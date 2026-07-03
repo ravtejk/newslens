@@ -1,46 +1,185 @@
 # =============================================================================
 # NewsLens sources & interests — this file is yours to edit.
 #
-# NewsLens ships with NO default outlets and NO default interests. Until you
-# add at least one source below, the pipeline refuses politely
-# ("sources.yaml has no active sources — uncomment or add your outlets")
-# rather than pulling from sources you never chose.
+# SEEDED 2026-07-03 from the principal's outlet list (M2 dispatch). Every
+# rss_url below was live-verified on 2026-07-03 with the pipeline's own
+# User-Agent; outlets with no usable feed are recorded as comments with the
+# reason, at the bottom of the sources block. Run `scripts/doctor` after any
+# edit — it validates format and re-checks that enabled feeds resolve.
 #
-# To activate: uncomment and edit the example blocks below, or write your own.
-# Then run `scripts/doctor` — it validates the format and checks that every
-# feed URL actually resolves.
+# Fields per source:
+#   name: <outlet>            required — used in attribution + corroboration
+#   rss_url: <feed URL>       required unless tier: reference_only
+#   tier: full | headline_only | cautious | reference_only   (default: full)
+#     full           usable RSS content (title + summary)
+#     headline_only  paywalled: titles/summaries only; attribution + linkout
+#     cautious       aggregator: DEFAULT-DISABLED; if enabled, flagged and
+#                    down-weighted downstream
+#     reference_only citable in briefings, NEVER fetched
+#   enabled: true|false       default true (cautious tier defaults to false)
+#   wire_syndication: true    wire services AND heavy wire-republishers, so
+#                             corroboration counting can exclude them — five
+#                             outlets running the same wire copy is ONE source
+#   note: "..."               free-text context, surfaced in reports
 # =============================================================================
-#
-# --- Source format -----------------------------------------------------------
-#
-#   sources:                      # a list; the spec's sweet spot is 8-12 outlets
-#     - name: <outlet name>       # required — used in attribution and in
-#                                 #   corroboration labels ("Reported by N named
-#                                 #   outlets")
-#       rss_url: <feed URL>       # required — the outlet's RSS/Atom feed
-#       wire_syndication: true    # optional, default false — set true on wire
-#                                 #   services (AP, Reuters, AFP, Bloomberg wire)
-#                                 #   so corroboration counting can exclude them:
-#                                 #   five outlets running the same wire copy is
-#                                 #   one source, not five
-#
-# --- Format examples (real, working feeds — uncomment to try) -----------------
-#
-# sources:
-#   - name: BBC News
-#     rss_url: https://feeds.bbci.co.uk/news/rss.xml
-#   - name: NPR Top Stories
-#     rss_url: https://feeds.npr.org/1001/rss.xml
-#   - name: The Guardian — World
-#     rss_url: https://www.theguardian.com/world/rss
-#
+
+sources:
+  # --- Wire / major (reference_only per principal: referenced, not fetched) --
+  - name: Associated Press
+    tier: reference_only
+    wire_syndication: true
+    note: "public RSS discontinued by AP; wire copy reaches us via other feeds"
+  - name: Reuters
+    tier: reference_only
+    wire_syndication: true
+    note: "public RSS discontinued 2020; wire copy reaches us via other feeds"
+  - name: The New York Times
+    tier: reference_only
+    note: "principal: reference/linkout only — NYT RSS exists and was verified live (rss.nytimes.com) if this ever changes"
+  - name: Wikipedia
+    tier: reference_only
+    note: "principal: requires primary-source verification; NEVER counts as corroboration"
+
+  # --- Paywalled majors (headline_only: titles + summaries, linkout) --------
+  - name: Bloomberg Markets
+    rss_url: https://feeds.bloomberg.com/markets/news.rss
+    tier: headline_only
+    wire_syndication: true
+    note: "Bloomberg syndicates widely (incl. BNN Bloomberg) — wire-flagged"
+  - name: Bloomberg Politics
+    rss_url: https://feeds.bloomberg.com/politics/news.rss
+    tier: headline_only
+    wire_syndication: true
+  - name: Washington Post — World
+    rss_url: https://feeds.washingtonpost.com/rss/world
+    tier: headline_only
+    note: "slow feed (8-10s observed) — ingestion timeout has headroom"
+  - name: Washington Post — Business
+    rss_url: https://feeds.washingtonpost.com/rss/business
+    tier: headline_only
+
+  # --- Broadcast / digital ---------------------------------------------------
+  - name: CNN
+    rss_url: http://rss.cnn.com/rss/cnn_topstories.rss
+    note: "http-only: CNN's https feed endpoint has broken TLS; content identical"
+  - name: NPR
+    rss_url: https://feeds.npr.org/1001/rss.xml
+  - name: NBC News
+    rss_url: https://feeds.nbcnews.com/nbcnews/public/news
+  - name: CNBC
+    rss_url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
+  - name: BBC News — World
+    rss_url: https://feeds.bbci.co.uk/news/world/rss.xml
+    note: "principal: background"
+  - name: PBS NewsHour
+    rss_url: https://www.pbs.org/newshour/feeds/rss/headlines
+
+  # --- International ----------------------------------------------------------
+  - name: Al Jazeera
+    rss_url: https://www.aljazeera.com/xml/rss/all.xml
+  - name: Euronews
+    rss_url: https://www.euronews.com/rss
+  - name: Open Magazine
+    rss_url: https://openthemagazine.com/feed/
+
+  # --- Financial ---------------------------------------------------------------
+  - name: Fortune
+    rss_url: https://fortune.com/feed/
+  - name: The Hill
+    rss_url: https://thehill.com/feed/
+  - name: Fox Business
+    rss_url: https://moxie.foxbusiness.com/google-publisher/latest.xml
+  - name: Washington Times
+    rss_url: https://www.washingtontimes.com/rss/headlines/news/
+  - name: InvestmentNews
+    rss_url: https://www.investmentnews.com/rss
+  - name: The Motley Fool
+    rss_url: https://www.fool.com/feeds/index.aspx
+  - name: Investing.com
+    rss_url: https://www.investing.com/rss/news.rss
+    wire_syndication: true
+    note: "republishes substantial wire copy — wire-flagged so corroboration doesn't double-count; revisit with real feed data at M3"
+  - name: OilPrice.com
+    rss_url: https://oilprice.com/rss/main
+  - name: Yahoo Finance
+    rss_url: https://finance.yahoo.com/news/rssindex
+    wire_syndication: true
+    note: "heavy wire/partner republisher — wire-flagged; revisit at M3"
+  - name: Business Insider
+    rss_url: https://feeds.businessinsider.com/custom/all
+
+  # --- Policy / public ----------------------------------------------------------
+  - name: Foreign Policy in Focus
+    rss_url: https://fpif.org/feed/
+  - name: The Fulcrum
+    rss_url: https://thefulcrum.us/feeds/feed.rss
+  - name: Federal News Network
+    rss_url: https://federalnewsnetwork.com/feed/
+  - name: KPBS
+    rss_url: https://www.kpbs.org/index.rss
+
+  # --- Government / reference -----------------------------------------------------
+  - name: Congress.gov — Most-Viewed Bills
+    rss_url: https://www.congress.gov/rss/most-viewed-bills.xml
+  - name: Congress.gov — Presented to the President
+    rss_url: https://www.congress.gov/rss/presented-to-president.xml
+
+  # --- Cautious aggregators (principal's label; DEFAULT-DISABLED) ------------------
+  - name: Whatfinger Business
+    rss_url: https://www.whatfinger.com/category/business/feed/
+    tier: cautious
+    enabled: false
+    wire_syndication: true
+    note: "aggregator/linkblog — enable explicitly if wanted; flagged + down-weighted downstream"
+
+  # ---------------------------------------------------------------------------
+  # NO USABLE FEED (verified 2026-07-03 with the pipeline UA; recorded so the
+  # feasibility pass outcome is visible, not silently dropped):
+  #   FPRI                 — https://www.fpri.org/feed/ hard-403s all clients
+  #                          (bot wall; even a browser UA gets 403)
+  #   Times of Israel      — https://www.timesofisrael.com/feed/ same hard 403
+  #   World Economic Forum — agenda/stories RSS endpoints 403 (bot wall)
+  #   CFR                  — no feed declared on cfr.org; legacy feeds.cfr.org
+  #                          now redirects to a podcast feed (wrong content)
+  #   Carnegie Endowment   — no publications feed found; /feed 308s to an HTML
+  #                          page; only an event-podcast feed exists
+  #   BNN Bloomberg        — no RSS endpoints found (site declares none);
+  #                          Bloomberg wire copy arrives via Bloomberg feeds
+  #   Man Group            — no public research feed; TLS errors on man.com
+  #   FinancialContent / MarketMinute — no public feed found
+  #   VisaHQ News          — news.visahq.com returns 404 (appears defunct)
+  #   Worldnews (wn.com)   — only per-keyword feeds, and those fail TLS;
+  #                          would be cautious-tier aggregator anyway
+  # ---------------------------------------------------------------------------
+
+  # --- CoS-suggested, pending principal approval (uncomment to adopt) --------
+  # All URLs verified live 2026-07-03.
+  # - name: The Guardian — World          # CoS-suggested, pending principal approval
+  #   rss_url: https://www.theguardian.com/world/rss
+  #   note: "free full-content RSS, strong international coverage"
+  # - name: Financial Times               # CoS-suggested, pending principal approval
+  #   rss_url: https://www.ft.com/rss/home
+  #   tier: headline_only
+  # - name: Axios                         # CoS-suggested, pending principal approval
+  #   rss_url: https://api.axios.com/feed/
+  # - name: Politico                      # CoS-suggested, pending principal approval
+  #   rss_url: https://rss.politico.com/politics-news.xml
+  # - name: The Economist                 # CoS-suggested, pending principal approval
+  #   rss_url: https://www.economist.com/latest/rss.xml
+  #   tier: headline_only
+  #   note: "weekly cadence — expect fewer, older items than dailies"
+  # - name: Chartbook (Adam Tooze)        # CoS-suggested, pending principal approval
+  #   rss_url: https://adamtooze.substack.com/feed
+  # - name: Noahpinion (Noah Smith)       # CoS-suggested, pending principal approval
+  #   rss_url: https://www.noahpinion.blog/feed
+  # - name: Slow Boring (Matt Yglesias)   # CoS-suggested, pending principal approval
+  #   rss_url: https://www.slowboring.com/feed
+
 # --- Interests -----------------------------------------------------------------
 # Broad tags steer the briefing's personal-impact ranking axis; granular tags
-# sharpen it and shape the one daily discovery query ("what's happening that
-# isn't in my named sources"). Start small — you extend and correct these
-# explicitly over time; there is deliberately no engagement-learning loop.
-#
-# Format + examples (uncomment and replace with your own):
+# sharpen it and shape the one capped discovery query per run ("what's
+# happening that isn't in my outlets"). The principal has not yet supplied
+# tags — discovery reports itself as skipped until these exist. Format:
 #
 # interests:
 #   broad:

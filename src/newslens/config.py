@@ -37,9 +37,19 @@ NO_INTERESTS_MSG = (
 DEFAULT_BUDGET_CAP_USD_PER_RUN = 0.50
 DEFAULT_GENERATE_HOUR_LOCAL = 6
 
-_VALID_SOURCE_KEYS = {"name", "rss_url", "wire_syndication"}
+_VALID_SOURCE_KEYS = {"name", "rss_url", "wire_syndication", "tier", "enabled", "note"}
 _VALID_TOP_LEVEL_KEYS = {"sources", "interests"}
 _VALID_INTEREST_KEYS = {"broad", "granular"}
+
+# Source tiers (milestone 2, principal's source list):
+#   full           — usable RSS content (title + summary/excerpt)
+#   headline_only  — paywalled outlet (Bloomberg/WaPo/FT-class): titles +
+#                    summaries only; attribution + linkout in briefings
+#   cautious       — aggregators: DEFAULT-DISABLED; if enabled, flagged and
+#                    down-weighted downstream (ranking, corroboration)
+#   reference_only — citable in briefings, NEVER fetched (NYT, Wikipedia, AP,
+#                    Reuters); rss_url optional and ignored
+VALID_TIERS = ("full", "headline_only", "cautious", "reference_only")
 
 
 class SourcesParseError(ValueError):
@@ -49,24 +59,48 @@ class SourcesParseError(ValueError):
 @dataclass
 class Source:
     name: str
-    rss_url: str
+    rss_url: Optional[str] = None
+    tier: str = "full"
+    enabled: bool = True
     wire_syndication: bool = False
+    note: str = ""
+
+    @property
+    def fetchable(self) -> bool:
+        """Fetched by ingestion only if enabled, not reference-only, and has a
+        URL. reference_only is structural: those outlets are never fetched
+        regardless of flags (principal ruling in the M2 dispatch)."""
+        return self.enabled and self.tier != "reference_only" and bool(self.rss_url)
 
 
 @dataclass
 class SourcesConfig:
     """Parsed sources.yaml. `problems` holds format errors that should be
     surfaced loudly (doctor renders them as failures) — a typo'd key must
-    never be silently ignored."""
+    never be silently ignored. `warnings` are non-blocking flags (e.g. a
+    cautious aggregator explicitly enabled)."""
 
     sources: List[Source] = field(default_factory=list)
     interests_broad: List[str] = field(default_factory=list)
     interests_granular: List[str] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def fetchable_sources(self) -> List[Source]:
+        return [s for s in self.sources if s.fetchable]
+
+    @property
+    def reference_only_sources(self) -> List[Source]:
+        return [s for s in self.sources if s.tier == "reference_only"]
+
+    @property
+    def disabled_sources(self) -> List[Source]:
+        return [s for s in self.sources if s.tier != "reference_only" and not s.enabled]
 
     @property
     def has_active_sources(self) -> bool:
-        return len(self.sources) > 0
+        return len(self.fetchable_sources) > 0
 
     @property
     def has_interests(self) -> bool:
@@ -149,22 +183,73 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                     if key not in _VALID_SOURCE_KEYS:
                         cfg.problems.append(f"source #{i}: unknown key `{key}`")
                 name = entry.get("name")
-                rss_url = entry.get("rss_url")
-                wire = entry.get("wire_syndication", False)
                 if not isinstance(name, str) or not name.strip():
                     cfg.problems.append(f"source #{i}: `name` is required (non-empty string)")
                     continue
-                if not isinstance(rss_url, str) or not rss_url.strip().startswith(("http://", "https://")):
+                name = name.strip()
+
+                tier = entry.get("tier", "full")
+                if not isinstance(tier, str) or tier not in VALID_TIERS:
                     cfg.problems.append(
-                        f"source #{i} ({name!r}): `rss_url` is required and must be an http(s) URL"
+                        f"source #{i} ({name!r}): `tier` must be one of {'|'.join(VALID_TIERS)}"
                     )
                     continue
+
+                rss_url = entry.get("rss_url")
+                if tier == "reference_only":
+                    # Never fetched; a URL may be recorded for documentation only.
+                    if rss_url is not None and not (
+                        isinstance(rss_url, str)
+                        and rss_url.strip().startswith(("http://", "https://"))
+                    ):
+                        cfg.problems.append(
+                            f"source #{i} ({name!r}): `rss_url`, when present, must be an http(s) URL"
+                        )
+                        continue
+                    rss_url = rss_url.strip() if isinstance(rss_url, str) else None
+                else:
+                    if not isinstance(rss_url, str) or not rss_url.strip().startswith(("http://", "https://")):
+                        cfg.problems.append(
+                            f"source #{i} ({name!r}): `rss_url` is required and must be an http(s) URL"
+                        )
+                        continue
+                    rss_url = rss_url.strip()
+
+                # Cautious aggregators are DEFAULT-DISABLED: omitting `enabled`
+                # on a cautious source means off; enabling one is explicit.
+                enabled = entry.get("enabled", tier != "cautious")
+                if not isinstance(enabled, bool):
+                    cfg.problems.append(f"source #{i} ({name!r}): `enabled` must be true or false")
+                    continue
+
+                wire = entry.get("wire_syndication", False)
                 if not isinstance(wire, bool):
                     cfg.problems.append(
                         f"source #{i} ({name!r}): `wire_syndication` must be true or false"
                     )
                     continue
-                cfg.sources.append(Source(name=name.strip(), rss_url=rss_url.strip(), wire_syndication=wire))
+
+                note = entry.get("note", "")
+                if not isinstance(note, str):
+                    cfg.problems.append(f"source #{i} ({name!r}): `note` must be a string")
+                    continue
+
+                if tier == "cautious" and enabled:
+                    cfg.warnings.append(
+                        f"cautious source {name!r} is explicitly enabled — aggregator "
+                        "content will be flagged and down-weighted downstream"
+                    )
+
+                cfg.sources.append(
+                    Source(
+                        name=name,
+                        rss_url=rss_url,
+                        tier=tier,
+                        enabled=enabled,
+                        wire_syndication=wire,
+                        note=note.strip(),
+                    )
+                )
 
     raw_interests = raw.get("interests")
     if raw_interests is not None:
@@ -181,14 +266,16 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
 
 
 def require_active_sources(cfg: Optional[SourcesConfig] = None) -> List[Source]:
-    """The pipeline's entry gate (used from milestone 2 on): returns active
-    sources or raises with a message fit to show the principal directly."""
+    """The pipeline's entry gate: returns the FETCHABLE sources (enabled,
+    non-reference-only, with a URL) or raises with a message fit to show the
+    principal directly. Never silently falls back to sources the principal
+    didn't enable."""
     cfg = cfg if cfg is not None else load_sources()
     if cfg.problems:
         raise SourcesParseError("sources.yaml has problems: " + "; ".join(cfg.problems))
     if not cfg.has_active_sources:
         raise SourcesParseError(NO_ACTIVE_SOURCES_MSG)
-    return cfg.sources
+    return cfg.fetchable_sources
 
 
 def budget_cap_usd_per_run(env: Optional[dict] = None) -> float:

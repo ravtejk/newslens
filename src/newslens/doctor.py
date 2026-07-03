@@ -38,7 +38,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from . import config, paths  # config is stdlib-only at import time (lazy yaml)
 
@@ -51,7 +51,7 @@ OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
 PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions"
 OPENAI_TIMEOUT_S = 15
 PERPLEXITY_TIMEOUT_S = 20
-FEED_TIMEOUT_S = 10
+FEED_TIMEOUT_S = 15  # WaPo's feeds measured 8-10s in the M2 sweep — headroom
 USER_AGENT = "NewsLens-doctor/0.1 (personal prototype; one-user health check)"
 
 INSTALL_HINT = (
@@ -372,20 +372,30 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
         except ValueError as exc:
             out.append(Result(FAIL, f"{exc} — fix it in .env"))
 
+    # GENERATE_HOUR_LOCAL is DORMANT: v1 generation is on-demand only
+    # (DECISIONS.md 2026-07-03) — nothing requires this var. Unset/valid are
+    # informational; a set-but-garbage value still fails, because a typo in
+    # .env is a config error regardless of whether anything reads it yet.
     if not (env.get("GENERATE_HOUR_LOCAL") or "").strip():
         out.append(
             Result(
                 INFO,
-                f"GENERATE_HOUR_LOCAL not set — default "
-                f"{config.DEFAULT_GENERATE_HOUR_LOCAL} "
-                f"({config.DEFAULT_GENERATE_HOUR_LOCAL:02d}:00 local) applies; "
-                "scheduling itself lands at milestone 7",
+                f"GENERATE_HOUR_LOCAL not set — fine (dormant: v1 is on-demand "
+                f"only; default {config.DEFAULT_GENERATE_HOUR_LOCAL} "
+                f"({config.DEFAULT_GENERATE_HOUR_LOCAL:02d}:00 local) would "
+                "apply only if scheduling ever returns)",
             )
         )
     else:
         try:
             hour = config.generate_hour_local(env)
-            out.append(Result(PASS, f"GENERATE_HOUR_LOCAL = {hour} ({hour:02d}:00 local)"))
+            out.append(
+                Result(
+                    PASS,
+                    f"GENERATE_HOUR_LOCAL = {hour} ({hour:02d}:00 local) — noted, "
+                    "but dormant: v1 generation is on-demand only",
+                )
+            )
         except ValueError as exc:
             out.append(Result(FAIL, f"{exc} — fix it in .env"))
 
@@ -557,13 +567,33 @@ def check_sources() -> List[Result]:
         out.append(Result(FAIL, f"sources.yaml: {problem}"))
 
     if cfg.has_active_sources:
+        fetchable = cfg.fetchable_sources
         out.append(
             Result(
                 PASS,
-                f"sources.yaml parses — {len(cfg.sources)} active source(s) configured",
+                f"sources.yaml parses — {len(fetchable)} active source(s) configured",
             )
         )
-        out.extend(check_feed_urls(cfg.sources))
+        for warning in cfg.warnings:
+            out.append(Result(WARN, f"sources.yaml: {warning}"))
+        if cfg.reference_only_sources:
+            names = ", ".join(s.name for s in cfg.reference_only_sources)
+            out.append(
+                Result(
+                    INFO,
+                    f"{len(cfg.reference_only_sources)} reference-only outlet(s) — "
+                    f"citable, never fetched: {names}",
+                )
+            )
+        if cfg.disabled_sources:
+            names = ", ".join(s.name for s in cfg.disabled_sources)
+            out.append(
+                Result(
+                    INFO,
+                    f"{len(cfg.disabled_sources)} source(s) present but disabled: {names}",
+                )
+            )
+        out.extend(check_feed_urls(fetchable))
     else:
         out.append(
             Result(

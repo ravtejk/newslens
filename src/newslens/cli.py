@@ -1,10 +1,11 @@
 """NewsLens command-line interface.
 
-Milestone 1 exposes exactly two commands: `migrate` and `doctor`.
-Later milestones add the pipeline verbs — generate (M5), read/listen (M7,
-consumption-event logging for the day-30 falsifier) — listed here so the
-shape of the CLI is visible, but deliberately not stubbed: an unimplemented
-command should not exist yet rather than exist and lie.
+Milestone 2 exposes three commands: `migrate`, `doctor`, `ingest`.
+Later milestones add the remaining pipeline verbs — generate (M5), read/listen
+(M7, consumption-event logging for the day-30 falsifier; v1 is on-demand only
+per DECISIONS.md 2026-07-03) — listed here so the shape of the CLI is visible,
+but deliberately not stubbed: an unimplemented command should not exist yet
+rather than exist and lie.
 """
 
 from __future__ import annotations
@@ -36,6 +37,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         "doctor",
         help="health check: env, keys, schema, sources (exit 0 = ready for a real run)",
     )
+    ingest_p = sub.add_parser(
+        "ingest",
+        help="pull enabled sources into source_items (idempotent per UTC fetch-day); "
+        "adds the capped Sonar discovery call when PERPLEXITY_API_KEY is set",
+    )
+    ingest_p.add_argument(
+        "--no-discovery",
+        action="store_true",
+        help="skip the Sonar discovery call even if a key is present (RSS only)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -58,6 +69,36 @@ def main(argv: Optional[List[str]] = None) -> int:
         from .doctor import run_doctor
 
         return run_doctor()
+
+    if args.command == "ingest":
+        from . import config, ingest
+
+        config.load_env()  # .env keys visible to the discovery seam
+        try:
+            report = ingest.run_ingest(with_discovery=not args.no_discovery)
+        except config.SourcesParseError as exc:
+            print(str(exc), file=sys.stderr)  # the polite refusal, verbatim
+            return 1
+        except Exception as exc:  # CLI boundary: loud, human-readable, nonzero
+            print(f"ingest failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+
+        print(
+            f"ingest: {len(report.succeeded)} of {report.attempted} sources ok — "
+            f"{report.items_new} new item(s), {report.items_updated} updated, "
+            f"{report.items_skipped} skipped (missing url/title)"
+        )
+        for warning in report.warnings:
+            print(f"  ⚠ {warning}")
+        if report.degradation_message:
+            print(f"  ⚠ {report.degradation_message}")
+            for name, reason in sorted(report.failed.items()):
+                print(f"      ✗ {name}: {reason}")
+        print(f"  discovery: {report.discovery_status}")
+        if not report.any_success:
+            print("ingest failed: no source could be fetched this run", file=sys.stderr)
+            return 1
+        return 0
 
     parser.error(f"unknown command: {args.command}")  # unreachable; argparse guards
     return 2

@@ -16,6 +16,8 @@ import pytest
 from newslens import db
 
 MIGRATION_0001 = "0001_initial_schema.sql"
+MIGRATION_0002 = "0002_briefings_date_format.sql"
+ALL_MIGRATIONS = [MIGRATION_0001, MIGRATION_0002]  # M2 world: two, in order
 EXPECTED_TABLES = {"source_items", "briefings", "memory", "briefings_history"}
 
 
@@ -27,23 +29,24 @@ def _tables(db_path):
         con.close()
 
 
-def test_fresh_migrate_applies_0001_and_creates_exactly_four_tables(tmp_path):
+def test_fresh_migrate_applies_all_and_creates_exactly_four_tables(tmp_path):
     db_path = tmp_path / "fresh.db"
     ran = db.migrate(db_path=db_path)
-    assert ran == [MIGRATION_0001]
+    assert ran == ALL_MIGRATIONS  # lexicographic order is the contract
+    # 0002 adds only triggers — the table set must NOT change.
     assert _tables(db_path) == EXPECTED_TABLES | {"schema_migrations"}
 
 
 def test_second_migrate_is_a_noop(tmp_path):
     db_path = tmp_path / "twice.db"
-    assert db.migrate(db_path=db_path) == [MIGRATION_0001]
+    assert db.migrate(db_path=db_path) == ALL_MIGRATIONS
     assert db.migrate(db_path=db_path) == []  # idempotent: nothing re-applied
     assert _tables(db_path) == EXPECTED_TABLES | {"schema_migrations"}
 
 
 def test_pending_migrations_lifecycle(tmp_path):
     db_path = tmp_path / "pending.db"
-    assert db.pending_migrations(db_path=db_path) == [MIGRATION_0001]
+    assert db.pending_migrations(db_path=db_path) == ALL_MIGRATIONS
     db.migrate(db_path=db_path)
     assert db.pending_migrations(db_path=db_path) == []
 
@@ -118,5 +121,5 @@ def test_connect_turns_foreign_keys_on(tmp_path):
         con.close()
 
 
-def test_shipped_migrations_dir_contains_exactly_0001():
-    assert [p.name for p in db.migration_files()] == [MIGRATION_0001]
+def test_shipped_migrations_dir_contains_exactly_the_known_migrations():
+    assert [p.name for p in db.migration_files()] == ALL_MIGRATIONS

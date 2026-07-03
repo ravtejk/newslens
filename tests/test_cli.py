@@ -50,7 +50,10 @@ def test_migrate_applies_then_reports_already_up_to_date(tmp_paths, capsys):
     rc = cli.main(["migrate"])
     out_first = capsys.readouterr().out
     assert rc == 0
-    assert "applied 1 migration(s): 0001_initial_schema.sql" in out_first
+    assert (
+        "applied 2 migration(s): 0001_initial_schema.sql, "
+        "0002_briefings_date_format.sql"
+    ) in out_first
     assert str(paths.DB_PATH) in out_first
 
     rc = cli.main(["migrate"])
@@ -86,3 +89,63 @@ def test_venv_entry_point_is_installed_and_runs():
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == "newslens 0.1.0"
+
+
+# --- newslens ingest (milestone 2) ---------------------------------------------
+
+def test_ingest_refuses_politely_on_template_sources(tmp_paths, capsys):
+    """The polite refusal reaches the CLI verbatim, exit 1."""
+    rc = cli.main(["ingest", "--no-discovery"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.err.strip() == (
+        "sources.yaml has no active sources — uncomment or add your outlets"
+    )
+
+
+def test_ingest_happy_path_reports_counts_and_discovery_state(
+    tmp_paths, fake_api, capsys
+):
+    from conftest import make_rss
+
+    url = fake_api.add_route(
+        "/cli.xml",
+        body=make_rss(
+            [
+                {"title": "S1", "url": "https://x.example/s1"},
+                {"title": "S2", "url": "https://x.example/s2"},
+            ]
+        ),
+    )
+    paths.SOURCES_FILE.write_text(
+        f"sources:\n  - name: CLI Feed\n    rss_url: {url}\n", encoding="utf-8"
+    )
+    rc = cli.main(["ingest", "--no-discovery"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "ingest: 1 of 1 sources ok — 2 new item(s), 0 updated, 0 skipped" in out
+    assert "discovery: not attempted" in out
+    # The sandboxed DB actually has the rows (CLI wired end to end).
+    from newslens import db
+
+    con = db.connect()
+    try:
+        n = con.execute("SELECT COUNT(*) FROM source_items").fetchone()[0]
+    finally:
+        con.close()
+    assert n == 2
+
+
+def test_ingest_all_sources_down_is_exit_1_with_degradation_detail(
+    tmp_paths, fake_api, capsys
+):
+    paths.SOURCES_FILE.write_text(
+        f"sources:\n  - name: Down\n    rss_url: {fake_api.dead_url('/x.xml')}\n",
+        encoding="utf-8",
+    )
+    rc = cli.main(["ingest", "--no-discovery"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "no source could be fetched this run" in captured.err
+    assert "1 of 1 sources unavailable this run" in captured.out
+    assert "✗ Down:" in captured.out
