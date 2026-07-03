@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "newslens"
+version = "0.1.0"
+description = "NewsLens — memory-threaded daily news briefing with audio (personal prototype)"
+readme = "README.md"
+requires-python = ">=3.9"  # floor matches the principal's machine (system Python 3.9.6)
+dependencies = [
+    "pyyaml>=6.0",        # parses sources.yaml (outlets + interests)
+    "python-dotenv>=1.0", # loads .env (principal-filled keys)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",        # QA-owned test suite (tests/)
+]
+
+[project.scripts]
+newslens = "newslens.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

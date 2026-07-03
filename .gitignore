@@ -1,0 +1,22 @@
+# Secrets — the principal fills .env themselves; it must never be committed.
+.env
+
+# Local state (SQLite DB, generated briefings/audio) — user data, not code.
+data/
+audio/
+
+# Principal-editable memory surface (milestone 4) — personal state, not code.
+memory.md
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# macOS
+.DS_Store

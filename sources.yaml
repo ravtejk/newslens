@@ -1,0 +1,51 @@
+# =============================================================================
+# NewsLens sources & interests — this file is yours to edit.
+#
+# NewsLens ships with NO default outlets and NO default interests. Until you
+# add at least one source below, the pipeline refuses politely
+# ("sources.yaml has no active sources — uncomment or add your outlets")
+# rather than pulling from sources you never chose.
+#
+# To activate: uncomment and edit the example blocks below, or write your own.
+# Then run `scripts/doctor` — it validates the format and checks that every
+# feed URL actually resolves.
+# =============================================================================
+#
+# --- Source format -----------------------------------------------------------
+#
+#   sources:                      # a list; the spec's sweet spot is 8-12 outlets
+#     - name: <outlet name>       # required — used in attribution and in
+#                                 #   corroboration labels ("Reported by N named
+#                                 #   outlets")
+#       rss_url: <feed URL>       # required — the outlet's RSS/Atom feed
+#       wire_syndication: true    # optional, default false — set true on wire
+#                                 #   services (AP, Reuters, AFP, Bloomberg wire)
+#                                 #   so corroboration counting can exclude them:
+#                                 #   five outlets running the same wire copy is
+#                                 #   one source, not five
+#
+# --- Format examples (real, working feeds — uncomment to try) -----------------
+#
+# sources:
+#   - name: BBC News
+#     rss_url: https://feeds.bbci.co.uk/news/rss.xml
+#   - name: NPR Top Stories
+#     rss_url: https://feeds.npr.org/1001/rss.xml
+#   - name: The Guardian — World
+#     rss_url: https://www.theguardian.com/world/rss
+#
+# --- Interests -----------------------------------------------------------------
+# Broad tags steer the briefing's personal-impact ranking axis; granular tags
+# sharpen it and shape the one daily discovery query ("what's happening that
+# isn't in my named sources"). Start small — you extend and correct these
+# explicitly over time; there is deliberately no engagement-learning loop.
+#
+# Format + examples (uncomment and replace with your own):
+#
+# interests:
+#   broad:
+#     - technology
+#     - global economy
+#   granular:
+#     - AI regulation
+#     - semiconductor supply chains
