@@ -48,7 +48,7 @@ rule). You fill `.env` yourself; agents only ever touch `.env.example`.
 
 | Var | Required | Why / scope |
 |---|---|---|
-| `OPENAI_API_KEY` | Yes | Text generation (GPT-4o-mini): ranking, narrative, script adaptation. Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **TTS backend is TBD at milestone 6** (local/open-source vs hosted under re-evaluation) — audio may need no key or a different vendor's key; this key is needed for text generation regardless. |
+| `OPENAI_API_KEY` | Yes | Text generation (GPT-4o-mini): ranking, narrative, script adaptation. Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **Audio (M6): Kokoro-82M local is the v1 default** — no key, no metered cost; gpt-4o-mini-tts on this same key is the built fallback, and the principal picks by ear at the milestone-6 listening test. This key is needed for text generation regardless. |
 | `PERPLEXITY_API_KEY` | Yes | One capped Sonar discovery query per run. Pay-as-you-go; a prepaid credit cap in their dashboard is the primary spend limit. |
 | `BUDGET_CAP_USD_PER_RUN` | Default 0.50 | In-app hard stop per generate run (ENGINEERING.md cost guardrail). |
 | `GENERATE_HOUR_LOCAL` | Default 6 | Local hour the daily run fires (wired up at milestone 7). |

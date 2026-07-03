@@ -44,8 +44,9 @@ then fix the leak. `.env` is gitignored.
    (a default project key is fine; no special permissions needed).
 2. **Set a hard spend cap in the dashboard** — Settings → Organization →
    Limits → set a monthly budget (e.g. $10 — expected generation spend is well
-   under $1/month; TTS, the dominant cost in the original estimate, is pending
-   a vendor re-evaluation at milestone 6 and may end up free/local).
+   under $1/month; audio's v1 default is Kokoro-82M running locally at no API
+   cost, with gpt-4o-mini-tts on this key as the built fallback — ~$5.40/month
+   at daily cadence only if the fallback wins the milestone-6 listening test).
 3. Put the key in `.env` as `OPENAI_API_KEY=...`
 
 ### 2b. PERPLEXITY_API_KEY (required — daily discovery query)
@@ -124,5 +125,8 @@ That's the designed experience: nothing crashes, every gap names its fix.
 
 - **Scheduling (M7):** launchd plist wiring for `GENERATE_HOUR_LOCAL`, plus
   `read`/`listen` commands whose usage log feeds the day-30 verdict.
-- **Audio (M6):** TTS backend decision pending Engineering's open-source/local
-  vs hosted evaluation — setup steps land here once decided.
+- **Audio (M6):** v1 default is Kokoro-82M local TTS (no key; ~$0.10/month
+  total run cost), with gpt-4o-mini-tts built in as the hosted fallback
+  (~$5.50/month total). Both sit behind the same `generate_audio()` wrapper;
+  you pick by ear at the milestone-6 listening test — setup steps land here
+  then (per `workspace/debates/2026-07-02--newslens--engineering-2.md`).

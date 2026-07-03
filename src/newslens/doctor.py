@@ -358,7 +358,10 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
         out.append(
             Result(
                 INFO,
-                "BUDGET_CAP_USD_PER_RUN not set — default 0.50 USD/run applies "
+                # Display references the real default — a hardcoded display
+                # literal is the same drift pattern that shipped BUG-1.
+                f"BUDGET_CAP_USD_PER_RUN not set — default "
+                f"{config.DEFAULT_BUDGET_CAP_USD_PER_RUN:.2f} USD/run applies "
                 "(hard stop for a runaway generate run)",
             )
         )
@@ -373,7 +376,9 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
         out.append(
             Result(
                 INFO,
-                "GENERATE_HOUR_LOCAL not set — default 6 (06:00 local) applies; "
+                f"GENERATE_HOUR_LOCAL not set — default "
+                f"{config.DEFAULT_GENERATE_HOUR_LOCAL} "
+                f"({config.DEFAULT_GENERATE_HOUR_LOCAL:02d}:00 local) applies; "
                 "scheduling itself lands at milestone 7",
             )
         )
@@ -592,11 +597,12 @@ def cost_estimate() -> List[Result]:
     return [
         Result(
             INFO,
-            "estimated cost-per-run ~$0.18 (~$5.50/month at daily cadence) — "
-            "static estimate from the approved spec §C; ~97% of it is TTS, whose "
-            "vendor is under re-evaluation before milestone 6 (may drop to ~$0 if "
-            "a local model is chosen); real per-run cost logging arrives with the "
-            "pipeline",
+            "estimated cost-per-run <$0.01 (~$0.10/month at daily cadence) with "
+            "the v1 default TTS — Kokoro-82M running locally, no key, no metered "
+            "cost; if the hosted fallback (gpt-4o-mini-tts) wins the milestone-6 "
+            "listening test instead, ~$0.18/run (~$5.50/month). Static estimate "
+            "from spec §C + the engineering-2 TTS decision; real per-run cost "
+            "logging arrives with the pipeline",
         )
     ]
 
