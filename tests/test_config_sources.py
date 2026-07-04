@@ -21,18 +21,46 @@ def write_yaml(tmp_path, text):
     return p
 
 
-# --- the shipped template, as shipped ----------------------------------------
+# --- the SHIPPED file (seeded since M2) and the template contract --------------
+# The shipped sources.yaml is the principal's live outlet list. Tests pin its
+# structural invariants, never its exact contents (the principal edits it),
+# and NEVER fetch from it. The template/refusal contract is pinned separately
+# against a synthetic zero-sources file.
 
-def test_shipped_template_parses_to_zero_sources_zero_problems():
+def test_shipped_seeded_file_parses_clean_with_valid_tier_structure():
     cfg = config.load_sources(PROTOTYPE_ROOT / "sources.yaml")
-    assert cfg.sources == []
-    assert cfg.problems == []
-    assert not cfg.has_active_sources
-    assert not cfg.has_interests
+    assert cfg.problems == [], f"shipped file has format problems: {cfg.problems}"
+    assert cfg.has_active_sources  # seeded state: there IS something to fetch
+    # Structural tier invariants, regardless of the principal's future edits:
+    for s in cfg.reference_only_sources:
+        assert not s.fetchable, f"reference_only source {s.name!r} is fetchable"
+    for s in cfg.fetchable_sources:
+        assert s.enabled and s.rss_url and s.tier != "reference_only"
+    # Every enabled cautious source must carry its explicit-enable warning.
+    enabled_cautious = [s for s in cfg.sources if s.tier == "cautious" and s.enabled]
+    assert len(cfg.warnings) == len(enabled_cautious)
 
 
-def test_template_state_refuses_politely_with_the_documented_message():
+def test_shipped_seeded_file_refuses_nothing_but_returns_only_fetchable():
     cfg = config.load_sources(PROTOTYPE_ROOT / "sources.yaml")
+    active = config.require_active_sources(cfg)
+    assert active == cfg.fetchable_sources
+    assert all(s.fetchable for s in active)
+
+
+def test_template_state_refuses_politely_with_the_documented_message(tmp_path):
+    """The polite-refusal rule (DECISIONS.md 2026-07-02) is a contract about
+    the zero-active-sources STATE, pinned here against a synthetic template —
+    decoupled from whatever the shipped file currently contains."""
+    p = write_yaml(
+        tmp_path,
+        "# fully commented template — zero active sources\n"
+        "# sources:\n"
+        "#   - name: Example\n"
+        "#     rss_url: https://example.invalid/feed.xml\n",
+    )
+    cfg = config.load_sources(p)
+    assert cfg.sources == [] and cfg.problems == []
     with pytest.raises(config.SourcesParseError) as excinfo:
         config.require_active_sources(cfg)
     assert str(excinfo.value) == config.NO_ACTIVE_SOURCES_MSG
@@ -40,6 +68,30 @@ def test_template_state_refuses_politely_with_the_documented_message():
         str(excinfo.value)
         == "sources.yaml has no active sources — uncomment or add your outlets"
     )
+
+
+def test_disabled_and_reference_only_sources_do_not_count_as_active(tmp_path):
+    """A file with entries but nothing fetchable still refuses politely —
+    'active' means fetchable, not merely present."""
+    p = write_yaml(
+        tmp_path,
+        "sources:\n"
+        "  - name: Ref Outlet\n"
+        "    tier: reference_only\n"
+        "  - name: Off Outlet\n"
+        "    rss_url: https://example.invalid/feed.xml\n"
+        "    enabled: false\n"
+        "  - name: Cautious Outlet\n"
+        "    rss_url: https://example.invalid/c.xml\n"
+        "    tier: cautious\n",
+    )
+    cfg = config.load_sources(p)
+    assert cfg.problems == []
+    assert len(cfg.sources) == 3
+    assert not cfg.has_active_sources
+    with pytest.raises(config.SourcesParseError) as excinfo:
+        config.require_active_sources(cfg)
+    assert str(excinfo.value) == config.NO_ACTIVE_SOURCES_MSG
 
 
 # --- valid files --------------------------------------------------------------

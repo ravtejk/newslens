@@ -61,20 +61,34 @@ then fix the leak. `.env` is gitignored.
 ### 2c. Everything else in .env
 
 - `BUDGET_CAP_USD_PER_RUN` — leave the 0.50 default unless you have a reason.
-- `GENERATE_HOUR_LOCAL` — set to the hour you actually want the briefing
-  (used at milestone 7 when scheduling lands).
+- `GENERATE_HOUR_LOCAL` — **dormant**: v1 generates on-demand only (your
+  2026-07-03 call), nothing reads this. Leave it or delete it; the doctor
+  treats it as informational either way.
 - `GNEWS_API_KEY` — **leave blank.** Deliberately ungranted fallback; only
   becomes relevant if the Sonar reliability spike fails, and that would come
   back to you as a checkpoint first.
 
-## 3. Add your outlets and interests
+## 3. Review your outlets, add your interests
 
-Open `sources.yaml`. It ships with zero active sources on purpose — the
-template comments show the exact format, with three real example feeds you can
-uncomment to try. Add roughly 8–12 outlets you actually read, and set
-`wire_syndication: true` on any wire service (AP/Reuters/AFP-style) so
-corroboration counts stay honest. Then add a few `interests` tags — broad ones
-steer ranking, granular ones sharpen it and shape the daily discovery query.
+`sources.yaml` is already seeded with your outlet list (2026-07-03), every
+feed URL live-verified, tiered (`full` / `headline_only` / `cautious` /
+`reference_only`) and flagged for wire syndication. Things worth a look:
+
+- **Enable/disable** any source by flipping `enabled:` — cautious aggregators
+  (Whatfinger) ship disabled and stay off until you explicitly opt in.
+- **No-feed outlets** (FPRI, Times of Israel, WEF, CFR, Carnegie, BNN
+  Bloomberg, Man Group, FinancialContent, VisaHQ, wn.com) are documented as
+  comments in the file with the verified reason each has no usable feed.
+- **CoS-suggested additions** (Guardian, FT, Axios, Politico, Economist,
+  Chartbook, Noahpinion, Slow Boring) are **enabled** — you approved them
+  2026-07-03; each carries an "approved" note in the file. Disable any by
+  adding `enabled: false` to its entry.
+- **Interests are still empty and yours to write** — broad tags steer
+  ranking, granular tags sharpen it and shape the one capped discovery query
+  per run. Discovery skips itself (and says so) until tags exist.
+
+Then: `newslens ingest` pulls everything enabled into the local DB. Re-running
+it the same UTC day updates in place — never duplicates.
 
 ## 4. Verify
 
@@ -99,7 +113,7 @@ still runs (stdlib-only) and exits `1` with, in short:
 ✗ OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, then add to .env
 ✗ PERPLEXITY_API_KEY not set — get one at perplexity.ai/settings/api, then add to .env
 ✓ migrations apply cleanly to a scratch DB — tables: briefings, briefings_history, memory, source_items
-⚠ sources.yaml has no active sources — uncomment or add your outlets (...)
+⚠ sources.yaml validation skipped (PyYAML not installed — see the missing-deps line above)
 ```
 
 That's the designed experience: nothing crashes, every gap names its fix.
@@ -123,7 +137,8 @@ That's the designed experience: nothing crashes, every gap names its fix.
 
 ## Later milestones (placeholders, so this file has one home)
 
-- **Scheduling (M7):** launchd plist wiring for `GENERATE_HOUR_LOCAL`, plus
+- **On-demand trigger + instrumentation (M7):** `generate` stays manual (v1 is
+  on-demand only, your 2026-07-03 call — no cron/launchd), plus the
   `read`/`listen` commands whose usage log feeds the day-30 verdict.
 - **Audio (M6):** v1 default is Kokoro-82M local TTS (no key; ~$0.10/month
   total run cost), with gpt-4o-mini-tts built in as the hosted fallback

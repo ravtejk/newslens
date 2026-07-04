@@ -51,26 +51,64 @@ def scrub_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
+# A synthetic zero-active-sources template. Since M2 the SHIPPED sources.yaml
+# is seeded with the principal's live outlets — tests must never depend on its
+# shape and must NEVER fetch its real feeds. Template-state behavior is a
+# contract of its own, pinned against this synthetic file instead.
+SYNTHETIC_TEMPLATE = (
+    "# QA synthetic sources.yaml — template state: zero active sources.\n"
+    "# sources:\n"
+    "#   - name: Example Outlet\n"
+    "#     rss_url: https://example.invalid/feed.xml\n"
+)
+
+
 @pytest.fixture
 def tmp_paths(tmp_path, monkeypatch):
     """Redirect all *stateful* newslens.paths locations into a sandbox.
 
     MIGRATIONS_DIR, PROMPTS_DIR, PROJECT_ROOT stay real — they are the code
-    under test. The sandbox gets a byte-for-byte copy of the *shipped*
-    sources.yaml template so template-state tests exercise the real artifact.
+    under test. sources.yaml starts in the synthetic TEMPLATE state (zero
+    active sources); tests write their own content over it as needed.
     """
     data_dir = tmp_path / "data"
     monkeypatch.setattr(paths, "DATA_DIR", data_dir)
     monkeypatch.setattr(paths, "DB_PATH", data_dir / "newslens.db")
 
     sources = tmp_path / "sources.yaml"
-    sources.write_text(
-        (PROTOTYPE_ROOT / "sources.yaml").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    sources.write_text(SYNTHETIC_TEMPLATE, encoding="utf-8")
     monkeypatch.setattr(paths, "SOURCES_FILE", sources)
     monkeypatch.setattr(paths, "ENV_FILE", tmp_path / ".env")  # does not exist
     return tmp_path
+
+
+def make_rss(items, channel_title="QA feed"):
+    """Build a minimal-but-valid RSS 2.0 document for the fake server.
+
+    Each item is a dict with optional keys: title, url, summary, pubdate
+    (RFC-822 string). Omit a key to omit the element — lets tests craft
+    entries missing url/title.
+    """
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<rss version="2.0"><channel>',
+        f"<title>{channel_title}</title>",
+        "<link>http://qa.invalid/</link>",
+        "<description>QA synthetic feed</description>",
+    ]
+    for item in items:
+        parts.append("<item>")
+        if "title" in item:
+            parts.append(f"<title>{item['title']}</title>")
+        if "url" in item:
+            parts.append(f"<link>{item['url']}</link>")
+        if "summary" in item:
+            parts.append(f"<description><![CDATA[{item['summary']}]]></description>")
+        if "pubdate" in item:
+            parts.append(f"<pubDate>{item['pubdate']}</pubDate>")
+        parts.append("</item>")
+    parts.append("</channel></rss>")
+    return "\n".join(parts).encode("utf-8")
 
 
 @pytest.fixture
@@ -114,6 +152,22 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _try_route(self) -> bool:
+        """Dynamic per-test routes (FakeAPI.add_route). Returns True if handled."""
+        spec = self.server.routes.get(self.path)
+        if spec is None:
+            return False
+        self.send_response(spec["status"])
+        if spec.get("location"):
+            self.send_header("Location", spec["location"])
+        body = spec.get("body", b"")
+        self.send_header("Content-Type", spec.get("content_type", "application/xml"))
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+        return True
+
     def do_GET(self):
         self.server.recorded.append(
             {
@@ -122,6 +176,8 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
                 "user_agent": self.headers.get("User-Agent", ""),
             }
         )
+        if self._try_route():
+            return
         if self.path == "/v1/models":
             if self._bearer() == self.server.good_key:
                 self._send(
@@ -161,6 +217,8 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
                 "body": body,
             }
         )
+        if self._try_route():
+            return
         if self.path == "/chat/completions":
             if self._bearer() == self.server.good_key:
                 self._send(
@@ -187,9 +245,28 @@ class FakeAPI:
             ("127.0.0.1", 0), _FakeAPIHandler
         )
         self.server.recorded = []
+        self.server.routes = {}
         self.server.good_key = "sk-qa-local-fake-good-key-0000"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    def add_route(
+        self,
+        path: str,
+        status: int = 200,
+        body: bytes = b"",
+        content_type: str = "application/xml",
+        location: str = None,
+    ) -> str:
+        """Register a dynamic response for `path` (GET and POST). Returns the
+        absolute URL. `location` adds a Location header (for redirect tests)."""
+        self.server.routes[path] = {
+            "status": status,
+            "body": body,
+            "content_type": content_type,
+            "location": location,
+        }
+        return self.base_url + path
 
     @property
     def base_url(self) -> str:

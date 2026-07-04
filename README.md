@@ -7,10 +7,13 @@ threads continuity through a transparent, hand-editable memory, and labels
 corroboration honestly (counts of distinct named outlets — never the word
 "verified").
 
-**Status: milestone 1 of 8** (skeleton + doctor). There is no pipeline yet —
-what exists today is the schema, the config surfaces, and a doctor that tells
-you exactly what's missing and how to fix it. Spec:
-`workspace/debates/2026-07-02--newslens--engineering.md` (§A–F).
+**Status: milestone 2 of 8** (source ingestion). What exists: the schema, the
+doctor, and working tier-1 ingestion — `newslens ingest` pulls the principal's
+verified outlet list into `source_items`, idempotently, with per-feed graceful
+degradation. The Sonar discovery seam is built but cold (key not yet granted).
+No ranking/briefing generation yet. Spec:
+`workspace/debates/2026-07-02--newslens--engineering.md` (§A–F); scope change:
+**v1 is on-demand only** — no scheduled generation (DECISIONS.md 2026-07-03).
 
 ## Quickstart
 
@@ -30,15 +33,18 @@ everything required for a real run is in place; exit `1` means at least one
 keys and no sources is expected to exit `1` today — that is the honest state,
 and every missing item comes with its fix.
 
-## Commands (milestone 1)
+## Commands (milestone 2)
 
 | Command | What it does |
 |---|---|
 | `newslens migrate` | Create/upgrade `data/newslens.db`. Idempotent — safe to re-run any time. |
-| `newslens doctor` / `scripts/doctor` | Health check: Python/deps, keys (validated with harmless read-only calls), schema, `sources.yaml`, feed URLs, cost estimate. `scripts/doctor` works even before `pip install`. |
+| `newslens doctor` / `scripts/doctor` | Health check: Python/deps, keys (validated with harmless read-only calls), schema, `sources.yaml` (tiers, disabled, reference-only), feed URLs, cost estimate. `scripts/doctor` works even before `pip install`. |
+| `newslens ingest [--no-discovery]` | Pull all enabled sources into `source_items` (idempotent per UTC fetch-day), then the one capped Sonar discovery call if `PERPLEXITY_API_KEY` exists (RSS-only otherwise, and it says so). Partial feed failures degrade gracefully with a visible "N of M sources unavailable" line. |
+| `scripts/sonar_spike` | The pending Sonar reliability gate — one command the moment the key lands. Refuses politely without it. |
 
 Coming later (deliberately not stubbed): `generate` (M5), `read`/`listen`
-(M7 — these log the consumption events the day-30 falsifier is computed from).
+(M7 — these log the consumption events the day-30 falsifier is computed from;
+v1 is on-demand only, so M7 is manual trigger + instrumentation, no cron).
 
 ## Environment variables & scopes
 
@@ -51,24 +57,45 @@ rule). You fill `.env` yourself; agents only ever touch `.env.example`.
 | `OPENAI_API_KEY` | Yes | Text generation (GPT-4o-mini): ranking, narrative, script adaptation. Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **Audio (M6): Kokoro-82M local is the v1 default** — no key, no metered cost; gpt-4o-mini-tts on this same key is the built fallback, and the principal picks by ear at the milestone-6 listening test. This key is needed for text generation regardless. |
 | `PERPLEXITY_API_KEY` | Yes | One capped Sonar discovery query per run. Pay-as-you-go; a prepaid credit cap in their dashboard is the primary spend limit. |
 | `BUDGET_CAP_USD_PER_RUN` | Default 0.50 | In-app hard stop per generate run (ENGINEERING.md cost guardrail). |
-| `GENERATE_HOUR_LOCAL` | Default 6 | Local hour the daily run fires (wired up at milestone 7). |
+| `GENERATE_HOUR_LOCAL` | Dormant | Nothing reads it in v1 (on-demand only, DECISIONS.md 2026-07-03). Kept optional in case scheduling ever returns; a set-but-invalid value still fails the doctor (typo'd .env is a config error). |
 | `GNEWS_API_KEY` | No — leave blank | Fallback discovery vendor, deliberately ungranted unless the Sonar reliability spike fails. |
 
 ## What's real vs. faked
 
 **Faked: nothing.** No mock data, no stubbed integrations, no
-`// PROTOTYPE: faked` markers anywhere. The only external calls in milestone 1
-live in the doctor and only fire for things you've configured: a read-only
-OpenAI `GET /v1/models`, a minimal Sonar query (~a fraction of a cent — its
-prompt is versioned at `prompts/doctor_sonar_ping.txt`), and a `GET` of each
-RSS feed you've actively added to `sources.yaml`. With no keys and no sources
-configured, the doctor makes no network calls at all.
+`// PROTOTYPE: faked` markers anywhere. External calls, all real and all
+yours: the doctor's read-only key validations + feed resolution for enabled
+sources, and `newslens ingest`'s feed GETs + the one capped Sonar call (only
+when its key exists — keyless runs are RSS-only and say so; keyless +
+nothing-enabled means zero network, period).
 
-`sources.yaml` ships with **zero active sources and zero interests** on
-purpose (principal decision, 2026-07-02): the pipeline refuses politely rather
-than ever using outlets you didn't choose.
+`sources.yaml` is **seeded with the principal's outlet list** (2026-07-03),
+tiered and live-verified — see the file header. The no-defaults rule still
+holds where it matters: interests are empty until the principal supplies tags
+(discovery skips itself and says why), reference-only outlets are never
+fetched, cautious aggregators are default-disabled, and an emptied file still
+refuses politely rather than inventing sources.
 
-## Data model (migration 0001)
+## Ingestion contract (milestone 2 — binding, see `src/newslens/ingest.py`)
+
+- **Fetch-day = UTC day.** `source_items` dedupes on `(url, UTC fetch-day)`;
+  the boundary is midnight UTC, not your local midnight. A late-evening local
+  run and next morning's run may re-snapshot the same URL on different
+  fetch-days: understood behavior. (`briefings.date` stays principal-local —
+  two clocks, on purpose.)
+- **Idempotent:** same-UTC-day re-runs update snapshots in place, never
+  duplicate; `fetched_at` is preserved on update.
+- **Tiers are promises:** `headline_only` items carry titles/summaries with
+  attribution + linkout downstream; `reference_only` outlets (NYT, Wikipedia,
+  AP, Reuters) are structurally unfetchable; `cautious` aggregators are
+  default-disabled and warned when enabled.
+- **Degrades gracefully, visibly:** per-source failures never kill a run;
+  the report prints "N of M sources unavailable this run: ..." naming each
+  failure. A run fails outright only when *every* source fails.
+- **No scraping:** feed-provided content only, tags stripped, excerpts
+  truncated (1500 chars), max 20 items per feed per run.
+
+## Data model (migrations 0001–0002)
 
 | Table | Concern |
 |---|---|
@@ -77,29 +104,34 @@ than ever using outlets you didn't choose.
 | `memory` | Tracked topics — `active`/`stale`/`dismissed` staleness policy (14-day auto-stale, principal-only dismissal); syncs to a hand-editable `memory.md` at milestone 4. |
 | `briefings_history` | Append-only log of superseded briefing versions (UPDATE/DELETE abort via triggers) so a re-run can never destroy yesterday's output. |
 
-Timestamps are UTC ISO-8601 text; `briefings.date` is your local calendar day.
-Rationale: `adr/0001-schema-three-tables-plus-history.md`.
+Timestamps are UTC ISO-8601 text; `briefings.date` is your local calendar day,
+format-enforced (`YYYY-MM-DD`) by triggers since migration 0002. Rationale:
+`adr/0001-schema-three-tables-plus-history.md`, `adr/0003-m2-ingestion-decisions.md`.
 
 ## Repo layout
 
 ```
-migrations/        numbered .sql files; IF NOT EXISTS everywhere (re-apply safe)
-prompts/           every LLM-facing prompt is a versioned file, never an inline string
-scripts/doctor     health check; works pre-install (stdlib-only bootstrap)
-src/newslens/      paths, db (stdlib-only), config, doctor, cli
-sources.yaml       YOUR outlets + interests — ships as a documented template
-data/              (gitignored) SQLite DB and generated artifacts
-adr/               one short file per significant technical decision
-tests/             QA-owned; run with: pytest
+migrations/          numbered .sql files; IF NOT EXISTS everywhere (re-apply safe)
+prompts/             every LLM-facing prompt is a versioned file, never inline
+scripts/doctor       health check; works pre-install (stdlib-only bootstrap)
+scripts/sonar_spike  the pending Sonar reliability gate (needs the key)
+src/newslens/        paths, db (stdlib-only), config, ingest, discovery, doctor, cli
+sources.yaml         the principal's tiered outlet list + interests (seeded M2)
+data/                (gitignored) SQLite DB and generated artifacts
+adr/                 one short file per significant technical decision
+NOTES-M2.md          living carryover file between milestones
+tests/               QA-owned; run with: pytest
 ```
 
 ## Tests
 
 `pytest` (installed via the `[dev]` extra). The suite is QA-owned per
-`team/ENGINEERING.md`; milestone 1's contract for QA: migrations are
-idempotent, `briefings_history` rejects UPDATE/DELETE, `load_sources` handles
-template/valid/malformed files, doctor exits 1 with missing keys and 0 when
-everything required passes.
+`team/ENGINEERING.md`. Milestone 2 adds to the contract: ingestion is
+idempotent per UTC fetch-day and degrades gracefully with the visible
+"N of M sources unavailable" line (kill-3-feeds case, spec §E M2); tiers
+behave (`reference_only` structurally unfetchable, `cautious`
+default-disabled); keyless discovery builds no request; migration 0002's
+date-format triggers reject malformed `briefings.date`.
 
 ## Docs
 

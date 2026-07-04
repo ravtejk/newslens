@@ -1,33 +1,47 @@
-# Carryover for milestone 2 (from the milestone-1 code review, 2026-07-02)
+# Carryover notes (living file — current target: milestone 3)
 
-Milestone 1 was approved with notes. Findings 1–2 were fixed in the follow-up
-commit; the four below ride to milestone 2. Whoever picks up M2 (implementer,
-QA, reviewer) reads this first, then deletes each item as it lands.
+## Resolved in milestone 2 (2026-07-03)
 
-1. **[QA-owned] Pin the remaining unreadable-file paths.** The fix-loop-1
-   change guarded three unguarded reads, but only unreadable `sources.yaml`
-   has a pinned test (`tests/test_doctor_offline.py::test_BUG2_*`). Add pins
-   for the other two friendly-degrade paths: unreadable `.env`
-   (`doctor.load_effective_env`, dotenv AND fallback branches) and unreadable
-   `prompts/doctor_sonar_ping.txt` (`doctor.check_perplexity_key`).
-   Implementer must not write these — `tests/` is QA's.
+- ~~Finding 4: `briefings.date` GLOB format check~~ — done as
+  `migrations/0002_briefings_date_format.sql` (triggers, not a table-rebuild
+  CHECK — rationale in ADR-0003 §1).
+- ~~Finding 5: "fetch-day = UTC day" stated explicitly~~ — done: binding
+  contract block atop `src/newslens/ingest.py`, README ingestion section,
+  ADR-0003 §5.
+- ~~Finding 6: unused `Optional` import in doctor.py~~ — removed with the M2
+  doctor changes.
 
-2. **[Schema — needs the full QA loop] Consider a format CHECK on
-   `briefings.date`.** The column is documented as `YYYY-MM-DD` but nothing
-   structural rejects e.g. `2026-7-2` or a full timestamp. A
-   `CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')` in a new
-   migration would make the format constraint real. Schema change ⇒ migration
-   ⇒ escalation trigger ⇒ QA loop — do it as part of M2's schema work, not as
-   a drive-by.
+## Still open
 
-3. **[M2 ingestion contract] State "fetch-day = UTC day" explicitly.** The
-   `source_items` dedupe key is `UNIQUE (url, date(fetched_at))` and
-   `fetched_at` is UTC ISO-8601, so the dedupe day boundary is midnight UTC —
-   not the principal's local midnight (`briefings.date`, by contrast, is
-   principal-local). M2's ingestion code and its docs/tests must say this out
-   loud so a late-evening local run double-fetching across the UTC boundary is
-   understood behavior, not a surprise.
+1. **[QA-owned, from M1 review finding 3] Pin the remaining unreadable-file
+   paths:** unreadable `.env` (`doctor.load_effective_env`, dotenv AND
+   fallback branches) and unreadable `prompts/doctor_sonar_ping.txt`
+   (`doctor.check_perplexity_key`). Implementer must not write these —
+   `tests/` is QA's.
 
-4. **[Cleanup, fold into any M2 touch of doctor.py] Unused `Optional` import**
-   in `src/newslens/doctor.py`'s `typing` import line. Not worth its own
-   commit/loop; remove the next time that file is edited for real work.
+## New carryovers for milestone 3
+
+2. **Wire-syndication flags on republishers are judgment calls, revisit with
+   real data.** Yahoo Finance / Investing.com / Whatfinger are wire-flagged in
+   `sources.yaml` on documented-republisher grounds; after a week of real
+   ingested items, check whether the flag over- or under-excludes for
+   corroboration counting (per-source notes mark this).
+3. **Does ranking need the Sonar answer text persisted?** M2 stores only
+   `search_results` rows (title/url/date) and surfaces the answer text in the
+   run report; if M3 ranking wants it as context, decide where it lives
+   (NOT as a source_items excerpt — ADR-0003 §6).
+4. **Sonar reliability spike still pending** — gated on `PERPLEXITY_API_KEY`;
+   one command when granted: `scripts/sonar_spike`. A failed spike is a
+   principal checkpoint (GNews fallback, cost change), never absorbed.
+5. **Cross-feed same-URL attribution is last-writer-wins** (QA-pinned:
+   `test_ingest.py::test_cross_feed_same_url_same_day_is_last_writer_wins`).
+   A wire-flagged republisher fetched later overwrites the original outlet's
+   attribution + wire flag for that day's snapshot. M3 corroboration counting
+   needs a deliberate ruling here — do not inherit by accident. (QA obs. 1,
+   2026-07-04.)
+6. **Well-formed HTML at an rss_url is a permanent silent 0-item success** —
+   doctor catches it, the ingest report never will. M3 candidate: flag sources
+   that parse but never yield entries. (QA obs. 2.)
+7. **Feed body size is unbounded** — items are capped at 20/feed, bytes are
+   not; one `read(cap)` away from bounded. Low risk with curated feeds. (QA
+   obs. 3.)

@@ -59,14 +59,18 @@ def _scrubbed_env(tmp_path):
         "HOME": os.environ.get("HOME", str(tmp_path)),
         "PYTHONPATH": str(tmp_path),
         "PYTHONIOENCODING": "utf-8",
+        # Force-empty: a real .env (with a real key) now exists in the
+        # checkout. The doctor gives the process environment precedence, so
+        # empty vars here keep the keyless contract testable — and make it
+        # impossible for this subprocess to reach a paid API, ever.
+        "OPENAI_API_KEY": "",
+        "PERPLEXITY_API_KEY": "",
+        "GNEWS_API_KEY": "",
     }
 
 
 @pytest.mark.skipif(not SYSTEM_PYTHON.exists(), reason="no /usr/bin/python3 on this machine")
 def test_preinstall_doctor_is_friendly_exit_1_with_zero_network(tmp_path):
-    if (PROTOTYPE_ROOT / ".env").exists():
-        pytest.skip("a real .env exists in the checkout — keyless premise not testable")
-
     net_log = tmp_path / "network-attempts.log"
     (tmp_path / "sitecustomize.py").write_text(
         SITECUSTOMIZE_TEMPLATE.format(log_path=str(net_log)), encoding="utf-8"
@@ -90,7 +94,16 @@ def test_preinstall_doctor_is_friendly_exit_1_with_zero_network(tmp_path):
     assert OPENAI_HINT in proc.stdout
     assert PERPLEXITY_HINT in proc.stdout
     assert "sources.yaml validation skipped (PyYAML not installed" in proc.stdout
-    assert ".env not found — run: cp .env.example .env" in proc.stdout
+    # A real .env may or may not exist in the checkout; both states must
+    # render friendly (the forced-empty process env keeps keys "not set").
+    assert (
+        ".env not found — run: cp .env.example .env" in proc.stdout
+        or ".env found" in proc.stdout
+    )
+    # No secret-shaped value is ever echoed, whatever .env contains.
+    import re
+
+    assert not re.search(r"\b(sk|pplx|gsk)-[A-Za-z0-9_-]{12,}", combined)
 
     # The stdlib-only schema check still works pre-install:
     assert (

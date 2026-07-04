@@ -1,0 +1,9 @@
+Today is {today_utc} (UTC). I already follow these news outlets closely: {outlets}.
+
+My standing interests, broad and granular: {interests}.
+
+What is happening in the news today that MATTERS for those interests but is
+unlikely to be covered by the outlets I already follow? Report only concrete,
+current news developments — no evergreen background, no speculation. For each
+item: one sentence on what happened and one on why it matters for my
+interests. Skip anything my listed outlets would obviously headline.

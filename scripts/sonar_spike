@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Sonar reliability spike — Rook's gate (DECISIONS.md 2026-07-02 dissent).
+
+ONE command, runnable the moment PERPLEXITY_API_KEY lands in .env:
+
+    scripts/sonar_spike            # 5 probes
+    scripts/sonar_spike 10         # more probes (1-25; each probe is a paid call)
+
+What it answers: is Sonar reliable enough for unattended on-demand use —
+latency spread, error shape, search_results presence — before we depend on it.
+Each probe is a real discovery-shaped call (the versioned prompt, tiny answer
+budget); total cost for the default run is well under a cent, printed per
+call. Refuses politely (exit 1) with no key: this spike is deliberately gated
+on the principal granting access.
+
+Exit codes: 0 = all probes succeeded; 1 = no key / any probe failed (details
+above the summary — a failed spike is a principal checkpoint, not something
+to absorb silently).
+"""
+
+import sys
+import time
+from pathlib import Path
+
+PROTOTYPE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
+
+
+def main() -> int:
+    import os
+
+    from newslens import config, discovery
+
+    try:
+        config.load_env()
+    except ImportError:
+        print("python-dotenv not installed — run pip install -e . first (see SETUP.md)")
+        return 1
+
+    key = (os.environ.get("PERPLEXITY_API_KEY") or "").strip()
+    if not key:
+        print("PERPLEXITY_API_KEY not set — the spike is gated on the principal")
+        print("granting the key (get one at perplexity.ai/settings/api, add to .env,")
+        print("re-run). No network was touched.")
+        return 1
+
+    # M2 review finding 2: the probe count is a money knob — validate it,
+    # floor 1 (zero/negative must not pass vacuously), hard cap 25 (each
+    # probe is a paid call and may retry once).
+    MAX_PROBES = 25
+    raw = sys.argv[1] if len(sys.argv) > 1 else "5"
+    try:
+        probes = int(raw)
+    except ValueError:
+        print(f"probe count must be a whole number, got {raw!r} — "
+              f"usage: scripts/sonar_spike [N], N between 1 and {MAX_PROBES}")
+        return 1
+    if not 1 <= probes <= MAX_PROBES:
+        print(f"probe count must be between 1 and {MAX_PROBES}, got {probes} — "
+              "refusing: zero probes would pass the reliability gate vacuously, "
+              "and large counts are an unattended spend loop.")
+        return 1
+    try:
+        cfg = config.load_sources()
+    except config.SourcesParseError as exc:
+        print(f"cannot build the discovery prompt: {exc}")
+        return 1
+    if cfg.has_interests:
+        prompt = discovery.build_prompt(cfg)
+    else:
+        prompt = (
+            "In one sentence: name one significant news development from today. "
+            "(NewsLens reliability probe — no interests configured yet.)"
+        )
+
+    print(f"Sonar reliability spike — {probes} probe(s), model=sonar, "
+          f"max_tokens={discovery.DISCOVERY_MAX_TOKENS}")
+    failures = 0
+    latencies = []
+    total_tokens = 0
+    for i in range(1, probes + 1):
+        started = time.monotonic()
+        try:
+            payload = discovery.call_sonar(key, prompt)
+            elapsed = time.monotonic() - started
+            latencies.append(elapsed)
+            usage = (payload.get("usage") or {}).get("total_tokens") or 0
+            total_tokens += usage
+            n_results = len(payload.get("search_results") or [])
+            print(f"  probe {i}: ok — {elapsed:.1f}s, {usage} tokens, "
+                  f"{n_results} search_results")
+        except Exception as exc:
+            elapsed = time.monotonic() - started
+            reason = getattr(exc, "code", None) or getattr(exc, "reason", None) or exc
+            failures += 1
+            print(f"  probe {i}: FAILED after {elapsed:.1f}s — "
+                  f"{type(exc).__name__}: {reason}")
+
+    print()
+    if latencies:
+        print(f"latency: min {min(latencies):.1f}s / max {max(latencies):.1f}s / "
+              f"mean {sum(latencies) / len(latencies):.1f}s")
+    est = total_tokens / 1_000_000 * discovery.SONAR_USD_PER_MTOK
+    print(f"total tokens {total_tokens} (~${est:.4f})")
+    if failures:
+        print(f"VERDICT: {failures}/{probes} probes failed — take this to the "
+              "principal (GNews fallback checkpoint per DECISIONS.md), don't absorb it.")
+        return 1
+    print("VERDICT: all probes succeeded — record the spike result in the build log.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

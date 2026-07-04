@@ -84,9 +84,14 @@ def test_gitignore_protects_secrets_and_local_state(path):
         ".env.example",
         "pyproject.toml",
         "migrations/0001_initial_schema.sql",
+        "migrations/0002_briefings_date_format.sql",
         "prompts/doctor_sonar_ping.txt",
+        "prompts/discovery_query.txt",
         "scripts/doctor",
+        "scripts/sonar_spike",
         "src/newslens/doctor.py",
+        "src/newslens/ingest.py",
+        "src/newslens/discovery.py",
         "tests/conftest.py",
     ],
 )
@@ -130,3 +135,20 @@ def test_pyproject_declares_the_39_floor_and_the_entry_point():
     pyproject = (PROTOTYPE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.9"' in pyproject
     assert 'newslens = "newslens.cli:main"' in pyproject
+
+
+def test_pyproject_declares_the_m2_feedparser_dependency():
+    """feedparser is M2's one new dependency (ADR-0003 §4, escalation-listed,
+    principal-approved). It must be declared where installer and reviewer
+    expect it."""
+    pyproject = (PROTOTYPE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "feedparser" in pyproject
+
+
+def test_env_file_is_never_tracked_by_git():
+    """A real .env now exists locally AND this repo has a GitHub remote —
+    this pin is the tripwire that keeps the key out of history: .env must be
+    ignored and must never appear in the index."""
+    assert _git("check-ignore", "-q", ".env").returncode == 0
+    ls = _git("ls-files", "--", ".env")
+    assert ls.stdout.strip() == ""

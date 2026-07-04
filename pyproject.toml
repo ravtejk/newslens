@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "newslens"
-version = "0.1.0"
+version = "0.1.0"  # version bumps ride with QA's suite updates, not mid-loop
 description = "NewsLens — memory-threaded daily news briefing with audio (personal prototype)"
 readme = "README.md"
 requires-python = ">=3.9"  # floor matches the principal's machine (system Python 3.9.6)
 dependencies = [
     "pyyaml>=6.0",        # parses sources.yaml (outlets + interests)
     "python-dotenv>=1.0", # loads .env (principal-filled keys)
+    "feedparser>=6.0",    # RSS/Atom/RDF parsing (M2 ingestion) — new dep, escalation-listed
 ]
 
 [project.optional-dependencies]
