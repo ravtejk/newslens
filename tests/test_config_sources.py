@@ -149,6 +149,16 @@ def test_missing_file_is_a_parse_error_naming_the_path(tmp_path):
     [
         ("- a\n- b\n", "top level must be a mapping"),
         ("sauces:\n  - name: A\n", "unknown top-level key `sauces`"),
+        (
+            "sources:\n  - name: Twin\n    rss_url: https://a.example/1\n"
+            "  - name: twin\n    rss_url: https://a.example/2\n",
+            "duplicate source name",
+        ),
+        (
+            "sources:\n  - name: First\n    rss_url: https://same.example/f\n"
+            "  - name: Second\n    rss_url: https://same.example/f\n",
+            "duplicate rss_url on 'Second' and 'First'",
+        ),
         ("sources: {}\n", "`sources` must be a list"),
         ("sources:\n  - just-a-string\n", "source #1 must be a mapping"),
         ("sources:\n  - rss_url: https://x.example/f\n", "`name` is required"),

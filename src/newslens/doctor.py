@@ -499,16 +499,14 @@ def check_database() -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def check_feed_urls(sources) -> List[Result]:
+    from . import net  # shared 308-following opener + pipeline UA: the doctor
+    # must see exactly what ingestion sees (M2 review carryover)
+
     out: List[Result] = []
     for source in sources:
-        req = urllib.request.Request(
-            source.rss_url, headers={"User-Agent": USER_AGENT}
-        )
         started = time.monotonic()
         try:
-            with urllib.request.urlopen(req, timeout=FEED_TIMEOUT_S) as resp:
-                head = resp.read(4096)
-                status = resp.getcode()
+            head, status = net.head_bytes(source.rss_url, timeout=FEED_TIMEOUT_S)
             elapsed = time.monotonic() - started
             if any(marker in head for marker in (b"<rss", b"<feed", b"<?xml", b"<rdf")):
                 out.append(

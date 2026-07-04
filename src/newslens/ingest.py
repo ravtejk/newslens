@@ -31,33 +31,19 @@ from __future__ import annotations
 import re
 import sqlite3
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
-from . import config, db
+from . import config, db, net
 
 FEED_TIMEOUT_S = 20          # WaPo's feeds measured 8-10s in the M2 sweep; headroom
 MAX_ITEMS_PER_FEED = 20      # per feed per run; ~30 enabled feeds => bounded volume
 MAX_EXCERPT_CHARS = 1500
-USER_AGENT = "NewsLens/0.1 (personal news briefing prototype; RSS reader)"
+USER_AGENT = net.USER_AGENT  # ONE fetch identity, shared with the doctor (net.py)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
-
-
-class _RedirectHandler308(urllib.request.HTTPRedirectHandler):
-    """Python 3.9's urllib does not follow HTTP 308 (support landed in 3.11).
-    Real outlets in the principal's list 308 (carnegieendowment.org, The
-    Hill's legacy paths), so treat 308 exactly like 301."""
-
-    def http_error_308(self, req, fp, code, msg, headers):  # noqa: N802 (urllib API)
-        return self.http_error_301(req, fp, 301, msg, headers)
-
-
-_OPENER = urllib.request.build_opener(_RedirectHandler308())
 
 
 @dataclass
@@ -116,9 +102,9 @@ def strip_html(text: str) -> str:
 
 
 def fetch_feed_bytes(url: str, timeout: int = FEED_TIMEOUT_S) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with _OPENER.open(req, timeout=timeout) as resp:
-        return resp.read()
+    """Shared opener (308-following) + hard byte cap — see net.py. A feed that
+    exceeds the cap is a loud per-source failure, not an unbounded read."""
+    return net.fetch_bytes(url, timeout=timeout)
 
 
 def _entry_published_iso(entry) -> Optional[str]:
@@ -260,6 +246,15 @@ def run_ingest(
             report.items_new += new
             report.items_updated += updated
             report.items_skipped += skipped
+            if new + updated + skipped == 0:
+                # M2 QA observation 2: well-formed HTML at an rss_url parses
+                # "successfully" with zero entries forever — a silent hole
+                # unless the run report says so.
+                report.warnings.append(
+                    f"{source.name}: fetched and parsed but yielded 0 entries — "
+                    "rss_url may point at an HTML page or an empty feed "
+                    "(scripts/doctor's feed-shape check can confirm)"
+                )
 
         if with_discovery:
             from . import discovery  # local import: keeps ingest importable alone

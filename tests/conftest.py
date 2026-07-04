@@ -160,6 +160,8 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(spec["status"])
         if spec.get("location"):
             self.send_header("Location", spec["location"])
+        for name, value in (spec.get("headers") or {}).items():
+            self.send_header(name, value)
         body = spec.get("body", b"")
         self.send_header("Content-Type", spec.get("content_type", "application/xml"))
         self.send_header("Content-Length", str(len(body)))
@@ -257,14 +259,17 @@ class FakeAPI:
         body: bytes = b"",
         content_type: str = "application/xml",
         location: str = None,
+        headers: dict = None,
     ) -> str:
         """Register a dynamic response for `path` (GET and POST). Returns the
-        absolute URL. `location` adds a Location header (for redirect tests)."""
+        absolute URL. `location` adds a Location header (redirect tests);
+        `headers` adds arbitrary extras (e.g. Retry-After)."""
         self.server.routes[path] = {
             "status": status,
             "body": body,
             "content_type": content_type,
             "location": location,
+            "headers": headers,
         }
         return self.base_url + path
 

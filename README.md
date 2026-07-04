@@ -7,11 +7,15 @@ threads continuity through a transparent, hand-editable memory, and labels
 corroboration honestly (counts of distinct named outlets — never the word
 "verified").
 
-**Status: milestone 2 of 8** (source ingestion). What exists: the schema, the
-doctor, and working tier-1 ingestion — `newslens ingest` pulls the principal's
-verified outlet list into `source_items`, idempotently, with per-feed graceful
-degradation. The Sonar discovery seam is built but cold (key not yet granted).
-No ranking/briefing generation yet. Spec:
+**Status: milestone 3 of 8** (ranking + corroboration). What exists: the
+schema, the doctor, working tier-1 ingestion (`newslens ingest` — idempotent,
+per-feed graceful degradation), and the editorial pass: `newslens rank`
+clusters the day's items, selects the top 1–5 by world + personal impact
+(bounded followed-analyst boost, 1-slot labeled urgency override, 14-day
+recency window with an honesty line), attaches corroboration labels, and
+writes the briefing row — instrumented in append-only `ranking_runs`. Narrative
+text and audio are milestones 5–6; memory threading is milestone 4. The Sonar
+discovery seam is built but cold (key deferred by choice). Spec:
 `workspace/debates/2026-07-02--newslens--engineering.md` (§A–F); scope change:
 **v1 is on-demand only** — no scheduled generation (DECISIONS.md 2026-07-03).
 
@@ -33,13 +37,14 @@ everything required for a real run is in place; exit `1` means at least one
 keys and no sources is expected to exit `1` today — that is the honest state,
 and every missing item comes with its fix.
 
-## Commands (milestone 2)
+## Commands (milestone 3)
 
 | Command | What it does |
 |---|---|
 | `newslens migrate` | Create/upgrade `data/newslens.db`. Idempotent — safe to re-run any time. |
 | `newslens doctor` / `scripts/doctor` | Health check: Python/deps, keys (validated with harmless read-only calls), schema, `sources.yaml` (tiers, disabled, reference-only), feed URLs, cost estimate. `scripts/doctor` works even before `pip install`. |
 | `newslens ingest [--no-discovery]` | Pull all enabled sources into `source_items` (idempotent per UTC fetch-day), then the one capped Sonar discovery call if `PERPLEXITY_API_KEY` exists (RSS-only otherwise, and it says so). Partial feed failures degrade gracefully with a visible "N of M sources unavailable" line. |
+| `newslens rank [--date YYYY-MM-DD]` | The editorial pass (M3): clusters items from the recency window (since your last briefing, 14-day cap — the report states plainly when ingested history is shorter), ranks the top 1-5 by world impact + your tags (topic match outweighs domain match; followed analysts get a bounded boost — better odds, never a guaranteed slot), applies the 1-slot urgency override with its unmissable label, corroboration-labels every story with the standing caveat, and writes the briefings row (prior version archived to history first). Needs `OPENAI_API_KEY`; budget-capped; real token cost logged. |
 | `scripts/sonar_spike` | The pending Sonar reliability gate — one command the moment the key lands. Refuses politely without it. |
 
 Coming later (deliberately not stubbed): `generate` (M5), `read`/`listen`
@@ -95,7 +100,7 @@ refuses politely rather than inventing sources.
 - **No scraping:** feed-provided content only, tags stripped, excerpts
   truncated (1500 chars), max 20 items per feed per run.
 
-## Data model (migrations 0001–0002)
+## Data model (migrations 0001–0004)
 
 | Table | Concern |
 |---|---|
@@ -103,10 +108,12 @@ refuses politely rather than inventing sources.
 | `briefings` | One row per day; story slots reference `source_items` ids (faithfulness by construction); `UNIQUE(date)` anchors idempotent re-runs. |
 | `memory` | Tracked topics — `active`/`stale`/`dismissed` staleness policy (14-day auto-stale, principal-only dismissal); syncs to a hand-editable `memory.md` at milestone 4. |
 | `briefings_history` | Append-only log of superseded briefing versions (UPDATE/DELETE abort via triggers) so a re-run can never destroy yesterday's output. |
+| `ranking_runs` | Append-only instrumentation (UPDATE/DELETE abort via triggers since 0004): one row per rank attempt incl. failures — override fired/pool, repairs, cost; feeds the day-14 recalibration readout. |
 
 Timestamps are UTC ISO-8601 text; `briefings.date` is your local calendar day,
 format-enforced (`YYYY-MM-DD`) by triggers since migration 0002. Rationale:
-`adr/0001-schema-three-tables-plus-history.md`, `adr/0003-m2-ingestion-decisions.md`.
+`adr/0001-schema-three-tables-plus-history.md`, `adr/0003-m2-ingestion-decisions.md`,
+`adr/0004-m3-ranking-decisions.md`.
 
 ## Repo layout
 
@@ -115,7 +122,7 @@ migrations/          numbered .sql files; IF NOT EXISTS everywhere (re-apply saf
 prompts/             every LLM-facing prompt is a versioned file, never inline
 scripts/doctor       health check; works pre-install (stdlib-only bootstrap)
 scripts/sonar_spike  the pending Sonar reliability gate (needs the key)
-src/newslens/        paths, db (stdlib-only), config, ingest, discovery, doctor, cli
+src/newslens/        paths, db (stdlib-only), config, net, ingest, discovery, ranking, doctor, cli
 sources.yaml         the principal's tiered outlet list + interests (seeded M2)
 data/                (gitignored) SQLite DB and generated artifacts
 adr/                 one short file per significant technical decision

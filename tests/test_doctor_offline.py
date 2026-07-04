@@ -38,7 +38,7 @@ PERPLEXITY_HINT = (
 )
 SCRATCH_TABLES_LINE = (
     "migrations apply cleanly to a scratch DB — tables: "
-    "briefings, briefings_history, memory, source_items"
+    "briefings, briefings_history, memory, ranking_runs, source_items"
 )
 
 
@@ -107,8 +107,9 @@ def test_doctor_flags_a_db_behind_on_migrations(tmp_paths, no_network, capsys):
     code, out = run_doctor_captured(capsys)
     assert code == 1
     assert (
-        "behind by 2 migration(s) (0001_initial_schema.sql, "
-        "0002_briefings_date_format.sql)"
+        "behind by 4 migration(s) (0001_initial_schema.sql, "
+        "0002_briefings_date_format.sql, 0003_ranking_runs.sql, "
+        "0004_ranking_runs_append_only.sql)"
     ) in out
     assert "run: newslens migrate" in out
 

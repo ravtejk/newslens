@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from conftest import PROTOTYPE_ROOT
 
 SPIKE = PROTOTYPE_ROOT / "scripts" / "sonar_spike"
@@ -83,4 +85,42 @@ def test_spike_refuses_politely_keyless_with_zero_network(tmp_path):
     # And "no network" is measured, not narrated:
     assert not net_log.exists() or net_log.read_text() == "", (
         f"keyless spike attempted network calls: {net_log.read_text()}"
+    )
+
+
+@pytest.mark.parametrize(
+    "arg, fragment",
+    [
+        ("abc", "must be a whole number"),
+        ("0", "must be between 1 and 25"),
+        ("-3", "must be between 1 and 25"),
+        ("26", "must be between 1 and 25"),
+    ],
+)
+def test_spike_validates_probe_count_before_any_network(tmp_path, arg, fragment):
+    """M2 carryover (review finding 2): the probe count is a money knob —
+    non-int/zero/negative/oversize must refuse BEFORE any call. A fake key is
+    set so validation (which sits after the key gate) is reachable; the
+    socket spy proves refusal happens with zero network."""
+    net_log = tmp_path / "network-attempts.log"
+    (tmp_path / "sitecustomize.py").write_text(
+        SITECUSTOMIZE_TEMPLATE.format(log_path=str(net_log)), encoding="utf-8"
+    )
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": os.environ.get("HOME", str(tmp_path)),
+        "PYTHONPATH": str(tmp_path),
+        "PYTHONIOENCODING": "utf-8",
+        "PERPLEXITY_API_KEY": "pplx-qa-fake-never-real",
+        "OPENAI_API_KEY": "",
+    }
+    proc = subprocess.run(
+        [sys.executable, str(SPIKE), arg],
+        capture_output=True, text=True, timeout=120, cwd=str(tmp_path), env=env,
+    )
+    assert proc.returncode == 1
+    assert fragment in proc.stdout
+    assert "Traceback" not in proc.stdout + proc.stderr
+    assert not net_log.exists() or net_log.read_text() == "", (
+        f"spike with bad arg {arg!r} attempted network: {net_log.read_text()}"
     )

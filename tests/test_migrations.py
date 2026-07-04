@@ -17,8 +17,12 @@ from newslens import db
 
 MIGRATION_0001 = "0001_initial_schema.sql"
 MIGRATION_0002 = "0002_briefings_date_format.sql"
-ALL_MIGRATIONS = [MIGRATION_0001, MIGRATION_0002]  # M2 world: two, in order
-EXPECTED_TABLES = {"source_items", "briefings", "memory", "briefings_history"}
+MIGRATION_0003 = "0003_ranking_runs.sql"
+MIGRATION_0004 = "0004_ranking_runs_append_only.sql"  # M3 fix loop 1 (BUG-5)
+ALL_MIGRATIONS = [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0004]
+EXPECTED_TABLES = {
+    "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
+}
 
 
 def _tables(db_path):
@@ -29,11 +33,11 @@ def _tables(db_path):
         con.close()
 
 
-def test_fresh_migrate_applies_all_and_creates_exactly_four_tables(tmp_path):
+def test_fresh_migrate_applies_all_and_creates_exactly_the_known_tables(tmp_path):
     db_path = tmp_path / "fresh.db"
     ran = db.migrate(db_path=db_path)
     assert ran == ALL_MIGRATIONS  # lexicographic order is the contract
-    # 0002 adds only triggers — the table set must NOT change.
+    # 0002 adds only triggers; 0003 adds exactly ranking_runs.
     assert _tables(db_path) == EXPECTED_TABLES | {"schema_migrations"}
 
 

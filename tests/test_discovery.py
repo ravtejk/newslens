@@ -124,6 +124,33 @@ def test_build_prompt_renders_outlets_interests_and_utc_date():
     assert "{" not in prompt  # every placeholder rendered
 
 
+@pytest.mark.parametrize(
+    "template, exc_name",
+    [
+        ("Outlets {outlets.bogus}", "AttributeError"),
+        ("Today {today_utc:d}", "ValueError"),
+    ],
+)
+def test_render_error_class_degrades_with_the_named_exception(
+    migrated_con, no_network, monkeypatch, tmp_path, template, exc_name
+):
+    """M2 carryover: BUG-3's fix must be class-wide, not KeyError-shaped.
+    Attribute access on a placeholder and a bad format spec are the other
+    common principal-edit typos — each must degrade to RSS-only with the
+    exception named in the status."""
+    pdir = tmp_path / "prompts"
+    pdir.mkdir()
+    (pdir / discovery.PROMPT_FILE).write_text(template, encoding="utf-8")
+    monkeypatch.setattr(paths, "PROMPTS_DIR", pdir)
+    status = discovery.run_discovery(
+        migrated_con, cfg_with_interests(), env=KEY_ENV, now_iso=NOW
+    )  # must not raise
+    assert status.startswith("failed")
+    assert "did not render" in status
+    assert exc_name in status
+    assert no_network == []
+
+
 def test_estimate_cost_is_conservative_and_tiny_at_default_budget():
     prompt = discovery.build_prompt(cfg_with_interests())
     est = discovery.estimate_cost_usd(prompt)

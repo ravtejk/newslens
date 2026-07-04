@@ -38,7 +38,10 @@ NO_INTERESTS_MSG = (
 DEFAULT_BUDGET_CAP_USD_PER_RUN = 0.50
 DEFAULT_GENERATE_HOUR_LOCAL = 6
 
-_VALID_SOURCE_KEYS = {"name", "rss_url", "wire_syndication", "tier", "enabled", "note"}
+_VALID_SOURCE_KEYS = {
+    "name", "rss_url", "wire_syndication", "tier", "enabled", "note",
+    "followed_analyst",  # M3: personal-impact ranking boost for followed writers
+}
 _VALID_TOP_LEVEL_KEYS = {"sources", "interests"}
 _VALID_INTEREST_KEYS = {"broad", "granular"}
 
@@ -64,6 +67,8 @@ class Source:
     tier: str = "full"
     enabled: bool = True
     wire_syndication: bool = False
+    followed_analyst: bool = False  # taxonomy contract §A: personal-impact
+    # credit for a followed writer's items independent of topic match
     note: str = ""
 
     @property
@@ -102,6 +107,10 @@ class SourcesConfig:
     @property
     def has_active_sources(self) -> bool:
         return len(self.fetchable_sources) > 0
+
+    @property
+    def followed_analyst_sources(self) -> List[Source]:
+        return [s for s in self.sources if s.followed_analyst]
 
     @property
     def has_interests(self) -> bool:
@@ -235,6 +244,13 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                     cfg.problems.append(f"source #{i} ({name!r}): `note` must be a string")
                     continue
 
+                followed = entry.get("followed_analyst", False)
+                if not isinstance(followed, bool):
+                    cfg.problems.append(
+                        f"source #{i} ({name!r}): `followed_analyst` must be true or false"
+                    )
+                    continue
+
                 if tier == "cautious" and enabled:
                     cfg.warnings.append(
                         f"cautious source {name!r} is explicitly enabled — aggregator "
@@ -248,9 +264,28 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                         tier=tier,
                         enabled=enabled,
                         wire_syndication=wire,
+                        followed_analyst=followed,
                         note=note.strip(),
                     )
                 )
+
+            # Duplicate lint (M2 review carryover): a copy-pasted entry must be
+            # a loud problem, not a silent double-fetch or double-count.
+            seen_names: dict = {}
+            seen_urls: dict = {}
+            for s in cfg.sources:
+                key = s.name.casefold()
+                if key in seen_names:
+                    cfg.problems.append(f"duplicate source name: {s.name!r}")
+                else:
+                    seen_names[key] = s.name
+                if s.rss_url:
+                    if s.rss_url in seen_urls:
+                        cfg.problems.append(
+                            f"duplicate rss_url on {s.name!r} and {seen_urls[s.rss_url]!r}: {s.rss_url}"
+                        )
+                    else:
+                        seen_urls[s.rss_url] = s.name
 
     raw_interests = raw.get("interests")
     if raw_interests is not None:

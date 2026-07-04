@@ -51,8 +51,9 @@ def test_migrate_applies_then_reports_already_up_to_date(tmp_paths, capsys):
     out_first = capsys.readouterr().out
     assert rc == 0
     assert (
-        "applied 2 migration(s): 0001_initial_schema.sql, "
-        "0002_briefings_date_format.sql"
+        "applied 4 migration(s): 0001_initial_schema.sql, "
+        "0002_briefings_date_format.sql, 0003_ranking_runs.sql, "
+        "0004_ranking_runs_append_only.sql"
     ) in out_first
     assert str(paths.DB_PATH) in out_first
 
@@ -149,3 +150,97 @@ def test_ingest_all_sources_down_is_exit_1_with_degradation_detail(
     assert "no source could be fetched this run" in captured.err
     assert "1 of 1 sources unavailable this run" in captured.out
     assert "✗ Down:" in captured.out
+
+
+# --- newslens rank (milestone 3) --------------------------------------------------
+
+INTERESTED_SOURCES = (
+    "sources:\n"
+    "  - name: Outlet A\n"
+    "    rss_url: https://a.invalid/feed\n"
+    "interests:\n"
+    "  granular:\n"
+    "    - AI regulation\n"
+)
+
+
+def test_rank_rejects_malformed_date_fast(capsys):
+    rc = cli.main(["rank", "--date", "2026-7-4"])
+    assert rc == 2
+    assert "--date must be YYYY-MM-DD" in capsys.readouterr().err
+
+
+def test_rank_keyless_is_a_polite_exit_1_with_no_request(
+    tmp_paths, fake_api, monkeypatch, capsys
+):
+    from newslens import ranking
+
+    monkeypatch.setattr(
+        ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
+    )
+    paths.SOURCES_FILE.write_text(INTERESTED_SOURCES, encoding="utf-8")
+    rc = cli.main(["rank"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "OPENAI_API_KEY not set" in err
+    assert [r for r in fake_api.recorded if r["method"] == "POST"] == []
+
+
+def test_rank_happy_path_prints_window_caveat_override_and_cost(
+    tmp_paths, fake_api, monkeypatch, capsys
+):
+    import json as _json
+
+    from newslens import db, ranking
+
+    monkeypatch.setattr(
+        ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-qa-fake-cli")
+    paths.SOURCES_FILE.write_text(INTERESTED_SOURCES, encoding="utf-8")
+    db.migrate()
+    con = db.connect()
+    try:
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        con.execute(
+            "INSERT INTO source_items (id, source_type, outlet, url, title, fetched_at)"
+            " VALUES (1, 'rss', 'Outlet A', 'https://a.invalid/1', 'Story', ?)",
+            (now,),
+        )
+        con.commit()
+    finally:
+        con.close()
+    payload = {
+        "clusters": [
+            {
+                "story_title": "Tagged story",
+                "summary": "Matched.",
+                "item_ids": [1],
+                "matched_tags": [{"name": "AI regulation", "level": "topic"}],
+                "matched_memory": [],
+                "world_impact": 6,
+                "world_impact_reason": "Wide effect",
+            }
+        ]
+    }
+    fake_api.add_route(
+        "/chat/completions",
+        status=200,
+        body=_json.dumps(
+            {
+                "choices": [{"message": {"content": _json.dumps(payload)}}],
+                "usage": {"prompt_tokens": 900, "completion_tokens": 150},
+            }
+        ).encode("utf-8"),
+        content_type="application/json",
+    )
+    rc = cli.main(["rank", "--date", "2026-07-04"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "story budget for 2026-07-04 — 1 of 5 slots filled" in out
+    assert "candidate window:" in out and "ingested history:" in out  # honesty line
+    assert "Note: Corroboration counts distinct outlets" in out       # standing caveat
+    assert "[Reported by 1 named outlet]" in out
+    assert "cost:" in out and "ranking_runs" in out

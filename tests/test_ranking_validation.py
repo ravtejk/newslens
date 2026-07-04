@@ -1,0 +1,570 @@
+"""Ranking LLM seam: hard validation + retry/expense discipline (ADR-0004 §10;
+ranking.py structured-output block; the 2026-07-04 live finding).
+
+Everything runs against the local fake server via ranking.OPENAI_CHAT_URL, or
+pure functions — no real endpoint, no spend, and a real key in .env changes
+nothing (tests pass env dicts explicitly).
+
+KNOWN-RED: test_BUG6_* — ADR-0004 §6 says failed runs log to ranking_runs
+too, but pre-call failures (budget abort) currently log nothing.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import urllib.error
+
+import pytest
+
+from newslens import config, ranking
+
+DATE = "2026-07-04"
+TAGS = {"AI regulation": "topic", "economy": "domain"}
+MEMORY = ["chip export controls"]
+KNOWN_IDS = {1, 2, 3, 4}
+
+
+def cluster(
+    ids,
+    title="A story",
+    summary="What happened.",
+    tags=None,
+    memory=None,
+    impact=5,
+    reason="Because it matters.",
+):
+    return {
+        "story_title": title,
+        "summary": summary,
+        "item_ids": ids,
+        "matched_tags": tags or [],
+        "matched_memory": memory or [],
+        "world_impact": impact,
+        "world_impact_reason": reason,
+    }
+
+
+def envelope(payload, prompt_tokens=1000, completion_tokens=200):
+    return json.dumps(
+        {
+            "choices": [{"message": {"content": json.dumps(payload)}}],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            },
+        }
+    ).encode("utf-8")
+
+
+def validate(payload):
+    return ranking.validate_payload(payload, KNOWN_IDS, TAGS, MEMORY)
+
+
+# --- validate_payload hostility -------------------------------------------------
+
+def test_valid_payload_passes_and_truncates():
+    out = validate(
+        {"clusters": [cluster([1, 2], title="T" * 400, summary="S" * 500,
+                              tags=[{"name": "AI regulation", "level": "topic"}])]}
+    )
+    assert len(out) == 1
+    assert len(out[0]["story_title"]) == 300
+    assert len(out[0]["summary"]) == 400
+    assert out[0]["matched_tags"] == [{"name": "AI regulation", "level": "topic"}]
+
+
+@pytest.mark.parametrize("payload", ["not a dict", {"no_clusters": []}, {"clusters": "x"}])
+def test_wrong_shape_is_rejected_outright(payload):
+    with pytest.raises(ValueError) as excinfo:
+        validate(payload)
+    assert "clusters" in str(excinfo.value)
+
+
+def test_far_too_many_clusters_refused():
+    with pytest.raises(ValueError) as excinfo:
+        validate({"clusters": [cluster([1]) for _ in range(25)]})
+    assert "far over" in str(excinfo.value)
+
+
+def test_invented_item_ids_rejected():
+    with pytest.raises(ValueError) as excinfo:
+        validate({"clusters": [cluster([1, 99])]})
+    assert "invented item_ids [99]" in str(excinfo.value)
+
+
+def test_cross_cluster_item_reuse_rejected_the_live_finding_class():
+    """The 2026-07-04 live failure class: the model put items 514/797 in two
+    clusters; the partition rule must reject the whole payload, naming ids."""
+    with pytest.raises(ValueError) as excinfo:
+        validate({"clusters": [cluster([1, 2]), cluster([2, 3], title="Other")]})
+    assert "item_ids [2] already used by another cluster" in str(excinfo.value)
+
+
+def test_releveled_and_unknown_tags_rejected():
+    with pytest.raises(ValueError) as excinfo:
+        validate(
+            {"clusters": [cluster(
+                [1],
+                tags=[{"name": "AI regulation", "level": "domain"},  # re-leveled
+                      {"name": "made-up tag", "level": "topic"}],    # not listed
+            )]}
+        )
+    msg = str(excinfo.value)
+    assert msg.count("not an exact listed tag") == 2
+
+
+def test_unknown_memory_thread_rejected():
+    with pytest.raises(ValueError) as excinfo:
+        validate({"clusters": [cluster([1], memory=["a thread we never provided"])]})
+    assert "not in the provided threads" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("impact", [11, -1, True, "7"])
+def test_out_of_range_or_non_numeric_world_impact_rejected(impact):
+    with pytest.raises(ValueError) as excinfo:
+        validate({"clusters": [cluster([1], impact=impact)]})
+    assert "world_impact must be a number 0-10" in str(excinfo.value)
+
+
+def test_boundary_impacts_accepted_and_floats_rounded():
+    out = validate(
+        {"clusters": [cluster([1], impact=0), cluster([2], impact=10),
+                      cluster([3], impact=7.6)]}
+    )
+    assert [c["world_impact"] for c in out] == [0, 10, 8]
+
+
+@pytest.mark.parametrize(
+    "field, value, fragment",
+    [
+        ("story_title", "", "story_title missing/empty"),
+        ("summary", "  ", "summary missing/empty"),
+        ("world_impact_reason", "", "world_impact_reason missing/empty"),
+        ("item_ids", [], "non-empty list of integers"),
+        ("item_ids", ["1"], "non-empty list of integers"),
+    ],
+)
+def test_missing_or_empty_required_fields_rejected(field, value, fragment):
+    c = cluster([1])
+    c[field] = value
+    with pytest.raises(ValueError) as excinfo:
+        validate({"clusters": [c]})
+    assert fragment in str(excinfo.value)
+
+
+def test_all_problems_reported_not_just_the_first():
+    """A retry/report is only actionable if EVERY problem is named."""
+    bad = {
+        "clusters": [
+            cluster([1, 99], reason=""),                       # invented id + empty reason
+            cluster([1], tags=[{"name": "nope", "level": "topic"}]),  # dupe id + bad tag
+        ]
+    }
+    with pytest.raises(ValueError) as excinfo:
+        validate(bad)
+    msg = str(excinfo.value)
+    for fragment in (
+        "invented item_ids [99]",
+        "world_impact_reason missing/empty",
+        "item_ids [1] already used by another cluster",
+        "not an exact listed tag",
+    ):
+        assert fragment in msg, f"missing {fragment!r} in {msg!r}"
+
+
+# --- HTTP error helpers ------------------------------------------------------------
+
+def _http_error(code, body=b"", headers=None):
+    import email.message
+    import io
+
+    hdrs = email.message.Message()
+    for k, v in (headers or {}).items():
+        hdrs[k] = v
+    return urllib.error.HTTPError(
+        "https://api.fake/v1/chat/completions", code, "err", hdrs, io.BytesIO(body)
+    )
+
+
+def test_http_error_detail_extracts_code_and_message():
+    exc = _http_error(
+        429, json.dumps({"error": {"code": "insufficient_quota", "message": "No credits"}}).encode()
+    )
+    assert ranking._http_error_detail(exc) == "insufficient_quota: No credits"
+
+
+def test_http_error_detail_tolerates_non_json_bodies():
+    assert ranking._http_error_detail(_http_error(500, b"<html>oops</html>")) == ""
+
+
+@pytest.mark.parametrize(
+    "header, expected", [("3.5", 3.5), ("999", 20.0), ("soon", 10.0), (None, 10.0)]
+)
+def test_retry_after_seconds_parses_caps_and_defaults(header, expected):
+    headers = {"Retry-After": header} if header is not None else {}
+    assert ranking._retry_after_seconds(_http_error(429, b"", headers)) == expected
+
+
+# --- call_llm_validated: retry + expense discipline (offline fake server) ------------
+
+@pytest.fixture
+def llm(fake_api, monkeypatch):
+    monkeypatch.setattr(
+        ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
+    )
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+    fake_api.sleeps = sleeps
+    return fake_api
+
+
+def _posts(fake_api):
+    return [r for r in fake_api.recorded if r["method"] == "POST"]
+
+
+def call(key="sk-qa-fake"):
+    return ranking.call_llm_validated(key, "prompt", KNOWN_IDS, TAGS, MEMORY)
+
+
+def test_success_returns_clusters_and_usage(llm):
+    llm.add_route(
+        "/chat/completions", status=200,
+        body=envelope({"clusters": [cluster([1])]}),
+        content_type="application/json",
+    )
+    clusters, usage = call()
+    assert len(clusters) == 1 and usage["prompt_tokens"] == 1000
+    assert len(_posts(llm)) == 1
+
+
+def test_401_fails_immediately_naming_the_key(llm):
+    llm.add_route(
+        "/chat/completions", status=401,
+        body=json.dumps({"error": {"code": "invalid_api_key", "message": "Incorrect API key"}}).encode(),
+        content_type="application/json",
+    )
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    assert "regenerate at platform.openai.com" in str(excinfo.value)
+    assert "invalid_api_key" in str(excinfo.value)
+    assert len(_posts(llm)) == 1  # never retried
+    assert llm.sleeps == []
+
+
+def test_429_insufficient_quota_fails_immediately_with_billing_hint(llm):
+    llm.add_route(
+        "/chat/completions", status=429,
+        body=json.dumps({"error": {"code": "insufficient_quota",
+                                   "message": "You exceeded your current quota"}}).encode(),
+        content_type="application/json",
+    )
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    msg = str(excinfo.value)
+    assert "add credits / check billing" in msg
+    assert "cannot catch this" in msg  # names the doctor's blind spot honestly
+    assert len(_posts(llm)) == 1  # retrying spends nothing and fixes nothing
+    assert llm.sleeps == []
+
+
+def test_transient_429_retries_once_honoring_retry_after(llm):
+    llm.add_route(
+        "/chat/completions", status=429,
+        body=json.dumps({"error": {"code": "rate_limit_exceeded", "message": "Rate limit"}}).encode(),
+        content_type="application/json",
+        headers={"Retry-After": "0"},
+    )
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    assert "failed after one retry" in str(excinfo.value)
+    assert "rate limited" in str(excinfo.value)
+    assert len(_posts(llm)) == 2  # exactly one retry
+    assert llm.sleeps == [0.0]   # honored the header, capped semantics tested above
+
+
+def test_5xx_retries_once_then_visible_error(llm):
+    llm.add_route("/chat/completions", status=503, body=b'{"error": "down"}',
+                  content_type="application/json")
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    assert "failed after one retry" in str(excinfo.value)
+    assert len(_posts(llm)) == 2
+
+
+def test_duplicate_ids_payload_repairs_and_succeeds_with_disclosure(llm):
+    """M3 fix loop 1 flips the 2026-07-04 live class from reject-and-retry to
+    DISCLOSED deterministic repair: keep each item's first cluster, drop later
+    duplicates, count every drop — one call, no retry burned."""
+    llm.add_route(
+        "/chat/completions", status=200,
+        body=envelope({"clusters": [cluster([1, 2]), cluster([2, 3], title="B")]}),
+        content_type="application/json",
+    )
+    repairs = {}
+    clusters, usage = ranking.call_llm_validated(
+        "sk-qa-fake", "prompt", KNOWN_IDS, TAGS, MEMORY, repairs=repairs
+    )
+    assert [c["item_ids"] for c in clusters] == [[1, 2], [3]]  # first cluster kept item 2
+    assert repairs["repaired"] == 1
+    assert repairs["dropped"] == [{"item_id": 2, "dropped_from": "B"}]
+    assert repairs["clusters_emptied"] == []
+    assert len(_posts(llm)) == 1  # repaired, not retried
+
+
+def test_cluster_emptied_by_repair_is_dropped_whole_and_disclosed(llm):
+    llm.add_route(
+        "/chat/completions", status=200,
+        body=envelope({"clusters": [cluster([1, 2]), cluster([2, 1], title="Echo")]}),
+        content_type="application/json",
+    )
+    repairs = {}
+    clusters, _ = ranking.call_llm_validated(
+        "sk-qa-fake", "prompt", KNOWN_IDS, TAGS, MEMORY, repairs=repairs
+    )
+    assert len(clusters) == 1  # Echo lost both ids and was removed
+    assert repairs["repaired"] == 2
+    assert repairs["clusters_emptied"] == ["Echo"]
+
+
+@pytest.mark.parametrize(
+    "bad_cluster, fragment",
+    [
+        (cluster([1, 99]), "invented item_ids"),
+        (cluster([1], tags=[{"name": "AI regulation", "level": "domain"}]),
+         "not an exact listed tag"),
+        (cluster([1], impact=11), "world_impact must be a number 0-10"),
+        (cluster([1], reason=""), "world_impact_reason missing/empty"),
+    ],
+)
+def test_repair_scope_other_violation_classes_still_hard_reject_end_to_end(
+    llm, bad_cluster, fragment
+):
+    """The repair is scoped to duplicate assignment ONLY — every other
+    violation class still walks the reject -> one retry -> visible-error
+    path, with the validator's diagnosis in the message."""
+    llm.add_route(
+        "/chat/completions", status=200,
+        body=envelope({"clusters": [bad_cluster]}),
+        content_type="application/json",
+    )
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    msg = str(excinfo.value)
+    assert "failed after one retry" in msg
+    assert "malformed LLM output" in msg
+    assert fragment in msg
+    assert len(_posts(llm)) == 2
+
+
+def test_repair_duplicate_ids_unit_semantics():
+    payload = {
+        "clusters": [
+            cluster([1, 2], title="First"),
+            cluster([2, 3], title="Second"),
+            cluster(["x"], title="NotInts"),  # not this repair's class
+        ]
+    }
+    fixed, info = ranking.repair_duplicate_ids(payload)
+    assert [c["item_ids"] for c in fixed["clusters"]] == [[1, 2], [3], ["x"]]
+    assert info["repaired"] == 1
+    # No duplicates -> payload passes through identically, repaired == 0.
+    clean = {"clusters": [cluster([1]), cluster([2], title="B")]}
+    same, info2 = ranking.repair_duplicate_ids(clean)
+    assert same is clean and info2 == {"repaired": 0}
+    # Unparseable shapes pass through for the validator's usual diagnosis.
+    garbage, info3 = ranking.repair_duplicate_ids("not a dict")
+    assert garbage == "not a dict" and info3 == {"repaired": 0}
+
+
+def test_unreachable_endpoint_retries_once_then_fails(llm, fake_api, monkeypatch):
+    monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.dead_url("/chat"))
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    assert "failed after one retry" in str(excinfo.value)
+
+
+# --- run_rank guards: spend-proofing + instrumentation --------------------------------
+
+def seed_items(con, n=3):
+    now = ranking.datetime.now(ranking.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    for i in range(1, n + 1):
+        con.execute(
+            "INSERT INTO source_items (id, source_type, outlet, url, title, fetched_at)"
+            " VALUES (?, 'rss', ?, ?, ?, ?)",
+            (i, f"Outlet {i}", f"https://o{i}.example/{i}", f"Story {i}", now),
+        )
+    con.commit()
+
+
+def rank_cfg():
+    return config.SourcesConfig(
+        sources=[config.Source(name="Outlet 1", rss_url="https://o1.example/f")],
+        interests_broad=["economy"],
+        interests_granular=["AI regulation"],
+    )
+
+
+def test_keyless_rank_refuses_before_any_request(migrated_con, llm):
+    seed_items(migrated_con)
+    with pytest.raises(ranking.RankingError) as excinfo:
+        ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(), env={})
+    assert "OPENAI_API_KEY not set" in str(excinfo.value)
+    assert "no keyless mode" in str(excinfo.value)
+    assert _posts(llm) == []  # spend-proof: no request was ever built
+
+
+def test_no_interests_refuses_before_any_request(migrated_con, llm):
+    seed_items(migrated_con)
+    cfg = config.SourcesConfig(
+        sources=[config.Source(name="Outlet 1", rss_url="https://o1.example/f")]
+    )
+    with pytest.raises(ranking.RankingError) as excinfo:
+        ranking.run_rank(
+            date=DATE, con=migrated_con, cfg=cfg, env={"OPENAI_API_KEY": "sk-x"}
+        )
+    assert "no interests configured" in str(excinfo.value)
+    assert _posts(llm) == []
+
+
+def test_no_items_in_window_is_a_named_refusal_and_logs_a_failed_run(
+    migrated_con, llm
+):
+    with pytest.raises(ranking.RankingError) as excinfo:
+        ranking.run_rank(
+            date=DATE, con=migrated_con, cfg=rank_cfg(), env={"OPENAI_API_KEY": "sk-x"}
+        )
+    assert "no ingested items inside the candidate window" in str(excinfo.value)
+    assert _posts(llm) == []
+    # M3 fix loop 1: post-connection refusals are instrumentation too.
+    rows = migrated_con.execute(
+        "SELECT meta FROM ranking_runs WHERE date = ?", (DATE,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["meta"])["status"] == "failed"
+
+
+def test_budget_cap_aborts_before_the_call(migrated_con, llm):
+    seed_items(migrated_con)
+    with pytest.raises(ranking.RankingError) as excinfo:
+        ranking.run_rank(
+            date=DATE, con=migrated_con, cfg=rank_cfg(),
+            env={"OPENAI_API_KEY": "sk-x", "BUDGET_CAP_USD_PER_RUN": "0.0001"},
+        )
+    assert "exceeds BUDGET_CAP_USD_PER_RUN" in str(excinfo.value)
+    assert _posts(llm) == []  # the guard fired BEFORE any money could move
+
+
+def test_BUG6_budget_abort_must_log_a_ranking_runs_row(migrated_con, llm):
+    """KNOWN-RED (BUG-6): ADR-0004 §6 — 'Failed runs log too (status=failed)'.
+    Pre-call failures (budget abort) currently log NOTHING, so the day-14
+    readout cannot see that runs were dying on a misconfigured cap.
+    Implementer call: log pre-call RankingErrors once the date is known, or
+    take a narrowed contract back through review."""
+    seed_items(migrated_con)
+    with pytest.raises(ranking.RankingError):
+        ranking.run_rank(
+            date=DATE, con=migrated_con, cfg=rank_cfg(),
+            env={"OPENAI_API_KEY": "sk-x", "BUDGET_CAP_USD_PER_RUN": "0.0001"},
+        )
+    rows = migrated_con.execute(
+        "SELECT meta FROM ranking_runs WHERE date = ?", (DATE,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["meta"])["status"] == "failed"
+
+
+def test_llm_failure_logs_a_failed_ranking_runs_row(migrated_con, llm):
+    """The live 2026-07-04 behavior, pinned: an LLM/validation failure raises
+    RankingError AND leaves a status=failed instrumentation row."""
+    seed_items(migrated_con)
+    llm.add_route("/chat/completions", status=503, body=b'{"error": "down"}',
+                  content_type="application/json")
+    with pytest.raises(ranking.RankingError):
+        ranking.run_rank(
+            date=DATE, con=migrated_con, cfg=rank_cfg(),
+            env={"OPENAI_API_KEY": "sk-x"},
+        )
+    rows = migrated_con.execute(
+        "SELECT meta FROM ranking_runs WHERE date = ?", (DATE,)
+    ).fetchall()
+    assert len(rows) == 1
+    meta = json.loads(rows[0]["meta"])
+    assert meta["status"] == "failed"
+    assert "failed after one retry" in meta["error"]
+    # And no briefing row was written for the failed run:
+    assert migrated_con.execute(
+        "SELECT COUNT(*) FROM briefings WHERE date = ?", (DATE,)
+    ).fetchone()[0] == 0
+
+
+def test_repaired_run_succeeds_end_to_end_with_full_disclosure(migrated_con, llm):
+    """The M3 fix-loop contract end to end: a duplicate-assignment payload
+    (with one cluster fully emptied) repairs, ranks, persists — and the
+    repair is disclosed BOTH as a visible run warning AND in
+    ranking_runs.meta.repairs. Never silent."""
+    seed_items(migrated_con)
+    payload = {
+        "clusters": [
+            cluster([1, 2], title="Keeper",
+                    tags=[{"name": "AI regulation", "level": "topic"}]),
+            cluster([2, 3], title="Partial"),
+            cluster([3, 1], title="Ghost"),  # loses both ids -> emptied
+        ]
+    }
+    llm.add_route(
+        "/chat/completions", status=200, body=envelope(payload),
+        content_type="application/json",
+    )
+    report = ranking.run_rank(
+        date=DATE, con=migrated_con, cfg=rank_cfg(), env={"OPENAI_API_KEY": "sk-x"}
+    )
+    assert len(_posts(llm)) == 1  # repaired on the first attempt, no retry
+    assert {s.story_title for s in report.slots} <= {"Keeper", "Partial"}
+
+    repair_warnings = [w for w in report.warnings if "clustering repair" in w]
+    assert len(repair_warnings) == 1
+    assert "3 duplicate item assignment(s) dropped" in repair_warnings[0]
+    assert "1 cluster(s) emptied and removed" in repair_warnings[0]
+    assert "ranking_runs.meta.repairs" in repair_warnings[0]
+
+    run = migrated_con.execute(
+        "SELECT meta FROM ranking_runs WHERE date = ?", (DATE,)
+    ).fetchone()
+    meta = json.loads(run["meta"])
+    assert meta["status"] == "ok"
+    assert meta["repairs"]["repaired"] == 3
+    assert meta["repairs"]["clusters_emptied"] == ["Ghost"]
+    # The briefing row landed despite the repair:
+    assert migrated_con.execute(
+        "SELECT COUNT(*) FROM briefings WHERE date = ?", (DATE,)
+    ).fetchone()[0] == 1
+
+
+# --- render-failure class (BUG-3 carryover pins, ranking side) --------------------------
+
+@pytest.mark.parametrize(
+    "template, exc_name",
+    [
+        ("Window {window_desc}; broken {items_block.nope}", "AttributeError"),
+        ("Cap {max_clusters[0]} is not subscriptable", "TypeError"),
+        ("Unknown {placeholder_that_does_not_exist}", "KeyError"),
+    ],
+)
+def test_prompt_render_errors_are_named_ranking_failures_not_crashes(
+    migrated_con, llm, monkeypatch, tmp_path, template, exc_name
+):
+    from newslens import paths
+
+    seed_items(migrated_con)
+    pdir = tmp_path / "prompts"
+    pdir.mkdir()
+    (pdir / ranking.PROMPT_FILE).write_text(template, encoding="utf-8")
+    monkeypatch.setattr(paths, "PROMPTS_DIR", pdir)
+    with pytest.raises(ranking.RankingError) as excinfo:
+        ranking.run_rank(
+            date=DATE, con=migrated_con, cfg=rank_cfg(), env={"OPENAI_API_KEY": "sk-x"}
+        )
+    msg = str(excinfo.value)
+    assert "did not render" in msg and exc_name in msg
+    assert _posts(llm) == []  # failed before any request

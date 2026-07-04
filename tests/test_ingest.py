@@ -337,6 +337,35 @@ def test_run_ingest_fetches_only_fetchable_sources(migrated_con, fake_api):
     assert "/off.xml" not in paths_hit
 
 
+def test_zero_entry_sources_get_a_visible_warning(migrated_con, fake_api):
+    """M3 closes M2 QA observation 2: a source that fetches+parses but yields
+    zero entries (well-formed HTML at the rss_url, or a genuinely empty feed)
+    now warns in the run report instead of passing silently forever."""
+    html_url = fake_api.add_route(
+        "/hollow.xml",
+        body=b"<html><body><h1>Login required</h1></body></html>",
+        content_type="text/html",
+    )
+    empty_url = fake_api.add_route("/empty.xml", body=make_rss([]))
+    good_url = fake_api.add_route(
+        "/good2.xml", body=make_rss([{"title": "G", "url": "https://x.example/g2"}])
+    )
+    cfg = config.SourcesConfig(
+        sources=[
+            mk_source(name="Hollow", url=html_url),
+            mk_source(name="Empty", url=empty_url),
+            mk_source(name="Good", url=good_url),
+        ]
+    )
+    report = ingest.run_ingest(con=migrated_con, cfg=cfg, with_discovery=False)
+    assert sorted(report.succeeded) == ["Empty", "Good", "Hollow"]
+    zero_warnings = [w for w in report.warnings if "yielded 0 entries" in w]
+    assert len(zero_warnings) == 2
+    assert any(w.startswith("Hollow:") for w in zero_warnings)
+    assert any(w.startswith("Empty:") for w in zero_warnings)
+    assert not any(w.startswith("Good:") for w in zero_warnings)
+
+
 def test_run_ingest_refuses_politely_when_nothing_is_fetchable(migrated_con):
     cfg = config.SourcesConfig(
         sources=[config.Source(name="Ref", tier="reference_only")]

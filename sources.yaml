@@ -173,24 +173,94 @@ sources:
     note: "weekly cadence — expect fewer, older items than dailies (CoS-suggested, approved 2026-07-03)"
   - name: Chartbook (Adam Tooze)
     rss_url: https://adamtooze.substack.com/feed
-    note: "principal-followed analyst — M3 wires the followed_analyst ranking boost (approved 2026-07-03)"
+    followed_analyst: true
+    note: "principal-followed analyst: personal-impact ranking boost independent of topic match (taxonomy contract 2026-07-03)"
   - name: Noahpinion (Noah Smith)
     rss_url: https://www.noahpinion.blog/feed
-    note: "principal-followed analyst — M3 wires the followed_analyst ranking boost (approved 2026-07-03)"
+    followed_analyst: true
+    note: "principal-followed analyst: personal-impact ranking boost independent of topic match (taxonomy contract 2026-07-03)"
   - name: Slow Boring (Matt Yglesias)
     rss_url: https://www.slowboring.com/feed
-    note: "principal-followed analyst — M3 wires the followed_analyst ranking boost (approved 2026-07-03)"
+    followed_analyst: true
+    note: "principal-followed analyst: personal-impact ranking boost independent of topic match (taxonomy contract 2026-07-03)"
 
-# --- Interests -----------------------------------------------------------------
-# Broad tags steer the briefing's personal-impact ranking axis; granular tags
-# sharpen it and shape the one capped discovery query per run ("what's
-# happening that isn't in my outlets"). The principal has not yet supplied
-# tags — discovery reports itself as skipped until these exist. Format:
+# --- Interests ---------------------------------------------------------------
+# SEEDED 2026-07-04 from the taxonomy contract's mapping of your 90 tags
+# (workspace/debates/2026-07-03--newslens--product.md §C) — review at the M3
+# checkpoint. How the two levels rank (contract §B rule 4): a topic match
+# carries FULL personal-impact weight; a broad/domain match carries HALF.
 #
-# interests:
-#   broad:
-#     - technology
-#     - global economy
-#   granular:
-#     - AI regulation
-#     - semiconductor supply chains
+# NOT here by design:
+#   * your 14 live threads (Iran War, Ceasefire, Ukraine War, Government
+#     Shutdown, DHS Funding, ROAD to Housing Act, Congressional Gridlock,
+#     Helium Shortage, + the acute halves of the five borderline items) —
+#     they seed the `memory` table at milestone 4, not the tag list;
+#   * Adam Tooze / Noah Smith / Matt Yglesias — routed to sources above with
+#     `followed_analyst: true` (a person is a source, not a tag);
+#   * CLOs, BDCs, Leveraged Loans — folded as context under Private Credit
+#     (rule 3: not independently toggleable); ranking still surfaces such
+#     stories via the Private Credit topic match;
+#   * BRICS appeared twice in the raw list — one entry below.
+#
+interests:
+  broad:          # domain-level (half-weight personalization signal)
+    - Middle East Conflict
+    - International Law
+    - Geopolitics
+    - Economic Policy
+    - Central Bank Policy
+    - Global Trade
+    - Africa
+    - Latin America           # merged with "South America" per principal, 2026-07-04
+    - Oceania
+    - Europe
+    - East Asia
+    - Civic Tech
+    - Independent Media
+  granular:       # topic-level (full-weight personalization signal)
+    - US-Israel Relations
+    - Diplomacy
+    - War Crimes
+    - Proxy Conflicts
+    - India Politics
+    - BRICS
+    - Oil Markets
+    - Energy Supply Shock
+    - Strategic Petroleum Reserve
+    - OPEC+
+    - Maritime Chokepoints
+    - Strait of Hormuz        # standing-interest twin; acute events -> memory (M4)
+    - China-Taiwan            # standing-interest twin; acute events -> memory (M4)
+    - Inflation
+    - Federal Reserve
+    - ECB
+    - US Economic Outlook
+    - European Economy
+    - Asian Markets
+    - Mergers & Acquisitions
+    - Private Credit          # CLOs / BDCs / Leveraged Loans fold under here
+    - Direct Lending
+    - Shadow Banking
+    - Credit Default Risk     # standing-interest twin; acute events -> memory (M4)
+    - Recession Risk          # standing-interest twin; acute events -> memory (M4)
+    - Stagflation             # standing-interest twin; acute events -> memory (M4)
+    - Fertilizer Supply
+    - Food Security
+    - Agricultural Commodities
+    - Supply Chain Disruption
+    - Semiconductor Supply
+    - Artificial Intelligence
+    - Housing Policy
+    - Housing Affordability
+    - Household Debt
+    - US Legislative Process
+    - Financial Analysis
+    - Institutional Research
+    - Policy Failure
+    - Regulatory Design
+    - Systemic Risk
+    - Consumer Protection
+    - NYC Subway
+    - New York Politics
+    - New York City
+    - Micromobility
