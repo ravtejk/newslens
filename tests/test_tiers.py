@@ -129,15 +129,34 @@ def test_headline_only_is_fetched_like_any_feed(tmp_path):
 
 
 def test_explicit_disable_works_on_any_tier(tmp_path):
+    # NB: the name must be quoted or non-reserved — bare Off/On/Yes/No are
+    # YAML 1.1 booleans, so an unquoted `name: Off` parses as `name: false`
+    # and is correctly REJECTED. That strictness is a feature; this test
+    # learned it the hard way (M2 QA adjudication).
+    cfg = load(
+        tmp_path,
+        "sources:\n"
+        "  - name: \"Off\"\n"
+        "    rss_url: https://o.example/feed\n"
+        "    enabled: false\n",
+    )
+    assert cfg.problems == []
+    assert not cfg.sources[0].fetchable
+    assert cfg.sources[0] in cfg.disabled_sources
+
+
+def test_bare_yaml_boolean_as_name_is_rejected_not_coerced(tmp_path):
+    """Pins the strictness found above: an unquoted YAML-boolean name
+    (`name: Off`) must surface as a format problem, never silently coerce
+    into the string 'False'."""
     cfg = load(
         tmp_path,
         "sources:\n"
         "  - name: Off\n"
-        "    rss_url: https://o.example/feed\n"
-        "    enabled: false\n",
+        "    rss_url: https://o.example/feed\n",
     )
-    assert not cfg.sources[0].fetchable
-    assert cfg.sources[0] in cfg.disabled_sources
+    assert any("`name` is required" in p for p in cfg.problems)
+    assert cfg.sources == []
 
 
 def test_disabled_sources_property_excludes_reference_only(tmp_path):
@@ -146,11 +165,12 @@ def test_disabled_sources_property_excludes_reference_only(tmp_path):
         "sources:\n"
         "  - name: Ref\n"
         "    tier: reference_only\n"
-        "  - name: Off\n"
+        "  - name: Muted Outlet\n"
         "    rss_url: https://o.example/feed\n"
         "    enabled: false\n",
     )
-    assert [s.name for s in cfg.disabled_sources] == ["Off"]
+    assert cfg.problems == []
+    assert [s.name for s in cfg.disabled_sources] == ["Muted Outlet"]
 
 
 # --- validation problems --------------------------------------------------------------
@@ -185,7 +205,7 @@ def test_require_active_sources_returns_only_fetchable(tmp_path):
         "  - name: Caut Default\n"
         "    rss_url: https://c.example/feed\n"
         "    tier: cautious\n"
-        "  - name: Off\n"
+        "  - name: Muted Outlet\n"
         "    rss_url: https://d.example/feed\n"
         "    enabled: false\n",
     )

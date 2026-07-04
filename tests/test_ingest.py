@@ -150,9 +150,24 @@ def test_parse_entries_raises_loud_on_garbage_bytes():
     assert "feed did not parse" in str(excinfo.value)
 
 
-def test_parse_entries_raises_loud_on_html_page():
+def test_parse_entries_raises_loud_on_tag_soup_html():
+    """Broken/hostile HTML (unclosed tags — the common bot-wall page) is
+    bozo-with-no-entries and must raise."""
     with pytest.raises(ValueError):
-        ingest.parse_entries(b"<html><body><h1>Login required</h1></body></html>")
+        ingest.parse_entries(b"<html><body><h1>Login required<p>token expired")
+
+
+def test_parse_entries_wellformed_html_is_a_silent_empty_success():
+    """PINS CURRENT BEHAVIOR (M2 QA adjudication, flagged as an observation):
+    a WELL-FORMED XML/HTML page that isn't a feed parses with bozo=0 and zero
+    entries, so ingestion reports the source as a SUCCESS with 0 items —
+    every run, forever, with no degradation line. The doctor catches this
+    (feed-marker WARN); the ingest report does not. If M3 adds a 'parsed but
+    never yields entries' signal, update this pin with it."""
+    items, skipped = ingest.parse_entries(
+        b"<html><body><h1>Login required</h1></body></html>"
+    )
+    assert items == [] and skipped == 0
 
 
 def test_parse_entries_empty_feed_is_zero_items_not_an_error():

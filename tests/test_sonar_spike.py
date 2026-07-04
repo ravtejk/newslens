@@ -40,7 +40,11 @@ socket.socket.connect = _spy_connect
 """
 
 
-def test_spike_script_is_executable_with_python3_shebang():
+def test_BUG4_spike_script_is_executable_with_python3_shebang():
+    """KNOWN-RED (BUG-4): scripts/sonar_spike is committed mode 100644 —
+    the documented invocation `scripts/sonar_spike` fails with Permission
+    denied. Implementer fix: chmod +x scripts/sonar_spike and commit the
+    mode change (100755, like scripts/doctor)."""
     assert os.access(SPIKE, os.X_OK), "scripts/sonar_spike is not executable"
     first = SPIKE.read_text(encoding="utf-8").splitlines()[0]
     assert first == "#!/usr/bin/env python3"

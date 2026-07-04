@@ -33,3 +33,15 @@
 4. **Sonar reliability spike still pending** — gated on `PERPLEXITY_API_KEY`;
    one command when granted: `scripts/sonar_spike`. A failed spike is a
    principal checkpoint (GNews fallback, cost change), never absorbed.
+5. **Cross-feed same-URL attribution is last-writer-wins** (QA-pinned:
+   `test_ingest.py::test_cross_feed_same_url_same_day_is_last_writer_wins`).
+   A wire-flagged republisher fetched later overwrites the original outlet's
+   attribution + wire flag for that day's snapshot. M3 corroboration counting
+   needs a deliberate ruling here — do not inherit by accident. (QA obs. 1,
+   2026-07-04.)
+6. **Well-formed HTML at an rss_url is a permanent silent 0-item success** —
+   doctor catches it, the ingest report never will. M3 candidate: flag sources
+   that parse but never yield entries. (QA obs. 2.)
+7. **Feed body size is unbounded** — items are capped at 20/feed, bytes are
+   not; one `read(cap)` away from bounded. Low risk with curated feeds. (QA
+   obs. 3.)

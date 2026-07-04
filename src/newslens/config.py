@@ -1,10 +1,11 @@
 """Runtime configuration: .env loading + sources.yaml parsing.
 
 This module owns the "refuse politely" rule (principal decision, DECISIONS.md
-2026-07-02): NewsLens ships with NO default outlets and NO default interests.
-If sources.yaml has no active sources, the pipeline must refuse with
-NO_ACTIVE_SOURCES_MSG — it must never silently fall back to sources the
-principal never chose.
+2026-07-02): NewsLens never invents outlets or interests. The shipped
+sources.yaml is principal-seeded (37 outlets as of 2026-07-03); interests
+arrive with M3's tag contract. If sources.yaml has no active sources, the
+pipeline must refuse with NO_ACTIVE_SOURCES_MSG — it must never silently fall
+back to sources the principal never chose.
 
 This module is stdlib-only AT IMPORT TIME (like db.py/paths.py), so the doctor
 can import it unconditionally pre-install and there is exactly ONE

@@ -166,6 +166,13 @@ def run_discovery(
         prompt = build_prompt(cfg)
     except OSError as exc:
         return finish(f"failed — cannot read prompts/{PROMPT_FILE} ({exc}); RSS-only run")
+    except (KeyError, IndexError, ValueError) as exc:
+        # The prompt file is principal-editable; a stray {placeholder} must
+        # degrade like every other discovery failure, not kill the run (BUG-3).
+        return finish(
+            f"failed — prompts/{PROMPT_FILE} did not render "
+            f"({type(exc).__name__}: {exc}); check its {{placeholders}}; RSS-only run"
+        )
 
     cap = config.budget_cap_usd_per_run(src_env)
     est = estimate_cost_usd(prompt)
