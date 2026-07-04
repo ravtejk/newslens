@@ -4,7 +4,7 @@
 ONE command, runnable the moment PERPLEXITY_API_KEY lands in .env:
 
     scripts/sonar_spike            # 5 probes
-    scripts/sonar_spike 10         # more probes
+    scripts/sonar_spike 10         # more probes (1-25; each probe is a paid call)
 
 What it answers: is Sonar reliable enough for unattended on-demand use —
 latency spread, error shape, search_results presence — before we depend on it.
@@ -44,7 +44,22 @@ def main() -> int:
         print("re-run). No network was touched.")
         return 1
 
-    probes = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+    # M2 review finding 2: the probe count is a money knob — validate it,
+    # floor 1 (zero/negative must not pass vacuously), hard cap 25 (each
+    # probe is a paid call and may retry once).
+    MAX_PROBES = 25
+    raw = sys.argv[1] if len(sys.argv) > 1 else "5"
+    try:
+        probes = int(raw)
+    except ValueError:
+        print(f"probe count must be a whole number, got {raw!r} — "
+              f"usage: scripts/sonar_spike [N], N between 1 and {MAX_PROBES}")
+        return 1
+    if not 1 <= probes <= MAX_PROBES:
+        print(f"probe count must be between 1 and {MAX_PROBES}, got {probes} — "
+              "refusing: zero probes would pass the reliability gate vacuously, "
+              "and large counts are an unattended spend loop.")
+        return 1
     try:
         cfg = config.load_sources()
     except config.SourcesParseError as exc:

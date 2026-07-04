@@ -80,8 +80,9 @@ feed URL live-verified, tiered (`full` / `headline_only` / `cautious` /
   Bloomberg, Man Group, FinancialContent, VisaHQ, wn.com) are documented as
   comments in the file with the verified reason each has no usable feed.
 - **CoS-suggested additions** (Guardian, FT, Axios, Politico, Economist,
-  Chartbook, Noahpinion, Slow Boring) sit commented out at the bottom,
-  URL-verified, pending your approval — uncomment to adopt.
+  Chartbook, Noahpinion, Slow Boring) are **enabled** — you approved them
+  2026-07-03; each carries an "approved" note in the file. Disable any by
+  adding `enabled: false` to its entry.
 - **Interests are still empty and yours to write** — broad tags steer
   ranking, granular tags sharpen it and shape the one capped discovery query
   per run. Discovery skips itself (and says so) until tags exist.

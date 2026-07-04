@@ -50,7 +50,9 @@ pipeline's own User-Agent before being seeded.
    only on timeout/5xx (never 4xx), budget-guarded against
    `config.budget_cap_usd_per_run` before the request is built.
 7. **Volume guardrails:** `MAX_ITEMS_PER_FEED = 20` (code constant, not env
-   var) bounds ~29 enabled feeds to ≲580 rows/run worst case. The ranking
+   var) bounds the enabled feeds to a worst case of 20 rows each — 37
+   enabled after the principal's 2026-07-03 approvals, so ≲740 rows/run
+   (was ≲580 at the original 29). The ranking
    context budget implications belong to M3 and are flagged in the milestone
    report for the principal's checkpoint.
 8. **On-demand-only scope change** (DECISIONS.md 2026-07-03):
