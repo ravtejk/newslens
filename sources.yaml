@@ -152,28 +152,34 @@ sources:
   #                          would be cautious-tier aggregator anyway
   # ---------------------------------------------------------------------------
 
-  # --- CoS-suggested, pending principal approval (uncomment to adopt) --------
+  # --- CoS-suggested, principal-approved 2026-07-03 ---------------------------
   # All URLs verified live 2026-07-03.
-  # - name: The Guardian — World          # CoS-suggested, pending principal approval
-  #   rss_url: https://www.theguardian.com/world/rss
-  #   note: "free full-content RSS, strong international coverage"
-  # - name: Financial Times               # CoS-suggested, pending principal approval
-  #   rss_url: https://www.ft.com/rss/home
-  #   tier: headline_only
-  # - name: Axios                         # CoS-suggested, pending principal approval
-  #   rss_url: https://api.axios.com/feed/
-  # - name: Politico                      # CoS-suggested, pending principal approval
-  #   rss_url: https://rss.politico.com/politics-news.xml
-  # - name: The Economist                 # CoS-suggested, pending principal approval
-  #   rss_url: https://www.economist.com/latest/rss.xml
-  #   tier: headline_only
-  #   note: "weekly cadence — expect fewer, older items than dailies"
-  # - name: Chartbook (Adam Tooze)        # CoS-suggested, pending principal approval
-  #   rss_url: https://adamtooze.substack.com/feed
-  # - name: Noahpinion (Noah Smith)       # CoS-suggested, pending principal approval
-  #   rss_url: https://www.noahpinion.blog/feed
-  # - name: Slow Boring (Matt Yglesias)   # CoS-suggested, pending principal approval
-  #   rss_url: https://www.slowboring.com/feed
+  - name: The Guardian — World
+    rss_url: https://www.theguardian.com/world/rss
+    note: "free full-content RSS, strong international coverage (CoS-suggested, approved 2026-07-03)"
+  - name: Financial Times
+    rss_url: https://www.ft.com/rss/home
+    tier: headline_only
+    note: "CoS-suggested, approved 2026-07-03"
+  - name: Axios
+    rss_url: https://api.axios.com/feed/
+    note: "CoS-suggested, approved 2026-07-03"
+  - name: Politico
+    rss_url: https://rss.politico.com/politics-news.xml
+    note: "CoS-suggested, approved 2026-07-03"
+  - name: The Economist
+    rss_url: https://www.economist.com/latest/rss.xml
+    tier: headline_only
+    note: "weekly cadence — expect fewer, older items than dailies (CoS-suggested, approved 2026-07-03)"
+  - name: Chartbook (Adam Tooze)
+    rss_url: https://adamtooze.substack.com/feed
+    note: "principal-followed analyst — M3 wires the followed_analyst ranking boost (approved 2026-07-03)"
+  - name: Noahpinion (Noah Smith)
+    rss_url: https://www.noahpinion.blog/feed
+    note: "principal-followed analyst — M3 wires the followed_analyst ranking boost (approved 2026-07-03)"
+  - name: Slow Boring (Matt Yglesias)
+    rss_url: https://www.slowboring.com/feed
+    note: "principal-followed analyst — M3 wires the followed_analyst ranking boost (approved 2026-07-03)"
 
 # --- Interests -----------------------------------------------------------------
 # Broad tags steer the briefing's personal-impact ranking axis; granular tags
