@@ -63,9 +63,17 @@ SYNTHETIC_TEMPLATE = (
 )
 
 
-@pytest.fixture
-def tmp_paths(tmp_path, monkeypatch):
-    """Redirect all *stateful* newslens.paths locations into a sandbox.
+@pytest.fixture(autouse=True)
+def sandbox_paths(tmp_path, monkeypatch):
+    """AUTOUSE (M5 escape postmortem): redirect all *stateful* newslens.paths
+    locations into a sandbox for EVERY test, requested or not.
+
+    Why autouse: when `generate` became a real verb at M5, a stale M1 pin
+    (`cli.main(["generate"])`, no fixtures) executed the real pipeline —
+    config.load_env() read the REAL .env (with a real key) because
+    paths.ENV_FILE was only redirected for tests that opted into the fixture.
+    Sandboxing must not be opt-in: no future newly-real verb may ever see
+    real state from inside this suite.
 
     MIGRATIONS_DIR, PROMPTS_DIR, PROJECT_ROOT stay real — they are the code
     under test. sources.yaml starts in the synthetic TEMPLATE state (zero
@@ -83,6 +91,47 @@ def tmp_paths(tmp_path, monkeypatch):
     # never read or write the real one.
     monkeypatch.setattr(paths, "MEMORY_FILE", tmp_path / "memory.md")
     return tmp_path
+
+
+@pytest.fixture
+def tmp_paths(sandbox_paths):
+    """Back-compat alias: the sandbox is autouse now; requesting tmp_paths
+    just hands back its tmp_path root."""
+    return sandbox_paths
+
+
+@pytest.fixture(autouse=True)
+def loopback_only_network(monkeypatch):
+    """AUTOUSE structural guard (M5 escape postmortem, layer 2): the suite is
+    offline-only BY CONSTRUCTION. DNS resolution and socket connects are
+    allowed to loopback (the fake server) and refused everywhere else —
+    so even a future sandboxing mistake cannot reach a real endpoint or
+    spend money. The opt-in `no_network` fixture layers on top to record
+    and refuse EVERYTHING, including loopback."""
+    real_getaddrinfo = socket.getaddrinfo
+    real_connect = socket.socket.connect
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if str(host) in ("127.0.0.1", "localhost", "::1"):
+            return real_getaddrinfo(host, *args, **kwargs)
+        raise OSError(
+            f"QA suite is offline-only: DNS lookup for {host!r} refused "
+            "(loopback_only_network structural guard)"
+        )
+
+    def guarded_connect(self, address):
+        if not isinstance(address, tuple):  # AF_UNIX etc. — local by nature
+            return real_connect(self, address)
+        host = str(address[0])
+        if host.startswith("127.") or host in ("::1", "localhost"):
+            return real_connect(self, address)
+        raise OSError(
+            f"QA suite is offline-only: connect to {address!r} refused "
+            "(loopback_only_network structural guard)"
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
 
 
 def make_rss(items, channel_title="QA feed"):

@@ -42,8 +42,9 @@ _VALID_SOURCE_KEYS = {
     "name", "rss_url", "wire_syndication", "tier", "enabled", "note",
     "followed_analyst",  # M3: personal-impact ranking boost for followed writers
 }
-_VALID_TOP_LEVEL_KEYS = {"sources", "interests"}
+_VALID_TOP_LEVEL_KEYS = {"sources", "interests", "settings"}
 _VALID_INTEREST_KEYS = {"broad", "granular"}
+_VALID_SETTINGS_KEYS = {"threads_steer_selection"}
 
 # Source tiers (milestone 2, principal's source list):
 #   full           — usable RSS content (title + summary/excerpt)
@@ -91,6 +92,10 @@ class SourcesConfig:
     interests_granular: List[str] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    # A6 (principal editorial review 2026-07-05): briefings-of-record select
+    # on tags + world impact only; thread recording/continuity continues
+    # regardless. Principal-flippable in sources.yaml `settings:`.
+    threads_steer_selection: bool = False
 
     @property
     def fetchable_sources(self) -> List[Source]:
@@ -286,6 +291,20 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                         )
                     else:
                         seen_urls[s.rss_url] = s.name
+
+    raw_settings = raw.get("settings")
+    if raw_settings is not None:
+        if not isinstance(raw_settings, dict):
+            cfg.problems.append("`settings` must be a mapping")
+        else:
+            for key in raw_settings:
+                if key not in _VALID_SETTINGS_KEYS:
+                    cfg.problems.append(f"settings: unknown key `{key}`")
+            tss = raw_settings.get("threads_steer_selection", False)
+            if not isinstance(tss, bool):
+                cfg.problems.append("settings.threads_steer_selection must be true or false")
+            else:
+                cfg.threads_steer_selection = tss
 
     raw_interests = raw.get("interests")
     if raw_interests is not None:

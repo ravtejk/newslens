@@ -37,10 +37,18 @@ def test_unknown_command_is_a_usage_error(capsys):
     assert excinfo.value.code == 2
 
 
-@pytest.mark.parametrize("not_yet", ["generate", "read", "listen"])
+@pytest.mark.parametrize("not_yet", ["read", "listen"])
 def test_future_pipeline_verbs_do_not_exist_yet(not_yet, capsys):
-    """M5/M7 verbs must not be stubbed ('an unimplemented command should not
-    exist yet rather than exist and lie' — cli.py docstring)."""
+    """M7 verbs must not be stubbed ('an unimplemented command should not
+    exist yet rather than exist and lie' — cli.py docstring).
+
+    POSTMORTEM (M5): `generate` graduated out of this list. While stale, this
+    pin EXECUTED the real pipeline un-sandboxed on every suite run (live
+    ingest + a paid rank call), because the test carried no fixtures and
+    paths.ENV_FILE still pointed at the real .env. Two autouse conftest
+    guards now make that class impossible (sandbox_paths +
+    loopback_only_network); when `read`/`listen` become real, delete them
+    here and pin their actual behavior — the guards will contain any lag."""
     with pytest.raises(SystemExit) as excinfo:
         cli.main([not_yet])
     assert excinfo.value.code == 2

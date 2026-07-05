@@ -23,6 +23,14 @@
 #   note: "..."               free-text context, surfaced in reports
 # =============================================================================
 
+# --- Settings ------------------------------------------------------------------
+# threads_steer_selection (A6, principal editorial review 2026-07-05):
+# false = briefings-of-record select on interest tags + world impact only;
+# your live threads are still matched, recorded, and woven into continuity —
+# they just don't boost what gets picked. Flip to true to restore steering.
+settings:
+  threads_steer_selection: false
+
 sources:
   # --- Wire / major (reference_only per principal: referenced, not fetched) --
   - name: Associated Press

@@ -1,11 +1,11 @@
 """NewsLens command-line interface.
 
-Milestone 2 exposes three commands: `migrate`, `doctor`, `ingest`.
-Later milestones add the remaining pipeline verbs — generate (M5), read/listen
-(M7, consumption-event logging for the day-30 falsifier; v1 is on-demand only
-per DECISIONS.md 2026-07-03) — listed here so the shape of the CLI is visible,
-but deliberately not stubbed: an unimplemented command should not exist yet
-rather than exist and lie.
+Commands as of milestone 5: `migrate`, `doctor`, `ingest`, `rank`,
+`memory` (list/add/dismiss/note), `generate` (the full on-demand briefing).
+Still to come — read/listen (M7, consumption-event logging for the day-30
+falsifier; v1 is on-demand only per DECISIONS.md 2026-07-03) — deliberately
+not stubbed: an unimplemented command should not exist yet rather than exist
+and lie.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="newslens",
         description="NewsLens — memory-threaded daily news briefing (personal prototype).",
         epilog=(
-            "Coming in later milestones: generate (M5), read/listen (M7). "
+            "Coming in later milestones: read/listen (M7). "
             "Health check: run `newslens doctor` (or scripts/doctor) any time."
         ),
     )
@@ -89,6 +89,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     mem_note.add_argument("topic")
     mem_note.add_argument("text")
 
+    gen_p = sub.add_parser(
+        "generate",
+        help="the full on-demand briefing (M5): ingest -> rank -> narrative -> "
+        "podcast script; renders to stdout + a dated file under data/briefings/. "
+        "Voice A is the voice of record (editorial review A1; alternation ended).",
+    )
+    gen_p.add_argument(
+        "--date", default=None, metavar="YYYY-MM-DD",
+        help="briefing date (default: today, local)",
+    )
+    gen_p.add_argument(
+        "--variant", choices=["A", "B"], default=None,
+        help="force a voice variant; forcing the retired variant (B) renders "
+        "a clearly-labeled SAMPLE file and never touches the briefing of record "
+        "(samples always skip the refresh chain)",
+    )
+    gen_p.add_argument(
+        "--no-refresh", action="store_true",
+        help="skip the ingest+rank chain and write from the existing briefing "
+        "row (narrative-only iteration)",
+    )
+    gen_p.add_argument(
+        "--no-threads", action="store_true",
+        help="cold-start SAMPLE: render with thread/memory context emptied "
+        "(tags kept) to a labeled file; the briefing of record is untouched",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "migrate":
@@ -113,6 +140,63 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "memory":
         return _memory_command(args)
+
+    if args.command == "generate":
+        import re as _re
+        from datetime import datetime as _dt
+
+        from . import config, generate
+
+        if args.date:
+            ok_shape = bool(_re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date))
+            if ok_shape:
+                try:
+                    _dt.strptime(args.date, "%Y-%m-%d")
+                except ValueError:
+                    ok_shape = False
+            if not ok_shape:
+                print(
+                    f"--date must be YYYY-MM-DD (a real calendar date), "
+                    f"got {args.date!r}", file=sys.stderr,
+                )
+                return 2
+        config.load_env()
+        try:
+            rep = generate.run_generate(
+                date=args.date,
+                variant_override=args.variant,
+                refresh=not args.no_refresh,
+                no_threads=args.no_threads,
+            )
+        except generate.GenerateError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except config.SourcesParseError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except Exception as exc:  # CLI boundary: loud, human-readable, nonzero
+            print(f"generate failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+
+        print(rep.narrative_text)
+        print()
+        label = "SAMPLE (not the briefing of record)" if rep.sample else "briefing of record"
+        print(f"[voice {rep.variant} — {label}]")
+        if rep.ingest_summary:
+            print(f"  ingest: {rep.ingest_summary}")
+        print(
+            f"  words: narrative {rep.narrative_words}, script {rep.script_words}"
+            f" | continuity: {rep.continuity_status}"
+        )
+        for w in rep.warnings:
+            print(f"  ⚠ {w}")
+        total = sum(s.get("usd") or 0 for s in rep.steps)
+        step_bits = ", ".join(
+            f"{s['step']} ${s.get('usd') or 0:.4f}" for s in rep.steps
+        )
+        print(f"  cost this stage: {step_bits} = ${total:.4f}")
+        print(f"  artifact: {rep.artifact_path}")
+        return 0
 
     if args.command == "rank":
         import re as _re

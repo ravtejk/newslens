@@ -7,7 +7,7 @@ threads continuity through a transparent, hand-editable memory, and labels
 corroboration honestly (counts of distinct named outlets — never the word
 "verified").
 
-**Status: milestone 4 of 8** (memory + continuity, lifecycle v2). What
+**Status: milestone 5 of 8** (the writer: narrative + podcast script). What
 exists: the schema, the doctor, working tier-1 ingestion (`newslens ingest` —
 idempotent, per-feed graceful degradation), the editorial pass (`newslens
 rank` — clustering, top 1–5 by world + personal impact, bounded
@@ -19,7 +19,23 @@ referencing briefing, the three-state lifecycle (`active` / `dormant` /
 `dismissed_user`, ADR-0006) with 14-day dormancy and earned-slot
 auto-revival, and the hand-editable `memory.md` two-way sync (file wins,
 loudly). Narrative text and audio are milestones 5–6. The Sonar discovery
-seam is built but cold (key deferred by choice). Spec:
+seam is built but cold (key deferred by choice). New at M5 (as
+amended by the principal's editorial review, contract §A1-A6):
+`newslens generate` — the end-to-end on-demand briefing (ingest -> rank ->
+narrative -> script) per the Content Lead's contract + amendments
+(`workspace/debates/2026-07-05--newslens--content.md` §5 + the A1-A6
+review): TIERED stories (one full-depth lead, tight-medium second/third,
+quick hits for the rest — lead-heavy by design), voice A only (B retired;
+the briefing's own voice never predicts — forward-looking claims are
+attributed or absent; no methodology self-reference), concreteness rules
+(specifics from sources, truisms banned, no moralization — show, don't
+label), the intro formula (what happened + why you care + what's uncertain,
+then the dateline), two-lane source rule, code-owned trust furniture,
+delta-only continuity callbacks with mandatory text disclosures, and a
+spoken pass under the hard fact-subset/hedge rules with editorial license
+over script attribution (A5). Selection runs on tags + world impact only —
+threads are recorded and woven into continuity, never steering
+(`settings.threads_steer_selection`, A6). Audio is milestone 6. Spec:
 `workspace/debates/2026-07-02--newslens--engineering.md` (§A–F); scope change:
 **v1 is on-demand only** — no scheduled generation (DECISIONS.md 2026-07-03).
 
@@ -41,7 +57,7 @@ everything required for a real run is in place; exit `1` means at least one
 keys and no sources is expected to exit `1` today — that is the honest state,
 and every missing item comes with its fix.
 
-## Commands (milestone 4)
+## Commands (milestone 5)
 
 | Command | What it does |
 |---|---|
@@ -53,9 +69,10 @@ and every missing item comes with its fix.
 | `newslens memory add "<topic>" [--note "..."]` | Start tracking a thread (revives it if dormant/dismissed — explicit revival resets the dormancy clock). |
 | `newslens memory dismiss "<topic>"` | Stop tracking — stays visible in `memory.md`, never auto-revives. |
 | `newslens memory note "<topic>" "<text>"` | Set the note the generation prompt reads verbatim — the explicit "more/less like this" mechanism. |
+| `newslens generate [--date] [--variant A\|B] [--no-refresh] [--no-threads]` | The whole product, on demand: chains ingest -> rank, writes the tiered narrative (lead full / second medium / rest quick hits) in **voice A — the voice of record** (editorial review A1; alternation ended), adapts it into a podcast script (fact-subset validated), persists both onto the briefing row (prior narrative archived first), renders to stdout + `data/briefings/<date>.md`, logs per-step real costs (incl. per-story tiers) to `briefings.token_cost` and `data/generation_log.jsonl`. All three LLM calls run on **GPT-4o** (writer up-tier: principal, 2026-07-05, register-holding trigger; ranking up-tier: CoS recommendation same day after loose semantic matches — 4o-mini stays as the documented fallback rung on both seams); expect ~$0.07–0.10/full briefing. `--variant B` renders the retired voice as a labeled comparison SAMPLE; `--no-threads` renders the cold-start view (threads emptied, tags kept) as a labeled SAMPLE — **samples always skip the refresh chain, so the briefing of record is never touched by a sample request**. `--no-refresh` skips the chain for narrative-only iteration on the record. |
 | `scripts/sonar_spike` | The pending Sonar reliability gate — one command the moment the key lands. Refuses politely without it. |
 
-Coming later (deliberately not stubbed): `generate` (M5), `read`/`listen`
+Coming later (deliberately not stubbed): `read`/`listen`
 (M7 — these log the consumption events the day-30 falsifier is computed from;
 v1 is on-demand only, so M7 is manual trigger + instrumentation, no cron).
 

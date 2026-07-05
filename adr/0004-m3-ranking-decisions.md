@@ -146,3 +146,65 @@ failed validation because the model re-used item_ids across clusters
    (test_invalid_payload_twice_is_the_live_failure_end_to_end) now takes the
    repair path instead of rejecting — that single flip is the intended
    behavior change; the two direct validate_payload duplicate pins stay green.
+
+## M5 amendment — 2026-07-05: bare-string tag names are schema tolerance
+
+Live finding: gpt-4o-mini intermittently (and on 2026-07-05, persistently at
+temperature 0 across 5+ calls) returns matched_tags as bare tag-name strings
+instead of {name, level} objects — always EXACT vocabulary matches. Ruling
+implemented as TOLERANCE, not repair: the dict's level field carries zero
+model information (any level differing from our canonical map is rejected
+anyway), so the string form is informationally identical to the dict form.
+Bare exact-match names normalize deterministically from tag_levels, are
+counted, surfaced as a run warning, and recorded in
+ranking_runs.meta.repairs.tag_shape_normalized. Non-matching strings and
+malformed dicts still hard-reject; nothing is guessed or discarded — which is
+the line that separates this from the principal-DEFERRED invented-ids repair.
+FLAGGED for the M5 gate to overrule if the repair contract is read more
+strictly; reverting is one small diff.
+
+## M5 amendment 2 — 2026-07-05: ranking up-tier to GPT-4o (RANK_MODEL seam)
+
+CoS recommendation on the principal's own quality question; objection window
+open until commit; REVERT = ranking.RANK_MODEL + the two RANK_USD_PER_MTOK_*
+rates, one clean diff. Evidence basis, on the record:
+1. Three loose semantic matches in two days: Pope-immigration -> "Civic
+   Tech" (07-04), Trump-anniversary -> "Iran War" thread (07-05), plus thin
+   overlapping slots 4-5 on 07-05 (two near-duplicate economy stories).
+2. The GPT-4o writer now visibly outruns its ranking inputs — the
+   pre-registered trigger (c) from the model-fallback ladder.
+The ranking PROMPT is unchanged — a model swap, not a contract change.
+gpt-4o-mini remains the documented fallback rung (ranking.MODEL constant,
+QA-pinned). Cost honesty: full run lands ~$0.07-0.10 (measured actuals in
+the fix-loop report).
+
+## The tag-shape tolerance, stated airtight (for the gate's ruling)
+
+**Claim:** accepting a bare-string matched_tags entry that EXACTLY matches
+the provided tag vocabulary is schema tolerance, not model-error repair.
+
+**The information argument, precisely:** validate_payload rejects any dict
+whose level differs from tag_levels[name] — the model cannot legally express
+ANY level other than ours. Therefore the level key carries zero bits of
+model-supplied information, and the set of accepted meanings for
+{"name": X, "level": tag_levels[X]} and the bare string X (X in vocabulary)
+is IDENTICAL. Normalization maps between two spellings of the same value; it
+cannot change what any accepted payload means.
+
+**What still hard-rejects (unchanged):** bare strings NOT in the vocabulary;
+dicts with wrong/missing name; dicts with a level differing from the map;
+non-string non-dict entries; every other violation class (invented ids,
+ranges, empty fields, cross-cluster reuse beyond the M3 repair).
+
+**Why this differs from the principal-DEFERRED invented-ids repair:** that
+repair would DISCARD model-asserted information (an id we can't verify);
+this tolerance discards nothing and guesses nothing — the normalized level
+comes from our own canonical map, the only value that was ever legal.
+
+**Auditability:** every firing is counted, surfaced as a run warning, and
+persisted at ranking_runs.meta.repairs.tag_shape_normalized (BUG-7 closed:
+persistence no longer gated on the duplicate-repair flag) — the day-30
+readout can measure tolerance frequency. Post-up-tier observation for the
+gate recorded in the fix-loop report: whether GPT-4o cures the shape drift.
+The tolerance stays regardless of the up-tier (mini is the documented
+fallback and must remain runnable).

@@ -50,8 +50,10 @@ RULES
    Ignore items that are not news stories (recipes, quizzes, promos).
 2. Return the {max_clusters} most significant clusters at most, judged by
    world impact and by relevance to the interests above.
-3. matched_tags / matched_memory are SEPARATE vocabularies: matched_tags
-   entries come ONLY from the tags list (with the exact listed level, domain
+3. matched_tags entries are OBJECTS with exactly two keys — {{"name": "...",
+   "level": "..."}} — they must be objects, never bare strings; the strict
+   shape is the contract. matched_tags / matched_memory are
+   SEPARATE vocabularies: matched_tags entries come ONLY from the tags list (with the exact listed level, domain
    or topic — no other level word exists); matched_memory entries come ONLY
    from the live-threads list. Never report a thread as a tag or a tag as a
    thread. Empty lists are correct when nothing genuinely matches — do NOT

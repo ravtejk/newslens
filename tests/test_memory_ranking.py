@@ -133,11 +133,28 @@ def test_dormant_match_stays_in_override_pool_zero_score():
     assert slots[0].matched_dormant == ["Helium Shortage"]
 
 
-def test_active_thread_match_is_a_full_personal_signal():
-    c = cluster([1], title="Thread story", mem=["Iran War"], impact=3)
-    slots, meta = ranking.select_slots([c], {1: item(1, "A")}, set())
-    assert slots[0].personal_score == 1.0  # MEMORY_WEIGHT
-    assert meta["override"]["pool_size"] == 0  # personal signal -> not pool material
+def test_active_thread_match_scoring_follows_the_steering_setting():
+    """A6 re-pin (supersedes the always-steers M4 pin): with steering OFF
+    (the default) a thread-only cluster scores ZERO and stays override-
+    eligible; with steering ON, MEMORY_WEIGHT applies and it leaves the pool."""
+    # OFF (default): recognition-only — a low-impact thread-only cluster
+    # earns NO slot at all, but it IS override-pool material...
+    weak = cluster([1], title="Thread story", mem=["Iran War"], impact=3)
+    assert ranking.personal_score(weak, followed=False) == 0.0
+    slots, meta = ranking.select_slots([weak], {1: item(1, "A")}, set())
+    assert slots == []  # zero signal + world 3: unslotted, honestly
+    assert meta["override"]["pool_size"] == 1
+    # ...and a world-9 thread-only cluster slots ONLY via the override gate.
+    hot = cluster([1], title="Thread story", mem=["Iran War"], impact=9)
+    slots_hot, _ = ranking.select_slots([hot], {1: item(1, "A")}, set())
+    assert slots_hot[0].override is True and slots_hot[0].personal_score == 0.0
+    # ON: the M4 semantics return — full personal signal, out of the pool.
+    assert ranking.personal_score(weak, followed=False, memory_steers=True) == 1.0
+    slots_on, meta_on = ranking.select_slots(
+        [weak], {1: item(1, "A")}, set(), memory_steers=True
+    )
+    assert slots_on[0].personal_score == 1.0
+    assert meta_on["override"]["pool_size"] == 0
 
 
 # --- vocabulary separation ---------------------------------------------------------------
@@ -382,8 +399,11 @@ def test_dismissed_user_is_absent_from_prompt_and_cannot_revive(
 
 def test_thread_reference_recording_e2e(migrated_con, memfile, llm):
     _seed_revival_world(migrated_con)
+    # A6: steering is OFF by default — the cluster earns its slot on TAGS;
+    # the thread match is recognition-only but must still be RECORDED.
     payload = {
-        "clusters": [cluster([1, 2], title="Thread hit", mem=["Iran War"], impact=4)]
+        "clusters": [cluster([1, 2], title="Thread hit", tags=TOPIC,
+                             mem=["Iran War"], impact=4)]
     }
     llm.add_route("/chat/completions", status=200, body=envelope(payload),
                   content_type="application/json")
@@ -472,7 +492,8 @@ def test_gatefix3_untouched_file_gets_the_refresh_with_no_warning(
     """Control half of pin 3: no mid-run edit -> post-run refresh happens and
     the in-flight warning does not appear."""
     _seed_revival_world(migrated_con)
-    payload = {"clusters": [cluster([1], title="T", mem=["Iran War"], impact=5)]}
+    payload = {"clusters": [cluster([1], title="T", tags=TOPIC,
+                                    mem=["Iran War"], impact=5)]}
     llm.add_route("/chat/completions", status=200, body=envelope(payload),
                   content_type="application/json")
     report = ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),

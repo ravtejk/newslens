@@ -153,10 +153,17 @@ def test_override_pool_is_zero_personal_signal_only():
         cluster([4], title="Zero", impact=9),
     ]
     items = {i: item(i, f"O{i}") for i in range(1, 5)}
+    # A6 default (steering OFF): the memory-matched cluster carries no
+    # personal signal either -> pool of TWO zero-signal clusters.
     slots, meta = ranking.select_slots(clusters, items, followed_outlets=set())
-    assert meta["override"]["pool_size"] == 1  # only "Zero"
+    assert meta["override"]["pool_size"] == 2  # "Memory" + "Zero"
     assert meta["override"]["fired"] is True
-    assert meta["override"]["story"] == "Zero"
+    # With steering ON, the M3/M4 semantics return: only "Zero" qualifies.
+    _, meta_on = ranking.select_slots(
+        clusters, items, followed_outlets=set(), memory_steers=True
+    )
+    assert meta_on["override"]["pool_size"] == 1
+    assert meta_on["override"]["story"] == "Zero"
 
 
 def test_override_bar_is_8_and_the_slot_may_stay_empty():
@@ -411,7 +418,13 @@ def test_end_to_end_rank_persists_archives_and_tells_the_truth(
     stored = json.loads(row["corroboration_labels"])
     assert stored["standing_caveat"] == ranking.CORROBORATION_CAVEAT
     assert len(json.loads(row["story_slots"])) == 2
-    assert json.loads(row["token_cost"])["total_usd"] == pytest.approx(0.00027)
+    # Pinned against the RANK seam constants (up-tiered to gpt-4o 2026-07-05)
+    # so the next model change updates one place, not this test.
+    expected_usd = (
+        1000 / 1e6 * ranking.RANK_USD_PER_MTOK_IN
+        + 200 / 1e6 * ranking.RANK_USD_PER_MTOK_OUT
+    )
+    assert json.loads(row["token_cost"])["total_usd"] == pytest.approx(expected_usd)
     runs = migrated_con.execute("SELECT meta FROM ranking_runs").fetchall()
     assert len(runs) == 1
     meta = json.loads(runs[0]["meta"])

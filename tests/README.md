@@ -79,6 +79,20 @@ sync; [id=N] bracketed keys), and the invented-ids hard-reject boundary are
 all pinned. Per the principal's Option A, red tests in this suite are the
 acceptance criteria for any future fix loop — no standalone QA re-verify.
 
+M5 QA pass (2026-07-05, the writer + same-day amendments): 1 red — BUG-7
+(`test_BUG7_*`, test_generate.py: the tag-shape tolerance ruling requires
+counted + surfaced + PERSISTED, but `meta["repairs"]` is still gated on the
+M3 duplicate flag, so a tag-shape-only run persists nothing to
+ranking_runs; fix contract in the test docstring). Also this pass: the
+`[generate]` spend-leak escape was killed structurally — sandbox_paths and
+loopback_only_network are AUTOUSE in conftest, so no future newly-real verb
+can reach real state or the network from inside the suite. All §5.9
+invariants, furniture ownership, variant/sample/no-threads isolation, chain
+semantics, continuity distinction, script scaling, writer-model seam, and
+the GATE-PENDING tag-shape tolerance boundary are pinned (487 green + 1 red
+acceptance). `test_generate.py` covers the writer end to end via a fake
+`generate._chat`.
+
 ## Implementer contract notes for milestone 3 (for QA — appended per dispatch)
 
 New surfaces: `ranking.py` (clustering/scoring/override/corroboration/persist),
@@ -228,3 +242,114 @@ wins (ADR-0006). QA pins the amended surface once:
    in flight" warning; untouched file -> refresh happens.
 4. **Bracket sanitize:** a title containing "[id=99]" renders in items_block
    with parens — the only "[id=" tokens in the prompt are the real keys.
+
+## Implementer contract notes for milestone 5 — §5.9 invariants roll-up (QA)
+
+New surfaces: `generate.py`, three prompt files (narrative A/B, script),
+`generate` CLI, `RankedSlot.world_impact_reason` (defaulted),
+data/generation_log.jsonl. Offline seams: `ranking.OPENAI_CHAT_URL` (both new
+calls go through it via `generate._chat`); every validator is a pure function.
+
+Deterministic §5.9 invariants (contract text: workspace/debates/
+2026-07-05--newslens--content.md):
+1. Structure: at-a-glance present; every story has headline + lede +
+   "**Why it matters:**" + "**Watch for:**" + trailing meta-line; footer =
+   window line + caveat verbatim (== ranking.CORROBORATION_CAVEAT) + variant
+   stamp. (Code-assembled: test `generate.assemble_narrative` directly.)
+2. Override: fired -> generate.OVERRIDE_TEXT_LABEL shape above that story's
+   headline (text) AND script contains outside-your-tags + the reason
+   (validate_script hard-fails otherwise). Not fired -> no override language.
+3. Revival: supplied date verbatim in the lede's first two sentences
+   (validate_narrative_payload raises) and spoken (ISO or "Month D(th)" forms
+   accepted by _date_spoken_forms).
+4. Correction: upstream flag not yet produced (labels_block renders
+   "corrections flagged upstream: none this run") — pin the placeholder until
+   M6+ wires the flag.
+5. Single-source: N==1 -> outlet named in lede prose (warn-grade) + spoken
+   acknowledgment (warn-grade).
+6. Caveat: text footer verbatim; SPOKEN_CAVEAT sentence in script (appended
+   deterministically if the model omits it — a warning discloses the append).
+7. Fact-subset proxy: script numerals ⊆ narrative numerals (warn list,
+   "2"/"3" exempt for enumeration speech).
+8. Hedge preservation: coarse — script "will" requires narrative "will"
+   (warn). Real per-claim checking stays QA/human.
+9. Budgets: NARRATIVE_BAND/PER_SLOT_WORDS/SCRIPT_SEGMENTS — warn-only KNOBs.
+10. Banned strings: generate.BANNED_STRINGS scan on all model fields + script.
+11. Variant conformance: A payload with my_read -> validation error; B stamp
+    == generate.VARIANT_B_STAMP; variant_for() parity (2026-07-05 -> "A",
+    strict daily alternation); SAMPLE mode writes no briefings row and no
+    briefing-of-record log entry (log entry carries sample:true).
+Also: continuity_status "corrupt" (prior row exists, slots unreadable) vs
+"none" (no prior row) — corrupt must produce the suspended-continuity warning.
+
+### URGENT — re-pin FIRST at M5 re-verify (suite is not currently spend-proof)
+
+`test_cli.py::test_future_pipeline_verbs_do_not_exist_yet[generate]` is stale
+by mandate (generate exists at M5) — and because that test does NOT use
+tmp_paths, the now-real command's `config.load_env()` reads the REAL .env
+from disk past the scrub_env fixture: every `pytest` run currently performs a
+LIVE ingest (network) and a PAID rank call inside the suite (observed: +60s
+runtime, real API spend, failed-run rows written to the real DB's
+ranking_runs/generation_log). Re-pin [generate] out of the not-yet-verbs list
+before anything else; [read]/[listen] pins remain valid. Consider pinning
+generate's keyless/offline behavior only under tmp_paths sandboxing (same
+pattern as the rank CLI tests).
+
+### M5 principal-amendment surface (fold into the M5 re-pin)
+
+1. Writer passes on generate.WRITER_MODEL == "gpt-4o" (ranking stays
+   ranking.MODEL == gpt-4o-mini); writer cost math uses
+   WRITER_USD_PER_MTOK_IN/OUT (2.50/10.00).
+2. Variant B commit-or-null hardened in the prompt; alternation restart
+   logged (generation_log.jsonl event alternation_restart, day 1 =
+   2026-07-05 = A; parity mechanics unchanged).
+3. --no-threads cold-start SAMPLE: always sample; threads/matched_memory/
+   revived stripped from prompt+assembly consistently; header + filename
+   <date>-no-threads-SAMPLE.md; here-for falls back to "world-impact
+   selection (no tag or thread match)" — never the override text unless
+   override actually fired (latent bug fixed at this amendment).
+4. TOLERANCE (ADR-0004 M5 amendment) — supersedes the hard-reject your
+   test_strings_for_dicts_* froze from the pre-amendment report: bare-string
+   matched_tags entries that EXACTLY match the tag vocabulary normalize
+   deterministically (level from the canonical map), counted + disclosed
+   (run warning + meta.repairs.tag_shape_normalized); non-matching strings
+   and malformed dicts still hard-reject. Flagged for the gate; revert is
+   one diff.
+5. Your test_keyless_generate_refuses_before_anything fails on a HELPER bug,
+   not the product: `env=env or ENV` converts the test's falsy {} into the
+   fake-key ENV, so the run is keyed and reaches the no-row error. Direct
+   call generate.run_generate(env={}) raises "OPENAI_API_KEY not set"
+   (verified). Suggested helper fix: `env=ENV if env is None else env`.
+6. Mechanism-depth obligation added to both narrative prompts (§5.4
+   amendment by reference) — prompt directive, not mechanically checkable.
+
+### Editorial-review package (A1-A6) — the ONE re-pin surface for M5 closure
+
+Behavior changes QA pins fresh (supersedes conflicting notes above):
+1. A-only voice: generate's record is always A (ACTIVE_VOICE); --variant B =
+   retired-voice SAMPLE (warning text "voice B is retired"); footer carries
+   NO variant stamp; variant_for() remains (dormant parity).
+2. Tiers: payload requires tier per story; sanity full/medium/medium-or-
+   quick/quick by position; quick + movement field -> ValueError; tier word
+   bands warn; assemble renders quick hits without movement labels but WITH
+   meta-lines.
+3. A3 scans: generate.TRUISM_WARN_STRINGS / MORALIZE_WARN_STRINGS ->
+   warnings; A4: MECHANICAL_TRANSITIONS + early-dateline warn.
+4. A5: spoken single-source check gone; spoken revival hard->warn; hard set
+   now = fact-subset, hedge, spoken override, schedule promises, caveat/
+   signoff append.
+5. A6: config.SourcesConfig.threads_steer_selection (default False; strict
+   settings-key validation); ranking.personal_score(memory_steers=...) —
+   thread-only cluster scores 0 when off (and IS override-eligible),
+   MEMORY_WEIGHT applies when on; meta.threads_steer_selection persisted;
+   doctor renders the setting; recording/revival unchanged either way.
+
+Expected QA-side flips from this package (enumerated; fold into the same
+pass as your two pending rate pins):
+- test_writer_model_seam_and_rates docstring prose ("ranking deliberately
+  stays on mini") — assertion still true; prose stale.
+- Any pins on: variant stamps in the footer; flat four-field story payloads
+  (now tier-gated); per-story sentence-budget prompt lines; spoken
+  single-source/revival hardness; sources.yaml template state (settings:
+  block now present); alternation scheduling (variant_for still A on even,
+  but generate no longer consults it for the record).

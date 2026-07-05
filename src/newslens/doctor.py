@@ -603,6 +603,15 @@ def check_sources() -> List[Result]:
         )
         out.append(Result(INFO, "no active RSS feeds to resolve yet"))
 
+    out.append(
+        Result(
+            INFO,
+            "settings: threads_steer_selection = "
+            + ("true (threads boost selection)" if cfg.threads_steer_selection
+               else "false (A6 default: threads are recorded and woven into "
+               "continuity, but selection is tags + world impact only)"),
+        )
+    )
     if cfg.has_interests:
         out.append(
             Result(
@@ -625,12 +634,15 @@ def cost_estimate() -> List[Result]:
     return [
         Result(
             INFO,
-            "estimated cost-per-run <$0.01 (~$0.10/month at daily cadence) with "
-            "the v1 default TTS — Kokoro-82M running locally, no key, no metered "
-            "cost; if the hosted fallback (gpt-4o-mini-tts) wins the milestone-6 "
-            "listening test instead, ~$0.18/run (~$5.50/month). Static estimate "
-            "from spec §C + the engineering-2 TTS decision; real per-run cost "
-            "logging arrives with the pipeline",
+            "estimated cost-per-run ~$0.07-0.10 for the full text pipeline (all "
+            "three calls on GPT-4o since 2026-07-05: rank ~$0.03-0.04 + "
+            "narrative & script ~$0.04-0.06; ~$2-3/month at daily cadence) "
+            "with the v1 default TTS — Kokoro-82M running "
+            "locally, no key, no metered cost; if the hosted fallback "
+            "(gpt-4o-mini-tts) wins the milestone-6 listening test, add "
+            "~$0.18/run (~$5.50/month). Static estimate from spec §C + the "
+            "engineering-2 TTS decision; real per-step costs are logged to "
+            "briefings.token_cost on every generate",
         )
     ]
 

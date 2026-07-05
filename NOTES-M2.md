@@ -153,3 +153,13 @@
 README currency is part of the implementer's definition of done: no
 milestone report ships until README status/commands/data-model/module-list
 match the tree (stale three gates running: M2, M3, M4).
+
+## Resolved in milestone 5 (2026-07-05)
+
+- ~~Item 13 (continuity consumption)~~ — generate consumes
+  prior_briefing_context (delta-only callbacks, cap 2, mandatory
+  revival/correction disclosures per content contract §5.3); repeat handling
+  is delta-treatment by the writer.
+- ~~Item 15 (corrupt-slots None ambiguity)~~ — generate distinguishes
+  row-exists+unreadable (continuity SUSPENDED, loud warning, logged) from
+  no-prior-row (first briefing). ADR-0007 §7.

@@ -49,6 +49,16 @@ from typing import Dict, List, Optional, Tuple
 from . import config, db, memory, paths
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
+# Active ranking model (CoS recommendation on the principal's own question,
+# 2026-07-05; objection window open until commit — REVERT = this constant +
+# the two rates below, one clean diff). Evidence in ADR-0004's up-tier note:
+# three loose semantic matches in two days + the GPT-4o writer visibly
+# outrunning its ranking inputs (pre-registered trigger (c)).
+RANK_MODEL = "gpt-4o"
+RANK_USD_PER_MTOK_IN = 2.50
+RANK_USD_PER_MTOK_OUT = 10.00
+# The documented fallback rung (kept as a constant so the fallback is a named
+# fact, not lore): gpt-4o-mini ran ranking M3 -> M5-day-1.
 MODEL = "gpt-4o-mini"
 LLM_TIMEOUT_S = 90
 # 3000, raised from 1600 in M4: with memory threads in play, 12 clusters of
@@ -92,9 +102,10 @@ CORROBORATION_CAVEAT = (
     "several outlets repeating one wire story."
 )
 
-# gpt-4o-mini pricing (spec §B), for the pre-call budget estimate + cost log.
-USD_PER_MTOK_IN = 0.15
-USD_PER_MTOK_OUT = 0.60
+# Active-rank-model pricing, for the pre-call budget estimate + cost log
+# (tracks RANK_MODEL; mini's 0.15/0.60 return with the fallback if reverted).
+USD_PER_MTOK_IN = RANK_USD_PER_MTOK_IN
+USD_PER_MTOK_OUT = RANK_USD_PER_MTOK_OUT
 
 
 class RankingError(RuntimeError):
@@ -125,6 +136,10 @@ class RankedSlot:
     # pre-revival coverage date for the narrative's back-reference.
     matched_dormant: List[str] = field(default_factory=list)
     revived_threads: List[Dict] = field(default_factory=list)
+    # M5: the ranker's one-sentence reason is SEED MATERIAL for the writer's
+    # "Why it matters" movement (content contract §5.1) — persisted per slot
+    # from this milestone on; older rows simply lack it (writer handles "").
+    world_impact_reason: str = ""
 
 
 @dataclass
@@ -297,7 +312,7 @@ def usage_to_usd(usage: Dict) -> float:
 def _post_chat(key: str, prompt: str) -> Dict:
     body = json.dumps(
         {
-            "model": MODEL,
+            "model": RANK_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,  # exact-copy discipline for ids/tag names (M4 live finding)
             "max_tokens": MAX_COMPLETION_TOKENS,
@@ -323,6 +338,7 @@ def validate_payload(
     tag_levels: Dict[str, str],
     memory_topics: List[str],
     dormant_topics: Optional[List[str]] = None,
+    notes: Optional[List[str]] = None,
 ) -> List[Dict]:
     """Hard schema validation of the LLM's cluster payload. Raises ValueError
     with ALL problems found (not just the first) so a retry/report is
@@ -369,7 +385,17 @@ def validate_payload(
             mtags = []
         clean_tags: List[Dict[str, str]] = []
         for t in mtags:
-            if (
+            if isinstance(t, str) and t in tag_levels:
+                # Schema TOLERANCE, not repair (ADR-0004 M5 amendment): the
+                # dict's level field carries zero model information — any
+                # level differing from OUR vocabulary map is rejected anyway —
+                # so a bare exact-match name is informationally identical to
+                # the dict form. Normalized deterministically from the map,
+                # counted, and disclosed. Non-matching strings still reject.
+                clean_tags.append({"name": t, "level": tag_levels[t]})
+                if notes is not None:
+                    notes.append(t)
+            elif (
                 not isinstance(t, dict)
                 or t.get("name") not in tag_levels
                 or t.get("level") != tag_levels.get(t.get("name"))
@@ -536,12 +562,16 @@ def call_llm_validated(
             content = choice["message"]["content"]
             payload = json.loads(content)
             payload, repair_info = repair_duplicate_ids(payload)
+            shape_notes: List[str] = []
             clusters = validate_payload(
-                payload, known_ids, tag_levels, memory_topics, dormant_topics
+                payload, known_ids, tag_levels, memory_topics, dormant_topics,
+                notes=shape_notes,
             )
             if repairs is not None:
                 repairs.clear()
                 repairs.update(repair_info)
+                if shape_notes:
+                    repairs["tag_shape_normalized"] = len(shape_notes)
             return clusters, usage
         except urllib.error.HTTPError as exc:
             detail = _http_error_detail(exc)
@@ -585,12 +615,17 @@ def call_llm_validated(
 # Deterministic selection, override, corroboration
 # ---------------------------------------------------------------------------
 
-def personal_score(cluster: Dict, followed: bool) -> float:
+def personal_score(cluster: Dict, followed: bool, memory_steers: bool = False) -> float:
+    """A6 (2026-07-05): thread matches contribute to selection ONLY when
+    settings.threads_steer_selection is true. With steering off (the default
+    of record), matched_memory is recognition-only here — exactly the M4
+    zero-influence pattern — while persist() keeps recording references,
+    revivals, and continuity regardless."""
     weights = [
         TOPIC_WEIGHT if t["level"] == "topic" else DOMAIN_WEIGHT
         for t in cluster["matched_tags"]
     ]
-    if cluster["matched_memory"]:
+    if cluster["matched_memory"] and memory_steers:
         weights.append(MEMORY_WEIGHT)
     base = max(weights) if weights else 0.0
     if followed:
@@ -630,12 +665,13 @@ def select_slots(
     clusters: List[Dict],
     items_by_id: Dict[int, sqlite3.Row],
     followed_outlets: set,
+    memory_steers: bool = False,
 ) -> Tuple[List[RankedSlot], Dict]:
     scored = []
     for c in clusters:
         cluster_items = [items_by_id[i] for i in c["item_ids"] if i in items_by_id]
         followed = any(r["outlet"] in followed_outlets for r in cluster_items)
-        p = personal_score(c, followed)
+        p = personal_score(c, followed, memory_steers)
         scored.append((c, cluster_items, followed, p, combined_score(p, c["world_impact"])))
 
     primaries = sorted(
@@ -681,6 +717,7 @@ def select_slots(
                 # match-only: never touched personal_score/selection above —
                 # carried through so persist() can apply earned-slot revival
                 matched_dormant=c.get("matched_dormant", []),
+                world_impact_reason=c["world_impact_reason"],
             )
         )
     override_slot = next((s.slot for s in slots if s.override), None)
@@ -700,7 +737,7 @@ def select_slots(
             "topic": TOPIC_WEIGHT, "domain": DOMAIN_WEIGHT, "memory": MEMORY_WEIGHT,
             "followed_boost": FOLLOWED_BOOST, "personal_share": PERSONAL_SHARE,
         },
-        "model": MODEL,
+        "model": RANK_MODEL,
         "prompt_file": PROMPT_FILE,
     }
     return slots, meta
@@ -767,7 +804,7 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
             "steps": [
                 {
                     "step": "rank_select",
-                    "model": MODEL,
+                    "model": RANK_MODEL,
                     "prompt_tokens": report.token_usage.get("prompt_tokens"),
                     "completion_tokens": report.token_usage.get("completion_tokens"),
                     "usd": round(usage_to_usd(report.token_usage), 6),
@@ -985,12 +1022,18 @@ def _run_rank_body(
 
     items_by_id = {r["id"]: r for r in items}
     followed_outlets = {s.name for s in cfg.followed_analyst_sources}
-    slots, meta = select_slots(clusters, items_by_id, followed_outlets)
+    slots, meta = select_slots(
+        clusters, items_by_id, followed_outlets,
+        memory_steers=cfg.threads_steer_selection,
+    )
+    meta["threads_steer_selection"] = cfg.threads_steer_selection
     meta["window"] = window
     meta["history_days"] = history
-    if repair_sink.get("repaired"):
-        # Disclosed repair (never silent): the warning renders in CLI output
-        # and the detail persists in ranking_runs.meta.repairs.
+    if repair_sink.get("repaired") or repair_sink.get("tag_shape_normalized"):
+        # Disclosed repair/tolerance (never silent, never unpersisted): the
+        # warning renders in CLI output AND the detail persists in
+        # ranking_runs.meta.repairs — BUG-7: a tag-shape-only run (the common
+        # case) must feed the day-30 tolerance-frequency readout too.
         meta["repairs"] = repair_sink
 
     report = RankReport(
@@ -1008,6 +1051,13 @@ def _run_rank_body(
     # Memory surfacing (spec §B: staleness is SURFACED, never silent; sync
     # edits are acknowledged so the principal knows the file was honored).
     report.warnings.extend(mem_sync.summary_lines())
+    if repair_sink.get("tag_shape_normalized"):
+        report.warnings.append(
+            f"tag-shape normalization: {repair_sink['tag_shape_normalized']} "
+            "bare-string tag name(s) accepted (exact vocabulary matches; "
+            "levels from the canonical map — disclosed schema tolerance, "
+            "ADR-0004 M5 amendment)"
+        )
     if repair_sink.get("repaired"):
         emptied = repair_sink.get("clusters_emptied") or []
         report.warnings.append(
