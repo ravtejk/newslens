@@ -93,6 +93,34 @@ the GATE-PENDING tag-shape tolerance boundary are pinned (487 green + 1 red
 acceptance). `test_generate.py` covers the writer end to end via a fake
 `generate._chat`.
 
+M6 QA pass (2026-07-05, voice + editor): 1 red — BUG-8 (`test_BUG8_*`,
+test_generate.py: mandate 2 re-runs all narrative validators on the EDITED
+payload, but that call sits outside every handler — a shape-legal,
+validator-violating edit (e.g. the editor clips a mandatory revival date
+while tightening) escapes as a raw ValueError: no degrade, no GenerateError,
+no failure log. Fix contract in the test docstring; degrade-to-draft or
+logged GenerateError both turn it green). Also this pass: the five
+mandate-stales re-pinned (editor step in costs/logs/abort-sequence, no-row
+reword, doctor exit-0 via fake engine files); the doctor's
+NEWSLENS_DOCTOR_TTS_SYNTH=0 skip-marker RULED ACCEPTED with two pinned
+conditions (marker always renders; skip never masks engine absence —
+test_audio.py); new `test_audio.py` pins the chunker edges, lossless concat
+with real output frame counts (the placeholder-nframes live finding),
+kokoro shim subprocess plumbing, engine validation, call-time path
+resolution, and the _outlet_token article fix. Suite: 524 green + 1 red
+acceptance.
+
+M6 fix-loop close (2026-07-05, late): BUG-8 fixed and frozen to the
+implemented contract (validator-violating edit -> disclosed DISCARD + draft
+re-validation; draft-also-fails -> logged GenerateError, both pinned); the
+A7/A8 text-quality package pinned (framing-menu membership, writer-owned
+labels with the editor code-barred, varied-rhythm and lead-depth warns,
+DELETE-ON-SIGHT + never-add-facts prompt drift guards); the slot-dup guard
+pinned (collapse-keep-earlier, promote-next, dropped-override-slot-empty,
+meta.dedup shape + run-warning disclosure); warnings + framings retained in
+ok AND failed log entries; editor budget-abort degrades instead of dying.
+Suite: 538/538 green.
+
 ## Implementer contract notes for milestone 3 (for QA — appended per dispatch)
 
 New surfaces: `ranking.py` (clustering/scoring/override/corroboration/persist),
@@ -353,3 +381,35 @@ pass as your two pending rate pins):
   single-source/revival hardness; sources.yaml template state (settings:
   block now present); alternation scheduling (variant_for still A on even,
   but generate no longer consults it for the record).
+
+## Implementer contract notes for milestone 6 (voice + editor)
+
+- **Sample-untouched-record pin (gate spec):** any sample request
+  (`--variant B` / `--no-threads`) with DEFAULT flags forces refresh=False —
+  the record row stays byte-identical (pin: hash briefings row before/after
+  a sample generate). Help text + README promise it.
+- **Audio seam:** `generate_audio(script_text, out_path, engine, key)` in
+  audio.py — engines kokoro (subprocess into data/tts/venv; NOT installed in
+  CI/suite) and openai (urllib; fake-server-able via audio.OPENAI_TTS_URL).
+  generate degrades with "audio: SKIPPED — <reason>" when the engine is
+  unavailable — suites without the engine venv exercise exactly that path,
+  spend-proof by construction. Doctor: NEWSLENS_DOCTOR_TTS_SYNTH=0 skips the
+  real synthesis with an INFO marker (QA rules on the skip-marker pattern).
+- **Editor pass:** draft is shape-checked only; editor output must keep
+  count/order/tiers (ValueError otherwise -> retry -> degrade-to-draft with
+  "editor: DEGRADED" disclosure); ALL narrative validators run on the edited
+  payload; "editor: N -> M words (P% tighter)" warning + log field; step
+  "editor_pass" in token_cost. Offline: mock via ranking.OPENAI_CHAT_URL
+  (generate._chat routes through it).
+- log_generation gains: tiers[], editor note, audio path.
+- Rides landed: no-row hint now says "generate the record first";
+  _outlet_token skips leading articles ("The Hill" -> "hill").
+
+- **Doctor TTS severity + pin recipe:** a missing kokoro engine is a HARD ✗
+  (listening-primary product; the default engine is required) — your
+  exit-0-with-warnings doctor test needs either a fake engine in the sandbox
+  (touch data/tts/venv/bin/python + the two model filenames under the
+  patched DATA_DIR, plus NEWSLENS_DOCTOR_TTS_SYNTH=0 to skip the real
+  synthesis with the INFO marker) or a settings tts_engine=openai sources
+  fixture (missing local engine is INFO in that mode). audio paths resolve
+  dynamically from paths.DATA_DIR (no import-order dependence).

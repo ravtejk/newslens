@@ -30,6 +30,10 @@
 # they just don't boost what gets picked. Flip to true to restore steering.
 settings:
   threads_steer_selection: false
+  # tts_engine: which voice reads the briefing — kokoro (local, free,
+  # default) or openai (gpt-4o-mini-tts, ~$0.015/min on your OpenAI key).
+  # Pick by ear at the M6 checkpoint; flipping is just editing this line.
+  tts_engine: kokoro
 
 sources:
   # --- Wire / major (reference_only per principal: referenced, not fetched) --

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 import time
 import urllib.error
@@ -661,6 +662,33 @@ def corroborate(items: List[sqlite3.Row]) -> Tuple[int, str, int, List[str]]:
     return count, label, wire_excluded, named
 
 
+_DEDUP_STOPWORDS = frozenset(
+    "a an the of in into on at to for and or as with over after amid its his "
+    "her their this that is are was were be has have had by from up down out "
+    "new says said".split()
+)
+DEDUP_JACCARD = 0.45  # M6, gate-reconciled: reproducible dup pair (QA fixture) J=0.667; distinct pairs <0.35 (ADR-0009 §2)
+
+
+def _sig_tokens(cluster: Dict) -> frozenset:
+    text = f"{cluster.get('story_title', '')} {cluster.get('summary', '')}".lower()
+    return frozenset(
+        (w[:-1] if len(w) > 3 and w.endswith("s") else w)  # meet/meets, summit/summits
+        for w in re.findall(r"[a-z0-9']+", text)
+        if w not in _DEDUP_STOPWORDS and len(w) > 2
+    )
+
+
+def _near_duplicate(a: Dict, b: Dict) -> bool:
+    """Deterministic same-story detection across SELECTED slots (M6 live
+    finding: the model produced two clusters of one NATO story and both
+    slotted). Significant-token Jaccard over title+summary >= DEDUP_JACCARD."""
+    ta, tb = _sig_tokens(a), _sig_tokens(b)
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / len(ta | tb) >= DEDUP_JACCARD
+
+
 def select_slots(
     clusters: List[Dict],
     items_by_id: Dict[int, sqlite3.Row],
@@ -690,6 +718,38 @@ def select_slots(
     take_primary = MAX_SLOTS - (1 if override_pick else 0)
     chosen = primaries[:take_primary] + ([override_pick] if override_pick else [])
     chosen.sort(key=lambda s: s[4], reverse=True)
+
+    # Slot-dup guard (code-owned, deterministic): collapse near-duplicate
+    # selections, promote the next-ranked primary, disclose. The override
+    # instance loses to a primary duplicate (its slot then goes unfilled —
+    # a normal outcome).
+    deduped = []
+    dropped_dupes = []
+    for entry in chosen:
+        dup_of = next(
+            (kept for kept in deduped if _near_duplicate(entry[0], kept[0])), None
+        )
+        if dup_of is not None:
+            dropped_dupes.append(
+                {"dropped": entry[0]["story_title"], "kept": dup_of[0]["story_title"]}
+            )
+            if entry is override_pick:
+                override_pick = None
+            continue
+        deduped.append(entry)
+    if dropped_dupes:
+        # Target: the primary quota refills; a dropped override's slot stays
+        # unfilled (a normal outcome, per the override contract).
+        target = take_primary + (1 if override_pick else 0)
+        pool = [p for p in primaries if p not in deduped and p is not override_pick]
+        for candidate in pool:
+            if len(deduped) >= target:
+                break
+            if any(_near_duplicate(candidate[0], kept[0]) for kept in deduped):
+                continue
+            deduped.append(candidate)
+        deduped.sort(key=lambda s: s[4], reverse=True)
+    chosen = deduped
 
     slots: List[RankedSlot] = []
     for n, (c, cluster_items, followed, p, comb) in enumerate(chosen, start=1):
@@ -722,6 +782,7 @@ def select_slots(
         )
     override_slot = next((s.slot for s in slots if s.override), None)
     meta = {
+        "dedup": {"dropped": dropped_dupes} if dropped_dupes else {"dropped": []},
         "override": {
             "pool_size": len(zero_pool),
             "threshold": OVERRIDE_THRESHOLD,
@@ -1051,6 +1112,15 @@ def _run_rank_body(
     # Memory surfacing (spec §B: staleness is SURFACED, never silent; sync
     # edits are acknowledged so the principal knows the file was honored).
     report.warnings.extend(mem_sync.summary_lines())
+    if meta["dedup"]["dropped"]:
+        names = "; ".join(
+            f"{d['dropped']!r} (same story as {d['kept']!r})"
+            for d in meta["dedup"]["dropped"]
+        )
+        report.warnings.append(
+            f"slot-dup guard: collapsed {len(meta['dedup']['dropped'])} "
+            f"near-duplicate selection(s) — {names}"
+        )
     if repair_sink.get("tag_shape_normalized"):
         report.warnings.append(
             f"tag-shape normalization: {repair_sink['tag_shape_normalized']} "

@@ -44,7 +44,7 @@ _VALID_SOURCE_KEYS = {
 }
 _VALID_TOP_LEVEL_KEYS = {"sources", "interests", "settings"}
 _VALID_INTEREST_KEYS = {"broad", "granular"}
-_VALID_SETTINGS_KEYS = {"threads_steer_selection"}
+_VALID_SETTINGS_KEYS = {"threads_steer_selection", "tts_engine"}
 
 # Source tiers (milestone 2, principal's source list):
 #   full           — usable RSS content (title + summary/excerpt)
@@ -96,6 +96,8 @@ class SourcesConfig:
     # on tags + world impact only; thread recording/continuity continues
     # regardless. Principal-flippable in sources.yaml `settings:`.
     threads_steer_selection: bool = False
+    # M6: which generate_audio engine voices the briefing (ADR-0008).
+    tts_engine: str = "kokoro"
 
     @property
     def fetchable_sources(self) -> List[Source]:
@@ -305,6 +307,11 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                 cfg.problems.append("settings.threads_steer_selection must be true or false")
             else:
                 cfg.threads_steer_selection = tss
+            engine = raw_settings.get("tts_engine", "kokoro")
+            if not isinstance(engine, str) or engine not in ("kokoro", "openai"):
+                cfg.problems.append("settings.tts_engine must be kokoro or openai")
+            else:
+                cfg.tts_engine = engine
 
     raw_interests = raw.get("interests")
     if raw_interests is not None:

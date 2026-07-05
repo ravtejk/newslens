@@ -76,8 +76,11 @@ def test_followed_only_at_world_10_loses_to_topic_match_at_world_3():
 def test_followed_content_never_gets_a_guaranteed_slot():
     """Five stronger topic clusters fill the budget; the followed-only cluster
     is simply outranked — no followed=>slot branch exists to rescue it."""
+    titles = ["Fed rate decision", "Chip export rules", "Grain corridor talks",
+              "Court docket shakeup", "Energy grid strain"]
     clusters = [
-        cluster([i], title=f"Topic {i}", tags=TOPIC, impact=4 + i) for i in range(1, 6)
+        cluster([i], title=titles[i - 1], tags=TOPIC, impact=4 + i)
+        for i in range(1, 6)
     ]
     clusters.append(cluster([9], title="Followed only", impact=10))
     items = {i: item(i, f"Outlet {i}") for i in range(1, 6)}
@@ -207,8 +210,11 @@ def test_override_label_carries_prefix_and_reason_and_only_on_the_override():
 
 
 def test_override_consumes_one_of_the_five_slots():
+    titles = ["Fed rate decision", "Chip export rules", "Grain corridor talks",
+              "Court docket shakeup", "Energy grid strain", "Housing bill vote"]
     clusters = [
-        cluster([i], title=f"T{i}", tags=TOPIC, impact=5) for i in range(1, 7)
+        cluster([i], title=titles[i - 1], tags=TOPIC, impact=5)
+        for i in range(1, 7)
     ]
     clusters.append(cluster([9], title="Zero 9", impact=9))
     items = {i: item(i, f"O{i}") for i in list(range(1, 7)) + [9]}
@@ -429,6 +435,7 @@ def test_end_to_end_rank_persists_archives_and_tells_the_truth(
     assert len(runs) == 1
     meta = json.loads(runs[0]["meta"])
     assert meta["status"] == "ok" and meta["override"]["fired"] is True
+    assert meta["dedup"] == {"dropped": []}  # M6 fix loop: shape always present
 
     # Re-rank the same date: archive-before-overwrite (ADR-0001, live now).
     report2 = ranking.run_rank(
@@ -446,3 +453,135 @@ def test_end_to_end_rank_persists_archives_and_tells_the_truth(
     assert (
         migrated_con.execute("SELECT COUNT(*) FROM ranking_runs").fetchone()[0] == 2
     )
+# --- M6 fix loop: the slot-dup guard (ADR-0009 §2) ---------------------------------------
+
+DISTINCT = ["Fed rate decision", "Chip export rules", "Grain corridor talks",
+            "Court docket shakeup", "Energy grid strain", "Housing bill vote"]
+
+
+def _dup_pair_cluster(ids, title, summary, tags=(), impact=5):
+    c = cluster(ids, title=title, tags=tags, impact=impact)
+    c["summary"] = summary
+    return c
+
+
+def test_dedup_collapses_near_duplicates_keeps_earlier_and_promotes_next():
+    """Jaccard-over-significant-tokens guard: the emulated live pair (two
+    write-ups of one story) collapses; earlier-ranked wins; the next-ranked
+    distinct primary is promoted; meta.dedup.dropped discloses the pair."""
+    dup_a = _dup_pair_cluster(
+        [1], "Senate passes chip export controls package",
+        "Senate approves sweeping chip export controls targeting advanced nodes.",
+        tags=TOPIC, impact=8,
+    )
+    dup_b = _dup_pair_cluster(
+        [2], "Chip export controls package passes Senate",
+        "The sweeping export controls on advanced chips clear the Senate.",
+        tags=TOPIC, impact=7,
+    )
+    others = [
+        _dup_pair_cluster([i + 2], DISTINCT[i],
+                          f"A distinct account of {DISTINCT[i].lower()} today.",
+                          tags=TOPIC, impact=6 - i)
+        for i in range(4)
+    ]
+    items = {i: item(i, f"O{i}") for i in range(1, 7)}
+    slots, meta = ranking.select_slots([dup_a, dup_b] + others, items, set())
+    titles = [s.story_title for s in slots]
+    assert dup_a["story_title"] in titles       # earlier-ranked kept
+    assert dup_b["story_title"] not in titles   # duplicate dropped
+    assert len(slots) == 5                      # next-ranked primary promoted
+    assert meta["dedup"]["dropped"] == [
+        {"dropped": dup_b["story_title"], "kept": dup_a["story_title"]}
+    ]
+
+
+def test_dedup_distinct_stories_are_untouched():
+    clusters = [
+        _dup_pair_cluster([i + 1], DISTINCT[i],
+                          f"A distinct account of {DISTINCT[i].lower()} today.",
+                          tags=TOPIC, impact=5)
+        for i in range(5)
+    ]
+    items = {i: item(i, f"O{i}") for i in range(1, 6)}
+    slots, meta = ranking.select_slots(clusters, items, set())
+    assert len(slots) == 5
+    assert meta["dedup"] == {"dropped": []}
+
+
+def test_dedup_dropped_override_leaves_its_slot_empty():
+    """The override contract holds through the guard: when the override
+    instance duplicates a primary, it is dropped and its slot stays UNFILLED
+    (a normal outcome) — no zero-signal story sneaks in as a replacement."""
+    primary = _dup_pair_cluster(
+        [1], "Senate passes chip export controls package",
+        "Senate approves sweeping chip export controls targeting advanced nodes.",
+        tags=TOPIC, impact=8,
+    )
+    override_dup = _dup_pair_cluster(
+        [2], "Chip export controls package passes Senate",
+        "The sweeping export controls on advanced chips clear the Senate.",
+        impact=9,  # zero personal signal + world 9: override material
+    )
+    spare_zero = _dup_pair_cluster(
+        [3], "Volcanic ash grounds hemisphere flights",
+        "An eruption closes airspace across the hemisphere.", impact=8,
+    )
+    items = {i: item(i, f"O{i}") for i in range(1, 4)}
+    slots, meta = ranking.select_slots([primary, override_dup, spare_zero], items, set())
+    titles = [s.story_title for s in slots]
+    assert primary["story_title"] in titles
+    assert override_dup["story_title"] not in titles
+    assert not any(s.override for s in slots)   # the override slot went EMPTY
+    assert meta["dedup"]["dropped"] == [
+        {"dropped": override_dup["story_title"], "kept": primary["story_title"]}
+    ]
+
+
+def test_dedup_disclosure_reaches_the_run_warnings(migrated_con, fake_api, monkeypatch):
+    import time as _time
+
+    monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions")
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    for i in (1, 2):
+        migrated_con.execute(
+            "INSERT INTO source_items (id, source_type, outlet, url, title, fetched_at)"
+            " VALUES (?, 'rss', ?, ?, ?, ?)",
+            (i, f"Outlet {i}", f"https://o{i}.example/x", "Story", now),
+        )
+    migrated_con.commit()
+    payload = {
+        "clusters": [
+            {"story_title": "Senate passes chip export controls package",
+             "summary": "Senate approves sweeping chip export controls targeting advanced nodes.",
+             "item_ids": [1],
+             "matched_tags": [{"name": "AI regulation", "level": "topic"}],
+             "matched_memory": [], "world_impact": 8, "world_impact_reason": "R"},
+            {"story_title": "Chip export controls package passes Senate",
+             "summary": "The sweeping export controls on advanced chips clear the Senate.",
+             "item_ids": [2],
+             "matched_tags": [{"name": "AI regulation", "level": "topic"}],
+             "matched_memory": [], "world_impact": 7, "world_impact_reason": "R"},
+        ]
+    }
+    fake_api.add_route(
+        "/chat/completions", status=200,
+        body=json.dumps({
+            "choices": [{"finish_reason": "stop",
+                         "message": {"content": json.dumps(payload)}}],
+            "usage": {"prompt_tokens": 500, "completion_tokens": 100},
+        }).encode("utf-8"),
+        content_type="application/json",
+    )
+    rep = ranking.run_rank(date="2026-07-04", con=migrated_con, cfg=rank_cfg(),
+                           env={"OPENAI_API_KEY": "sk-x"})
+    assert any(
+        w.startswith("slot-dup guard: collapsed 1 near-duplicate selection(s)")
+        and "same story as" in w
+        for w in rep.warnings
+    )
+    meta = json.loads(migrated_con.execute(
+        "SELECT meta FROM ranking_runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()["meta"])
+    assert len(meta["dedup"]["dropped"]) == 1

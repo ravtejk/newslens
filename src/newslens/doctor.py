@@ -627,6 +627,56 @@ def check_sources() -> List[Result]:
 
 
 # ---------------------------------------------------------------------------
+# TTS engine (M6 — a REAL local synthesis, not a liveness ping; the
+# engineering-2 ruling. QA seam: gate the real synth behind the engine
+# actually being installed + NEWSLENS_DOCTOR_TTS_SYNTH != "0".)
+# ---------------------------------------------------------------------------
+
+def check_tts() -> List[Result]:
+    from . import audio, config as cfg_mod
+
+    out: List[Result] = []
+    try:
+        engine = cfg_mod.load_sources().tts_engine
+    except Exception:  # sources problems are reported by check_sources
+        engine = "kokoro"
+    problem = audio.kokoro_ready()
+    if engine == "openai":
+        out.append(Result(INFO, "settings.tts_engine = openai (gpt-4o-mini-tts, "
+                                "~$0.015/min on the OpenAI key)"))
+        if problem:
+            out.append(Result(INFO, f"local kokoro engine not installed ({problem}) "
+                                    "— fine while the openai engine is selected"))
+        return out
+    if problem:
+        out.append(Result(FAIL, f"tts (kokoro, the default engine): {problem}"))
+        return out
+    if os.environ.get("NEWSLENS_DOCTOR_TTS_SYNTH") == "0":
+        out.append(Result(INFO, "tts real-synthesis check skipped "
+                                "(NEWSLENS_DOCTOR_TTS_SYNTH=0 — QA/offline mode)"))
+        return out
+    import tempfile
+    from pathlib import Path as _P
+    try:
+        with tempfile.TemporaryDirectory(prefix="newslens-tts-") as tmp:
+            res = audio.generate_audio(
+                "NewsLens doctor check: the local voice is working.",
+                _P(tmp) / "doctor.wav", engine="kokoro",
+            )
+        rate = res.detail.get("realtime_x")
+        out.append(Result(
+            PASS,
+            f"tts kokoro: REAL synthesis OK — {res.duration_s:.1f}s of audio in "
+            f"{res.gen_time_s:.1f}s"
+            + (f" ({rate}x realtime; this machine measured ~4.4x on a full "
+               "script — below the reconvene's 14x floor, flagged at M6)" if rate else ""),
+        ))
+    except audio.AudioError as exc:
+        out.append(Result(FAIL, f"tts kokoro: real synthesis FAILED — {exc}"))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Cost
 # ---------------------------------------------------------------------------
 
@@ -671,6 +721,7 @@ def run_doctor() -> int:
 
     sections.append(("Database", check_database()))
     sections.append(("Sources & interests", check_sources()))
+    sections.append(("TTS engine", check_tts()))
     sections.append(("Cost", cost_estimate()))
 
     tally = {PASS: 0, FAIL: 0, WARN: 0, INFO: 0}

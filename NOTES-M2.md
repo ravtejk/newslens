@@ -163,3 +163,57 @@ match the tree (stale three gates running: M2, M3, M4).
 - ~~Item 15 (corrupt-slots None ambiguity)~~ — generate distinguishes
   row-exists+unreadable (continuity SUSPENDED, loud warning, logged) from
   no-prior-row (first briefing). ADR-0007 §7.
+
+## Milestone 6 record (2026-07-05) — the editor + parked audio infrastructure
+
+**Parked by principal priority ruling (DECISIONS.md 2026-07-05): the audio/
+podcast quality backlog** — 9 items recorded in the content contract's
+"PRINCIPAL REVIEW ROUND 2" section (cold-open orientation, never-repeat
+across open/headlines/story, sentence-rhythm variation, speech-not-prose,
+contemporary transitions, editorial-judgment personality, one-idea density,
+TTS-safe writing for the tics class, delivery pacing/emphasis) — plus the
+ear-test re-run against a current script, the engine pick, and the
+**4.4x-realtime-vs-14x-floor vendor question (principal's call at the ear
+test)**. Infrastructure rides complete: both engines behind one seam, doctor
+real-synthesis check with QA's two pinned skip-marker conditions,
+`scripts/setup_tts` idempotent.
+
+**M5 rides disposition:** LANDED this tree: `_outlet_token` The-prefix fix;
+the sample no-row error hint ("generate the record first"). CARRIED:
+corrections spoken-presence check (until a corrections pipeline exists —
+`build_labels_block` still hardcodes "none this run"); hedge-coarseness
+quality read (day-14); mechanism-depth quality read (day-14); tier-frequency
++ tolerance-frequency readouts (day-14, instrumentation live); keyless-refusal
+log asymmetry; numeral {2,3} exemption; caveat-paraphrase double-render edge.
+
+## New carryovers for milestone 7 (from the M6 gate review)
+
+16. **Budget-cap pre-check on the openai TTS call** (`audio.py`,
+    `_synthesize_openai`) — the only spending path without one (~script_words
+    /160 × $0.015 estimate vs remaining cap). Bounded today (~$0.08, no retry
+    loop, non-default engine) but breaks the repo's cap discipline.
+17. **Pin `kokoro-onnx==0.5.0` in `scripts/setup_tts`** (ADR records 0.5.0;
+    the runner's stats string hardcodes it; an unpinned future release breaks
+    the isolated venv silently).
+18. **Editor forensics (gate nice-to-haves, cheap):** (a) draft-vs-edited
+    hedge-word-ratio warn (mechanical tripwire for epistemic-qualifier
+    deletion inside kept sentences); (b) persist the pre-edit draft JSON in
+    the generation log entry so day-14 can attribute quality regressions to
+    writer vs editor.
+19. **Audio hardening (gate nice-to-haves):** scrub `env=` on the kokoro
+    subprocess (defense-in-depth — runner reads only argv); reuse
+    `ranking._http_error_detail` for openai TTS errors; WAV params-consistency
+    check across chunks; pass model paths to `tts_runner` as argv; model
+    checksums in setup_tts.
+20. **Framing-distribution read at day-14** (gate ruling: warn +
+    instrumentation sufficient; the model could alternate two framings
+    without tripping the >=3-same warn — the per-run `framings` log field is
+    the readout).
+
+20a. **[QA-owned, M7] Pin the calibration figure in-suite:** one assertion
+     computing J of the chip-export fixture pair via `_sig_tokens` and
+     asserting the exact value (0.667), so ADR-0009's cited figure is
+     ENFORCED by the suite and can never drift from code again. Meta-lesson
+     (gate, after the record accumulated four figures — 0.46, 0.583, 0.833,
+     0.667 — three of them wrong): figures in decision records come from
+     executable one-liners, not recollection or reconstruction.

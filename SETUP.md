@@ -135,6 +135,18 @@ That's the designed experience: nothing crashes, every gap names its fix.
   `api.openai.com` and `api.perplexity.ai`; failures say "network-shaped" when
   that's the likely cause.
 
+## The voice (M6) — one-time local TTS setup
+
+```bash
+scripts/setup_tts   # brew python@3.12 + isolated engine venv + ~340MB model
+scripts/doctor      # its TTS section runs a REAL short synthesis
+```
+
+Kokoro-82M runs locally and free (default). Switch to the hosted voice any
+time: `settings.tts_engine: openai` in sources.yaml (~$0.015/min on your
+OpenAI key). The audio lands next to each briefing:
+`data/briefings/<date>.wav`.
+
 ## Later milestones (placeholders, so this file has one home)
 
 - **On-demand trigger + instrumentation (M7):** `generate` stays manual (v1 is

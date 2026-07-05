@@ -119,6 +119,13 @@ STORY MECHANICS:
   or the prior briefing. If the story is single-outlet (corroboration data
   says so), NAME the outlet inside the lede prose ("— reported so far only
   by the FT"). Developing/unconfirmed status is stated here, not buried.
+- FRAMING (A7): for each full/medium story, CHOOSE the second movement's
+  framing from this menu to fit the story's nature — "Why it matters",
+  "Why markets care", "The debate", "What's unknown", "The background",
+  "The stakes", "What changed" — and the third movement's from: "Watch for",
+  "What happens next", "The next test", "What would change this". Declare
+  your choices in why_label / watch_label (exact strings from the menus).
+  Never give five stories one rhythm; pick what fits, not what repeats.
 - why_it_matters: the analysis movement — significance, second/third-order
   mechanisms per the ladder, personal relevance woven in as prose when a
   tag or thread earned the slot, world-context when the world axis did. The
@@ -151,10 +158,12 @@ STORY MECHANICS:
 
 OUTPUT — one JSON object, nothing else:
 {{"stories": [
-  {{"tier": "full", "headline": "...", "lede": "...", "why_it_matters": "...",
-    "watch_for": "..."}},
-  {{"tier": "medium", "headline": "...", "lede": "...", "why_it_matters": "...",
-    "watch_for": "..."}},
+  {{"tier": "full", "headline": "...", "lede": "...",
+    "why_label": "<from the menu>", "why_it_matters": "...",
+    "watch_label": "<from the menu>", "watch_for": "..."}},
+  {{"tier": "medium", "headline": "...", "lede": "...",
+    "why_label": "...", "why_it_matters": "...",
+    "watch_label": "...", "watch_for": "..."}},
   {{"tier": "quick", "headline": "...", "lede": "<the 1-3 sentence hit>"}}
 ]}}
 Exactly one entry per story below, in the same order. Story 1 must be

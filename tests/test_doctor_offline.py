@@ -223,10 +223,21 @@ def test_exit_0_with_warnings_once_everything_required_passes(
     monkeypatch.setenv("OPENAI_API_KEY", fake_api.good_key)
     monkeypatch.setenv("PERPLEXITY_API_KEY", fake_api.good_key)
     db.migrate()  # sandboxed
+    # M6: the TTS engine is REQUIRED (listening-primary product). Fake its
+    # presence in the sandbox and skip the real synthesis via the DISCLOSED
+    # marker (QA ruling: accepted BECAUSE the skip renders an INFO line and
+    # never masks engine absence — both pinned in test_audio.py).
+    venv_py = paths.DATA_DIR / "tts" / "venv" / "bin" / "python"
+    venv_py.parent.mkdir(parents=True, exist_ok=True)
+    venv_py.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (paths.DATA_DIR / "tts" / "kokoro-v1.0.onnx").write_bytes(b"fake")
+    (paths.DATA_DIR / "tts" / "voices-v1.0.bin").write_bytes(b"fake")
+    monkeypatch.setenv("NEWSLENS_DOCTOR_TTS_SYNTH", "0")
 
     code, out = run_doctor_captured(capsys)
 
     assert code == 0
+    assert "tts real-synthesis check skipped" in out  # the disclosed marker
     assert "Doctor exit 0 — everything required passes; the ⚠ lines are worth a look." in out
     assert "0 required failing" in out
     assert config.NO_ACTIVE_SOURCES_MSG in out  # warnings present, not blocking

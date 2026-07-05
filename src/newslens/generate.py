@@ -64,6 +64,9 @@ NARRATIVE_TEMPERATURE = 0.3
 SCRIPT_TEMPERATURE = 0.4
 
 PROMPT_A = "narrative_variant_a.txt"
+PROMPT_EDITOR = "editor_pass.txt"
+EDITOR_MAX_TOKENS = 2800
+EDITOR_TEMPERATURE = 0.2
 PROMPT_B = "narrative_variant_b.txt"
 PROMPT_SCRIPT = "script_adapt.txt"
 
@@ -125,6 +128,16 @@ TRUISM_WARN_STRINGS = [
 ]
 MORALIZE_WARN_STRINGS = ["divisive", "controversial", "troubling", "worrisome"]
 MECHANICAL_TRANSITIONS = ["turning to", "in economic news", "finally,"]
+
+# A7 (Round 2): sanctioned framing menus — the writer declares a framing per
+# movement to fit the story; validators check MEMBERSHIP, never fixed names.
+WHY_FRAMINGS = (
+    "Why it matters", "Why markets care", "The debate", "What's unknown",
+    "The background", "The stakes", "What changed",
+)
+WATCH_FRAMINGS = (
+    "Watch for", "What happens next", "The next test", "What would change this",
+)
 
 _WORD_RE = re.compile(r"\b\w+\b")
 _NUM_RE = re.compile(r"\d[\d,.]*")
@@ -283,8 +296,9 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str) -> Dict:
     ).fetchone()
     if row is None:
         raise GenerateError(
-            f"no briefing row for {date} — run without --no-refresh so "
-            "generate can chain ingest + rank first"
+            f"no briefing row for {date} — generate the record first "
+            "(a plain `newslens generate`), then request samples or "
+            "narrative-only re-runs against it"
         )
     try:
         slots = json.loads(row["story_slots"] or "[]")
@@ -468,8 +482,11 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
 
 def _outlet_token(outlet: str) -> str:
     """First significant token of an outlet display name, lowercased —
-    "BBC News — World" -> "bbc" (what a writer actually calls it)."""
+    "BBC News — World" -> "bbc"; "The Hill" -> "hill" (gate ride: a leading
+    article is never the name a writer uses)."""
     for tok in re.split(r"[\s—-]+", outlet):
+        if tok.lower() in ("the", "a", "an"):
+            continue
         if len(tok) > 2 or tok.isupper():
             return tok.lower()
     return outlet.lower()
@@ -520,6 +537,19 @@ def validate_narrative_payload(
             if not isinstance(v, str) or not v.strip():
                 raise ValueError(f"story {n}: {fld} missing/empty (tier {tier})")
             out[fld] = v.strip()
+        if tier in ("full", "medium"):
+            # A7: declared framings, menu-membership enforced.
+            wl = s.get("why_label")
+            if wl not in WHY_FRAMINGS:
+                raise ValueError(
+                    f"story {n}: why_label {wl!r} not in the sanctioned menu"
+                )
+            xl = s.get("watch_label")
+            if xl not in WATCH_FRAMINGS:
+                raise ValueError(
+                    f"story {n}: watch_label {xl!r} not in the sanctioned menu"
+                )
+            out["why_label"], out["watch_label"] = wl, xl
         if tier == "quick":
             for fld in ("why_it_matters", "watch_for"):
                 if isinstance(s.get(fld), str) and s[fld].strip():
@@ -577,6 +607,22 @@ def validate_narrative_payload(
                 f"quotes are fine): {moralize}"
             )
         clean.append(out)
+    # A7 rhythm warn: five stories must never share one framing.
+    why_labels = [c.get("why_label") for c in clean if c.get("why_label")]
+    if len(why_labels) >= 3 and len(set(why_labels)) == 1:
+        warnings.append(
+            f"all {len(why_labels)} movement stories share one framing "
+            f"({why_labels[0]!r}) — A7 wants varied rhythm [warn-only]"
+        )
+    # A8 lead-depth pressure: a lead near slot-2 length is a flag.
+    if clean and clean[0].get("tier") == "full":
+        lead_words = len(_WORD_RE.findall(
+            " ".join(v for v in clean[0].values() if isinstance(v, str))))
+        if lead_words <= 240:
+            warnings.append(
+                f"lead landed at {lead_words} words — near slot-2 length; A8 "
+                "wants the lead's why-movement built from source specifics"
+            )
     return clean, warnings
 
 
@@ -599,12 +645,14 @@ def assemble_narrative(
         parts.append(st["lede"])
         parts.append("")
         if st.get("tier") in ("full", "medium"):
-            parts.append(f"**Why it matters:** {st['why_it_matters']}")
+            why_label = st.get("why_label") or "Why it matters"
+            watch_label = st.get("watch_label") or "Watch for"
+            parts.append(f"**{why_label}:** {st['why_it_matters']}")
             if st.get("my_read"):
                 parts.append("")
                 parts.append(f"**My read:** {st['my_read']}")
             parts.append("")
-            parts.append(f"**Watch for:** {st['watch_for']}")
+            parts.append(f"**{watch_label}:** {st['watch_for']}")
             parts.append("")
         # quick hits (A2): headline + the 1-3 sentence hit + trust furniture
         # only — no movement structure.
@@ -804,7 +852,7 @@ def validate_script(
 
 def persist_generation(
     con: sqlite3.Connection, date: str, narrative: str, script: str,
-    steps: List[Dict]
+    steps: List[Dict], audio_path: Optional[str] = None
 ) -> None:
     """Write narrative/script onto the briefing row. If a narrative already
     exists (re-generation), archive the row to briefings_history first —
@@ -834,8 +882,9 @@ def persist_generation(
         total = round(sum(s.get("usd") or 0 for s in all_steps), 6)
         con.execute(
             "UPDATE briefings SET narrative_text = ?, script_text = ?,"
-            " token_cost = ?, generated_at = ? WHERE id = ?",
-            (narrative, script,
+            " audio_file_path = ?, token_cost = ?, generated_at = ?"
+            " WHERE id = ?",
+            (narrative, script, audio_path,
              json.dumps({"steps": all_steps, "total_usd": total}), now, row["id"]),
         )
 
@@ -944,7 +993,8 @@ def run_generate(
             )
         except GenerateError as exc:
             log_generation({"date": date, "variant": variant, "sample": sample,
-                            "status": "failed", "error": str(exc)[:500]})
+                            "status": "failed", "error": str(exc)[:500],
+                            "warnings": report.warnings})
             raise
     finally:
         if own_con:
@@ -1006,29 +1056,115 @@ def _run_generate_body(
             f"estimated narrative cost ${est:.4f} exceeds the remaining budget "
             f"cap (${cap:.2f}) — aborting before the call"
         )
-    narrative_warnings: List[str] = []
-    stories_holder: List[List[Dict]] = []
+    draft_holder: List[Dict] = []
 
-    def _validate_narrative(content: str) -> None:
+    def _shape_check(content: str) -> None:
         payload = json.loads(content)
-        stories, warns = validate_narrative_payload(
-            payload, inputs["slots"], report.variant
-        )
-        narrative_warnings[:] = warns
-        stories_holder[:] = [stories]
+        if not isinstance(payload, dict) or not isinstance(payload.get("stories"), list):
+            raise ValueError("draft must be a JSON object with a `stories` list")
+        if len(payload["stories"]) != len(inputs["slots"]):
+            raise ValueError(
+                f"{len(payload['stories'])} draft stories for "
+                f"{len(inputs['slots'])} slots — must match"
+            )
+        draft_holder[:] = [payload]
 
     _, usage_n = call_llm(
         key, n_prompt, "narrative", NARRATIVE_MAX_TOKENS,
-        NARRATIVE_TEMPERATURE, True, validate=_validate_narrative,
+        NARRATIVE_TEMPERATURE, True, validate=_shape_check,
     )
-    stories = stories_holder[0]
-    report.warnings.extend(narrative_warnings)
+    draft_payload = draft_holder[0]
     step_n = {"step": f"narrative_{report.variant}", "model": WRITER_MODEL,
               "prompt_tokens": usage_n.get("prompt_tokens"),
               "completion_tokens": usage_n.get("completion_tokens"),
               "usd": round(_step_cost(usage_n), 6)}
     report.steps.append(step_n)
     spent += step_n["usd"] or 0
+
+    # --- Editor pass (M6 mandate 2): cut/tighten/concretize ONLY — the
+    # editor may never add facts; the edited payload is what gets fully
+    # validated, persisted, and adapted. Editor failure degrades to the
+    # unedited draft WITH disclosure — never a dead run.
+    edited_payload = draft_payload
+    editor_note = "editor: skipped"
+    try:
+        e_template = (paths.PROMPTS_DIR / PROMPT_EDITOR).read_text(encoding="utf-8")
+        e_prompt = e_template.format(
+            labels_block=build_labels_block(inputs),
+            draft_json=json.dumps(draft_payload, ensure_ascii=False),
+        )
+        est_e = _est_cost(e_prompt, EDITOR_MAX_TOKENS)
+        if spent + est_e > cap:
+            raise GenerateError(
+                f"editor pass estimate ${est_e:.4f} would exceed the run cap"
+            )
+        edited_holder: List[Dict] = []
+
+        def _editor_shape(content: str) -> None:
+            payload = json.loads(content)
+            if not isinstance(payload, dict) or not isinstance(payload.get("stories"), list):
+                raise ValueError("editor must return the same JSON shape")
+            if len(payload["stories"]) != len(draft_payload["stories"]):
+                raise ValueError("editor changed the story count")
+            for de, dr in zip(payload["stories"], draft_payload["stories"]):
+                if not (isinstance(de, dict) and isinstance(dr, dict)):
+                    continue
+                if de.get("tier") != dr.get("tier"):
+                    raise ValueError("editor changed a tier")
+                for lbl in ("why_label", "watch_label"):
+                    if dr.get(lbl) is not None and de.get(lbl) != dr.get(lbl):
+                        raise ValueError(f"editor changed {lbl} (A7 labels are the writer's)")
+            edited_holder[:] = [payload]
+
+        _, usage_e = call_llm(
+            key, e_prompt, "editor", EDITOR_MAX_TOKENS,
+            EDITOR_TEMPERATURE, True, validate=_editor_shape,
+        )
+        edited_payload = edited_holder[0]
+        step_e = {"step": "editor_pass", "model": WRITER_MODEL,
+                  "prompt_tokens": usage_e.get("prompt_tokens"),
+                  "completion_tokens": usage_e.get("completion_tokens"),
+                  "usd": round(_step_cost(usage_e), 6)}
+        report.steps.append(step_e)
+        spent += step_e["usd"] or 0
+        before = sum(wc(" ".join(v for v in s.values() if isinstance(v, str)))
+                     for s in draft_payload["stories"] if isinstance(s, dict))
+        after = sum(wc(" ".join(v for v in s.values() if isinstance(v, str)))
+                    for s in edited_payload["stories"] if isinstance(s, dict))
+        pct = round((before - after) / before * 100) if before else 0
+        editor_note = f"editor: {before} -> {after} words ({pct}% tighter)"
+        report.warnings.append(editor_note)
+    except (GenerateError, OSError) as exc:
+        editor_note = f"editor: DEGRADED to unedited draft ({exc})"
+        report.warnings.append(editor_note)
+
+    # ALL narrative validators run on the EDITED text (mandate 2) — INSIDE
+    # the degrade seam (BUG-8): a validator-violating edit (live repro: the
+    # editor clipped a mandatory revival date) degrades to the re-validated
+    # draft with disclosure; a draft that ALSO fails is a logged, visible
+    # GenerateError — never a raw crash.
+    try:
+        stories, narrative_warnings = validate_narrative_payload(
+            edited_payload, inputs["slots"], report.variant
+        )
+    except ValueError as exc:
+        if edited_payload is not draft_payload:
+            report.warnings.append(
+                f"editor: output FAILED validation ({exc}) — degraded to the "
+                "writer's draft (disclosed; the edit was discarded)"
+            )
+            editor_note += " [DISCARDED: failed validation]"
+            try:
+                stories, narrative_warnings = validate_narrative_payload(
+                    draft_payload, inputs["slots"], report.variant
+                )
+            except ValueError as exc2:
+                raise GenerateError(
+                    f"narrative draft failed validation after editor degrade: {exc2}"
+                ) from exc2
+        else:
+            raise GenerateError(f"narrative failed validation: {exc}") from exc
+    report.warnings.extend(narrative_warnings)
 
     narrative = assemble_narrative(date, report.variant, stories, inputs)
     report.narrative_text = narrative
@@ -1100,9 +1236,43 @@ def _run_generate_body(
             f"for {len(inputs['slots'])} slot(s) [KNOB; warn-only]"
         )
 
+    # --- Audio step (M6 mandate 1): the last stage; a synth failure
+    # degrades to a no-audio run WITH disclosure, never a dead run.
+    from . import audio as audio_mod
+
+    cfg_full = config.load_sources()
+    audio_path_str = None
+    out_dir = paths.DATA_DIR / BRIEFINGS_DIR_NAME
+    if report.sample:
+        stem = (f"{date}-no-threads-SAMPLE" if report.no_threads
+                else f"{date}-variant-{report.variant}-SAMPLE")
+    else:
+        stem = date
+    try:
+        result = audio_mod.generate_audio(
+            script, out_dir / f"{stem}.wav",
+            engine=cfg_full.tts_engine, openai_key=key,
+        )
+        audio_path_str = result.path
+        report.steps.append({
+            "step": f"tts_{result.engine}", "model": result.engine,
+            "duration_s": result.duration_s, "gen_time_s": result.gen_time_s,
+            "usd": result.est_cost_usd,
+        })
+        report.warnings.append(
+            f"audio: {result.engine} — {result.duration_s / 60:.1f} min in "
+            f"{result.gen_time_s:.0f}s"
+            + (f" (${result.est_cost_usd:.4f})" if result.est_cost_usd else " ($0)")
+        )
+    except audio_mod.AudioError as exc:
+        report.warnings.append(
+            f"audio: SKIPPED — {exc} (the text briefing is unaffected)"
+        )
+
     # --- Persist (never for samples), artifact, instrumentation ---
     if not report.sample:
-        persist_generation(con, date, narrative, script, report.steps)
+        persist_generation(con, date, narrative, script, report.steps,
+                           audio_path=audio_path_str)
     report.artifact_path = str(
         write_artifact(date, report.variant, report.sample, narrative, script,
                        no_threads=no_threads)
@@ -1111,6 +1281,11 @@ def _run_generate_body(
         "date": date, "variant": report.variant, "sample": report.sample,
         "no_threads": no_threads,
         "status": "ok",
+        "tiers": [s.get("tier") for s in stories],
+        "framings": [s.get("why_label") for s in stories],
+        "editor": editor_note,
+        "audio": audio_path_str,
+        "warnings": report.warnings,
         "narrative_words": report.narrative_words,
         "per_story_words": report.per_story_words,
         "script_words": report.script_words,

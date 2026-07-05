@@ -121,6 +121,10 @@ def stories_payload(slots, variant="A", lede_extra="", my_read=None):
                 "It matters because of concrete effects on the reader's interests."
             )
             story["watch_for"] = "Watch the next scheduled decision."
+            # A7: declared framings, sanctioned-menu members (varied to keep
+            # the all-one-rhythm warn out of unrelated tests).
+            story["why_label"] = generate.WHY_FRAMINGS[(i - 1) % len(generate.WHY_FRAMINGS)]
+            story["watch_label"] = generate.WATCH_FRAMINGS[(i - 1) % len(generate.WATCH_FRAMINGS)]
         if my_read is not None and variant == "B":
             story["my_read"] = my_read
         stories.append(story)
@@ -160,16 +164,25 @@ def fake_model(monkeypatch):
     state = type("S", (), {})()
     state.calls = []
     state.narrative = None
-    state.script = None
+    state.editor = None      # M6: 2nd+ json-mode call = the editor pass;
+    state.script = None      # None -> echo the narrative (a no-op edit)
 
     def fake_chat(key, prompt, max_tokens, temperature, json_mode):
         state.calls.append(
             {"json_mode": json_mode, "max_tokens": max_tokens,
              "temperature": temperature, "prompt": prompt}
         )
-        content = (
-            json.dumps(state.narrative) if json_mode else state.script
-        )
+        if json_mode:
+            n_json_before = sum(
+                1 for c in state.calls[:-1] if c["json_mode"]
+            )
+            payload = (
+                state.narrative if n_json_before == 0
+                else (state.editor if state.editor is not None else state.narrative)
+            )
+            content = json.dumps(payload)
+        else:
+            content = state.script
         return {
             "choices": [{"finish_reason": "stop", "message": {"content": content}}],
             "usage": {"prompt_tokens": 900, "completion_tokens": 200},
@@ -270,8 +283,10 @@ def test_assemble_narrative_owns_all_furniture():
     text = generate.assemble_narrative(A_DAY, "A", stories, _inputs_for(slots))
     assert text.startswith("# NewsLens — Sunday, July 5, 2026")
     assert "In today's briefing:" in text
-    assert text.count("**Why it matters:**") == 2
-    assert text.count("**Watch for:**") == 2
+    assert text.count("**Why it matters:**") == 1   # story 1's declared framing
+    assert text.count("**Why markets care:**") == 1  # story 2's (A7 render)
+    assert text.count("**Watch for:**") == 1
+    assert text.count("**What happens next:**") == 1
     # Override label: canonical, code-assembled, above the override story only.
     assert text.count("**Outside your interests:**") == 1
     assert "it's here because it cleared a high global-impact bar" in text
@@ -735,7 +750,7 @@ def test_no_refresh_without_a_row_is_a_named_refusal(migrated_con, fake_model):
     with pytest.raises(generate.GenerateError) as excinfo:
         run(migrated_con, date=A_DAY, refresh=False)
     assert "no briefing row" in str(excinfo.value)
-    assert "--no-refresh" in str(excinfo.value)
+    assert "generate the record first" in str(excinfo.value)  # M6 reword
 
 
 def test_regeneration_archives_prior_narrative_first(migrated_con, fake_model):
@@ -823,7 +838,8 @@ def test_script_budget_abort_leaves_row_untouched(migrated_con, fake_model, monk
     slots = [slot(1)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
-    ests = iter([0.0001, 999.0])  # narrative cheap, script over cap
+    # M6 sequence: narrative -> editor -> script; abort at the SCRIPT estimate.
+    ests = iter([0.0001, 0.0001, 999.0])
     monkeypatch.setattr(generate, "_est_cost", lambda p, m: next(ests))
     with pytest.raises(generate.GenerateError) as excinfo:
         run(migrated_con, date=A_DAY, refresh=False)
@@ -834,7 +850,7 @@ def test_script_budget_abort_leaves_row_untouched(migrated_con, fake_model, monk
         "SELECT narrative_text, script_text FROM briefings WHERE date = ?", (A_DAY,)
     ).fetchone()
     assert row["narrative_text"] is None and row["script_text"] is None
-    assert len(fake_model.calls) == 1  # narrative ran; script never called
+    assert len(fake_model.calls) == 2  # narrative + editor ran; script never called
 
 
 def test_per_step_costs_merge_into_token_cost(migrated_con, fake_model):
@@ -849,7 +865,9 @@ def test_per_step_costs_merge_into_token_cost(migrated_con, fake_model):
         ).fetchone()["token_cost"]
     )
     step_names = [s["step"] for s in tc["steps"]]
-    assert step_names == ["rank_select", "narrative_A", "script_adapt"]
+    assert step_names == [
+        "rank_select", "narrative_A", "editor_pass", "script_adapt"
+    ]  # M6: the editor step merges between writer and script
     expected_total = round(sum(s.get("usd") or 0 for s in tc["steps"]), 6)
     assert tc["total_usd"] == expected_total
 
@@ -869,7 +887,12 @@ def test_generation_log_records_ok_runs_fully(migrated_con, fake_model):
     assert entry["override_rendered"] is True
     assert entry["revival_rendered"] is True
     assert entry["narrative_words"] > 0 and entry["script_words"] > 0
-    assert [s["step"] for s in entry["steps"]] == ["narrative_A", "script_adapt"]
+    assert [s["step"] for s in entry["steps"]] == [
+        "narrative_A", "editor_pass", "script_adapt"
+    ]
+    assert entry["editor"].startswith("editor: ")   # note logged (M6)
+    assert entry["tiers"] == ["full", "medium"]     # per-story tiers logged
+    assert entry["audio"] is None                   # engine absent in sandbox
 
 
 # --- call_llm error taxonomy (HTTP layer, loopback fake server) ------------------------------
@@ -1010,9 +1033,15 @@ def test_A2_quick_hits_render_lean_with_trust_furniture():
         stories_payload(slots4), slots4, "A"
     )
     text = generate.assemble_narrative(A_DAY, "A", stories, _inputs_for(slots4))
-    # Three tiered stories carry movements; the quick hit carries none…
-    assert text.count("**Why it matters:**") == 3
-    assert text.count("**Watch for:**") == 3
+    # Three tiered stories carry movements (each with its declared A7
+    # framing); the quick hit carries none…
+    movement_labels = sum(
+        text.count(f"**{w}:**") for w in generate.WHY_FRAMINGS
+    )
+    watch_labels = sum(
+        text.count(f"**{w}:**") for w in generate.WATCH_FRAMINGS
+    )
+    assert movement_labels == 3 and watch_labels == 3
     # …but its trust furniture is intact (meta-line with corroboration).
     assert "Reported by 1 named outlet — Solo. Here for:" in text
 
@@ -1187,3 +1216,322 @@ def test_A6_steering_off_still_records_references_and_persists_flag(
         "SELECT meta FROM ranking_runs WHERE date = ? ORDER BY id DESC LIMIT 1", (A_DAY,)
     ).fetchone()["meta"])
     assert meta["threads_steer_selection"] is False
+# --- M6: the editor pass + pipeline audio ------------------------------------------------
+
+def _fake_audio_ok(monkeypatch, out_paths):
+    from newslens import audio as audio_mod
+
+    def fake_generate_audio(script_text, out_path, engine="kokoro", openai_key=""):
+        out_paths.append(str(out_path))
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"RIFFfake")
+        return audio_mod.AudioResult(
+            path=str(out_path), engine=engine, duration_s=300.0,
+            gen_time_s=70.0, est_cost_usd=0.0, detail={},
+        )
+
+    monkeypatch.setattr(audio_mod, "generate_audio", fake_generate_audio)
+
+
+from pathlib import Path
+
+
+def test_editor_count_change_degrades_to_draft(migrated_con, fake_model):
+    """Never-adds-facts guard 1: an editor payload that DROPS (or adds) a
+    story fails the count guard -> retry -> DEGRADED disclosure, and the
+    UNEDITED draft is what ships."""
+    slots = [slot(1), slot(2)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    dropped = stories_payload(slots)
+    dropped["stories"] = dropped["stories"][:1]
+    fake_model.editor = dropped
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    degraded = [w for w in rep.warnings if w.startswith("editor: DEGRADED")]
+    assert len(degraded) == 1
+    assert "editor changed the story count" in degraded[0]
+    assert "Rewritten headline 1" in rep.narrative_text  # the draft shipped
+    assert not any(s["step"] == "editor_pass" for s in rep.steps)  # no cost step
+
+
+def test_editor_tier_change_degrades_to_draft(migrated_con, fake_model):
+    """Never-adds-facts guard 2: re-tiering a story is a guard failure."""
+    slots = [slot(1), slot(2)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    retiered = stories_payload(slots)
+    retiered["stories"][1]["tier"] = "quick"
+    retiered["stories"][1].pop("why_it_matters", None)
+    retiered["stories"][1].pop("watch_for", None)
+    fake_model.editor = retiered
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    degraded = [w for w in rep.warnings if w.startswith("editor: DEGRADED")]
+    assert len(degraded) == 1 and "editor changed a tier" in degraded[0]
+
+
+def test_editor_success_discloses_and_merges_cost(migrated_con, fake_model):
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    tightened = stories_payload(slots)
+    tightened["stories"][0]["why_it_matters"] = "Tighter and better."
+    fake_model.editor = tightened
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    notes = [w for w in rep.warnings if w.startswith("editor: ") and "words" in w]
+    assert len(notes) == 1
+    assert "% tighter)" in notes[0]
+    assert "Tighter and better." in rep.narrative_text  # the EDIT shipped
+    editor_steps = [s for s in rep.steps if s["step"] == "editor_pass"]
+    assert len(editor_steps) == 1 and editor_steps[0]["model"] == "gpt-4o"
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
+    )
+    assert entry["editor"] == notes[0]
+
+
+def test_BUG8_validator_violating_edit_must_be_handled_not_crash(
+    migrated_con, fake_model
+):
+    """KNOWN-RED candidate (BUG-8) — self-contained acceptance: mandate 2
+    says ALL narrative validators re-run on the EDITED payload, and mandate 3
+    says degrade-never-die. But validate_narrative_payload on the edited
+    payload (generate.py ~:1095) runs OUTSIDE both the editor try/except and
+    any GenerateError wrapper — an edit that passes the shape guards yet
+    violates a validator (here: tightening a lede clips the mandatory revival
+    date) raises a raw ValueError: unhandled, un-logged (run_generate only
+    logs GenerateError), and fatal to the run. Contract: a handled failure —
+    either degrade to the (re-validated) draft with disclosure, or a
+    GenerateError that reaches the failure log. This test passes when either
+    lands; it must never see a bare ValueError."""
+    slots = [slot(1, revived=({"topic": "T", "last_covered": "2026-07-01"},))]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)  # draft carries the date
+    clipped = stories_payload(slots)
+    clipped["stories"][0]["lede"] = "Tightened lede without the date. Second sentence."
+    fake_model.editor = clipped
+    fake_model.script = compliant_script(slots)
+    # FIX LANDED (ADR-0009 §1) — freeze the implemented branch: the edit is
+    # DISCARDED with disclosure, the draft re-validates and ships.
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    disclosures = [w for w in rep.warnings if "editor: output FAILED validation" in w]
+    assert len(disclosures) == 1
+    assert "degraded to the writer's draft" in disclosures[0]
+    assert "the edit was discarded" in disclosures[0]
+    assert "2026-07-01" in rep.narrative_text  # the draft's revival date shipped
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
+    )
+    assert entry["editor"].endswith("[DISCARDED: failed validation]")
+
+
+def test_BUG8_draft_also_failing_is_a_logged_visible_error(migrated_con, fake_model):
+    """The other lawful branch: when the DRAFT itself violates a validator
+    (shape-check passed, validator did not), the degrade lands on a draft
+    that also fails — a logged GenerateError, never a raw crash."""
+    slots = [slot(1, revived=({"topic": "T", "last_covered": "2026-07-01"},))]
+    seed_briefing(migrated_con, A_DAY, slots)
+    bad_draft = stories_payload(slots)
+    bad_draft["stories"][0]["lede"] = "No date here. Second sentence also dateless."
+    fake_model.narrative = bad_draft
+    fake_model.editor = bad_draft  # editor echoes the same broken content
+    fake_model.script = compliant_script(slots)
+    with pytest.raises(generate.GenerateError) as excinfo:
+        run(migrated_con, date=A_DAY, refresh=False)
+    assert "failed validation" in str(excinfo.value)
+    log_lines = (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()
+    entry = json.loads(log_lines[-1])
+    assert entry["status"] == "failed"
+    assert isinstance(entry.get("warnings"), list)  # retention on failures too
+
+
+def test_audio_lands_on_the_record(migrated_con, fake_model, monkeypatch):
+    out_paths = []
+    _fake_audio_ok(monkeypatch, out_paths)
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    assert out_paths == [str(paths.DATA_DIR / "briefings" / f"{A_DAY}.wav")]
+    row = migrated_con.execute(
+        "SELECT audio_file_path FROM briefings WHERE date = ?", (A_DAY,)
+    ).fetchone()
+    assert row["audio_file_path"] == out_paths[0]  # persisted on the record
+    assert any(s["step"] == "tts_kokoro" for s in rep.steps)
+    assert any(w.startswith("audio: kokoro — 5.0 min in 70s") for w in rep.warnings)
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
+    )
+    assert entry["audio"] == out_paths[0]
+
+
+def test_audio_failure_degrades_with_disclosure(migrated_con, fake_model, monkeypatch):
+    from newslens import audio as audio_mod
+
+    def broken(*a, **kw):
+        raise audio_mod.AudioError("engine wedged")
+
+    monkeypatch.setattr(audio_mod, "generate_audio", broken)
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)  # never a dead run
+    assert any(
+        w == "audio: SKIPPED — engine wedged (the text briefing is unaffected)"
+        for w in rep.warnings
+    )
+    row = migrated_con.execute(
+        "SELECT audio_file_path, narrative_text FROM briefings WHERE date = ?",
+        (A_DAY,),
+    ).fetchone()
+    assert row["audio_file_path"] is None
+    assert row["narrative_text"]  # the text briefing landed regardless
+
+
+def test_sample_audio_lands_beside_the_sample_and_record_is_byte_identical(
+    migrated_con, fake_model, monkeypatch
+):
+    """The gate-spec pin, landed: a default-flag sample request forces
+    refresh=False, writes its audio NEXT TO the sample file, and leaves the
+    record row byte-identical (hashed before/after)."""
+    import hashlib
+
+    out_paths = []
+    _fake_audio_ok(monkeypatch, out_paths)
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    run(migrated_con, date=A_DAY, refresh=False)  # the record, with audio
+
+    def row_hash():
+        row = migrated_con.execute(
+            "SELECT * FROM briefings WHERE date = ?", (A_DAY,)
+        ).fetchone()
+        return hashlib.sha256(repr(tuple(row)).encode()).hexdigest()
+
+    before = row_hash()
+    out_paths.clear()
+    fake_model.narrative = stories_payload(slots, variant="B", my_read="A judgment.")
+    # DEFAULT flags: refresh not passed — sample mode must force it off.
+    rep = generate.run_generate(
+        date=A_DAY, con=migrated_con, env=ENV, variant_override="B"
+    )
+    assert rep.sample is True
+    assert out_paths == [
+        str(paths.DATA_DIR / "briefings" / f"{A_DAY}-variant-B-SAMPLE.wav")
+    ]
+    assert row_hash() == before  # the record did not move by one byte
+# --- M6 fix loop: A7/A8 text-quality package pins ---------------------------------------
+
+def test_A7_unsanctioned_framing_is_a_validation_error():
+    slots = [slot(1)]
+    payload = stories_payload(slots)
+    payload["stories"][0]["why_label"] = "Why this slaps"
+    with pytest.raises(ValueError) as excinfo:
+        generate.validate_narrative_payload(payload, slots, "A")
+    assert "why_label 'Why this slaps' not in the sanctioned menu" in str(excinfo.value)
+    missing = stories_payload(slots)
+    del missing["stories"][0]["watch_label"]
+    with pytest.raises(ValueError) as excinfo2:
+        generate.validate_narrative_payload(missing, slots, "A")
+    assert "watch_label None not in the sanctioned menu" in str(excinfo2.value)
+
+
+def test_A7_assembly_renders_the_declared_framings():
+    slots = [slot(1)]
+    payload = stories_payload(slots)
+    payload["stories"][0]["why_label"] = "The stakes"
+    payload["stories"][0]["watch_label"] = "The next test"
+    stories, _ = generate.validate_narrative_payload(payload, slots, "A")
+    text = generate.assemble_narrative(A_DAY, "A", stories, _inputs_for(slots))
+    assert "**The stakes:**" in text and "**The next test:**" in text
+    assert "**Why it matters:**" not in text  # the label is the writer's choice
+
+
+def test_A7_editor_may_not_change_labels(migrated_con, fake_model):
+    """Code guard: even a SANCTIONED relabel by the editor degrades — A7
+    labels belong to the writer."""
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    relabeled = stories_payload(slots)
+    relabeled["stories"][0]["why_label"] = "The debate"  # sanctioned, still barred
+    fake_model.editor = relabeled
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    degraded = [w for w in rep.warnings if w.startswith("editor: DEGRADED")]
+    assert len(degraded) == 1
+    assert "editor changed why_label (A7 labels are the writer's)" in degraded[0]
+
+
+def test_A7_all_one_rhythm_warns():
+    slots = [slot(1), slot(2), slot(3)]
+    payload = stories_payload(slots)
+    for s in payload["stories"]:
+        s["why_label"] = "Why markets care"
+    _, warns = generate.validate_narrative_payload(payload, slots, "A")
+    assert any("A7 wants varied rhythm" in w for w in warns)
+    varied = stories_payload(slots)  # fixture varies labels by position
+    _, warns2 = generate.validate_narrative_payload(varied, slots, "A")
+    assert not any("varied rhythm" in w for w in warns2)
+
+
+def test_A8_lead_near_slot2_length_warns():
+    slots = [slot(1)]
+    thin = stories_payload(slots)  # fixture lead is well under 240 words
+    _, warns = generate.validate_narrative_payload(thin, slots, "A")
+    assert any("near slot-2 length" in w for w in warns)
+    deep = stories_payload(slots)
+    deep["stories"][0]["why_it_matters"] = "specific detail " * 130  # ~260+ words
+    _, warns2 = generate.validate_narrative_payload(deep, slots, "A")
+    assert not any("near slot-2 length" in w for w in warns2)
+
+
+def test_A8_delete_on_sight_and_never_add_facts_prompt_guards():
+    text = (paths.PROMPTS_DIR / generate.PROMPT_EDITOR).read_text(encoding="utf-8")
+    assert "DELETE ON SIGHT" in text            # priority-0, canonized examples
+    assert "YOU NEVER ADD FACTS" in text        # the one hard constraint, retained
+    assert "why_label / watch_label" in text    # labels named as PRESERVE ABSOLUTELY
+
+
+def test_editor_budget_abort_routes_through_the_degrade_path(
+    migrated_con, fake_model, monkeypatch
+):
+    """The editor's own cap-abort no longer kills the run — it degrades with
+    the estimate named, and the pipeline continues to script + persist."""
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    ests = iter([0.0001, 999.0, 0.0001])  # narrative ok, EDITOR over, script ok
+    monkeypatch.setattr(generate, "_est_cost", lambda p, m: next(ests))
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    degraded = [w for w in rep.warnings if w.startswith("editor: DEGRADED")]
+    assert len(degraded) == 1 and "editor pass estimate" in degraded[0]
+    assert not any(s["step"] == "editor_pass" for s in rep.steps)
+    assert rep.script_text  # the run survived to the script pass
+    row = migrated_con.execute(
+        "SELECT narrative_text FROM briefings WHERE date = ?", (A_DAY,)
+    ).fetchone()
+    assert row["narrative_text"]  # and persisted
+
+
+def test_warnings_and_framings_are_retained_in_ok_log_entries(
+    migrated_con, fake_model
+):
+    slots = [slot(1), slot(2)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
+    )
+    assert entry["warnings"] == rep.warnings          # full array, verbatim
+    assert any("audio: SKIPPED" in w for w in entry["warnings"])
+    assert entry["framings"] == ["Why it matters", "Why markets care"]

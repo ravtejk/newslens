@@ -7,7 +7,7 @@ threads continuity through a transparent, hand-editable memory, and labels
 corroboration honestly (counts of distinct named outlets — never the word
 "verified").
 
-**Status: milestone 5 of 8** (the writer: narrative + podcast script). What
+**Status: milestone 6 of 8** (the editor + parked audio infrastructure). What
 exists: the schema, the doctor, working tier-1 ingestion (`newslens ingest` —
 idempotent, per-feed graceful degradation), the editorial pass (`newslens
 rank` — clustering, top 1–5 by world + personal impact, bounded
@@ -35,7 +35,13 @@ delta-only continuity callbacks with mandatory text disclosures, and a
 spoken pass under the hard fact-subset/hedge rules with editorial license
 over script attribution (A5). Selection runs on tags + world impact only —
 threads are recorded and woven into continuity, never steering
-(`settings.threads_steer_selection`, A6). Audio is milestone 6. Spec:
+(`settings.threads_steer_selection`, A6). Audio ships at M6: `generate` ends by voicing the
+script — Kokoro-82M locally by default (free; isolated engine env via
+`scripts/setup_tts`; measured ~4.4x realtime on this machine — below the
+community 14x floor, flagged at the ear test) or gpt-4o-mini-tts
+(~$0.015/min) via `settings.tts_engine`; a GPT-4o **editor pass** tightens
+every draft (cut/concretize only, never adds facts, fully re-validated,
+disclosed in the run log) before validation. Spec:
 `workspace/debates/2026-07-02--newslens--engineering.md` (§A–F); scope change:
 **v1 is on-demand only** — no scheduled generation (DECISIONS.md 2026-07-03).
 
@@ -69,7 +75,7 @@ and every missing item comes with its fix.
 | `newslens memory add "<topic>" [--note "..."]` | Start tracking a thread (revives it if dormant/dismissed — explicit revival resets the dormancy clock). |
 | `newslens memory dismiss "<topic>"` | Stop tracking — stays visible in `memory.md`, never auto-revives. |
 | `newslens memory note "<topic>" "<text>"` | Set the note the generation prompt reads verbatim — the explicit "more/less like this" mechanism. |
-| `newslens generate [--date] [--variant A\|B] [--no-refresh] [--no-threads]` | The whole product, on demand: chains ingest -> rank, writes the tiered narrative (lead full / second medium / rest quick hits) in **voice A — the voice of record** (editorial review A1; alternation ended), adapts it into a podcast script (fact-subset validated), persists both onto the briefing row (prior narrative archived first), renders to stdout + `data/briefings/<date>.md`, logs per-step real costs (incl. per-story tiers) to `briefings.token_cost` and `data/generation_log.jsonl`. All three LLM calls run on **GPT-4o** (writer up-tier: principal, 2026-07-05, register-holding trigger; ranking up-tier: CoS recommendation same day after loose semantic matches — 4o-mini stays as the documented fallback rung on both seams); expect ~$0.07–0.10/full briefing. `--variant B` renders the retired voice as a labeled comparison SAMPLE; `--no-threads` renders the cold-start view (threads emptied, tags kept) as a labeled SAMPLE — **samples always skip the refresh chain, so the briefing of record is never touched by a sample request**. `--no-refresh` skips the chain for narrative-only iteration on the record. |
+| `newslens generate [--date] [--variant A\|B] [--no-refresh] [--no-threads]` | The whole product, on demand: chains ingest -> rank, writes the tiered narrative (lead full / second medium / rest quick hits) in **voice A — the voice of record** (editorial review A1; alternation ended), adapts it into a podcast script (fact-subset validated), persists both onto the briefing row (prior narrative archived first), renders to stdout + `data/briefings/<date>.md`, logs per-step real costs (incl. per-story tiers) to `briefings.token_cost` and `data/generation_log.jsonl`. All three LLM calls run on **GPT-4o** (writer up-tier: principal, 2026-07-05, register-holding trigger; ranking up-tier: CoS recommendation same day after loose semantic matches — 4o-mini stays as the documented fallback rung on both seams); expect ~$0.10–0.14/full text pipeline (rank + writer + editor); audio adds $0 (kokoro) or ~$0.015/min (openai). `--variant B` renders the retired voice as a labeled comparison SAMPLE; `--no-threads` renders the cold-start view (threads emptied, tags kept) as a labeled SAMPLE — **samples always skip the refresh chain, so the briefing of record is never touched by a sample request**. `--no-refresh` skips the chain for narrative-only iteration on the record. |
 | `scripts/sonar_spike` | The pending Sonar reliability gate — one command the moment the key lands. Refuses politely without it. |
 
 Coming later (deliberately not stubbed): `read`/`listen`
