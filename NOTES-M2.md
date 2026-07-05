@@ -1,4 +1,4 @@
-# Carryover notes (living file — current target: milestone 4)
+# Carryover notes (living file — current target: milestone 5)
 
 ## Resolved in milestone 2 (2026-07-03)
 
@@ -26,11 +26,11 @@
    `sources.yaml` on documented-republisher grounds; after a week of real
    ingested items, check whether the flag over- or under-excludes for
    corroboration counting (per-source notes mark this).
-3. ~~Does ranking need the Sonar answer text persisted?~~ **Resolved in M3:
-   no** — ranking consumes sonar rows via title/url like any item (they can
+3. ~~Does ranking need the Sonar answer text persisted?~~ Resolved in M3:
+   **no** — ranking consumes sonar rows via title/url like any item (they can
    cluster but never count as "named outlets", ADR-0004 §5); the answer text
    stays report-only. Reopen only if M5 narrative quality shows a gap.
-   Original question:** M2 stores only
+   Original question: M2 stores only
    `search_results` rows (title/url/date) and surfaces the answer text in the
    run report; if M3 ranking wants it as context, decide where it lives
    (NOT as a source_items excerpt — ADR-0003 §6).
@@ -98,3 +98,58 @@
     guards rank; `top_zero_match_score` misnames a world-impact value; when
     M4/M5 tunes weights (item 10), record the max-not-sum combinator choice
     in `personal_score` as a stated design decision.
+
+## Resolved in milestone 4 (2026-07-04)
+
+- ~~Item 8 (decide)~~ — **tags table DEFERRED again, deliberately** (ADR-0005):
+  memory got its sync machinery this milestone; adding a second file<->table
+  sync for tags in the same change would double the riskiest surface. File
+  (`sources.yaml` interests) remains the tags source of truth; revisit when
+  real use demands `tag add/drop` ergonomics the file can't give.
+- ~~Item 11 (narrative-NULLing)~~ — fixed in M4 (persist was being modified
+  anyway): re-rank NULLs narrative_text/script_text/audio_file_path on slot
+  overwrite; history archives the old state first.
+- ~~Item 12~~ — Retry-After clamped finite>=0; prompt armor line added;
+  `--date` real-calendar via strptime; cosmetics: 0003 meta now writes
+  override {reason, slot}, `top_zero_match_world_impact` renamed, persist
+  uses SQL NULL for empty usage, .env.example BUDGET_CAP text covers rank,
+  this file's item-3 bold artifact fixed. Max-not-sum combinator recorded as
+  a stated decision in ADR-0005.
+
+## New carryovers for milestone 5
+
+13. **Continuity consumption**: `memory.prior_briefing_context(con, date)` is
+    built and bounded — M5's generate prompt consumes it (a) verbatim active
+    memory list with principal notes, (b) the prior-briefing text_block.
+    Repeat-suppression ("don't re-cover unless developed") lands there too.
+14. **memory.md checkpoint**: the principal opens memory.md and confirms it
+    reads as genuinely editable — scheduled at the M4 boundary.
+
+## Memory lifecycle v2 amendment (2026-07-04, pre-QA)
+
+- Lifecycle replaced per principal contract: see ADR-0006 (three states,
+  earned-slot auto-revival, Active/Inactive file, migration 0006 rebuild).
+- On record from the same dispatch: migration 0005 principal-APPROVED;
+  invented-ids repair extension DEFERRED (hard-reject + mitigation stand;
+  recurrences are logged failures in ranking_runs).
+- Fixed during amendment: memory verbs' trailing full-sync clobbered the
+  verb's own change (fresh `add` was dismissed-by-deletion instantly; fresh
+  note reverted) — trailing step is now render-only. QA: pin it.
+
+## Must-address at M5 (from the M4 gate, 2026-07-04)
+
+15. **`prior_briefing_context` returns None for corrupt story_slots JSON,
+    indistinguishable from "no prior briefing"** — M5's generate must
+    distinguish (warn on corrupt vs proceed on genuinely-first) rather than
+    silently writing a continuity-free narrative.
+16. Closed at the gate, on record: id-in-headline spoofing (brackets now
+    sanitized out of titles in items_block); the ~90s memory.md clobber
+    window (mtime-guarded refresh). Residual accepted: dismissed_user
+    tombstones render in memory.md forever at personal scale — revisit only
+    if the Inactive section becomes noise.
+
+## Binding process change (from the M4 gate)
+
+README currency is part of the implementer's definition of done: no
+milestone report ships until README status/commands/data-model/module-list
+match the tree (stale three gates running: M2, M3, M4).

@@ -37,6 +37,7 @@ ranking_runs row with status=failed for the instrumentation trail.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import time
 import urllib.error
@@ -45,12 +46,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-from . import config, db, paths
+from . import config, db, memory, paths
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 MODEL = "gpt-4o-mini"
 LLM_TIMEOUT_S = 90
-MAX_COMPLETION_TOKENS = 1600
+# 3000, raised from 1600 in M4: with memory threads in play, 12 clusters of
+# title+summary+reason+matches measured right at the old cap and the model's
+# JSON truncated mid-string on a live run (~$0.0018 worst case at 4o-mini
+# rates — the budget guard scales with this constant automatically).
+MAX_COMPLETION_TOKENS = 3000
 PROMPT_FILE = "rank_select.txt"
 USER_AGENT = "NewsLens/0.1 (personal news briefing prototype; ranking)"
 
@@ -114,6 +119,12 @@ class RankedSlot:
     corroboration_count: int
     corroboration_label: str
     wire_items_excluded: int
+    # Lifecycle v2 (ADR-0006): dormant-thread matches are MATCH-ONLY — they
+    # contribute nothing to any score; they exist so a slot-earning story can
+    # auto-revive a thread. revived_threads is filled by persist() with the
+    # pre-revival coverage date for the narrative's back-reference.
+    matched_dormant: List[str] = field(default_factory=list)
+    revived_threads: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -221,12 +232,9 @@ def gather_items(con: sqlite3.Connection, start_iso: str) -> List[sqlite3.Row]:
 
 def active_memory_topics(con: sqlite3.Connection) -> List[str]:
     """Ranker reads active memory rows exactly like tags (taxonomy contract
-    §A). Empty until M4 seeds the table — reading it now costs nothing and
-    means M4 requires no ranker change."""
-    rows = con.execute(
-        "SELECT topic FROM memory WHERE status = 'active' ORDER BY updated_at DESC LIMIT 15"
-    ).fetchall()
-    return [r["topic"] for r in rows]
+    §A): ACTIVE only, capped at the 15 most-recently-referenced (spec §B).
+    Delegates to memory.active_context — one implementation of the cap."""
+    return memory.active_context(con)
 
 
 def build_prompt(
@@ -235,15 +243,30 @@ def build_prompt(
     cfg: config.SourcesConfig,
     memory_topics: List[str],
     window_desc: str,
+    dormant: Optional[List[str]] = None,
 ) -> str:
     template = (paths.PROMPTS_DIR / PROMPT_FILE).read_text(encoding="utf-8")
+    # Ascending id order + an explicit [id=N] key: copying exact ids out of a
+    # ~550-line list is where the model slips. Live M4 findings, in order:
+    # invented near-miss ids (fixed by ascending sort + temp 0), then numbers
+    # LIFTED FROM HEADLINES as ids ("Top Links 1151" -> id 115, deterministic
+    # at temp 0) — the bracketed key makes the id token structurally
+    # unmistakable. Presentation only; selection order is irrelevant.
+    # Brackets are sanitized out of titles so a headline can never fabricate
+    # an "[id=N]" token (M4 gate: closes the id-in-headline class outright,
+    # including a hostile feed publishing literal id markers).
     items_block = "\n".join(
-        f"{r['id']} | {r['outlet']} | {r['title']}" for r in items
+        f"[id={r['id']}] {r['outlet']} | "
+        + r["title"].replace("[", "(").replace("]", ")")
+        for r in sorted(items, key=lambda r: r["id"])
     )
     tag_lines = [f"- {name} (domain)" for name in cfg.interests_broad]
     tag_lines += [f"- {name} (topic)" for name in cfg.interests_granular]
     memory_block = (
         "\n".join(f"- {t}" for t in memory_topics) if memory_topics else "(none right now)"
+    )
+    dormant_block = (
+        "\n".join(f"- {t}" for t in dormant) if dormant else "(none right now)"
     )
     return template.format(
         date_local=date_local,
@@ -251,6 +274,7 @@ def build_prompt(
         items_block=items_block,
         tags_block="\n".join(tag_lines),
         memory_block=memory_block,
+        dormant_block=dormant_block,
         max_clusters=MAX_CLUSTERS,
     )
 
@@ -275,7 +299,7 @@ def _post_chat(key: str, prompt: str) -> Dict:
         {
             "model": MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
+            "temperature": 0,  # exact-copy discipline for ids/tag names (M4 live finding)
             "max_tokens": MAX_COMPLETION_TOKENS,
             "response_format": {"type": "json_object"},
         }
@@ -298,11 +322,13 @@ def validate_payload(
     known_ids: set,
     tag_levels: Dict[str, str],
     memory_topics: List[str],
+    dormant_topics: Optional[List[str]] = None,
 ) -> List[Dict]:
     """Hard schema validation of the LLM's cluster payload. Raises ValueError
     with ALL problems found (not just the first) so a retry/report is
     actionable. Extra unknown keys are tolerated; everything we consume is
-    checked."""
+    checked. matched_dormant (lifecycle v2) validates against the provided
+    dormant list — match-only; scoring never sees it."""
     problems: List[str] = []
     if not isinstance(payload, dict) or not isinstance(payload.get("clusters"), list):
         raise ValueError("payload must be a JSON object with a `clusters` list")
@@ -313,6 +339,7 @@ def validate_payload(
     seen_ids: set = set()
     valid: List[Dict] = []
     memory_set = set(memory_topics)
+    dormant_set = set(dormant_topics or [])
     for i, c in enumerate(clusters, start=1):
         where = f"cluster #{i}"
         if not isinstance(c, dict):
@@ -359,6 +386,16 @@ def validate_payload(
         if bad_mem:
             problems.append(f"{where}: matched_memory {bad_mem} not in the provided threads")
 
+        mdorm = c.get("matched_dormant", [])
+        if not isinstance(mdorm, list) or not all(isinstance(m, str) for m in mdorm):
+            problems.append(f"{where}: matched_dormant must be a list of strings")
+            mdorm = []
+        bad_dorm = [m for m in mdorm if m not in dormant_set]
+        if bad_dorm:
+            problems.append(
+                f"{where}: matched_dormant {bad_dorm} not in the provided dormant threads"
+            )
+
         impact = c.get("world_impact")
         if not isinstance(impact, (int, float)) or isinstance(impact, bool) or not 0 <= impact <= 10:
             problems.append(f"{where}: world_impact must be a number 0-10")
@@ -375,6 +412,7 @@ def validate_payload(
                 "item_ids": ids,
                 "matched_tags": clean_tags,
                 "matched_memory": [m for m in mmem if m in memory_set],
+                "matched_dormant": [m for m in mdorm if m in dormant_set],
                 "world_impact": int(round(float(impact))),
                 "world_impact_reason": reason.strip()[:400],
             }
@@ -399,10 +437,16 @@ def _http_error_detail(exc: urllib.error.HTTPError) -> str:
 
 
 def _retry_after_seconds(exc: urllib.error.HTTPError, default: float = 10.0) -> float:
+    """Clamped to finite [0, 20] — a hostile/garbage Retry-After (negative,
+    nan, inf) must never reach time.sleep(), where it would raise outside the
+    RankingError taxonomy and bypass BUG-6 logging (M3 review carryover)."""
     try:
-        return min(float(exc.headers.get("Retry-After", default)), 20.0)
+        value = float(exc.headers.get("Retry-After", default))
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(value) or value < 0:
+        return default
+    return min(value, 20.0)
 
 
 def repair_duplicate_ids(payload: object) -> Tuple[object, Dict]:
@@ -461,6 +505,7 @@ def call_llm_validated(
     tag_levels: Dict[str, str],
     memory_topics: List[str],
     repairs: Optional[Dict] = None,
+    dormant_topics: Optional[List[str]] = None,
 ) -> Tuple[List[Dict], Dict]:
     """One call + ONE retry total, then a visible RankingError.
 
@@ -480,10 +525,20 @@ def call_llm_validated(
         try:
             response = _post_chat(key, prompt)
             usage = response.get("usage") or {}
-            content = response["choices"][0]["message"]["content"]
+            choice = response["choices"][0]
+            if choice.get("finish_reason") == "length":
+                # Name truncation precisely — "malformed JSON" hides the real
+                # cause (live M4 finding: completions hit the token cap).
+                raise ValueError(
+                    "completion truncated at the max_tokens cap "
+                    f"({MAX_COMPLETION_TOKENS}) — response unusable"
+                )
+            content = choice["message"]["content"]
             payload = json.loads(content)
             payload, repair_info = repair_duplicate_ids(payload)
-            clusters = validate_payload(payload, known_ids, tag_levels, memory_topics)
+            clusters = validate_payload(
+                payload, known_ids, tag_levels, memory_topics, dormant_topics
+            )
             if repairs is not None:
                 repairs.clear()
                 repairs.update(repair_info)
@@ -623,15 +678,23 @@ def select_slots(
                 corroboration_count=count,
                 corroboration_label=label,
                 wire_items_excluded=wire_excluded,
+                # match-only: never touched personal_score/selection above —
+                # carried through so persist() can apply earned-slot revival
+                matched_dormant=c.get("matched_dormant", []),
             )
         )
+    override_slot = next((s.slot for s in slots if s.override), None)
     meta = {
         "override": {
             "pool_size": len(zero_pool),
             "threshold": OVERRIDE_THRESHOLD,
             "fired": override_pick is not None,
-            "top_zero_match_score": zero_pool[0][0]["world_impact"] if zero_pool else None,
+            # world-impact of the best zero-match candidate (named precisely —
+            # M3 review cosmetic: the old key read like a combined score)
+            "top_zero_match_world_impact": zero_pool[0][0]["world_impact"] if zero_pool else None,
             "story": override_pick[0]["story_title"] if override_pick else None,
+            "reason": override_pick[0]["world_impact_reason"] if override_pick else None,
+            "slot": override_slot,
         },
         "weights": {
             "topic": TOPIC_WEIGHT, "domain": DOMAIN_WEIGHT, "memory": MEMORY_WEIGHT,
@@ -647,11 +710,42 @@ def select_slots(
 # Persistence (idempotent per date; prior version archived first)
 # ---------------------------------------------------------------------------
 
-def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> None:
+def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dict]:
     """Upsert the briefings row for the date. If one exists, its current state
     is archived to briefings_history BEFORE overwrite (the idempotent-re-run
     rule binds from the first overwritable briefing — ADR-0001, live now).
-    Every run also appends a ranking_runs instrumentation row."""
+    Every run also appends a ranking_runs instrumentation row.
+
+    Lifecycle v2: applies earned-slot auto-revival here — POST-selection by
+    construction (only slots that already won on merits reach this function),
+    which is the hard constraint's guarantee that dormant threads never boost
+    their own revival. Returns the revived list [{topic, last_covered}]."""
+    # Revival PREVIEW before serialization: capture each matched dormant
+    # thread's previous coverage date so the slot JSON carries the
+    # back-reference ("last covered <date>") for M5's narrative.
+    revived_preview: Dict[str, Dict] = {}
+    for s in report.slots:
+        for topic in s.matched_dormant:
+            key = topic.casefold()
+            if key in revived_preview:
+                continue
+            row = con.execute(
+                "SELECT m.topic, b.date AS last_covered FROM memory m"
+                " LEFT JOIN briefings b ON b.id = m.last_referenced_briefing_id"
+                " WHERE lower(m.topic) = lower(?) AND m.status = 'dormant'",
+                (topic,),
+            ).fetchone()
+            if row is not None:
+                revived_preview[key] = {
+                    "topic": row["topic"], "last_covered": row["last_covered"]
+                }
+    for s in report.slots:
+        s.revived_threads = [
+            revived_preview[t.casefold()]
+            for t in s.matched_dormant
+            if t.casefold() in revived_preview
+        ]
+
     story_slots = json.dumps([s.__dict__ for s in report.slots])
     corroboration = json.dumps(
         {
@@ -700,17 +794,38 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> None:
                     existing["token_cost"], existing["generated_at"],
                 ),
             )
+            # New slots invalidate any narrative written for the OLD slots —
+            # NULL the generation fields on re-rank (M3 gate review, NOTES
+            # item 11; the archived history row above preserves them).
             con.execute(
                 "UPDATE briefings SET story_slots = ?, corroboration_labels = ?,"
-                " token_cost = ?, generated_at = ? WHERE id = ?",
+                " token_cost = ?, generated_at = ?, narrative_text = NULL,"
+                " script_text = NULL, audio_file_path = NULL WHERE id = ?",
                 (story_slots, corroboration, token_cost, now, existing["id"]),
             )
+            briefing_id = existing["id"]
         else:
-            con.execute(
+            cur = con.execute(
                 "INSERT INTO briefings (date, story_slots, corroboration_labels,"
                 " token_cost, generated_at) VALUES (?, ?, ?, ?, ?)",
                 (report.date, story_slots, corroboration, token_cost, now),
             )
+            briefing_id = cur.lastrowid
+        # Continuity's spine: matched threads record which briefing referenced
+        # them (drives the dormancy clock + most-recently-referenced cap).
+        matched_threads = [t for s in report.slots for t in s.matched_memory]
+        if matched_threads:
+            memory.update_references(con, briefing_id, matched_threads)
+        # Earned-slot auto-revival (dormant -> active, dated; never touches
+        # dismissed_user — memory.revive_matched filters on status='dormant').
+        dormant_matched = [t for s in report.slots for t in s.matched_dormant]
+        revived = (
+            memory.revive_matched(con, briefing_id, dormant_matched)
+            if dormant_matched
+            else []
+        )
+        if revived:
+            meta["revivals"] = revived
         con.execute(
             "INSERT INTO ranking_runs (date, meta, token_usage) VALUES (?, ?, ?)",
             (
@@ -724,9 +839,12 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> None:
                         "slots": len(report.slots),
                     }
                 ),
-                json.dumps(report.token_usage or None),
+                # SQL NULL for absent usage, matching log_failed_run (M3
+                # review cosmetic — one convention, not two).
+                json.dumps(report.token_usage) if report.token_usage else None,
             ),
         )
+    return revived
 
 
 def log_failed_run(con: sqlite3.Connection, date: str, error: str) -> None:
@@ -798,6 +916,23 @@ def _run_rank_body(
 ) -> RankReport:
     """run_rank's post-connection body. Raises RankingError for every handled
     failure; the caller logs each one to ranking_runs (BUG-6)."""
+    # Memory sync FIRST: memory.md is the source of truth at generation time
+    # (spec §B, literally) — the principal's hand edits must be in the DB
+    # before the context is pulled. A broken file is a loud, logged failure:
+    # silently ignoring memory edits is the transparency surface's one
+    # unforgivable bug.
+    try:
+        mem_sync = memory.sync_memory(con)
+    except memory.MemorySyncError as exc:
+        raise RankingError(str(exc)) from exc
+    # Snapshot the file identity the sync just wrote: the post-run refresh at
+    # the bottom must not clobber a hand-edit made DURING the ~90s LLM call
+    # (M4 gate optional, adopted — see the guarded write below).
+    try:
+        mem_mtime = paths.MEMORY_FILE.stat().st_mtime_ns
+    except OSError:
+        mem_mtime = None
+
     window = candidate_window(con, date)
     history = ingested_history_days(con)
     items = gather_items(con, window["start_iso"])
@@ -809,10 +944,15 @@ def _run_rank_body(
             "`newslens ingest` first"
         )
     memory_topics = active_memory_topics(con)
+    # Lifecycle v2: dormant threads join the prompt as a MATCH-ONLY
+    # vocabulary — zero scoring influence (personal_score never reads
+    # matched_dormant); a match only matters after a story has already
+    # earned its slot, when persist() applies the auto-revival.
+    dormant = memory.dormant_topics(con)
     window_desc = f"the last {window['days']:g} day(s), {window['basis']}"
 
     try:
-        prompt = build_prompt(date, items, cfg, memory_topics, window_desc)
+        prompt = build_prompt(date, items, cfg, memory_topics, window_desc, dormant)
     except OSError as exc:
         raise RankingError(f"cannot read prompts/{PROMPT_FILE} ({exc})") from exc
     except Exception as exc:  # noqa: BLE001 — principal-editable template:
@@ -839,7 +979,8 @@ def _run_rank_body(
 
     repair_sink: Dict = {}
     clusters, usage = call_llm_validated(
-        key, prompt, known_ids, tag_levels, memory_topics, repairs=repair_sink
+        key, prompt, known_ids, tag_levels, memory_topics,
+        repairs=repair_sink, dormant_topics=dormant,
     )
 
     items_by_id = {r["id"]: r for r in items}
@@ -864,6 +1005,9 @@ def _run_rank_body(
     )
     report.override_fired = meta["override"]["fired"]
     report.override_pool_size = meta["override"]["pool_size"]
+    # Memory surfacing (spec §B: staleness is SURFACED, never silent; sync
+    # edits are acknowledged so the principal knows the file was honored).
+    report.warnings.extend(mem_sync.summary_lines())
     if repair_sink.get("repaired"):
         emptied = repair_sink.get("clusters_emptied") or []
         report.warnings.append(
@@ -885,5 +1029,39 @@ def _run_rank_body(
             f"item window hit the {MAX_INPUT_ITEMS}-item cap — oldest items in "
             "the window were not considered"
         )
-    persist(con, report, meta)
+    revived = persist(con, report, meta)
+    if revived:
+        # Every automatic transition is surfaced, dated, never silent
+        # (lifecycle v2 contract).
+        names = ", ".join(
+            r["topic"] + (f" (last covered {r['last_covered']})" if r["last_covered"] else "")
+            for r in revived
+        )
+        report.warnings.append(
+            f"memory: {len(revived)} dormant thread(s) auto-revived by "
+            f"slot-earning stories: {names} — see memory.md"
+        )
+    # memory.md must reflect THIS run's own effects (revivals, new reference
+    # dates) immediately — not on the next run's sync. Render-only, and
+    # GUARDED: if the file changed since the opening sync wrote it (a hand
+    # edit during the LLM call), skip the refresh and say so — a transparency
+    # surface never overwrites edits it hasn't read (M4 gate optional, adopted).
+    try:
+        current_mtime = paths.MEMORY_FILE.stat().st_mtime_ns
+    except OSError:
+        current_mtime = None
+    if mem_mtime is not None and current_mtime != mem_mtime:
+        report.warnings.append(
+            "memory.md changed while this run was in flight — post-run refresh "
+            "skipped to protect your edit; the next sync will reconcile it"
+        )
+    else:
+        try:
+            paths.MEMORY_FILE.write_text(memory.render_file(con), encoding="utf-8")
+        except OSError as exc:  # non-fatal (opening sync validated
+            # writability), but never silent:
+            report.warnings.append(
+                f"memory.md could not be refreshed after this run ({exc}) — it "
+                "will catch up on the next sync"
+            )
     return report

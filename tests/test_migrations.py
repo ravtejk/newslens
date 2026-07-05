@@ -19,7 +19,12 @@ MIGRATION_0001 = "0001_initial_schema.sql"
 MIGRATION_0002 = "0002_briefings_date_format.sql"
 MIGRATION_0003 = "0003_ranking_runs.sql"
 MIGRATION_0004 = "0004_ranking_runs_append_only.sql"  # M3 fix loop 1 (BUG-5)
-ALL_MIGRATIONS = [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0004]
+MIGRATION_0005 = "0005_memory_topic_unique.sql"       # M4
+MIGRATION_0006 = "0006_memory_lifecycle_v2.sql"       # M4 lifecycle amendment
+ALL_MIGRATIONS = [
+    MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
+    MIGRATION_0004, MIGRATION_0005, MIGRATION_0006,
+]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
 }

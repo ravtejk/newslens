@@ -62,6 +62,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         "come from the recency window at run time: since your last briefing, "
         "capped at 14 days",
     )
+    memory_p = sub.add_parser(
+        "memory",
+        help="the live threads NewsLens tracks for you — list/add/dismiss/note. "
+        "Same data as hand-editing memory.md; every verb syncs the file first "
+        "and rewrites it after (taxonomy contract §F: explicit actions only, "
+        "nothing is ever inferred from reading behavior)",
+    )
+    memory_sub = memory_p.add_subparsers(dest="memory_command", required=True)
+    mem_list = memory_sub.add_parser("list", help="show threads")
+    mem_list.add_argument(
+        "--status", choices=["active", "dormant", "dismissed_user", "all"], default="all"
+    )
+    mem_add = memory_sub.add_parser("add", help="start tracking a thread")
+    mem_add.add_argument("topic")
+    mem_add.add_argument("--note", default="")
+    mem_dismiss = memory_sub.add_parser(
+        "dismiss", help="stop tracking a thread (kept for audit; excluded from context)"
+    )
+    mem_dismiss.add_argument("topic")
+    mem_note = memory_sub.add_parser(
+        "note",
+        help="set the note the generation prompt reads verbatim — this is the "
+        "explicit 'more/less like this' mechanism",
+    )
+    mem_note.add_argument("topic")
+    mem_note.add_argument("text")
 
     args = parser.parse_args(argv)
 
@@ -85,14 +111,32 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         return run_doctor()
 
+    if args.command == "memory":
+        return _memory_command(args)
+
     if args.command == "rank":
         import re as _re
+        from datetime import datetime as _dt
 
         from . import config, ranking
 
-        if args.date and not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
-            print(f"--date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
-            return 2
+        if args.date:
+            # Shape first (strict zero-padding — strptime alone accepts
+            # "2026-7-4"), then calendar truth (strptime rejects 2026-13-01,
+            # which the regex and the DB's GLOB trigger both let through).
+            ok_shape = bool(_re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date))
+            if ok_shape:
+                try:
+                    _dt.strptime(args.date, "%Y-%m-%d")
+                except ValueError:
+                    ok_shape = False
+            if not ok_shape:
+                print(
+                    f"--date must be YYYY-MM-DD (a real calendar date), "
+                    f"got {args.date!r}",
+                    file=sys.stderr,
+                )
+                return 2
         config.load_env()
         try:
             report = ranking.run_rank(date=args.date)
@@ -172,6 +216,115 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser.error(f"unknown command: {args.command}")  # unreachable; argparse guards
     return 2
+
+
+def _memory_command(args) -> int:
+    """memory list/add/dismiss/note. Every verb: sync file->DB first (hand
+    edits are never overwritten unseen), apply the verb, resync so memory.md
+    reflects the result immediately."""
+    from . import db, memory
+
+    db.migrate()
+    con = db.connect()
+    try:
+        try:
+            sync = memory.sync_memory(con)
+        except memory.MemorySyncError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        for line in sync.summary_lines():
+            print(f"  ⚠ {line}")
+
+        if args.memory_command == "list":
+            where = "" if args.status == "all" else " WHERE status = ?"
+            params = () if args.status == "all" else (args.status,)
+            rows = con.execute(
+                "SELECT m.topic, m.status, m.principal_note, b.date AS ref_date"
+                " FROM memory m LEFT JOIN briefings b"
+                " ON b.id = m.last_referenced_briefing_id" + where +
+                " ORDER BY m.status, m.id",
+                params,
+            ).fetchall()
+            if not rows:
+                print("no threads" + ("" if args.status == "all" else f" with status {args.status}"))
+                return 0
+            for r in rows:
+                note = f" — {r['principal_note']}" if r["principal_note"] else ""
+                ref = f" (last referenced: {r['ref_date']})" if r["ref_date"] else ""
+                print(f"  [{r['status']}] {r['topic']}{note}{ref}")
+            print(f"\n  ({len(rows)} thread(s); hand-edit memory.md any time — same data)")
+            return 0
+
+        topic = args.topic.strip()
+        if not topic:
+            print("topic must be non-empty", file=sys.stderr)
+            return 2
+        if memory.SEPARATOR in topic:
+            print(f"topic may not contain {memory.SEPARATOR!r} (it separates "
+                  "topic from note in memory.md)", file=sys.stderr)
+            return 2
+        row = con.execute(
+            "SELECT id, status FROM memory WHERE lower(topic) = lower(?)", (topic,)
+        ).fetchone()
+
+        if args.memory_command == "add":
+            now = memory._utc_now_iso()
+            if row is not None:
+                if row["status"] == "active":
+                    print(f"already tracking {topic!r} (active)")
+                    return 0
+                with con:
+                    con.execute(
+                        "UPDATE memory SET status = 'active',"
+                        " status_changed_at = ?, updated_at = ?"
+                        " WHERE id = ?", (now, now, row["id"]),
+                    )
+                print(f"revived {topic!r} (was {row['status']})")
+            else:
+                with con:
+                    con.execute(
+                        "INSERT INTO memory (topic, status, principal_note,"
+                        " status_changed_at, created_at, updated_at)"
+                        " VALUES (?, 'active', ?, ?, ?, ?)",
+                        (topic, args.note.strip() or None, now, now, now),
+                    )
+                print(f"now tracking {topic!r}")
+        elif args.memory_command == "dismiss":
+            if row is None:
+                print(f"no thread named {topic!r} — `newslens memory list` shows them",
+                      file=sys.stderr)
+                return 1
+            with con:
+                con.execute(
+                    "UPDATE memory SET status = 'dismissed_user',"
+                    " status_changed_at = ?, updated_at = ?"
+                    " WHERE id = ?", (memory._utc_now_iso(), memory._utc_now_iso(), row["id"]),
+                )
+            print(f"dismissed {topic!r} — stays visible in memory.md, never auto-revives")
+        elif args.memory_command == "note":
+            if row is None:
+                print(f"no thread named {topic!r} — add it first: "
+                      f"newslens memory add \"{topic}\"", file=sys.stderr)
+                return 1
+            with con:
+                con.execute(
+                    "UPDATE memory SET principal_note = ?, updated_at = ?"
+                    " WHERE id = ?",
+                    (args.text.strip() or None, memory._utc_now_iso(), row["id"]),
+                )
+            print(f"note set on {topic!r} — the generation prompt reads it verbatim")
+
+        # RENDER-ONLY refresh — a trailing full sync would re-read the file
+        # written by the OPENING sync (which predates this verb) and file-wins
+        # would clobber the verb's own change (M4 amendment fix: a fresh
+        # `memory add` isn't in that file and would be dismissed-by-deletion
+        # instantly; a fresh note would revert).
+        from . import paths
+
+        paths.MEMORY_FILE.write_text(memory.render_file(con), encoding="utf-8")
+        return 0
+    finally:
+        con.close()
 
 
 if __name__ == "__main__":

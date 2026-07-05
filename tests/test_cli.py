@@ -51,9 +51,10 @@ def test_migrate_applies_then_reports_already_up_to_date(tmp_paths, capsys):
     out_first = capsys.readouterr().out
     assert rc == 0
     assert (
-        "applied 4 migration(s): 0001_initial_schema.sql, "
+        "applied 6 migration(s): 0001_initial_schema.sql, "
         "0002_briefings_date_format.sql, 0003_ranking_runs.sql, "
-        "0004_ranking_runs_append_only.sql"
+        "0004_ranking_runs_append_only.sql, 0005_memory_topic_unique.sql, "
+        "0006_memory_lifecycle_v2.sql"
     ) in out_first
     assert str(paths.DB_PATH) in out_first
 
@@ -168,6 +169,172 @@ def test_rank_rejects_malformed_date_fast(capsys):
     rc = cli.main(["rank", "--date", "2026-7-4"])
     assert rc == 2
     assert "--date must be YYYY-MM-DD" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad", ["2026-13-01", "2026-02-30", "2026-00-10"])
+def test_rank_rejects_calendar_nonsense_dates(capsys, bad):
+    """M4 item-12 batch: shape first (strict zero-padding), then strptime for
+    calendar truth — month 13 and Feb 30 must exit 2, not reach the pipeline."""
+    rc = cli.main(["rank", "--date", bad])
+    assert rc == 2
+    assert "real calendar date" in capsys.readouterr().err
+
+
+# --- newslens memory verbs (milestone 4) --------------------------------------
+
+def _memory_world(monkeypatch, tmp_path):
+    from newslens import paths as _paths
+
+    memfile = tmp_path / "memory.md"
+    monkeypatch.setattr(_paths, "MEMORY_FILE", memfile)
+    return memfile
+
+
+def test_memory_add_survives_its_own_command(tmp_paths, capsys):
+    """M4 amendment regression pin (cli.py render-only refresh): the trailing
+    sync used to re-read the file written by the OPENING sync and file-wins
+    would dismiss the fresh add instantly. A fresh `memory add` must exist,
+    active, after its own command AND after the next command's sync."""
+    from newslens import db, paths as _paths
+
+    cli.main(["migrate"])
+    capsys.readouterr()
+    rc = cli.main(["memory", "add", "Fresh Topic"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "now tracking 'Fresh Topic'" in out
+
+    con = db.connect()
+    try:
+        row = con.execute(
+            "SELECT status FROM memory WHERE topic = 'Fresh Topic'"
+        ).fetchone()
+    finally:
+        con.close()
+    assert row is not None and row["status"] == "active"
+    text = _paths.MEMORY_FILE.read_text(encoding="utf-8")
+    assert "Fresh Topic" in text.split("## Inactive")[0]
+
+    # The NEXT command's opening sync must also leave it alone.
+    rc = cli.main(["memory", "list"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "Fresh Topic" in out
+    con = db.connect()
+    try:
+        status = con.execute(
+            "SELECT status FROM memory WHERE topic = 'Fresh Topic'"
+        ).fetchone()["status"]
+    finally:
+        con.close()
+    assert status == "active"
+
+
+def test_memory_verbs_sync_hand_edits_before_acting(tmp_paths, capsys):
+    from newslens import db, paths as _paths
+
+    cli.main(["migrate"])
+    capsys.readouterr()
+    cli.main(["memory", "add", "Existing"])
+    capsys.readouterr()
+    # Hand-edit the file: add a new line the DB has never seen.
+    text = _paths.MEMORY_FILE.read_text(encoding="utf-8")
+    _paths.MEMORY_FILE.write_text(
+        text.replace("- Existing", "- Existing\n- Hand Added — from the editor"),
+        encoding="utf-8",
+    )
+    rc = cli.main(["memory", "list"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Hand Added" in out  # opening sync landed the hand edit first
+    con = db.connect()
+    try:
+        row = con.execute(
+            "SELECT status, principal_note FROM memory WHERE topic = 'Hand Added'"
+        ).fetchone()
+    finally:
+        con.close()
+    assert row["status"] == "active" and row["principal_note"] == "from the editor"
+
+
+def test_memory_dismiss_and_add_revive_cycle(tmp_paths, capsys):
+    from newslens import db
+
+    cli.main(["migrate"])
+    cli.main(["memory", "add", "Cycling"])
+    capsys.readouterr()
+    rc = cli.main(["memory", "dismiss", "Cycling"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "never auto-revives" in out
+    con = db.connect()
+    try:
+        assert con.execute(
+            "SELECT status FROM memory WHERE topic='Cycling'"
+        ).fetchone()["status"] == "dismissed_user"
+    finally:
+        con.close()
+    rc = cli.main(["memory", "add", "cycling"])  # case-insensitive revive
+    out = capsys.readouterr().out
+    # (The verb echoes the argument's casing; the DB row keeps its own.)
+    assert rc == 0 and "revived" in out and "(was dismissed_user)" in out
+    con = db.connect()
+    try:
+        assert con.execute(
+            "SELECT status FROM memory WHERE topic='Cycling'"
+        ).fetchone()["status"] == "active"
+    finally:
+        con.close()
+
+
+def test_memory_add_rejects_the_separator(tmp_paths, capsys):
+    cli.main(["migrate"])
+    capsys.readouterr()
+    rc = cli.main(["memory", "add", "bad — topic"])
+    assert rc == 2
+    assert "may not contain" in capsys.readouterr().err
+
+
+def test_gatefix1b_memory_add_revival_survives_the_next_sync(tmp_paths, capsys):
+    """GATE-FIX PIN 1b: `memory add` on a long-dormant thread sets a fresh
+    status_changed_at; the next sync's dormancy pass must respect it (basis
+    includes the transition date) instead of instantly re-dormanting a
+    thread that is, by definition, >14d unreferenced."""
+    from datetime import datetime, timedelta, timezone
+
+    from newslens import db, memory as mem
+
+    cli.main(["migrate"])
+    capsys.readouterr()
+    old = (datetime.now(timezone.utc) - timedelta(days=60)).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z"
+    )
+    older = (datetime.now(timezone.utc) - timedelta(days=30)).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z"
+    )
+    con = db.connect()
+    try:
+        con.execute(
+            "INSERT INTO memory (topic, status, status_changed_at,"
+            " created_at, updated_at) VALUES"
+            " ('Long Sleeper', 'dormant', ?, ?, ?)", (older, old, old),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    rc = cli.main(["memory", "add", "Long Sleeper"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "revived" in out
+
+    # The NEXT command runs a full sync-first — the revival must hold.
+    con = db.connect()
+    try:
+        result = mem.sync_memory(con)
+        status = con.execute(
+            "SELECT status FROM memory WHERE topic = 'Long Sleeper'"
+        ).fetchone()["status"]
+    finally:
+        con.close()
+    assert "Long Sleeper" not in result.went_dormant
+    assert status == "active"
 
 
 def test_rank_keyless_is_a_polite_exit_1_with_no_request(

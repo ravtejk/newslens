@@ -107,9 +107,10 @@ def test_doctor_flags_a_db_behind_on_migrations(tmp_paths, no_network, capsys):
     code, out = run_doctor_captured(capsys)
     assert code == 1
     assert (
-        "behind by 4 migration(s) (0001_initial_schema.sql, "
+        "behind by 6 migration(s) (0001_initial_schema.sql, "
         "0002_briefings_date_format.sql, 0003_ranking_runs.sql, "
-        "0004_ranking_runs_append_only.sql)"
+        "0004_ranking_runs_append_only.sql, 0005_memory_topic_unique.sql, "
+        "0006_memory_lifecycle_v2.sql)"
     ) in out
     assert "run: newslens migrate" in out
 

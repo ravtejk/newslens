@@ -22,6 +22,8 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 SOURCES_FILE = PROJECT_ROOT / "sources.yaml"
 ENV_FILE = PROJECT_ROOT / ".env"                 # principal-edited; never committed
 ENV_EXAMPLE_FILE = PROJECT_ROOT / ".env.example"
+MEMORY_FILE = PROJECT_ROOT / "memory.md"         # hand-editable memory surface
+                                                  # (gitignored; personal state)
 
 
 def looks_like_checkout() -> bool:

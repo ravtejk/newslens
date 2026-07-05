@@ -135,15 +135,18 @@ def test_briefings_json_columns_accept_valid_json_and_null_cost(migrated_con):
 
 # --- memory ------------------------------------------------------------------
 
-@pytest.mark.parametrize("status", ["active", "stale", "dismissed"])
-def test_memory_status_accepts_spec_values(migrated_con, status):
+@pytest.mark.parametrize("status", ["active", "dormant", "dismissed_user"])
+def test_memory_status_accepts_lifecycle_v2_values(migrated_con, status):
+    """Lifecycle v2 (ADR-0006): active | dormant | dismissed_user."""
     migrated_con.execute(
         "INSERT INTO memory (topic, status) VALUES ('rates', ?)", (status,)
     )
 
 
-@pytest.mark.parametrize("status", ["archived", "Active", ""])
-def test_memory_status_is_a_closed_enum(migrated_con, status):
+@pytest.mark.parametrize("status", ["stale", "dismissed", "archived", "Active", ""])
+def test_memory_status_is_a_closed_enum_v1_values_rejected(migrated_con, status):
+    """The v1 statuses (stale/dismissed) are gone — 0006's rebuilt CHECK must
+    reject them along with everything else outside the v2 trio."""
     with pytest.raises(sqlite3.IntegrityError):
         migrated_con.execute(
             "INSERT INTO memory (topic, status) VALUES ('rates', ?)", (status,)

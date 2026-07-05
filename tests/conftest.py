@@ -79,6 +79,9 @@ def tmp_paths(tmp_path, monkeypatch):
     sources.write_text(SYNTHETIC_TEMPLATE, encoding="utf-8")
     monkeypatch.setattr(paths, "SOURCES_FILE", sources)
     monkeypatch.setattr(paths, "ENV_FILE", tmp_path / ".env")  # does not exist
+    # M4: memory.md is live principal state on this machine — the suite must
+    # never read or write the real one.
+    monkeypatch.setattr(paths, "MEMORY_FILE", tmp_path / "memory.md")
     return tmp_path
 
 
