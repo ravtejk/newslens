@@ -7,7 +7,7 @@ threads continuity through a transparent, hand-editable memory, and labels
 corroboration honestly (counts of distinct named outlets — never the word
 "verified").
 
-**Status: milestone 6 of 8** (the editor + parked audio infrastructure). What
+**Status: milestone 7 of 8** (the UI — `newslens serve`). What
 exists: the schema, the doctor, working tier-1 ingestion (`newslens ingest` —
 idempotent, per-feed graceful degradation), the editorial pass (`newslens
 rank` — clustering, top 1–5 by world + personal impact, bounded
@@ -63,11 +63,12 @@ everything required for a real run is in place; exit `1` means at least one
 keys and no sources is expected to exit `1` today — that is the honest state,
 and every missing item comes with its fix.
 
-## Commands (milestone 5)
+## Commands (milestone 7)
 
 | Command | What it does |
 |---|---|
 | `newslens migrate` | Create/upgrade `data/newslens.db`. Idempotent — safe to re-run any time. |
+| `newslens serve [--port 8484]` | **The UI (M7).** Local web app at `http://127.0.0.1:8484/` — localhost-only by design. Today (tiered stories, tap-away generation details, play-the-episode, per-story follow), Following (ongoing threads with edit-note/stop/resume/delete, topic and writer editors that round-trip `sources.yaml`), Archive (every edition, tap to reopen). Regenerate lives in Settings. Page views and episode plays land in `consumption_events` (the day-30 falsifier's data — see ADR-0010); thread verbs share the CLI's exact code path. stdlib only, no build step, dies with the terminal. |
 | `newslens doctor` / `scripts/doctor` | Health check: Python/deps, keys (validated with harmless read-only calls), schema, `sources.yaml` (tiers, disabled, reference-only), feed URLs, cost estimate. `scripts/doctor` works even before `pip install`. |
 | `newslens ingest [--no-discovery]` | Pull all enabled sources into `source_items` (idempotent per UTC fetch-day), then the one capped Sonar discovery call if `PERPLEXITY_API_KEY` exists (RSS-only otherwise, and it says so). Partial feed failures degrade gracefully with a visible "N of M sources unavailable" line. |
 | `newslens rank [--date YYYY-MM-DD]` | The editorial pass: clusters items from the recency window (since your last briefing, 14-day cap — the report states plainly when ingested history is shorter), ranks the top 1-5 by world impact + your tags and live threads (topic/thread match outweighs domain match; followed analysts get a bounded boost — better odds, never a guaranteed slot), applies the 1-slot urgency override with its unmissable label, corroboration-labels every story with the standing caveat, writes the briefings row (prior version archived to history first), records thread references, and applies earned-slot auto-revival of dormant threads (dated, disclosed). Needs `OPENAI_API_KEY`; budget-capped; real token cost logged. |

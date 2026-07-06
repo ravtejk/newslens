@@ -23,8 +23,10 @@ SPEED = 1.0
 def main() -> int:
     text = Path(sys.argv[1]).read_text(encoding="utf-8")
     out_path = Path(sys.argv[2])
+    model = sys.argv[3] if len(sys.argv) > 3 else str(BASE / "kokoro-v1.0.onnx")
+    voices = sys.argv[4] if len(sys.argv) > 4 else str(BASE / "voices-v1.0.bin")
     t0 = time.monotonic()
-    kokoro = Kokoro(str(BASE / "kokoro-v1.0.onnx"), str(BASE / "voices-v1.0.bin"))
+    kokoro = Kokoro(model, voices)
     load_s = time.monotonic() - t0
     t1 = time.monotonic()
     samples, sample_rate = kokoro.create(text, voice=VOICE, speed=SPEED, lang="en-us")

@@ -1134,6 +1134,23 @@ def _run_generate_body(
         pct = round((before - after) / before * 100) if before else 0
         editor_note = f"editor: {before} -> {after} words ({pct}% tighter)"
         report.warnings.append(editor_note)
+        # Carryover 18a: mechanical tripwire for epistemic-qualifier deletion.
+        hedge_re = re.compile(
+            r"\b(could|may|might|likely|expect(?:s|ed)?|appears?|suggests?|"
+            r"unclear|reportedly|unconfirmed)\b", re.I)
+        draft_text = " ".join(
+            v for s in draft_payload["stories"] if isinstance(s, dict)
+            for v in s.values() if isinstance(v, str))
+        edited_text = " ".join(
+            v for s in edited_payload["stories"] if isinstance(s, dict)
+            for v in s.values() if isinstance(v, str))
+        h_before, h_after = len(hedge_re.findall(draft_text)), len(hedge_re.findall(edited_text))
+        if h_before >= 3 and h_after < h_before * 0.5:
+            report.warnings.append(
+                f"editor hedge-ratio: {h_before} -> {h_after} hedge words — "
+                "check that epistemic qualifiers weren't stripped from kept "
+                "claims (carryover 18a tripwire)"
+            )
     except (GenerateError, OSError) as exc:
         editor_note = f"editor: DEGRADED to unedited draft ({exc})"
         report.warnings.append(editor_note)
@@ -1252,6 +1269,7 @@ def _run_generate_body(
         result = audio_mod.generate_audio(
             script, out_dir / f"{stem}.wav",
             engine=cfg_full.tts_engine, openai_key=key,
+            budget_cap=max(0.0, cap - spent),
         )
         audio_path_str = result.path
         report.steps.append({
@@ -1284,6 +1302,8 @@ def _run_generate_body(
         "tiers": [s.get("tier") for s in stories],
         "framings": [s.get("why_label") for s in stories],
         "editor": editor_note,
+        "draft_stories": draft_payload.get("stories"),  # carryover 18b: forensics
+        "stories": stories,  # M7: the UI's structured render source (ADR-0010)
         "audio": audio_path_str,
         "warnings": report.warnings,
         "narrative_words": report.narrative_words,

@@ -579,3 +579,117 @@ def prior_briefing_context(
         "stories": stories,
         "text_block": text_block,
     }
+
+
+# ---------------------------------------------------------------------------
+# Shared verbs (M7): ONE code path for CLI and web UI
+# ---------------------------------------------------------------------------
+# Extracted from cli._memory_command so `newslens serve` mutates threads
+# through exactly the machinery the CLI verbs use (M7 dispatch requirement),
+# instead of a parallel SQL dialect that could drift. Protocol per verb:
+# callers sync_memory() FIRST, apply the verb, then write_memory_file() —
+# render-only, because a trailing full sync would clobber the verb's own
+# change with the pre-verb file (M4 amendment fix).
+
+
+def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
+               last_referenced_briefing_id: Optional[int] = None) -> str:
+    """Start tracking (or revive) a thread. Returns 'added' | 'revived' |
+    'already-active'. `last_referenced_briefing_id` is the M7 follow-from-
+    story seam: the edition the follow came from (CLI passes nothing)."""
+    now = _utc_now_iso()
+    row = con.execute(
+        "SELECT id, status FROM memory WHERE lower(topic) = lower(?)", (topic,)
+    ).fetchone()
+    if row is not None:
+        if row["status"] == "active":
+            return "already-active"
+        with con:
+            if last_referenced_briefing_id is not None:
+                # M7 gate finding 8: the follow-from-story seam stamps the
+                # edition on the REVIVE branch too (ADR-0010 §5), not just on
+                # insert — else "Last picked up" goes stale after a revive.
+                con.execute(
+                    "UPDATE memory SET status = 'active', status_changed_at = ?,"
+                    " updated_at = ?, last_referenced_briefing_id = ?"
+                    " WHERE id = ?",
+                    (now, now, last_referenced_briefing_id, row["id"]),
+                )
+            else:
+                con.execute(
+                    "UPDATE memory SET status = 'active', status_changed_at = ?,"
+                    " updated_at = ? WHERE id = ?", (now, now, row["id"]),
+                )
+        return "revived"
+    with con:
+        con.execute(
+            "INSERT INTO memory (topic, status, principal_note,"
+            " last_referenced_briefing_id, status_changed_at, created_at,"
+            " updated_at) VALUES (?, 'active', ?, ?, ?, ?, ?)",
+            (topic, (note or "").strip() or None, last_referenced_briefing_id,
+             now, now, now),
+        )
+    return "added"
+
+
+def dismiss_thread(con: sqlite3.Connection, topic: str) -> bool:
+    """dismissed_user: visible in memory.md, never auto-revives. False if
+    no such thread."""
+    row = con.execute(
+        "SELECT id FROM memory WHERE lower(topic) = lower(?)", (topic,)
+    ).fetchone()
+    if row is None:
+        return False
+    now = _utc_now_iso()
+    with con:
+        con.execute(
+            "UPDATE memory SET status = 'dismissed_user',"
+            " status_changed_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, row["id"]),
+        )
+    return True
+
+
+def set_note(con: sqlite3.Connection, topic: str, note: str) -> bool:
+    """Set/clear the principal note (the generation prompt reads it
+    verbatim). False if no such thread."""
+    row = con.execute(
+        "SELECT id FROM memory WHERE lower(topic) = lower(?)", (topic,)
+    ).fetchone()
+    if row is None:
+        return False
+    with con:
+        con.execute(
+            "UPDATE memory SET principal_note = ?, updated_at = ? WHERE id = ?",
+            (note.strip() or None, _utc_now_iso(), row["id"]),
+        )
+    return True
+
+
+def delete_thread(con: sqlite3.Connection, topic: str) -> Tuple[bool, str]:
+    """M7 SOFT delete (ADR-0010): the thread row is removed from memory (and
+    so from memory.md and every UI list), while past briefings stay immutable
+    — their written references to the story are baked narrative text and no
+    briefing row points at memory, so nothing dangles. This is deliberately
+    NOT a redaction of history; it deletes the *tracking*, not the record.
+    M7 gate ruling 2: delete is the product's only irreversible verb, so the
+    dismissed-only rule is enforced HERE at the shared API — structurally,
+    not by UI courtesy (ADR-0010 §4: "the stronger verb offered only from
+    that state")."""
+    row = con.execute(
+        "SELECT id, status FROM memory WHERE lower(topic) = lower(?)", (topic,)
+    ).fetchone()
+    if row is None:
+        return False, "no thread with that topic"
+    if row["status"] != "dismissed_user":
+        return False, ("dismiss the thread first — delete is only offered on "
+                       "stopped follows")
+    with con:
+        con.execute("DELETE FROM memory WHERE id = ?", (row["id"],))
+    return True, "deleted"
+
+
+def write_memory_file(con: sqlite3.Connection) -> None:
+    """Render-only refresh of memory.md after a verb (see protocol note)."""
+    from . import paths
+    paths.MEMORY_FILE.write_text(render_file(con), encoding="utf-8")

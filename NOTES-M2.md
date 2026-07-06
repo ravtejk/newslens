@@ -188,19 +188,19 @@ log asymmetry; numeral {2,3} exemption; caveat-paraphrase double-render edge.
 
 ## New carryovers for milestone 7 (from the M6 gate review)
 
-16. **Budget-cap pre-check on the openai TTS call** (`audio.py`,
+16. ~~DONE (M7)~~ **Budget-cap pre-check on the openai TTS call** (`audio.py`,
     `_synthesize_openai`) — the only spending path without one (~script_words
     /160 × $0.015 estimate vs remaining cap). Bounded today (~$0.08, no retry
     loop, non-default engine) but breaks the repo's cap discipline.
-17. **Pin `kokoro-onnx==0.5.0` in `scripts/setup_tts`** (ADR records 0.5.0;
+17. ~~DONE (M7)~~ **Pin `kokoro-onnx==0.5.0` in `scripts/setup_tts`** (ADR records 0.5.0;
     the runner's stats string hardcodes it; an unpinned future release breaks
     the isolated venv silently).
-18. **Editor forensics (gate nice-to-haves, cheap):** (a) draft-vs-edited
+18. ~~DONE (M7)~~ **Editor forensics (gate nice-to-haves, cheap):** (a) draft-vs-edited
     hedge-word-ratio warn (mechanical tripwire for epistemic-qualifier
     deletion inside kept sentences); (b) persist the pre-edit draft JSON in
     the generation log entry so day-14 can attribute quality regressions to
     writer vs editor.
-19. **Audio hardening (gate nice-to-haves):** scrub `env=` on the kokoro
+19. ~~DONE (M7)~~ **Audio hardening (gate nice-to-haves):** scrub `env=` on the kokoro
     subprocess (defense-in-depth — runner reads only argv); reuse
     `ranking._http_error_detail` for openai TTS errors; WAV params-consistency
     check across chunks; pass model paths to `tts_runner` as argv; model
@@ -217,3 +217,67 @@ log asymmetry; numeral {2,3} exemption; caveat-paraphrase double-render edge.
      (gate, after the record accumulated four figures — 0.46, 0.583, 0.833,
      0.667 — three of them wrong): figures in decision records come from
      executable one-liners, not recollection or reconstruction.
+
+## M7 backlog — recorded per dispatch, explicitly NOT built
+
+21. **Date-treatment redesign** — v5's serif/small-caps edition-date block
+    reverted to basic text by principal tweak; revisit as a design pass.
+22. **Real NewsLens logo** — top bar carries a centered dashed PLACEHOLDER
+    wordmark; principal designs the real mark.
+23. **Masthead / splash entry moment** — design-addendum backlog item;
+    design against habit-usage evidence, not before.
+24. **Deeper-analysis story view** — headlines become tappable into a fuller
+    surface; tap target marked in mockup comments only.
+25. **Writer name→feed resolution** — the UI's type-a-name path is rendered
+    but marked coming; paste-a-link is the functional path today.
+26. **One-time pulse on a dot's first appearance** — motion considered and
+    deferred; static dot shipped.
+
+## Milestone 7 record (2026-07-06) — the web UI
+
+**Landed this milestone:** `newslens serve` (stdlib, 127.0.0.1-only, one
+server-rendered page); consumption_events via migration 0007 (reads raw,
+listens deduped per-date-per-day; day-30 = trailing distinct open days);
+sources.yaml line-surgery editors; shared thread verbs (CLI == UI);
+follow-a-story seam; SOFT delete (dismissed-only, enforced in the shared
+verb per the M7 gate ruling); single-flight generation job.
+**Carryovers 16–19: LANDED AND GATE-VERIFIED** (openai-TTS cap pre-check
+aborts before any call; kokoro-onnx==0.5.0 pinned + sha256 checksums,
+bash-3.2-safe; hedge-ratio tripwire + draft_stories forensics; env-scrubbed
+subprocess, shared error parser, WAV params check, argv model paths).
+**Item 20a: LANDED (QA)** — calibration figure J=0.667 suite-enforced.
+**M7 gate fixes (nine, CoS-applied per the enumerated-surface condition):**
+problems-state validation + atomic replace in _yaml_edit; structural-char
+name rejection; JSON-content-type CSRF guard on POSTs; read events only for
+actually-rendered briefings; delete guarded dismissed-only in the verb;
+settings shows the configured engine; revive-branch follow stamp;
+preview_runtime/ gitignored; this record.
+**Definition-of-done amendment (gate):** docs currency explicitly includes
+NOTES-M2.md milestone records, not just README.
+
+## New carryovers for milestone 8 (from the M7 gate)
+
+21. **Day-30 readout caveats (must appear IN the readout):** (a) deflation —
+    reading the emitted markdown artifact directly bypasses UI capture
+    (UI-only capture was the design ruling; say so); (b) interpretation —
+    single-page architecture makes "opened the app" == "briefing rendered",
+    so open-days measures app-opens per ADR-0010 §3's own definition; (c) the
+    2 disclosed synthetic reads on 2026-07-05 (implementer demo + CoS
+    verification) are not principal reads.
+22. **Host-header allowlist** (belt-and-braces on the CSRF fix) at M8/preflight.
+23. **Error-panel claim edge:** "Nothing was published" is false in one case —
+    artifact-write failure AFTER persist (the row IS published). One wording fix.
+24. **GEN_JOB BaseException stranding:** a BaseException in the job thread
+    strands state at "running" until restart. Cheap guard at M8.
+25. **Unfollow eats an inline comment on the `enabled:` line** (write-side
+    sibling of BUG-9's read-side fix — same tolerance needed when rewriting).
+26. **`_parse_narrative` dead branch** (server.py:145-148) — remove or exercise.
+27. **Drift-guard suggestion (QA, optional):** a "furniture contract" test
+    rendering a synthetic briefing through build_page asserting the code-owned
+    furniture set (tracked marker, override note, meta-footnote, disclosure
+    trigger, follow button with aria-pressed) — pins the trust surface against
+    webui edits without pinning pixels. Plus dated-delta notes in webui.py's
+    header pointing at DIRECTION-v3.
+28. Carried M6 minors: corrections presence check (when the pipeline exists);
+    keyless-refusal log asymmetry; numeral {2,3} exemption; caveat-paraphrase
+    double-render edge.

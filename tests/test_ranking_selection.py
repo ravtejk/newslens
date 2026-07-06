@@ -585,3 +585,24 @@ def test_dedup_disclosure_reaches_the_run_warnings(migrated_con, fake_api, monke
         "SELECT meta FROM ranking_runs ORDER BY id DESC LIMIT 1"
     ).fetchone()["meta"])
     assert len(meta["dedup"]["dropped"]) == 1
+# --- Item 20a: the ADR-0009 calibration figure, suite-enforced -----------------------------
+
+def test_dedup_calibration_figure_is_the_measured_pair():
+    """ADR-0009 recorded the reproducible duplicate pair's similarity; the
+    gate reconciled it to the QA fixture pair. Enforce the FIGURE, not just
+    the behavior: J(chip-export fixture pair) == 2/3 = 0.667, comfortably
+    above DEDUP_JACCARD = 0.45, and the distinct-pair floor stays below."""
+    a = {"story_title": "Senate passes chip export controls package",
+         "summary": "Senate approves sweeping chip export controls targeting advanced nodes."}
+    b = {"story_title": "Chip export controls package passes Senate",
+         "summary": "The sweeping export controls on advanced chips clear the Senate."}
+    ta, tb = ranking._sig_tokens(a), ranking._sig_tokens(b)
+    j = len(ta & tb) / len(ta | tb)
+    assert j == pytest.approx(0.667, abs=0.001)
+    assert ranking.DEDUP_JACCARD == 0.45
+    assert j >= ranking.DEDUP_JACCARD
+    distinct = {"story_title": "Grain corridor talks resume",
+                "summary": "Negotiators return to the corridor framework."}
+    td = ranking._sig_tokens(distinct)
+    j2 = len(ta & td) / len(ta | td)
+    assert j2 < 0.35  # the measured distinct-pair ceiling

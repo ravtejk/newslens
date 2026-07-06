@@ -19,12 +19,27 @@ if [ ! -x data/tts/venv/bin/python ]; then
   data/tts/venv/bin/pip install --quiet --upgrade pip
 fi
 echo "-> installing kokoro-onnx + soundfile into the engine venv"
-data/tts/venv/bin/pip install --quiet kokoro-onnx soundfile
+data/tts/venv/bin/pip install --quiet 'kokoro-onnx==0.5.0' soundfile
+# Known-good checksums (first 16 hex of sha256; carryover 19).
+# case-lookup, not declare -A: macOS /bin/bash is 3.2 (no associative arrays).
+check_sum() { shasum -a 256 "$1" | cut -c1-16; }
+expected_sum() {
+  case "$1" in
+    kokoro-v1.0.onnx) echo 7d5df8ecf7d4b187 ;;
+    voices-v1.0.bin)  echo bca610b8308e8d99 ;;
+  esac
+}
 for f in kokoro-v1.0.onnx voices-v1.0.bin; do
   if [ ! -f "data/tts/$f" ]; then
     echo "-> downloading $f"
     curl -L --progress-bar -o "data/tts/$f" \
       "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$f"
+  fi
+  actual="$(check_sum "data/tts/$f")"
+  if [ "$actual" != "$(expected_sum "$f")" ]; then
+    echo "!! checksum mismatch for $f (got $actual, expected $(expected_sum "$f"))"
+    echo "   delete data/tts/$f and re-run, or verify the release upstream."
+    exit 1
   fi
 done
 echo "== done — verify with: scripts/doctor (TTS section) =="

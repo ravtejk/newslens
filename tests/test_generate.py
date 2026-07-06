@@ -1221,7 +1221,8 @@ def test_A6_steering_off_still_records_references_and_persists_flag(
 def _fake_audio_ok(monkeypatch, out_paths):
     from newslens import audio as audio_mod
 
-    def fake_generate_audio(script_text, out_path, engine="kokoro", openai_key=""):
+    def fake_generate_audio(script_text, out_path, engine="kokoro", openai_key="",
+                            **kw):
         out_paths.append(str(out_path))
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_bytes(b"RIFFfake")
@@ -1535,3 +1536,42 @@ def test_warnings_and_framings_are_retained_in_ok_log_entries(
     assert entry["warnings"] == rep.warnings          # full array, verbatim
     assert any("audio: SKIPPED" in w for w in entry["warnings"])
     assert entry["framings"] == ["Why it matters", "Why markets care"]
+# --- M7 carryovers 18a/18b: hedge-ratio tripwire + draft forensics --------------------------
+
+def test_hedge_ratio_tripwire_fires_on_qualifier_stripping(migrated_con, fake_model):
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    hedged = stories_payload(slots)
+    hedged["stories"][0]["why_it_matters"] = (
+        "Officials say this could raise costs and may slow approvals; analysts "
+        "reportedly expect delays, though the timeline is unclear."
+    )
+    fake_model.narrative = hedged
+    stripped = stories_payload(slots)
+    stripped["stories"][0]["why_it_matters"] = (
+        "This raises costs and slows approvals; analysts see delays on a set "
+        "timeline."
+    )
+    fake_model.editor = stripped
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY, refresh=False)
+    trip = [w for w in rep.warnings if w.startswith("editor hedge-ratio:")]
+    assert len(trip) == 1
+    assert "check that epistemic qualifiers weren't stripped" in trip[0]
+
+
+def test_draft_stories_forensics_in_ok_log_entries(migrated_con, fake_model):
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    draft = stories_payload(slots)
+    tightened = stories_payload(slots)
+    tightened["stories"][0]["why_it_matters"] = "Tighter."
+    fake_model.narrative = draft
+    fake_model.editor = tightened
+    fake_model.script = compliant_script(slots)
+    run(migrated_con, date=A_DAY, refresh=False)
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
+    )
+    assert entry["draft_stories"] == draft["stories"]     # pre-edit forensics
+    assert entry["stories"][0]["why_it_matters"] == "Tighter."  # the final text

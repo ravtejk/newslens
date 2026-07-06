@@ -121,6 +121,31 @@ meta.dedup shape + run-warning disclosure); warnings + framings retained in
 ok AND failed log entries; editor budget-abort degrades instead of dying.
 Suite: 538/538 green.
 
+M7 QA pass (2026-07-05, the web UI): 1 red — BUG-9 (`test_BUG9_*`,
+test_server.py: writer_remove's name-line regex lacks topic_remove's
+trailing-comment tolerance, so an inline-commented `- name:` line cannot be
+unfollowed — silent-collection risk on a principal-editable file; fix
+contract in the docstring). New organs pinned in `test_server.py` (loopback
+binding by source, route sanity, single-flight generation job, line-surgery
+round-trips on a real-file replica with hostile cases + validate-and-revert,
+shared-verb CLI/UI equivalence, soft-delete untouchability, follow seam,
+structured/fallback render parity with slots-owned furniture, structural
+a11y) and `test_events.py` (0007 shape, raw reads, per-day listen dedup,
+trailing-open-days boundaries + flood immunity). Item 20a calibration figure
+(J=0.667) enforced; carryovers 16-19 pinned. Crash-mid-write temp-file
+atomicity does NOT exist for sources.yaml surgery (validate-and-revert only)
+— flagged, not failed. Suite: 580 green + 1 red acceptance.
+
+M7 gate-fix close (2026-07-05): BUG-9 fixed among the gate's nine (regex
+tolerance — its acceptance test is green); two pins flipped as ordered
+(delete guarded dismissed-only at the shared verb, both branches; the
+byte-identical revert re-triggered through the surgery path, now covering
+BOTH revert branches — exception and problems-state); new pins for the
+CSRF 415 guard, the _bad_name pre-checks (colon/newline/leading-# on both
+add paths), atomic tmp+os.replace writes with no tmp leftovers, read
+honesty during running/error panels, the follow-revive edition stamp vs
+CLI revive, and the settings engine display. Suite: 590/590 green.
+
 ## Implementer contract notes for milestone 3 (for QA — appended per dispatch)
 
 New surfaces: `ranking.py` (clustering/scoring/override/corroboration/persist),

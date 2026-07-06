@@ -26,6 +26,7 @@ Sanity check before any keys exist — this should already work:
 ```bash
 newslens migrate     # creates data/newslens.db
 scripts/doctor       # friendly report; exit 1 is EXPECTED until keys+sources are in
+.venv/bin/newslens serve   # after your first generate: the UI at http://127.0.0.1:8484/
 ```
 
 ## 2. Create your .env

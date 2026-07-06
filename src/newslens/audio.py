@@ -106,8 +106,10 @@ def _synthesize_kokoro(script_text: str, out_path: Path) -> AudioResult:
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
-            [str(tts_venv_py()), str(TTS_RUNNER), str(tmp_txt), str(out_path)],
+            [str(tts_venv_py()), str(TTS_RUNNER), str(tmp_txt), str(out_path),
+             str(tts_model()), str(tts_voices())],
             capture_output=True, text=True, timeout=KOKORO_TIMEOUT_S,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home())},  # carryover 19: scrub
         )
     except subprocess.TimeoutExpired as exc:
         raise AudioError(
@@ -160,11 +162,20 @@ def _chunk_text(text: str, cap: int = OPENAI_TTS_CHUNK_CHARS) -> List[str]:
     return chunks
 
 
-def _synthesize_openai(script_text: str, out_path: Path, key: str) -> AudioResult:
+def _synthesize_openai(script_text: str, out_path: Path, key: str,
+                       budget_cap: Optional[float] = None) -> AudioResult:
     if not key:
         raise AudioError(
             "OPENAI_API_KEY not set — the openai TTS engine needs it "
             "(or switch settings.tts_engine back to kokoro)"
+        )
+    # Carryover 16: the one spending path without a cap pre-check.
+    est_minutes = len(script_text.split()) / 160.0
+    est_usd = est_minutes * OPENAI_TTS_USD_PER_MIN
+    if budget_cap is not None and est_usd > budget_cap:
+        raise AudioError(
+            f"estimated openai-tts cost ${est_usd:.3f} exceeds the remaining "
+            f"run budget (${budget_cap:.2f}) — aborting before any call"
         )
     chunks = _chunk_text(script_text)
     t0 = time.monotonic()
@@ -185,9 +196,11 @@ def _synthesize_openai(script_text: str, out_path: Path, key: str) -> AudioResul
             with urllib.request.urlopen(req, timeout=OPENAI_TTS_TIMEOUT_S) as resp:
                 blob = resp.read()
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:200]
+            from . import ranking  # carryover 19: one error-detail parser, not two
+            detail = ranking._http_error_detail(exc)
             raise AudioError(
-                f"openai tts chunk {i}/{len(chunks)} failed (HTTP {exc.code}): {detail}"
+                f"openai tts chunk {i}/{len(chunks)} failed (HTTP {exc.code}"
+                + (f"; {detail}" if detail else "") + ")"
             ) from exc
         except Exception as exc:
             raise AudioError(
@@ -200,6 +213,16 @@ def _synthesize_openai(script_text: str, out_path: Path, key: str) -> AudioResul
             params = w.getparams()
             if wav_params is None:
                 wav_params = params
+            elif (params.nchannels, params.sampwidth, params.framerate) != (
+                wav_params.nchannels, wav_params.sampwidth, wav_params.framerate
+            ):
+                # Carryover 19: refuse to concatenate mismatched formats —
+                # a silent mix produces chipmunk/garbled audio, not an error.
+                raise AudioError(
+                    f"openai tts chunk {i} format differs "
+                    f"({params.framerate}Hz/{params.nchannels}ch vs "
+                    f"{wav_params.framerate}Hz/{wav_params.nchannels}ch)"
+                )
             frames.append(w.readframes(w.getnframes()))
     if wav_params is None:
         raise AudioError("openai tts produced no audio (empty script?)")
@@ -231,12 +254,13 @@ def generate_audio(
     out_path: Path,
     engine: str = DEFAULT_TTS_ENGINE,
     openai_key: str = "",
+    budget_cap: Optional[float] = None,
 ) -> AudioResult:
     """THE wrapper (engineering-2's one-function-boundary ruling)."""
     if engine == "kokoro":
         return _synthesize_kokoro(script_text, out_path)
     if engine == "openai":
-        return _synthesize_openai(script_text, out_path, openai_key)
+        return _synthesize_openai(script_text, out_path, openai_key, budget_cap)
     raise AudioError(
         f"unknown tts engine {engine!r} — settings.tts_engine must be one of "
         f"{VALID_TTS_ENGINES}"

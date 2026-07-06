@@ -1,11 +1,10 @@
 """NewsLens command-line interface.
 
-Commands as of milestone 5: `migrate`, `doctor`, `ingest`, `rank`,
-`memory` (list/add/dismiss/note), `generate` (the full on-demand briefing).
-Still to come — read/listen (M7, consumption-event logging for the day-30
-falsifier; v1 is on-demand only per DECISIONS.md 2026-07-03) — deliberately
-not stubbed: an unimplemented command should not exist yet rather than exist
-and lie.
+Commands as of milestone 7: `migrate`, `doctor`, `ingest`, `rank`,
+`memory` (list/add/dismiss/note), `generate` (the full on-demand briefing),
+and `serve` (the local web UI). Consumption logging for the day-30 falsifier
+shipped as server-side events (page view = read, episode play = listen) —
+not as CLI verbs, by design: the UI is the consumption surface (ADR-0010).
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="newslens",
         description="NewsLens — memory-threaded daily news briefing (personal prototype).",
         epilog=(
-            "Coming in later milestones: read/listen (M7). "
+            "The web UI is `newslens serve` (reads/listens are logged there). "
             "Health check: run `newslens doctor` (or scripts/doctor) any time."
         ),
     )
@@ -89,6 +88,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     mem_note.add_argument("topic")
     mem_note.add_argument("text")
 
+    serve_p = sub.add_parser(
+        "serve",
+        help="local web UI at 127.0.0.1 (Today / Following / Archive)")
+    serve_p.add_argument("--port", type=int, default=8484,
+                         help="port to bind on localhost (default 8484)")
+
     gen_p = sub.add_parser(
         "generate",
         help="the full on-demand briefing (M5): ingest -> rank -> narrative -> "
@@ -140,6 +145,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "memory":
         return _memory_command(args)
+
+    if args.command == "serve":
+        from . import server
+
+        return server.serve(port=args.port)
 
     if args.command == "generate":
         import re as _re
@@ -403,9 +413,7 @@ def _memory_command(args) -> int:
         # would clobber the verb's own change (M4 amendment fix: a fresh
         # `memory add` isn't in that file and would be dismissed-by-deletion
         # instantly; a fresh note would revert).
-        from . import paths
-
-        paths.MEMORY_FILE.write_text(memory.render_file(con), encoding="utf-8")
+        memory.write_memory_file(con)
         return 0
     finally:
         con.close()

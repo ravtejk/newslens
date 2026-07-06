@@ -298,3 +298,41 @@ def test_outlet_token_skips_leading_articles():
     }]}
     _, warns = generate.validate_narrative_payload(payload, slots, "A")
     assert not any("single-outlet" in w for w in warns)
+# --- M7 carryovers 16 + 19: openai cap pre-check; setup_tts pin + checksums ------------------
+
+def test_openai_tts_refuses_over_budget_before_any_call(tmp_path, fake_api, monkeypatch):
+    """Carryover 16: the cost estimate gates BEFORE the first request — an
+    over-cap synthesis never opens a socket."""
+    monkeypatch.setattr(audio, "OPENAI_TTS_URL",
+                        fake_api.base_url + "/v1/audio/speech")
+    long_script = "word " * 20000  # a long episode, est cost >> a tiny cap
+    with pytest.raises(audio.AudioError) as excinfo:
+        audio.generate_audio(long_script, tmp_path / "x.wav", engine="openai",
+                             openai_key="sk-x", budget_cap=0.0001)
+    msg = str(excinfo.value)
+    assert "aborting before any call" in msg
+    assert [r for r in fake_api.recorded if r["method"] == "POST"] == []
+
+
+def test_openai_tts_within_budget_proceeds(tmp_path, fake_api, monkeypatch):
+    blob = make_wav_bytes(n_frames=400)
+    fake_api.add_route("/v1/audio/speech", status=200, body=blob,
+                       content_type="audio/wav")
+    monkeypatch.setattr(audio, "OPENAI_TTS_URL",
+                        fake_api.base_url + "/v1/audio/speech")
+    result = audio.generate_audio("Short script.", tmp_path / "x.wav",
+                                  engine="openai", openai_key="sk-x",
+                                  budget_cap=1.0)
+    assert result.engine == "openai"
+
+
+def test_setup_tts_pins_version_and_checksums():
+    """Carryover 19: the engine install is pinned (kokoro-onnx==0.5.0) and
+    the model artifacts carry known-good sha256 prefixes — a drifted download
+    must not silently become the voice."""
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "setup_tts").read_text(
+        encoding="utf-8"
+    )
+    assert "kokoro-onnx==0.5.0" in script
+    assert "sha256" in script
+    assert script.count('"') > 0 and "shasum" in script or "sha256sum" in script
