@@ -69,7 +69,9 @@ product's actual running state. If you want the daily discovery query later:
 
 ### 2c. Everything else in .env
 
-- `BUDGET_CAP_USD_PER_RUN` — leave the 0.50 default unless you have a reason.
+- `BUDGET_CAP_USD_PER_RUN` — leave the 0.25 default unless you have a reason
+  (recommended value cut from 0.50 with the M9 Analyst ruling, 2026-07-06 —
+  if your .env still pins 0.50, lower it to match).
 - `GENERATE_HOUR_LOCAL` — **dormant**: v1 generates on-demand only (your
   2026-07-03 call), nothing reads this. Leave it or delete it; the doctor
   treats it as informational either way.

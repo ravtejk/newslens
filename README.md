@@ -13,6 +13,11 @@ day's tiered briefing and voices it; `newslens serve` is the daily surface;
 `newslens diagnose` is the self-caveating readout the day-14/day-30
 verdicts will read; `PREFLIGHT.md` is the human engineer's review guide
 (org law: model-reviewed-model needs human eyes before anything public).
+**In construction: M9 "the Analyst"** (approved 2026-07-06) — milestone 1
+landed the retrieval leg: tier-scoped, robots-respecting, attributed,
+single-user-paced full-text fetch of cluster-linked articles with per-fetch
+instrumentation (`src/newslens/analysis.py`; the analysis call + brief land
+at milestones 2–3; cap cut to $0.25/run per the ruling).
 What
 exists: the schema, the doctor, working tier-1 ingestion (`newslens ingest` —
 idempotent, per-feed graceful degradation), the editorial pass (`newslens
@@ -101,7 +106,7 @@ rule). You fill `.env` yourself; agents only ever touch `.env.example`.
 |---|---|---|
 | `OPENAI_API_KEY` | Yes | Text generation (GPT-4o-mini): ranking, narrative, script adaptation. Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **Audio (M6): Kokoro-82M local is the v1 default** — no key, no metered cost; gpt-4o-mini-tts on this same key is the built fallback, and the principal picks by ear at the milestone-6 listening test. This key is needed for text generation regardless. |
 | `PERPLEXITY_API_KEY` | Yes | One capped Sonar discovery query per run. Pay-as-you-go; a prepaid credit cap in their dashboard is the primary spend limit. |
-| `BUDGET_CAP_USD_PER_RUN` | Default 0.50 | In-app hard stop per generate run (ENGINEERING.md cost guardrail). |
+| `BUDGET_CAP_USD_PER_RUN` | Default 0.25 (M9 ruling 2026-07-06; was 0.50) | In-app hard stop per generate run (ENGINEERING.md cost guardrail). Degradation ladder: cheapest inputs first, content protected longest; routine derating at 0.25 escalates to the principal, never absorbed. |
 | `GENERATE_HOUR_LOCAL` | Dormant | Nothing reads it in v1 (on-demand only, DECISIONS.md 2026-07-03). Kept optional in case scheduling ever returns; a set-but-invalid value still fails the doctor (typo'd .env is a config error). |
 | `GNEWS_API_KEY` | No — leave blank | Fallback discovery vendor, deliberately ungranted unless the Sonar reliability spike fails. |
 

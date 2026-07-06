@@ -35,7 +35,18 @@ NO_INTERESTS_MSG = (
 )
 
 # Defaults for the two no-account config vars (.env.example documents both).
-DEFAULT_BUDGET_CAP_USD_PER_RUN = 0.50
+# M9 ruling (2026-07-06): 0.50 -> 0.25, the principal's binding cost
+# condition on the Analyst's sourcing-posture yes ("as long as that won't
+# affect the content too much"). The org obligation attached to that quote:
+#   * DEGRADATION LADDER ORDER — cheapest inputs degrade first, content
+#     quality is protected longest: (1) discovery/Sonar background calls
+#     shrink or skip first; (2) analysis briefs for LOWER-tier depth stories
+#     go before the lead's; (3) the writer's narrative/script/editor passes
+#     degrade LAST (they are the content) — and audio's default is local/$0.
+#   * ESCALATION CONDITION — routine derating at 0.25 (the ladder firing on
+#     normal news days) is a principal checkpoint, NEVER silently absorbed;
+#     real-run costs are measured and reported at every build checkpoint.
+DEFAULT_BUDGET_CAP_USD_PER_RUN = 0.25
 DEFAULT_GENERATE_HOUR_LOCAL = 6
 
 _VALID_SOURCE_KEYS = {

@@ -46,7 +46,7 @@ def test_env_example_has_exactly_the_five_spec_vars_with_no_secret_values():
         "PERPLEXITY_API_KEY": "",
         "GNEWS_API_KEY": "",
         # Non-secret guard defaults, exactly as spec §D documents them:
-        "BUDGET_CAP_USD_PER_RUN": "0.50",
+        "BUDGET_CAP_USD_PER_RUN": "0.25",  # M9 ruling 2026-07-06 (was 0.50)
         "GENERATE_HOUR_LOCAL": "6",
     }
 

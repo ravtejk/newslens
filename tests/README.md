@@ -174,6 +174,22 @@ ongoing recency (sort + lifecycle untouched proof), and the splash logo
 dashed border both states, dark-mode independence). Item 27's furniture
 contract extended to the glance rows.
 
+M9-M1 QA pass (2026-07-06, the Analyst's fetcher): 0 red — 656/656.
+Implementer's 20-test battery audited (genuinely socket-level via asserting
+fetch fns); the three cap-flip pins verified honest (incl. the new
+above-default WARN contract). `test_analysis_qa.py` adds: two MORE real-page
+fixtures (BBC + Guardian, live-captured robots-first with timestamps in the
+fixture headers — both won via article-tag, making it 3-of-5 across the live
+corpus), default-wiring socket proof for excluded tiers, pacing edges (no
+leading delay, N-1 sleeps, the cached-robots-denial delay pinned-as-actual
+with the docstring mismatch flagged), path-scoped robots + unparseable-served
+stance, fetch kwargs plumb (cap/UA/timeout), paywall both-directions at the
+boundary, _decode charset edges, and manifest completeness. Tier-scope
+dispatch-vs-code discrepancy resolved against the design record: {full,
+cautious} in, headline_only/reference_only out — code correct. NPR probe:
+robots fetch failed silently, so its article was NOT fetched (the module's
+own conservative-deny discipline, honored by QA too).
+
 ## Implementer contract notes for milestone 3 (for QA — appended per dispatch)
 
 New surfaces: `ranking.py` (clustering/scoring/override/corroboration/persist),

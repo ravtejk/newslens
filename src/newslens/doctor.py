@@ -379,7 +379,14 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
     else:
         try:
             cap = config.budget_cap_usd_per_run(env)
-            out.append(Result(PASS, f"BUDGET_CAP_USD_PER_RUN = {cap:.2f} USD/run"))
+            if cap > config.DEFAULT_BUDGET_CAP_USD_PER_RUN:
+                out.append(Result(WARN, (
+                    f"BUDGET_CAP_USD_PER_RUN = {cap:.2f} USD/run — above the "
+                    f"{config.DEFAULT_BUDGET_CAP_USD_PER_RUN:.2f} recommended "
+                    "default (M9 ruling 2026-07-06); consider lowering the pin "
+                    "in your .env")))
+            else:
+                out.append(Result(PASS, f"BUDGET_CAP_USD_PER_RUN = {cap:.2f} USD/run"))
         except ValueError as exc:
             out.append(Result(FAIL, f"{exc} — fix it in .env"))
 

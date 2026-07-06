@@ -346,3 +346,44 @@ history** (0 required failing · 1 warning · 49 passing).
 **Verification discipline:** items 1-3 verified by in-process `build_page`
 rendering + suite — zero consumption events generated (the day-30 window
 opens 2026-07-07; the events table stayed at 11 construction rows throughout).
+
+## M9 "the Analyst" — milestone 1 record (2026-07-06): the fetcher
+
+**Landed:** `src/newslens/analysis.py` — the retrieval leg under the
+principal's four binding boundaries (tier-scoped {full,cautious} with
+socketless tier-excluded records; robots.txt honored per-host-per-run-cached,
+404=allow / unreachable-or-4xx-5xx=conservative-deny per RFC 9309;
+attributed FetchRecords for every URL; sequential polite-delay pacing, one
+attempt per URL, byte-capped through net.fetch_bytes). Stdlib extraction
+(Pax's ruling): first-title capture, <article>-scope-then-paragraphs chooser,
+script/style/svg dropped WITH content, chrome (nav/header/footer/aside/form)
+excluded from prose, paywall-marker + length-floor + link-density
+classification into the closed outcome vocabulary (ok / robots-denied /
+paywall-suspected / empty / error / tier-excluded). `fetch_stats()` is the
+week-1 readout seed (success rate over ATTEMPTED only — policy exclusions
+never dilute the <30% dep trigger).
+**Cap change landed:** BUDGET_CAP_USD_PER_RUN default 0.50 -> 0.25
+(config.py with the degradation-ladder ordering + escalation condition in
+the docstring; .env.example; README; SETUP; doctor now WARNs on a cap pinned
+above the recommended default). **The principal's own .env still pins 0.50 —
+flagged to the CoS; agents never edit .env.**
+**Fixtures:** tests/fixtures/analysis/ — clean_article.html is a REAL saved
+page (The Hill NATO-summit story, fetched by the disclosed live probe);
+paywall/js-shell/hostile are synthetic BY DECISION (capturing a real paywall
+would require fetching a paywalled outlet — the act the tier boundary
+prohibits). Hostile fixture pins Rook's demand both ways: body-prose payload
+SURVIVES extraction (the M2 validator must see it), script payload NEVER
+surfaces.
+**Live probe (disclosed):** 3 real articles (The Hill, Al Jazeera, CNBC) +
+1 tier-exclusion (WaPo, no socket): 3/3 attempted OK, 2.2–3.0k chars each,
+$0 spend, zero consumption events. Migration 0008: NOT landed here —
+sequenced to M2 with persistence, per the engineering transcript.
+**Slot-3 reconciliation (my confirmation, as flagged in the design brief):**
+CONFIRMED workable — the fetcher is tier-agnostic (callers pass tier), and
+the analyst's medium-vs-quick call for slot 3 binds at M2's loop level; no
+pipeline-contract complication at this layer.
+**QA pins flipped (mechanical, intended changes):** cap default 0.25 in
+test_config_guards (default + INFO text; PASS case split into
+at-or-below-default PASS + above-default WARN — new behavior pinned),
+test_repo_hygiene (.env.example value), test_doctor_offline (template-run
+"default 0.25").
