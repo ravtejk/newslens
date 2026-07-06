@@ -278,9 +278,10 @@ NOTES-M2.md milestone records, not just README.
     trigger, follow button with aria-pressed) — pins the trust surface against
     webui edits without pinning pixels. Plus dated-delta notes in webui.py's
     header pointing at DIRECTION-v3.
-28. Carried M6 minors: corrections presence check (when the pipeline exists);
-    keyless-refusal log asymmetry; numeral {2,3} exemption; caveat-paraphrase
-    double-render edge.
+28. Carried M6 minors: corrections presence check (when the pipeline exists)
+    — STILL CARRIED; ~~keyless-refusal log asymmetry; numeral {2,3}
+    exemption; caveat-paraphrase double-render edge~~ DONE (backlog-minors
+    batch 2026-07-06).
 
 ## Milestone 8 record (2026-07-05) — hardening, the readout, the human handoff
 
@@ -537,3 +538,30 @@ open still heavy) — warn-documented, ear-test decides significance.
 kokoro $0/4.8min/65s, openai $0.067/4.4min/50s; 4.4x-vs-14x note included —
 principal's ruling). Milestone spend: $0.061 (regen) + $0.067 (openai TTS)
 = $0.128.
+
+## Backlog-minors batch record (2026-07-06)
+
+**1. Tap-outside-popup dismisses** (webui.py, shared component, single-
+pattern rule): scrim tap routes through ONE dismissPopup(); the binding
+nuance implemented as DIRTY = NO-OP (judgment, disclosed: mis-taps are
+common on mobile, Cancel stays one tap away, and no-op is the least
+destructive reading of "never eat unsaved text silently"). Dirty = any
+field differing from its OPENING snapshot (dataset.initialValue set in
+openPopup — prefilled edit-note text is clean until touched). Escape
+parity: Escape now uses the same guarded path (it previously ate typed
+text unconditionally — the exact bug class).
+**2. Topic-add autofill** (server.py): native datalist (no custom widget;
+no-JS/no-support degrades to the plain input, Enter flow unchanged);
+vocabulary = current interests + every coverage-matched tag name from
+persisted slots (_topic_vocabulary).
+**3. Writer-add autofill, v1-scoped** (server.py): datalist over RECALL
+only — followed analysts + writer-shaped sources, both display forms
+offered; resolution stays P4; paste-a-link untouched.
+**4. NOTES 28 minors:** 28a keyless refusal logs symmetrically (check moved
+inside the logged region; liveness pin); 28b the {2,3} exemption became
+principled (enumeration numerals up to the story count; old pin flipped +
+slot-bounded pin added); 28c caveat paraphrases in the outro are REMOVED
+before the frozen append (stem-match >=3 of outlet/wire/source/count/truth;
+disclosed; never two caveats).
+**5. Sweep:** Topics/Writers hint copy updated to describe the suggestions
+honestly.

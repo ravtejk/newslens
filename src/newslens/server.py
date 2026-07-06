@@ -720,6 +720,45 @@ def _dossier(t: Dict, actions: str, meta: str) -> str:
 </div>"""
 
 
+def _topic_vocabulary(con: sqlite3.Connection, cfg) -> List[str]:
+    """Backlog-minors item 2: the autofill vocabulary — the principal's
+    current interests (curated baseline) + every tag name coverage has
+    matched (accumulated in the persisted slots). Sorted, deduped."""
+    vocab = set(cfg.interests_broad) | set(cfg.interests_granular)
+    for r in con.execute("SELECT story_slots FROM briefings"):
+        try:
+            slots = json.loads(r["story_slots"] or "[]")
+        except ValueError:
+            continue
+        for s in slots if isinstance(slots, list) else []:
+            for tg in s.get("matched_tags") or []:
+                if isinstance(tg, dict) and tg.get("name"):
+                    vocab.add(tg["name"])
+    return sorted(vocab, key=str.lower)
+
+
+def _writer_vocabulary(cfg) -> List[str]:
+    """Backlog-minors item 3, v1-scoped: RECALL of what the system already
+    knows — followed analysts plus writer-shaped feed entries already in
+    sources.yaml ("Pub (Name)" pattern). Name->feed RESOLUTION stays P4;
+    this suggests, never resolves. Both display forms offered so either
+    matches as the principal types."""
+    names = set()
+    for s in cfg.sources:
+        m = re.match(r"^(.*)\s+\((.+)\)\s*$", s.name)
+        if s.followed_analyst or m:
+            names.add(s.name)
+            if m:
+                names.add(f"{m.group(2)} — {m.group(1)}")
+    return sorted(names, key=str.lower)
+
+
+def _datalist(list_id: str, options: List[str]) -> str:
+    return (f'<datalist id="{_e(list_id)}">'
+            + "".join(f"<option value={_e_attr(o)}></option>" for o in options)
+            + "</datalist>")
+
+
 def _render_following(con: sqlite3.Connection) -> str:
     g = _following_rows(con)
     cfg = config.load_sources()
@@ -765,12 +804,16 @@ def _render_following(con: sqlite3.Connection) -> str:
                 f'<button class="token-remove" aria-label="Remove {_e(label or name)}"'
                 f' onclick="removeToken({_e(_js_str(kind))}, {_e(_js_str(name))}, this)">×</button></span>')
 
+    # item 2: native datalist (degrades to the plain input with no JS and
+    # on browsers that ignore it — the Enter flow is unchanged either way)
     topics = [
         '<input class="token-search" type="text" placeholder="Search or add a topic…"'
-        ' aria-label="Search or add a topic"'
+        ' aria-label="Search or add a topic" list="topic-vocab"'
         ' onkeydown="if(event.key===\'Enter\'){openAddTopic(this.value); this.value=\'\';}">',
-        '<p class="token-search-hint">Type a topic and press Enter to add it '
-        'as a broad or specific interest.</p>',
+        _datalist("topic-vocab", _topic_vocabulary(con, cfg)),
+        '<p class="token-search-hint">Type a topic — suggestions draw from '
+        'your interests and everything coverage has matched so far; press '
+        'Enter to add.</p>',
     ]
     for group, label in ((cfg.interests_broad, "Broad"),
                          (cfg.interests_granular, "Specific")):
@@ -783,10 +826,13 @@ def _render_following(con: sqlite3.Connection) -> str:
 
     writers = [
         '<input class="token-search" type="text" placeholder="Search or add a writer…"'
-        ' aria-label="Search or add a writer"'
+        ' aria-label="Search or add a writer" list="writer-vocab"'
         ' onkeydown="if(event.key===\'Enter\'){openAddWriter(this.value); this.value=\'\';}">',
+        _datalist("writer-vocab", _writer_vocabulary(cfg)),
         '<p class="token-search-hint">Following a writer adds their feed to '
-        'your sources and boosts their pieces in ranking.</p>',
+        'your sources and boosts their pieces in ranking. Suggestions recall '
+        'writers the system already knows; adding someone new still takes '
+        'their feed link.</p>',
         '<div class="token-group"><div class="token-list">',
     ]
     followed = cfg.followed_analyst_sources

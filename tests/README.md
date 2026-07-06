@@ -629,3 +629,42 @@ warn-grade-never-hard sweep.
 trailing "dollars": "$2 billion dollars" -> "2 billion dollars dollars"
 in the persisted script/wav — the tics class P3 exists to kill. Stable
 under re-application (no amplifier); fix contract in the docstring.
+
+## Backlog-minors batch (QA)
+
+Files: implementer pins in test_generate.py/test_p3_script.py (3, incl.
+two liveness reds — both VERIFIED to bite via probe-and-restore, hashes
+byte-identical); QA `test_backlog_qa.py` (13 green + 1 KNOWN-RED). Floor
+after this pass: **881 green + 1 known-red** (was 868). Events 11
+before/after — zero from QA.
+
+INCIDENT (disclosed): during the first 28a liveness bite, a `git
+checkout -- src/newslens/generate.py` in my restore fallback wiped the
+implementer's UNCOMMITTED batch hunks in that one file. Recovered by
+reconstructing all three hunks verbatim from the full diff captured in
+my session transcript; equivalence verified behaviorally — the whole 868
+floor incl. the implementer's own three batch pins passes against the
+reconstruction, and both liveness bites fire correctly. server.py,
+webui.py, NOTES, and all test files were never touched. Standing lesson
+applied: no git working-tree commands near uncommitted product files;
+probe/restore is python-anchored-replacement only, hash-verified.
+
+Landed: dirty-guard structural pins (snapshot-on-open, value-diff dirty
+test — the property that catches datalist selections without keystrokes;
+dismiss order; scrim + Escape both routed through the guard, the old
+closePopup(p.id) eater gone; explicit Cancel exits ungated; no cross-
+popup snapshot state) + the live-interaction browser-pass item recorded;
+vocabulary endpoints (dedupe/order/case-variant pinned, hostile tag names
+escaped in datalist output, writer recall shapes incl. the greedy-paren
+edge); 28b both directions with the GATE CORRECTION (the bound narrows
+1-slot days but WIDENS 5-slot days: invented '4'/'5' now exempt, '1'
+everywhere — implementer's docstring honest, dispatch's only-narrows
+framing wrong); 28c near-miss boundaries both sides, disclosure-quotes-
+the-paraphrase, never-doubled invariant, and the verbatim-caveat GATING
+pin (BUG20 candidate withdrawn: the block is gated on caveat-absence,
+so the frozen text can't be its own removal target).
+
+**KNOWN-RED — BUG19:** 28c stems match as substrings (country->count,
+wired->wire, outsourced->source): a legitimate outro sentence with three
+artifact hits is REMOVED from the persisted script. Word-boundary fix
+contract in the docstring; near-miss greens are the keep-green set.

@@ -974,6 +974,28 @@ def validate_script(
 
     if SPOKEN_CAVEAT.lower() not in low:
         body = body.rstrip()
+        # NOTES 28c: a PARAPHRASED caveat plus the verbatim append used to
+        # voice two caveats back to back. Detect a paraphrase in the outro
+        # region (a sentence carrying >=3 of the caveat's distinctive
+        # stems) and remove it before appending the frozen text.
+        tail_start = max(0, len(body) - 700)
+        tail = body[tail_start:]
+        # BUG19: stems match on WORD BOUNDARIES (plural-tolerant) — the
+        # substring version ate legitimate prose (country->count,
+        # wired->wire, outsourced->source).
+        stem_res = (re.compile(r"\boutlets?\b"), re.compile(r"\bwires?\b"),
+                    re.compile(r"\bsources?\b"), re.compile(r"\bcounts?\b"),
+                    re.compile(r"\btruth\b"))
+        for sent in re.split(r"(?<=[.!?])\s+", tail):
+            s_low = sent.lower()
+            if sum(1 for rx in stem_res if rx.search(s_low)) >= 3 and len(sent) > 40:
+                body = (body[:tail_start] + tail.replace(sent, "").strip())
+                warnings.append(
+                    "spoken caveat PARAPHRASE removed — replaced with the "
+                    "frozen text (NOTES 28c; paraphrase: "
+                    f"\"{sent[:60]}...\")")
+                low = body.lower()
+                break
         if SIGNOFF.lower() in low:
             body = re.sub(re.escape(SIGNOFF), "", body, flags=re.I).rstrip()
         body += "\n\n" + SPOKEN_CAVEAT + "\n\n" + SIGNOFF
@@ -990,7 +1012,12 @@ def validate_script(
     # for the rounded phrase, not for new precise figures).
     narrative_nums = {x.replace(",", "").rstrip(".") for x in _NUM_RE.findall(narrative)}
     script_nums = {x.replace(",", "").rstrip(".") for x in _NUM_RE.findall(body)}
-    loose = sorted(x for x in script_nums - narrative_nums if x not in {"2", "3"})
+    # NOTES 28b: the old blanket {2, 3} exemption becomes principled —
+    # enumeration-of-structure numerals (counts up to the story count:
+    # "Two quick ones", the menu's shape) are script furniture, not facts;
+    # anything else single-digit is checked like every other numeral.
+    enum_ok = {str(i) for i in range(1, len(inputs["slots"]) + 1)}
+    loose = sorted(x for x in script_nums - narrative_nums if x not in enum_ok)
     if loose:
         warnings.append(f"script numerals absent from narrative (review): {loose[:8]}")
     # Hedge preservation (§5.9 #8, coarse): "will" in script needs "will" in narrative.
@@ -1150,11 +1177,10 @@ def run_generate(
     src_env = env if env is not None else os.environ
     date = date or ranking.local_today()
     key = (src_env.get("OPENAI_API_KEY") or "").strip()
-    if not key:
-        raise GenerateError(
-            "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
-            "then add to .env (generation is an LLM step; there is no keyless mode)"
-        )
+    # NOTES 28a (keyless-refusal log asymmetry): the check itself moved into
+    # the logged region below — a keyless refusal now lands in
+    # generation_log.jsonl exactly like every other failed run, instead of
+    # being the one failure the record never saw.
 
     scheduled = ACTIVE_VOICE  # A1: alternation ended; A is the voice of record
     variant = (variant_override or scheduled).upper()
@@ -1210,6 +1236,13 @@ def _run_generate_body(
     report: GenReport, refresh: bool, no_threads: bool = False
 ) -> GenReport:
     from . import ingest
+
+    if not key:
+        # inside the logged region — see the NOTES 28a note at the caller
+        raise GenerateError(
+            "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
+            "then add to .env (generation is an LLM step; there is no keyless mode)"
+        )
 
     if refresh:
         try:

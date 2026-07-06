@@ -117,3 +117,40 @@ def test_LIVENESS_tts_safe_pass_reaches_the_persisted_script(
         assert "OPEC plus agreed to move." in row["script_text"]
     finally:
         con.close()
+
+
+# --- Backlog-minors batch: NOTES 28a/28c liveness pins ----------------------
+
+def test_28a_keyless_refusal_lands_in_the_generation_log(tmp_paths):
+    """The one failure the record never saw: a keyless run now logs a failed
+    entry exactly like every other GenerateError (fails without the check
+    living inside the logged region)."""
+    from newslens import paths
+    db.migrate()
+    con = db.connect()
+    try:
+        with pytest.raises(generate.GenerateError, match="OPENAI_API_KEY"):
+            generate.run_generate(date=DATE, con=con, env={}, refresh=False)
+        log = (paths.DATA_DIR / "generation_log.jsonl").read_text(encoding="utf-8")
+        entries = [json.loads(l) for l in log.splitlines() if l.strip()]
+        assert any(e.get("status") == "failed"
+                   and "OPENAI_API_KEY not set" in (e.get("error") or "")
+                   for e in entries)
+    finally:
+        con.close()
+
+
+def test_28c_caveat_paraphrase_is_replaced_never_doubled():
+    from test_generate import _inputs_for, slot
+    paraphrase = ("Remember that outlet counts just measure pickup across "
+                  "sources and are no guarantee of truth or wire independence.")
+    script = ("Something happened today. It's Tuesday, July 7. Here's what "
+              "matters today. Details arrived. What I'm watching: the vote. "
+              + paraphrase + " " + generate.SIGNOFF + " " + "pad " * 40)
+    body, _, warns = generate.validate_script(
+        script, "Something happened. Details arrived. The vote.",
+        _inputs_for([slot(1)]))
+    assert generate.SPOKEN_CAVEAT in body                 # frozen text present
+    assert "no guarantee of truth" not in body            # paraphrase gone
+    assert any("PARAPHRASE removed" in w for w in warns)  # disclosed
+    assert body.count("outlet counts measure") == 1       # never doubled

@@ -638,7 +638,12 @@ def test_frozen_caveat_and_signoff_appended_with_disclosure():
 
 
 def test_fact_subset_and_hedge_warn_grade():
-    slots = [slot(1)]
+    # NOTES 28b (backlog-minors batch): the blanket {2,3} exemption became
+    # PRINCIPLED — enumeration numerals up to the story count are script
+    # furniture; beyond the count they check like any figure. Three slots
+    # here: "2" and "3" are structure ("two quick ones..."); on a 1-slot
+    # day they would flag.
+    slots = [slot(1), slot(2), slot(3)]
     narrative = "The plan allocates 40 billion and might pass."
     script = (
         "The plan allocates 40 billion — and a new figure, 7500, appears here. "
@@ -649,8 +654,19 @@ def test_fact_subset_and_hedge_warn_grade():
     assert hard == []
     joined = " | ".join(warns)
     assert "script numerals absent from narrative" in joined and "7500" in joined
-    assert "'2'" not in joined and "'3'" not in joined  # enumeration exemption
+    assert "'2'" not in joined and "'3'" not in joined  # enumeration <= slot count
     assert "hedge check" in joined  # will vs might
+
+
+def test_numeral_exemption_is_slot_bounded_not_blanket():
+    """NOTES 28b: on a 1-slot day an invented '3' is a real loose numeral —
+    the old blanket exemption would have hidden it."""
+    slots = [slot(1)]
+    narrative = "One story today."
+    script = ("One story today, with 3 invented reasons. "
+              + generate.SPOKEN_CAVEAT + " " + generate.SIGNOFF + " " + "pad " * 40)
+    _, _, warns = generate.validate_script(script, narrative, _inputs_for(slots))
+    assert any("'3'" in w for w in warns)
 
 
 # --- script scaling (M5 fix) -----------------------------------------------------------

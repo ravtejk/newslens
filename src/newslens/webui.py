@@ -535,6 +535,12 @@ function openPopup(id) {
   lastFocusedBeforePopup = document.activeElement;
   var el = document.getElementById(id);
   el.classList.add('open');
+  /* Backlog-minors item 1: snapshot each field's opening value so the
+     dirty check respects PRE-FILLED popups (edit-note opens with the
+     existing note — that text is clean until touched). */
+  el.querySelectorAll('input[type="text"], textarea').forEach(function (f) {
+    f.dataset.initialValue = f.value;
+  });
   var firstField = el.querySelector('input, textarea, button');
   if (firstField) firstField.focus();
 }
@@ -542,6 +548,30 @@ function closePopup(id) {
   document.getElementById(id).classList.remove('open');
   if (lastFocusedBeforePopup) lastFocusedBeforePopup.focus();
 }
+/* Backlog-minors item 1 — tap-outside dismisses, built ONCE in the shared
+   component (design round 4's single-pattern rule). The recorded nuance is
+   binding: a popup with unsaved typed input never dies silently — dirty =
+   NO-OP (judgment call, disclosed: a mis-tap on the scrim is common on
+   mobile and Cancel stays one tap away; no-op is the least destructive).
+   Escape parity: the same guard, the same single path. */
+function popupIsDirty(el) {
+  var fields = el.querySelectorAll('input[type="text"], textarea');
+  for (var i = 0; i < fields.length; i++) {
+    if (fields[i].value !== (fields[i].dataset.initialValue || '')) return true;
+  }
+  return false;
+}
+function dismissPopup(id) {
+  var el = document.getElementById(id);
+  if (!el || !el.classList.contains('open')) return;
+  if (popupIsDirty(el)) return;  // unsaved text: no-op, never silent loss
+  closePopup(id);
+}
+document.addEventListener('click', function (e) {
+  if (e.target.classList && e.target.classList.contains('popup-scrim')) {
+    dismissPopup(e.target.id);
+  }
+});
 var noteTopic = null;
 function openEditNote(topicName, existing) {
   noteTopic = topicName;
@@ -632,6 +662,8 @@ if (document.getElementById('gen-running')) { pollGeneration(); }
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Escape') return;
   closeSettings();
-  document.querySelectorAll('.popup-scrim.open').forEach(function (p) { closePopup(p.id); });
+  /* item 1 parity: Escape uses the SAME dirty-guarded path — Escape
+     silently eating typed text was the exact bug class being fixed. */
+  document.querySelectorAll('.popup-scrim.open').forEach(function (p) { dismissPopup(p.id); });
 });
 """
