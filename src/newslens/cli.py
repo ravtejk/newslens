@@ -88,6 +88,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     mem_note.add_argument("topic")
     mem_note.add_argument("text")
 
+    analyze_p = sub.add_parser(
+        "analyze",
+        help="M9: analysis briefs for the date's depth-tier stories "
+             "(fetch + Sonar + cited synthesis; briefing record untouched)")
+    analyze_p.add_argument("--date", default=None,
+                           help="briefing date to analyze (default: latest)")
+
     sub.add_parser(
         "diagnose",
         help="read-only readout: the day-30 falsifier + generation record, "
@@ -150,6 +157,28 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "memory":
         return _memory_command(args)
+
+    if args.command == "analyze":
+        from . import analysis, db as db_mod
+
+        db_mod.migrate()
+        try:
+            report = analysis.run_analysis(date=args.date)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"analysis — {report['date']} · model {report['model']} · "
+              f"${report['total_usd']:.4f}")
+        for s in report["per_story"]:
+            print(f"  slot {s['slot']} ({s['tier']}): {s['outcome']} — "
+                  f"{s['detail'][:100]} (fetch {s['fetch_ok']}/{s['fetch_attempted']},"
+                  f" sonar: {s['sonar'][:40]}, ${s['cost_usd']:.4f})")
+        for w in report["warnings"]:
+            print(f"  ⚠ {w}")
+        if report["derating"]:
+            print("  !! DERATING under the cap — escalation-flag class "
+                  "(never absorbed silently)")
+        return 0
 
     if args.command == "diagnose":
         from . import diagnose

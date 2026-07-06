@@ -482,3 +482,63 @@ pass as your two pending rate pins):
   synthesis with the INFO marker) or a settings tts_engine=openai sources
   fixture (missing local engine is INFO in that mode). audio paths resolve
   dynamically from paths.DATA_DIR (no import-order dependence).
+
+## M9 milestone 2 — the analysis call + citation checking (QA)
+
+Files: implementer `test_analysis_brief.py` (18, audited genuine);
+QA `test_analysis_brief_qa.py` (57 green + 13 KNOWN-RED). Floor after this
+pass: **738 green + 13 known-red** (was 681). Fully offline; model/Sonar
+injected fakes; live DB rows (11 events, 2 valid briefs) untouched.
+
+KNOWN-RED ledger (fix contracts in each test's docstring):
+- **BUG10** (7 tests) — `validate_brief` not total over adversarial JSON:
+  bare-string pinned entries / numeric fields crash with
+  AttributeError:648 / TypeError:639,690,796 instead of `BriefRejected`;
+  at run level the PAID synthesis call dies unlogged (BUG-6 class).
+- **BUG11** (2) — quote checker sees ASCII straight quotes only: curly-quoted
+  fabrications invisible (false PASS); straight-vs-curly apostrophe glyph
+  mismatch false-REJECTS verbatim quotes. Fix: symmetric glyph
+  normalization + curly-pair detection. Direction-safety pinned green by
+  `test_curly_verbatim_quote_passes_now_and_must_keep_passing_after_the_fix`.
+- **BUG12** (1) — discrepancy sides citing the IDENTICAL key pass as
+  two-sided; ADR-0012 lists one-sided discrepancies as hard-reject.
+- **BUG13** (1) — `call_analysis_model` retry under-reports spend: attempt 1
+  pays, only attempt 2's cost returned (cap honesty).
+- **BUG14** (2) — 0008 claims append-only, no RAISE(ABORT) triggers
+  (BUG-5 precedent): forensic rejected rows UPDATE/DELETE-able. Fix needs a
+  path onto the already-applied live DB, not just fresh installs.
+
+Flagged-as-actual (frozen, gate-reported, not red): render_material breaks
+at first overflow (tail drops — prior briefings can vanish from the model's
+view on long-article days); no Sonar-vs-cluster URL dedup (same article as
+S1 AND R1 — feeds BUG12); model-claimed `provenance` inside discrepancy
+side dicts survives into the persisted artifact (render layer strips it —
+pinned); material order S,R,C,P vs manifest order S,C,R,P (two deliberate
+orders, both pinned). Unchecked-quote surfaces (notes_for_writer, unknowns/
+watch prose, discrepancy values) reported to gate, not pinned.
+
+### M9-M2 closing pass (gate APPROVE + fix loop verified)
+
+BUG10-BUG14 all fixed and flipped green (751/751 verified before pins):
+`_require_str` totality + a run-level belt (any validator escape → disclosed
+'rejected', persisted, logged), symmetric glyph normalization + curly-pair
+detection (direction-safety pins held), identical-cite-set discrepancies
+reject, retry cost accumulates every paid attempt, and migration 0009 lands
+the trigger pair on live + fresh DBs. The three gate residuals verified
+faithful and pinned both directions: empty-ledger countable warning,
+artifact-wide quote checking (notes_for_writer, unknowns' three fields,
+watch observable+settles, discrepancy values — glyph-normalized on all),
+P-slice reservation (min(total_P, budget//6), order still S,R,C,P; my
+tail-drop freeze consciously flipped by the gate — adopted). 0009 also adds
+`analysis_retrieval` receipts (persisted per brief incl. rejected;
+append-only; QA added its coverage — it arrived with none). Editor-routed
+fix items (F2 same-referent, F4 modal-basis, G3 recency re-basis, item-10
+arc lint) verified disclosed; editorial pins stay the Editor's lane.
+
+**Floor: 765 green + 3 KNOWN-RED (BUG15).** BUG15 (closing-pass find):
+render_material's S/R/C loop starves single-non-P-source maps to an EMPTY
+or P-only material block (no header room in share, no first-entry
+admission) — SCR gate already passed, so a no-quote brief citing the
+invisible article's REAL keys validates: fake receipts with code-supplied
+keys. The with-P case is a residual-3 regression; no-P is inherited. Fix
+contract in the test docstring; the residual-3 pins must keep passing.

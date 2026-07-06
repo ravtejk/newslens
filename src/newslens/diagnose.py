@@ -165,6 +165,8 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
 
     # ---------------- Generation record ----------------
     entries, bad_lines = _load_entries()
+    analysis_entries = [e for e in entries if e.get("stage") == "analysis"]
+    entries = [e for e in entries if e.get("stage") != "analysis"]
     real = [e for e in entries if e.get("date") and e.get("status")]
     samples = [e for e in real if e.get("sample")]
     record = [e for e in real if not e.get("sample")]
@@ -253,6 +255,30 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
              "noise included):")
         for label, n in sorted(bucket_counts.items(), key=lambda kv: -kv[1]):
             push(f"    {n:>3} × {label}")
+
+    # ---------------- The Analyst (M9) ----------------
+    if analysis_entries:
+        push("")
+        push("THE ANALYST (M9; analysis-stage entries in generation_log)")
+        stories = [s for e in analysis_entries for s in e.get("per_story", [])]
+        outc: Dict[str, int] = {}
+        for s in stories:
+            outc[s.get("outcome", "?")] = outc.get(s.get("outcome", "?"), 0) + 1
+        push(f"  runs: {len(analysis_entries)} · stories analyzed: "
+             f"{len(stories)} — " + " · ".join(f"{k} {v}" for k, v in
+                                               sorted(outc.items())))
+        att = sum(s.get("fetch_attempted", 0) for s in stories)
+        ok = sum(s.get("fetch_ok", 0) for s in stories)
+        if att:
+            push(f"  extraction: {ok}/{att} attempted fetches ok "
+                 f"({ok/att:.0%}) — the week-1 readout; <30% brings the "
+                 "dep decision forward (pre-registered)")
+        cost = sum(e.get("total_usd") or 0 for e in analysis_entries)
+        push(f"  analysis cost: ${cost:.4f} across {len(analysis_entries)} run(s)")
+        der = sum(1 for e in analysis_entries if e.get("derating"))
+        if der:
+            push(f"  !! derating fired in {der} run(s) — escalation-flag "
+                 "class under the $0.25 cap")
 
     push("")
     push("Interpretation guardrails: construction-period numbers describe "

@@ -14,10 +14,16 @@ day's tiered briefing and voices it; `newslens serve` is the daily surface;
 verdicts will read; `PREFLIGHT.md` is the human engineer's review guide
 (org law: model-reviewed-model needs human eyes before anything public).
 **In construction: M9 "the Analyst"** (approved 2026-07-06) — milestone 1
-landed the retrieval leg: tier-scoped, robots-respecting, attributed,
-single-user-paced full-text fetch of cluster-linked articles with per-fetch
-instrumentation (`src/newslens/analysis.py`; the analysis call + brief land
-at milestones 2–3; cap cut to $0.25/run per the ruling).
+landed the retrieval leg (tier-scoped, robots-respecting, attributed,
+single-user-paced fetch with per-fetch instrumentation); milestone 2 landed
+the organ itself: `newslens analyze` produces one cited analysis brief per
+depth-tier story (fetch + Sonar verification + gpt-4o synthesis), validated
+deterministically — fabricated citations hard-reject, quotes must be
+verbatim substrings, provenance tiers and source tables are code-computed,
+own-voice inference is dropped structurally (borrowed-inference rule) —
+and persisted to `analysis_briefs` (migration 0008). Reader copy says
+"cited," never "verified." Writer integration + the deep view land at
+milestone 3; cap $0.25/run per the ruling (first live run: $0.042).
 What
 exists: the schema, the doctor, working tier-1 ingestion (`newslens ingest` —
 idempotent, per-feed graceful degradation), the editorial pass (`newslens

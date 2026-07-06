@@ -387,3 +387,69 @@ test_config_guards (default + INFO text; PASS case split into
 at-or-below-default PASS + above-default WARN — new behavior pinned),
 test_repo_hygiene (.env.example value), test_doctor_offline (template-run
 "default 0.25").
+
+## M9 "the Analyst" — milestone 2 record (2026-07-06): the organ
+
+**Landed:** migration 0008 (analysis_briefs — append-only, rejected briefs
+persisted for forensics, readers take newest valid); the analysis stage
+(`run_analysis`/`analyze_story` in analysis.py + `newslens analyze` verb):
+M1 fetch -> per-story Sonar verification (discovery's call shape) ->
+gpt-4o synthesis (ANALYSIS_MODEL seam, fallback rung gpt-4o-mini) ->
+deterministic validation -> persistence + stage-logged costs. Contract §5
+sections as data; prompt carries the borrowed-inference rule and the
+data-never-instructions armor. Validation: fabricated keys / non-verbatim
+quotes / uncited pinned facts / one-sided discrepancies / generic unknowns
+= HARD REJECT; own-voice effects dropped-with-disclosure; provenance +
+source table CODE-computed (ADR-0012). Ladder: Sonar skipped first, briefs
+skipped next (derating = escalation flag), briefing itself untouchable from
+this stage. diagnose gains THE ANALYST section (extraction rate = the
+week-1 <30% readout).
+**Checkpoint run (live, 2026-07-05 edition):** 2/2 depth briefs VALID,
+$0.0424 total, 7/7 extraction, Sonar 8+8 results — and a REAL discrepancy
+caught and rendered (meeting date Jul 8 [rferl] vs Wednesday [cluster]),
+never averaged. Milestone LLM spend incl. dev loops: $0.042 (estimate was
+$0.10-0.20; first live run validated clean, no retries needed).
+**QA pins flipped (mechanical):** migration cascade for 0008 (test_migrations
+list+tables, test_cli count 7->8, test_doctor_offline behind-by + scratch
+tables, test_preinstall_doctor scratch tables).
+**For M3:** render_writer_view is the writer's input block;
+latest_valid_brief(con, date, slot) is the view's read; demoted-quick
+outcomes must reach the writer's tier assignment; reader rendering excludes
+notes_for_writer and renders citations as outlet-named links; footer:
+"Based on N sources retrieved <time>" + degradation label; "cited" never
+"verified".
+
+## M9-M2 fix loop 1 record (2026-07-06)
+
+**QA's five bugs — 13 reds flipped green:** BUG11 glyph-symmetric quote
+check (curly-pair detection + normalization both sides; direction-safe);
+BUG10 validator totality (_require_str at every text boundary, dict guards
+on pinned/discrepancy entries, run-level belt: validator escape = disclosed
+'rejected' with a log entry, never a crash after paid synthesis); BUG14
+migration 0009 append-only triggers on analysis_briefs (reaches the LIVE db;
+0004 precedent); BUG12 identical-cite-set discrepancies reject + Sonar-vs-
+cluster URL dedup at map build (QA's frozen test CONSCIOUSLY FLIPPED to pin
+the new behavior, per its own docstring); BUG13 both paid attempts' costs
+accumulate into the returned cost.
+**Editor's five (their report quoted in the diffs):** officeholder fidelity
+prompt rule (F1; deterministic lint SKIPPED as fuzzy — needs entity
+extraction, per the don't-force-it clause); same-referent date
+normalization code-owned (F2: weekday==calendar-date within ±10d of the
+edition drops the entry, disclosed); attributed-take recency (G3:
+take_date field + validator re-basis to historical-pattern-with-date when
+>7d older than the edition); basis lint (F4: modal text under mechanical →
+borrowed-inference drop path); arc integrity (item 10: arc citing no P-key
+while one exists is dropped, disclosed — the delta feeds the writer
+mechanically).
+**Receipts persist (item 11):** analysis_retrieval table (0009), rows
+written with every brief (valid AND rejected); live: 23 rows / 40KB for
+2 briefs — ~1-3MB/month. Hand-traces re-check stored text, never re-fetch.
+**Passing fix (disclosed):** report status now ok/partial/failed
+(demoted-quick counts as a decision); was 'ok' even when all stories failed.
+**Live re-run ($0.0435):** F1 fixed in the wild ("President Donald Trump",
+source wording); arc cites P1 with a named delta; take_dates present.
+HONEST RESIDUE: slot-2's 188k-vs-206k discrepancy (G2 tranche class)
+persists — the prompt rule alone didn't stop it and the deterministic
+same-referent rule covers dates, not period-figures; Editor's hand-trace
+lane catches it meanwhile; if the week shows recurrence, ledger sides may
+need their own dated-referent field (day-14 item, on record).

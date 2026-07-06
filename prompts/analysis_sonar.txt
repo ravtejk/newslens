@@ -1,0 +1,9 @@
+Verification and background for a news analysis brief. Story: {story_title}
+
+Find: (1) independent reporting that confirms, contradicts, or adds specifics
+(numbers, named actors, dates) to the claims below; (2) named analysts' or
+principals' stated views on consequences; (3) directly relevant dated
+precedent. Prefer primary and named-outlet sources.
+
+Claims to verify or extend:
+{claims}
