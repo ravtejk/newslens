@@ -531,7 +531,7 @@ def _js_str(v: str) -> str:
 
 
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
-                  active_topics: set) -> str:
+                  active_topics: set, has_file: bool = False) -> str:
     h = {"full": "h2", "medium": "h3"}.get(tier, "h4")
     parts = [f'<article class="story{" quick-hit" if tier == "quick" else ""}" id="story-{i}">']
 
@@ -574,6 +574,15 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     parts.append(
         f'<p class="meta-footnote">{_e(meta)}. Here for: {_e(here_for)}.</p>')
 
+    # M9-M3 entry affordance — three binding states (v4 addendum): present
+    # (valid brief), absent (quick tier), degraded-hidden (failed brief —
+    # renders IDENTICALLY to absent; total absence is the signal).
+    if has_file:
+        parts.append(
+            f'<p class="deep-view-entry"><a href="#" '
+            f'onclick="openDeepView(\'story-{i}\', event)">→ The full '
+            f'picture</a></p>')
+
     topic = slot.get("story_title") or st.get("headline") or ""
     followed = topic.lower() in active_topics
     pressed = "true" if followed else "false"
@@ -592,7 +601,8 @@ def _e_attr(v: str) -> str:
 
 
 def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
-                  gen_state: Dict[str, str]) -> str:
+                  gen_state: Dict[str, str],
+                  briefs: Optional[Dict[int, Dict]] = None) -> str:
     if gen_state["state"] == "running":
         return """
 <div class="state-panel" id="gen-running">
@@ -660,7 +670,8 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
     for i, st in enumerate(stories):
         slot = slots[i] if i < len(slots) else {}
         tier = tiers[i] if i < len(tiers) else ("full" if i == 0 else "medium" if i <= 2 else "quick")
-        html.append(_render_story(i, st, slot, tier, active))
+        html.append(_render_story(i, st, slot, tier, active,
+                                  has_file=(i + 1) in (briefs or {})))
 
     # Footer disclosure (addendum #3): quiet line; window/caveat/cost a tap away
     gen_local = _fmt_local(row["generated_at"])
@@ -883,6 +894,231 @@ def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict]) -> str
 </div>"""
 
 
+def _cite_qualifier(cites: List[str], src_by_key: Dict[str, Dict],
+                    provenance: str = "") -> str:
+    """The v4-addendum trailing qualifier: '(Outlet · N outlets)',
+    '(Outlet · via Sonar)', '(background)'. Typography-carried provenance —
+    never a badge, never an icon (Axel's rationale)."""
+    outlets = []
+    kinds = set()
+    for c in cites:
+        s = src_by_key.get(c)
+        if not s:
+            continue
+        kinds.add(s.get("kind", ""))
+        o = s.get("outlet", "")
+        if o and o not in outlets:
+            outlets.append(o)
+    if not outlets:
+        return "(background)"
+    if not provenance:
+        # BUG16 (M3 gate): ONE provenance path, not two — a caller that has
+        # no provenance string gets it derived from the resolved keys, so
+        # multi-outlet cites can never read "· 1 outlet".
+        provenance = compute_prov_display(cites, src_by_key)
+    names = ", ".join(outlets[:2])
+    if provenance.startswith("cluster-corroborated"):
+        n = provenance.split("(")[-1].split()[0]
+        return f"({names} · {n} outlets)"
+    if provenance == "cluster-single" or (
+            not provenance and kinds & {"cluster-full-text", "cluster-excerpt"}):
+        return f"({names} · 1 outlet)"
+    if provenance.startswith("retrieved-single") or kinds == {"retrieved"}:
+        return f"({names} · via Sonar)"
+    if kinds == {"prior-briefing"}:
+        return f"({names})"
+    return f"({names})"
+
+
+def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
+                      date: str) -> str:
+    """The reader rendering — v6-as-edited is the spec. One artifact, two
+    renderings (§5.3): this template never re-composes, never re-ledes;
+    'cited' never 'verified'; notes_for_writer never renders."""
+    brief = doc.get("brief") or {}
+    header = doc.get("header") or {}
+    src_by_key = {s["key"]: s for s in brief.get("sources", [])}
+
+    out = [f'<section id="view-deep-{story_anchor}" class="view">']
+    out.append('<a class="deep-back" href="#" onclick="closeDeepView(event)">'
+               '← Back to today’s edition</a>')
+    out.append(f'<div class="deep-title-block"><p class="deep-eyebrow">The full '
+               f'picture</p><h1 class="deep-title">{_e(headline)}</h1></div>')
+    jump_items = [("facts", "Facts"), ("ledger", "Ledger"),
+                  ("mechanism", "Mechanism")]
+    if brief.get("arc"):  # no dead anchors (M7 precedent, gate batch)
+        jump_items.append(("arc", "Arc"))
+    jump_items += [("unknowns", "Unknowns"), ("watch", "Watch for"),
+                   ("sources", "Sources")]
+    out.append('<p class="deep-jumplist">'
+               + '<span class="sep">·</span>'.join(
+                   f'<a href="#{story_anchor}-{sid}">{label}</a>'
+                   for sid, label in jump_items)
+               + "</p>")
+
+    # 1. pinned facts
+    lis = []
+    for f in brief.get("pinned_facts", []):
+        q = _cite_qualifier(f.get("cites", []), src_by_key,
+                            compute_prov_display(f.get("cites", []), src_by_key))
+        lis.append(f'<li>{_e(f.get("fact", ""))} '
+                   f'<span class="fact-cite">{_e(q)}</span></li>')
+    out.append(f'<div class="deep-section" id="{story_anchor}-facts">'
+               '<p class="deep-section-label">Pinned facts</p>'
+               f'<ul class="deep-facts-list">{"".join(lis)}</ul></div>')
+
+    # 2. ledger (discrepancies break the one-line pattern deliberately)
+    led = []
+    for e in brief.get("ledger", []):
+        if e.get("discrepancy"):
+            a, b = e.get("a") or {}, e.get("b") or {}
+            qa_ = _cite_qualifier(_cites_list(a), src_by_key)
+            qb_ = _cite_qualifier(_cites_list(b), src_by_key)
+            led.append(
+                '<div class="deep-discrepancy">'
+                f'<p>{_e(str(a.get("value", "")))} '
+                f'<span class="cite">{_e(qa_)}</span></p>'
+                f'<p>{_e(str(b.get("value", "")))} — '
+                '<span class="unresolved-tag">unresolved</span> '
+                f'<span class="cite">{_e(qb_)}</span></p></div>')
+        else:
+            q = _cite_qualifier(e.get("cites", []), src_by_key,
+                                e.get("provenance", ""))
+            led.append(f'<p class="deep-ledger-entry">{_e(e.get("claim", ""))} '
+                       f'<span class="cite">{_e(q)}</span></p>')
+    out.append(f'<div class="deep-section" id="{story_anchor}-ledger">'
+               '<p class="deep-section-label">The ledger</p>'
+               + "".join(led) + "</div>")
+
+    # 3. mechanism (inline [S#] keys become outlet-named qualifiers)
+    mech = brief.get("mechanism", "")
+    mech_display = re.sub(
+        r"\s*\[([SCRP]\d+(?:,\s*[SCRP]\d+)*)\]",
+        lambda m: " " + _e(_cite_qualifier(
+            [k.strip() for k in m.group(1).split(",")], src_by_key)),
+        _e(mech))
+    out.append(f'<div class="deep-section" id="{story_anchor}-mechanism">'
+               '<p class="deep-section-label">Mechanism</p>'
+               f'<p>{mech_display}</p></div>')
+
+    # 4. effects — the citation IS the basis marker (Thread D)
+    effs = []
+    for e in brief.get("effects", []):
+        holder = e.get("holder", "")
+        # v6 grammar (M3 gate): bare "(via Outlet)" — the deviation batch
+        # killed both "(via X · 1 outlet)" and the double-via Sonar shape.
+        via_outlets = []
+        for c in e.get("cites", []):
+            s = src_by_key.get(c)
+            if s and s.get("outlet") and s["outlet"] not in via_outlets:
+                via_outlets.append(s["outlet"])
+        via = f"(via {', '.join(via_outlets[:2])})" if via_outlets else "(background)"
+        lead_in = f"{_e(holder)}: " if holder else ""
+        effs.append(f'<p class="deep-effect">{lead_in}{_e(e.get("effect", ""))} '
+                    f'<span class="cite">{_e(via)}</span></p>')
+    if effs:
+        out.append(f'<div class="deep-section" id="{story_anchor}-effects">'
+                   '<p class="deep-section-label">What could follow</p>'
+                   + "".join(effs) + "</div>")
+
+    # 5. arc
+    arc = brief.get("arc")
+    if arc:
+        verdict = {"advances": "Advances the thread",
+                   "reverses": "Reverses the thread",
+                   "merely-matches": "Merely matches the thread"}.get(
+                       arc.get("delta", ""), _e(str(arc.get("delta", ""))))
+        q = _cite_qualifier(_cites_list(arc), src_by_key)
+        out.append(f'<div class="deep-section" id="{story_anchor}-arc">'
+                   '<p class="deep-section-label">Arc</p>'
+                   f'<span class="deep-arc-verdict">{_e(verdict)}</span>'
+                   f'<p>{_e(arc.get("what_changed", ""))} '
+                   f'<span class="cite">{_e(q)}</span></p></div>')
+
+    # 6. honest unknowns — three beats
+    unk = []
+    for u in brief.get("unknowns", []):
+        unk.append(
+            '<div class="deep-unknown">'
+            f'<p class="unknown-q">{_e(u.get("question", ""))}</p>'
+            f'<span class="unknown-beat">· why it matters: '
+            f'{_e(u.get("why_material", ""))}</span>'
+            f'<span class="unknown-beat">· what would resolve it: '
+            f'{_e(u.get("would_resolve", ""))}</span></div>')
+    out.append(f'<div class="deep-section" id="{story_anchor}-unknowns">'
+               '<p class="deep-section-label">Honest unknowns</p>'
+               + "".join(unk) + "</div>")
+
+    # 7. watch
+    wat = []
+    for w in brief.get("watch", []):
+        settles = w.get("settles", "")
+        tail = (f' <span class="cite">(settles: {_e(settles)})</span>'
+                if settles else "")
+        wat.append(f'<p class="deep-watch-item">{_e(w.get("observable", ""))}'
+                   f'{tail}</p>')
+    out.append(f'<div class="deep-section" id="{story_anchor}-watch">'
+               '<p class="deep-section-label">Watch for</p>'
+               + "".join(wat) + "</div>")
+
+    # 8. source table — rows, real accessible names (Axel)
+    rows = []
+    for s in brief.get("sources", []):
+        when = _fmt_local(s.get("retrieved_at")) if "T" in str(s.get("retrieved_at", "")) \
+            else _e(str(s.get("retrieved_at", "")))
+        kind_label = {"cluster-full-text": "cluster, full text",
+                      "cluster-excerpt": "cluster excerpt",
+                      "retrieved": "retrieved, via Sonar",
+                      "prior-briefing": "prior NewsLens edition"}.get(
+                          s.get("kind", ""), s.get("kind", ""))
+        title = _e(s.get("title", "") or "(untitled)")
+        link = (f'<a href={_e_attr(s["url"])}>{title}</a>' if s.get("url")
+                else title)
+        rows.append('<div class="deep-source-row">'
+                    f'<p class="source-outlet">{_e(s.get("outlet", ""))}</p>'
+                    f'<p class="source-title">{link}</p>'
+                    f'<p class="source-meta">Retrieved {when} · {_e(kind_label)}</p></div>')
+    out.append(f'<div class="deep-section" id="{story_anchor}-sources">'
+               '<p class="deep-section-label">Sources</p>'
+               + "".join(rows) + "</div>")
+
+    # deterministic footer — cited, never verified (Sten's law, binding copy)
+    n_src = len(brief.get("sources", []))
+    degraded = header.get("degraded")
+    deg_line = (f"<p>Limited source access for this story — analysis is "
+                f"based on {n_src} source(s): {_e(degraded)}</p>") if degraded else ""
+    out.append(f'<div class="deep-footer"><p>Based on {n_src} cited '
+               f'source(s) for the {_e(_human_date(date))} edition.</p>'
+               f'{deg_line}'
+               '<p>Citations in this brief are cited, not verified: they '
+               'resolve to real retrieved text, but NewsLens cannot confirm '
+               'every source characterizes its own claim fairly. Treat this '
+               'as receipts, not proof.</p></div>')
+    out.append("</section>")
+    return "".join(out)
+
+
+def _cites_list(d: Dict) -> List[str]:
+    out = []
+    for c in d.get("cites") or []:
+        if isinstance(c, str):
+            out.append(c.strip().strip("[]"))
+    return out
+
+
+def compute_prov_display(cites: List[str], src_by_key: Dict[str, Dict]) -> str:
+    kinds = {src_by_key[c]["kind"] for c in cites if c in src_by_key}
+    outlets = {src_by_key[c]["outlet"] for c in cites
+               if c in src_by_key and src_by_key[c]["kind"].startswith("cluster")}
+    if len(outlets) >= 2:
+        return f"cluster-corroborated ({len(outlets)} outlets)"
+    if len(outlets) == 1:
+        return "cluster-single"
+    if "retrieved" in kinds:
+        return "retrieved-single (x)"
+    return ""
+
+
 def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str, Optional[str]]:
     """Returns (html, briefing_date_rendered)."""
     gen_state = GEN_JOB.snapshot()
@@ -904,15 +1140,30 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
          src="/audio/{_e(row["date"])}.wav"></audio>
 </div>"""
 
+    # M9-M3: newest-valid-wins brief reads; the view renders FROM the
+    # persisted row (never regenerates); date-addressed like briefings.
+    briefs: Dict[int, Dict] = {}
+    deep_sections: List[str] = []
+    if row is not None and gen_state["state"] != "running":
+        stories_probe, _ = _stories_for(row, entry)
+        from . import analysis as analysis_mod
+        for i, st in enumerate(stories_probe):
+            doc = analysis_mod.latest_valid_brief(con, row["date"], i + 1)
+            if doc and doc.get("brief"):
+                briefs[i + 1] = doc
+                deep_sections.append(_render_deep_view(
+                    f"story-{i}", st.get("headline", ""), doc, row["date"]))
+
     page = webui.PAGE.format(
         css=webui.CSS,
         date_label=_e(date_label),
         episode_html=episode_html,
-        today_html=_render_today(con, row, entry, gen_state),
+        today_html=_render_today(con, row, entry, gen_state, briefs=briefs),
         following_html=_render_following(con),
         archive_html=_render_archive(con),
         settings_html=_render_settings(con, row, entry),
         popups_html=webui.POPUPS,
+        deep_views_html="".join(deep_sections),
         js=webui.JS,
     )
     # M7 gate finding 4: a read event means the briefing BODY was actually

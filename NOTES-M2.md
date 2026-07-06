@@ -453,3 +453,61 @@ persists — the prompt rule alone didn't stop it and the deterministic
 same-referent rule covers dates, not period-figures; Editor's hand-trace
 lane catches it meanwhile; if the week shows recurrence, ledger sides may
 need their own dated-referent field (day-14 item, on record).
+
+## M9 "the Analyst" — milestone 3 record (2026-07-06): writer integration + the deep view
+
+**Writer-from-brief (generate.py):** analysis stage runs inside generate on
+record-refreshing runs (one cap governs: analysis spends first, cheapest-
+degrades-first ladder intact; stage-wide failure = disclosed excerpt
+degrade). Briefed depth stories' material = render_writer_view (trace-
+don't-generate directive + notes_for_writer; excerpts dropped, titles kept
+as context); unbriefed depth stories keep excerpts + a disclosure line +
+the artifact meta-line ladder label ("Analysis: unavailable — built from
+feed excerpts"). THE SLOT-3 RECONCILIATION NOW BINDS: the analyst's verdict
+(valid brief = medium, demoted-quick = quick) pins the writer's A2 tier
+validation; the model chooses only when no verdict exists (fallback rung).
+**The deep view (server.py/webui.py):** v6-as-edited rendered faithfully —
+entry affordance "→ The full picture" in the trailing stack with the three
+binding states (degraded-hidden == absent, Axel's ruling); 8 sections;
+trailing-qualifier provenance grammar; discrepancies as two paired lines
+ending "unresolved"; three-beat unknowns; source rows with real accessible
+names; deterministic footer with the cited-not-verified paragraph;
+openDeepView/closeDeepView with lastStoryAnchor scroll restore (binding).
+Views render FROM persisted rows (never regenerate), newest-valid-wins,
+date-addressed (archive editions carry their files on their own page).
+**Axel instrumentation:** generate log gains deep_views per depth slot +
+analysis_usd; diagnose prints per-day availability. Deep-view opens are
+client-side view switches — NO new consumption event kind (concluded, not
+built: day-30 semantics ruled on app-opens; an in-page switch is within an
+already-counted open).
+**v6 deviation (disclosed):** content §5.3's "opens with one line stating
+what the view adds" — v6-as-approved opens with eyebrow+title+jumplist and
+no adds-line; v6 wins as the later approval.
+**Live proof (2026-07-06 edition):** 3/3 valid briefs ($0.0665), writer
+stage $0.0548 — run total $0.121 under the $0.25 cap; tiers [full, medium,
+medium] with slot-3 ruled BY THE ANALYST (first live exercise of the
+reconciliation); page renders 3 entry affordances + 3 files; consumption
+events untouched at 11 (all verification in-process).
+
+## M9-M3 gate batch record (2026-07-06)
+
+**Gate 1a — numeral trace-check (warn-grade), PRE-REGISTERED ESCALATION:**
+trace_check_numerals warns on story numerals outside the briefed slot's
+universe (writer view + cluster titles + title/summary). WARN not reject —
+derived numerals ("doubled", "up 4%") legitimately compute from brief
+figures (§5.9 #7 logic). ESCALATION, pre-registered: if a week of warns
+shows genuine invented specifics rather than arithmetic noise, reject-grade
+returns as a PRINCIPAL CHECKPOINT — never silently tightened.
+**Gate 1b:** editor receives the briefed slots' fact universe
+(build_analysis_facts_block) + the one authorized constraint line in
+editor_pass.txt: a specific not present is a fabrication to CUT.
+**Gate 2:** slot-3 verdicts persist (demotions as rejected verdict rows,
+reject_reason 'demoted-quick: ...') and analyst_slot3_tier() is the ONE
+derivation path both refresh modes use.
+**Gate 3 render batch:** BUG16 (one provenance path — _cite_qualifier
+derives via compute_prov_display when uncalled-with-provenance); v6 bare
+"(via Outlet)" effects grammar; no dead Arc anchor on arc-less briefs.
+**Consciously flipped pins (each per the gate's own order):** double-via
+freeze, arc-anchor-gap freeze, demotion no-row clause (verdict row now
+required), and the generate-wiring pin's verdict expectation (fake
+per_story without persistence = no verdict under the one-path ruling).

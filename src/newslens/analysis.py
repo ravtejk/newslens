@@ -1206,6 +1206,23 @@ def persist_brief(con: sqlite3.Connection, date: str, slot: int, tier: str,
     return brief_id
 
 
+def analyst_slot3_tier(con: sqlite3.Connection, date: str) -> Optional[str]:
+    """The slot-3 tier verdict, derived from PERSISTED rows — the single
+    path both the fresh run and --no-refresh use (M3 gate item 2). Newest
+    row wins: valid brief = medium; a demoted-quick verdict row = quick;
+    a plain rejection or no row = no verdict (the writer's A2 fallback)."""
+    row = con.execute(
+        "SELECT status, reject_reason FROM analysis_briefs WHERE date = ?"
+        " AND slot = 3 ORDER BY id DESC LIMIT 1", (date,)).fetchone()
+    if row is None:
+        return None
+    if row["status"] == "valid":
+        return "medium"
+    if (row["reject_reason"] or "").startswith("demoted-quick"):
+        return "quick"
+    return None
+
+
 def latest_valid_brief(con: sqlite3.Connection, date: str,
                        slot: int) -> Optional[Dict]:
     row = con.execute(
@@ -1263,6 +1280,15 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         sa.detail = ("slot-3 medium -> quick by analyst (thin material: no "
                      "full text, <2 retrieved results) — reconciliation "
                      "2026-07-06, confirmed M9-M1")
+        # M3 gate item 2: the verdict is a binding contract, not a
+        # refresh-path behavior — it persists as a rejected VERDICT row
+        # (no brief was made; reject_reason carries the ruling) so
+        # --no-refresh re-runs derive the same tier the live path ruled.
+        persist_brief(con, date, slot_no, tier, "rejected", None,
+                      f"demoted-quick: {sa.detail}", sa.cost_usd,
+                      {"slot": slot_no, "tier": tier, "date": date,
+                       "verdict": "demoted-quick", "model": ANALYSIS_MODEL},
+                      sources=sources)
         return sa
 
     # Total-failure rule: never a model-memory brief
@@ -1349,7 +1375,9 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
 
 def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = None,
                  fetch: FetchFn = net.fetch_bytes, chat=None, sonar=None,
-                 sleep: Callable[[float], None] = time.sleep) -> Dict:
+                 sleep: Callable[[float], None] = time.sleep,
+                 already_spent: float = 0.0,
+                 tiers_override: Optional[List[str]] = None) -> Dict:
     """The M2 stage, standalone: depth-tier stories of the date's ranked
     slots -> analysis briefs. M3 wires this between rank and write; the
     contract here (slots in, briefs + report out) is that seam."""
@@ -1377,10 +1405,14 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
         slots = json.loads(row["story_slots"] or "[]")
         # tiers: the generation log's recorded tiers for the date; positional
         # default when absent (pre-M7 rows)
-        tiers = _tiers_for(date, len(slots))
+        tiers = tiers_override[:len(slots)] if tiers_override \
+            else _tiers_for(date, len(slots))
         cfg = config.load_sources()
         cap = config.budget_cap_usd_per_run(src_env)
-        spent = 0.0
+        # M3: when generate hosts this stage, its prior spend rides in so
+        # ONE cap governs the whole run (the ladder still degrades analysis
+        # before the writer — analysis runs first and leaves headroom).
+        spent = float(already_spent)
         memory_lines = memory_mod.active_context(con)
         prior = _prior_briefing_material(con, date)
         report = {"ts": datetime.now(timezone.utc).isoformat(),
@@ -1402,7 +1434,7 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
             report["warnings"].extend(sa.warnings)
             if any(w.startswith("derating:") for w in sa.warnings):
                 report["derating"] = True
-        report["total_usd"] = round(spent, 6)
+        report["total_usd"] = round(spent - already_spent, 6)
         if not report["per_story"]:
             report["status"] = "no-depth-stories"
         else:

@@ -542,3 +542,64 @@ admission) — SCR gate already passed, so a no-quote brief citing the
 invisible article's REAL keys validates: fake receipts with code-supplied
 keys. The with-P case is a residual-3 regression; no-P is inherited. Fix
 contract in the test docstring; the residual-3 pins must keep passing.
+
+## M9 milestone 3 — writer-from-brief + the deep view (QA)
+
+Files: implementer `test_m3_integration.py` (4, audited genuine); QA
+`test_m3_qa.py` (36 green + 1 KNOWN-RED). Floor after this pass:
+**808 green + 1 known-red** (was 772). Fully offline (ingest/rank/analysis
+staged fakes per tg:705 pattern); ZERO synthetic consumption events; live
+DB untouched.
+
+Landed pins: two fact universes no-bleed (briefed = writer view + titles,
+excerpts dropped; unbriefed = excerpts + disclosure; stage-absent = run
+warning only); degraded-hidden **byte-identical** to never-had-a-brief
+(Axel, pinned at page bytes across two DBs); slot-3 verdict binding both
+directions + no-verdict freedom + string-slot sweep (prompt line, meta
+label, deep_views keys); ladder label direction battery; one-cap
+sequencing (already_spent rides in, analysis derates first, writer aborts
+disclosed on exhaustion, never called past its check); tiers_override
+beats recorded log tiers; --no-refresh reuses persisted briefs with
+analysis provably cold; _cite_qualifier grammar across all provenance
+shapes + 3-outlet naming; discrepancy two-line never-averaged render
+(live slot-2 fixture replica); deep-view XSS escaping; jumplist v6 parity;
+footer degradation + cited-not-verified copy; deep-view JS purity (no
+fetch/XHR/beacon in the switch — no event path exists) + zero events
+through repeated renders; diagnose availability math (demoted-quick
+leaves the depth denominator).
+
+**KNOWN-RED — BUG16:** `_cite_qualifier` with no provenance and >=2
+resolved cluster outlets says "(A, B · 1 outlet)" (reachable via mechanism
+inline multi-key cites). Underclaims — safe direction — but a reader-facing
+self-contradiction. Fix contract in the docstring.
+
+Gate items (frozen as actual where testable): NO mechanical fact-subset
+check shipped — §5.6 "no specific absent from the brief" is prompt prose
+(generate.py:473) and the editor never receives the brief (§607 stayed
+[ASSUMPTION]); effects qualifier copy deviates from v6's bare
+"(via Outlet)" (double-via on Sonar cites); arc-less briefs emit a dead
+Arc jumplist anchor; demoted slot-3 verdict does not persist across
+--no-refresh re-runs (model re-chooses); compute_prov_display duplicates
+provenance logic display-side. Browser back-nav scroll restore = the one
+recorded browser-pass item (M7 precedent).
+
+### M9-M3 closing pass (gate batch verified; M9 closes on this suite)
+
+Floor 810/810 verified before pins (BUG16 flipped green by the render
+batch — one provenance path, bare "(via Outlet)", no dead Arc anchor; all
+four conscious flips in QA files audited honest, nothing weakened; my
+stale verdict-loss flag closed by gate item 2). Landed: trace-check unit
+battery (invented numeral warns with slot + figures + §5.6 tag;
+brief/title/slot-sourced numerals silent; derived-arithmetic warn-noise
+frozen as the accepted behavior; unbriefed slots and absent stage silent);
+editor fact-universe pins (constraint line exactly once, block per
+briefed slot with VS-never-merge discrepancies, excerpt-lanes fallback);
+verdict persistence (demotion = rejected verdict row, newest-row-wins
+battery incl. plain-rejection-is-not-a-ruling and slot-2 never leaking,
+re-cut run pins: fresh valid slot-3 row binds medium, persisted verdict
+row binds quick on --no-refresh with analysis provably cold).
+
+**KNOWN-RED — BUG17 (2 tests):** gate diff 1a is UNWIRED —
+trace_check_numerals has zero call sites, so no invented-numeral warning
+reaches any run (draft or edited-swap). Fix contract in the docstring;
+the four unit pins define the behavior. M9 close rides on this wiring.

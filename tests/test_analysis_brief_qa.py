@@ -741,7 +741,11 @@ def test_prior_briefings_alone_never_ground_a_brief(tmp_paths):
 def test_slot3_demotion_precedes_the_total_failure_rule(tmp_paths):
     """ADR-0012 decision 3 ordering pin: slot 3 with NO material satisfies
     both the demotion condition and skipped-thin — demotion wins (the tier
-    call IS the outcome), the model is never called, no row persists."""
+    call IS the outcome), the model is never called. CONSCIOUSLY AMENDED at
+    the M3 gate (item 2): the verdict now PERSISTS as a rejected verdict
+    row (reject_reason 'demoted-quick: ...') so --no-refresh re-runs derive
+    the same tier — one rejected row, never a valid one, model still never
+    called."""
     con = _con(tmp_paths)
     try:
         slot = {"story_title": "Slot three", "summary": "s", "item_ids": []}
@@ -750,8 +754,15 @@ def test_slot3_demotion_precedes_the_total_failure_rule(tmp_paths):
                 prior=[{"date": "2026-07-05", "text": "prior"}]))
         assert sa.outcome == "demoted-quick"
         assert "thin material" in sa.detail
-        assert con.execute(
-            "SELECT COUNT(*) c FROM analysis_briefs").fetchone()["c"] == 0
+        row = con.execute(
+            "SELECT status, reject_reason FROM analysis_briefs"
+            " WHERE slot = 3").fetchone()
+        assert row["status"] == "rejected"
+        assert row["reject_reason"].startswith("demoted-quick:")
+        assert con.execute("SELECT COUNT(*) c FROM analysis_briefs"
+                           " WHERE status='valid'").fetchone()["c"] == 0
+        # and the single derivation path reads it back as the ruling
+        assert analysis.analyst_slot3_tier(con, DATE) == "quick"
     finally:
         con.close()
 

@@ -279,6 +279,21 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
         if der:
             push(f"  !! derating fired in {der} run(s) — escalation-flag "
                  "class under the $0.25 cap")
+    # Axel's asymmetry, instrumented not solved (M3): per-day deep-view
+    # availability across depth stories, so the day-14 read can see whether
+    # degraded-hidden creates a noticeable cross-day pattern.
+    gen_with_dv = [e for e in entries if isinstance(e.get("deep_views"), dict)
+                   and e.get("date") and not e.get("sample")]
+    if gen_with_dv:
+        push("  deep-view availability (Axel's asymmetry — pattern watch):")
+        for e in gen_with_dv[-14:]:
+            dv = e["deep_views"]
+            avail = sum(1 for v in dv.values() if v == "available")
+            depth = sum(1 for v in dv.values() if v != "demoted-quick")
+            extras = [f"slot {k}: {v}" for k, v in sorted(dv.items())
+                      if v not in ("available",)]
+            push(f"    {e['date']}: {avail}/{depth} depth stories carry a "
+                 f"file" + (f" ({'; '.join(extras)})" if extras else ""))
 
     push("")
     push("Interpretation guardrails: construction-period numbers describe "

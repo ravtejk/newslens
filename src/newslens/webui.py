@@ -231,6 +231,62 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .popup-status.found { color: var(--tracked); }
 .popup-status.err { color: var(--danger); }
 
+/* ===== M9-M3: the deep view ("the file") — v6-as-edited is the spec ===== */
+.deep-view-entry { margin-top: 0.5rem; }
+.deep-view-entry a { font-size: 0.8rem; color: var(--ink-soft); text-decoration: none; }
+.deep-view-entry a:hover { color: var(--accent); text-decoration: underline; }
+.deep-back { font-size: 0.85rem; color: var(--ink-soft); text-decoration: none;
+  display: inline-block; margin: 1.1rem 0 0.5rem; }
+.deep-back:hover { color: var(--accent); }
+.deep-title-block { margin: 0.5rem 0 1.5rem; }
+.deep-eyebrow { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-faint); margin: 0 0 0.4rem; }
+.deep-title { font-family: var(--font-serif); font-size: 1.3rem; font-weight: 700;
+  margin: 0; line-height: 1.3; }
+.deep-jumplist { font-size: 0.85rem; color: var(--ink-soft); margin: 0 0 2rem;
+  padding-bottom: 1.25rem; border-bottom: 1px solid var(--rule); line-height: 1.9; }
+.deep-jumplist a { color: var(--ink-soft); text-decoration: none; }
+.deep-jumplist a:hover { color: var(--accent); }
+.deep-jumplist .sep { color: var(--ink-faint); margin: 0 0.4em; }
+.deep-section { margin: 0 0 2.25rem; scroll-margin-top: 1rem; }
+.deep-section-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--accent); margin: 0 0 0.85rem; }
+.deep-section p { margin: 0 0 0.75rem; }
+.deep-section p:last-child { margin-bottom: 0; }
+.deep-facts-list { list-style: none; margin: 0; padding: 0; }
+.deep-facts-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--rule); }
+.deep-facts-list li:last-child { border-bottom: none; }
+.deep-facts-list .fact-cite { color: var(--ink-faint); font-size: 0.85em; }
+.deep-ledger-entry { margin: 0 0 0.65rem; }
+.deep-ledger-entry .cite { color: var(--ink-faint); font-size: 0.9em; }
+.deep-discrepancy { margin: 0 0 0.9rem; padding: 0.7rem 0.9rem;
+  background: var(--surface); border-radius: var(--radius); }
+.deep-discrepancy p { margin: 0 0 0.3rem; }
+.deep-discrepancy p:last-child { margin-bottom: 0; }
+.deep-discrepancy .cite { color: var(--ink-faint); font-size: 0.9em; }
+.deep-discrepancy .unresolved-tag { color: var(--ink-faint); font-style: italic; }
+.deep-effect { margin: 0 0 0.85rem; }
+.deep-effect .cite { color: var(--ink-faint); font-size: 0.9em; }
+.deep-arc-verdict { display: inline-block; font-size: 0.78rem; font-weight: 600;
+  color: var(--ink); margin-bottom: 0.5rem; }
+.deep-unknown { margin: 0 0 1.1rem; }
+.deep-unknown .unknown-q { margin: 0 0 0.3rem; }
+.deep-unknown .unknown-beat { display: block; font-size: 0.82rem;
+  color: var(--ink-faint); margin-left: 0; line-height: 1.5; }
+.deep-watch-item { margin: 0 0 0.6rem; }
+.deep-watch-item .cite { color: var(--ink-faint); font-size: 0.9em; }
+.deep-source-row { background: var(--surface); border-radius: var(--radius);
+  padding: 0.85rem 1rem; margin-bottom: 0.6rem; }
+.deep-source-row .source-outlet { font-weight: 700; margin: 0 0 0.2rem; }
+.deep-source-row a { color: var(--ink); text-decoration: none; }
+.deep-source-row a:hover { color: var(--accent); text-decoration: underline; }
+.deep-source-row .source-title { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.3rem; }
+.deep-source-row .source-meta { color: var(--ink-faint); font-size: 0.78rem; margin: 0; }
+.deep-footer { font-size: 0.74rem; color: var(--ink-faint); padding-top: 1.25rem;
+  margin-top: 0.5rem; border-top: 1px solid var(--rule); line-height: 1.6; }
+.deep-footer p { margin: 0 0 0.4rem; }
+.deep-footer p:last-child { margin-bottom: 0; }
+
 nav.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg);
   border-top: 1px solid var(--rule); display: flex; justify-content: space-around;
   padding: 0.5rem 0 max(0.5rem, env(safe-area-inset-bottom)); z-index: 15; }
@@ -274,6 +330,7 @@ PAGE = """<!DOCTYPE html>
 <section id="view-today" class="view active">{today_html}</section>
 <section id="view-following" class="view">{following_html}</section>
 <section id="view-archive" class="view">{archive_html}</section>
+{deep_views_html}
 </main>
 <div class="slide-scrim" id="slide-scrim" onclick="closeSettings()"></div>
 <div class="slide-panel" id="slide-panel" role="dialog" aria-label="Settings" aria-hidden="true">
@@ -404,6 +461,29 @@ function toggleFollow(btn) {
     btn.setAttribute('aria-pressed', 'true');
     btn.textContent = 'Following this story';
   }, 1800);
+}
+/* M9-M3: deep-view navigation — v6's lastStoryAnchor logic is the spec.
+   Back-navigation restores scroll to the ORIGINATING story, not page top
+   (binding: the "resume where you left off" ritual test). */
+var lastStoryAnchor = null;
+function openDeepView(storyId, e) {
+  if (e) e.preventDefault();
+  lastStoryAnchor = storyId;
+  document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+  document.getElementById('view-deep-' + storyId).classList.add('active');
+  window.scrollTo(0, 0);
+}
+function closeDeepView(e) {
+  if (e) e.preventDefault();
+  document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+  document.getElementById('view-today').classList.add('active');
+  if (lastStoryAnchor) {
+    var target = document.getElementById(lastStoryAnchor);
+    if (target) {
+      setTimeout(function () { target.scrollIntoView({ block: 'start' }); }, 0);
+    }
+  }
+  lastStoryAnchor = null;
 }
 function toggleFooterDisclosure() {
   var btn = document.getElementById('footer-disclosure-btn');

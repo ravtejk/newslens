@@ -22,8 +22,12 @@ deterministically — fabricated citations hard-reject, quotes must be
 verbatim substrings, provenance tiers and source tables are code-computed,
 own-voice inference is dropped structurally (borrowed-inference rule) —
 and persisted to `analysis_briefs` (migration 0008). Reader copy says
-"cited," never "verified." Writer integration + the deep view land at
-milestone 3; cap $0.25/run per the ruling (first live run: $0.042).
+"cited," never "verified." Milestone 3 closed the loop: the writer
+writes FROM the brief (trace-don't-generate; the analyst's slot-3 tier call
+binds), and every depth story with a valid brief carries "→ The full
+picture" — the deep view: 8 sections, typography-carried provenance,
+"cited" never "verified", back-nav restoring your exact story position.
+Cap $0.25/run per the ruling; measured full run incl. analysis: ~$0.12.
 What
 exists: the schema, the doctor, working tier-1 ingestion (`newslens ingest` —
 idempotent, per-feed graceful degradation), the editorial pass (`newslens

@@ -55,5 +55,11 @@ same fields per tier. Edited text in the fields.
 === LABEL DATA (context; a source of ALREADY-PRESENT specifics) ===
 {labels_block}
 
+ANALYSIS FACT UNIVERSE (briefed stories only — M9): for a story listed
+below, this block IS its fact universe. A specific in the draft that is
+not present here (and not plain arithmetic on figures that are) is a
+FABRICATION — cut it, never tighten it.
+{analysis_facts_block}
+
 === THE DRAFT (edit this) ===
 {draft_json}

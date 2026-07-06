@@ -165,6 +165,8 @@ class GenReport:
     artifact_path: str = ""
     ingest_summary: str = ""
     continuity_status: str = "none"   # ok | none | corrupt
+    analysis_usd: float = 0.0          # M9-M3: the analysis stage's spend
+    deep_views: Dict[str, str] = field(default_factory=dict)  # slot -> availability (Axel instrumentation)
 
 
 def wc(text: str) -> int:
@@ -429,6 +431,10 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
     for s in inputs["slots"]:
         n = s["slot"]
         lines = [f"STORY {n} — budget: {_slot_budget_line(n)}"]
+        if int(n) == 3 and inputs.get("analyst_slot3_tier"):
+            lines.append(
+                f"TIER RULED BY THE ANALYST: {inputs['analyst_slot3_tier']} "
+                "(the medium-vs-quick call moved upstream — write to it)")
         lines.append(f"working title (rewrite it): {s.get('story_title', '')}")
         lines.append(f"what happened (one line): {s.get('summary', '')}")
         if s.get("world_impact_reason"):
@@ -458,12 +464,40 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
                     f"{rv['last_covered']}' (date exactly as written here), a "
                     "one-clause prior summary, and what's new"
                 )
-        lines.append("source items (your REPORT lane for this story):")
-        for it in inputs["items_by_slot"].get(n, []):
-            excerpt = (it["raw_excerpt"] or "").strip()[:700]
-            lines.append(f"  * [{it['outlet']}] {it['title']}")
-            if excerpt:
-                lines.append(f"    excerpt: {excerpt}")
+        slot_no = int(n)
+        brief_doc = (inputs.get("briefs_by_slot") or {}).get(slot_no)
+        if brief_doc and brief_doc.get("brief"):
+            # M9-M3: trace, don't generate (content §5.6 migration). The
+            # brief's cited ledger IS this story's report lane; the two-lane
+            # rule as amended admits retrieved-and-cited material to your
+            # grounding. You introduce no analytic specific absent from the
+            # brief or the cluster titles; effects only with the brief's
+            # basis + holder; never a forward claim absent from it.
+            from . import analysis as analysis_mod
+            lines.append(
+                "ANALYSIS BRIEF — your REPORT lane for this story. TRACE, "
+                "DON'T GENERATE: every analytic specific you write traces to "
+                "this brief or the cluster items; copy effects with their "
+                "basis and holder, never generate your own; what the brief "
+                "lists as unknown stays unknown:")
+            lines.append(analysis_mod.render_writer_view(brief_doc["brief"]))
+            lines.append("cluster items (context only — the brief above is "
+                         "the ledger):")
+            for it in inputs["items_by_slot"].get(n, []):
+                lines.append(f"  * [{it['outlet']}] {it['title']}")
+        else:
+            if slot_no <= 3 and not (inputs.get("briefs_by_slot") or {}):
+                pass  # whole stage absent: run-level warning already covers it
+            elif slot_no <= 3:
+                lines.append(
+                    "(analysis unavailable for this story — the excerpts "
+                    "below are the report lane; disclosed in the meta line)")
+            lines.append("source items (your REPORT lane for this story):")
+            for it in inputs["items_by_slot"].get(n, []):
+                excerpt = (it["raw_excerpt"] or "").strip()[:700]
+                lines.append(f"  * [{it['outlet']}] {it['title']}")
+                if excerpt:
+                    lines.append(f"    excerpt: {excerpt}")
         story_parts.append("\n".join(lines))
 
     weekday, human = _spoken_date(date)
@@ -498,7 +532,8 @@ def _scan_banned(text: str) -> List[str]:
 
 
 def validate_narrative_payload(
-    payload: object, slots: List[Dict], variant: str
+    payload: object, slots: List[Dict], variant: str,
+    slots_ctx: Optional[Dict] = None
 ) -> Tuple[List[Dict], List[str]]:
     """Structural checks BLOCK (retry-then-fail); style checks warn.
     Mandatory disclosures (revival dates) block."""
@@ -518,10 +553,14 @@ def validate_narrative_payload(
         tier = s.get("tier")
         # A2 sanity: the model proposes only story 3's tier; code enforces
         # the rest (lead is always full; 2 medium; 4+ quick).
+        analyst_t = (slots_ctx or {}).get("analyst_slot3_tier") if i == 2 else None
         allowed = (
             ("full",) if i == 0 else
             ("medium",) if i == 1 else
-            ("medium", "quick") if i == 2 else
+            # M9 reconciliation (confirmed M9-M1, bound M2/M3): the ANALYST
+            # holds slot 3's medium-vs-quick call when it ran; the model
+            # chooses only when no analyst verdict exists (fallback rung).
+            ((analyst_t,) if analyst_t else ("medium", "quick")) if i == 2 else
             ("quick",)
         )
         if tier not in allowed:
@@ -671,7 +710,17 @@ def assemble_narrative(
         meta_line = slot.get("corroboration_label", "")
         outlets = slot.get("outlets") or []
         outlet_names = f" — {', '.join(outlets)}" if outlets else ""
-        parts.append(f"*{meta_line}{outlet_names}. Here for: {here_for}.*")
+        # M9-M3 ladder label (content §5.7): a depth story built without a
+        # valid brief says so in its own trailing meta — reader-facing UI
+        # shows nothing (degraded-hidden == absent, Axel's ruling), the
+        # artifact carries the honest label.
+        a_note = ""
+        deep_views = inputs.get("deep_views") or {}
+        slot_no = str(slot.get("slot", ""))
+        if st.get("tier") in ("full", "medium") and deep_views \
+                and deep_views.get(slot_no) not in ("available", None):
+            a_note = " Analysis: unavailable — built from feed excerpts."
+        parts.append(f"*{meta_line}{outlet_names}. Here for: {here_for}.{a_note}*")
         parts.append("")
 
     # Footer block — fixed order, deterministic (§5.7).
@@ -710,6 +759,72 @@ def _script_budgets(n_slots: int, narrative_words: int) -> Tuple[int, str]:
         for i in range(1, n_slots + 1)
     )
     return total, desc
+
+
+def _norm_nums(text: str) -> set:
+    return {x.replace(",", "").rstrip(".") for x in _NUM_RE.findall(text or "")}
+
+
+def trace_check_numerals(stories: List[Dict], inputs: Dict) -> List[str]:
+    """M3 gate 1a — §5.6 trace-don't-generate teeth, warn-grade (the same
+    logic as §5.9 #7: derived numerals — "doubled", "up 4%" — legitimately
+    compute from brief figures, so this warns and never rejects; the
+    pre-registered escalation to reject-grade lives in NOTES-M2). Briefed
+    slots only: the numeral universe is the writer view of the brief + the
+    slot's cluster titles + story_title/summary; a story numeral outside
+    it is named, per slot."""
+    from . import analysis as analysis_mod
+    briefs = inputs.get("briefs_by_slot") or {}
+    if not briefs:
+        return []
+    warns: List[str] = []
+    titles_by_slot: Dict[int, List[str]] = {}
+    for n_key, items in (inputs.get("items_by_slot") or {}).items():
+        titles_by_slot[int(n_key)] = [it["title"] or "" for it in items]
+    for st, slot in zip(stories, inputs["slots"]):
+        n = int(slot["slot"])
+        doc = briefs.get(n)
+        if not doc or not doc.get("brief"):
+            continue
+        universe = _norm_nums(analysis_mod.render_writer_view(doc["brief"]))
+        universe |= _norm_nums(" ".join(titles_by_slot.get(n, [])))
+        universe |= _norm_nums(slot.get("story_title", ""))
+        universe |= _norm_nums(slot.get("summary", ""))
+        story_text = " ".join(v for v in st.values() if isinstance(v, str))
+        loose = sorted(_norm_nums(story_text) - universe)
+        if loose:
+            warns.append(
+                f"story {n}: numeral(s) outside the brief+cluster universe "
+                f"({', '.join(loose[:6])}) — §5.6 trace-don't-generate check "
+                "[warn-grade; derived arithmetic is legitimate]")
+    return warns
+
+
+def build_analysis_facts_block(inputs: Dict) -> str:
+    """M3 gate 1b (§607's assumption shipped): the editor receives, for
+    briefed slots, the brief's pinned facts + ledger holders/values — the
+    fact universe against which a specific not present is a FABRICATION to
+    cut, not tighten (constraint line lives in editor_pass.txt)."""
+    briefs = inputs.get("briefs_by_slot") or {}
+    if not briefs:
+        return "(no analysis briefs this run — the excerpt lanes govern)"
+    lines: List[str] = []
+    for n in sorted(briefs):
+        b = (briefs[n] or {}).get("brief") or {}
+        lines.append(f"story {n} (briefed — its fact universe):")
+        for f in b.get("pinned_facts", []):
+            lines.append(f"  fact: {f.get('fact', '')}")
+        for e in b.get("ledger", []):
+            if e.get("discrepancy"):
+                a, bb = e.get("a") or {}, e.get("b") or {}
+                lines.append(f"  discrepancy: {a.get('value', '')} VS "
+                             f"{bb.get('value', '')} (unresolved — never merge)")
+            else:
+                lines.append(f"  claim: {e.get('claim', '')}")
+        for ef in b.get("effects", []):
+            lines.append(f"  take [{ef.get('basis', '')}: {ef.get('holder', '')}]: "
+                         f"{ef.get('effect', '')}")
+    return "\n".join(lines)
 
 
 def build_labels_block(inputs: Dict) -> str:
@@ -1048,6 +1163,50 @@ def _run_generate_body(
     cap = config.budget_cap_usd_per_run(src_env)
     spent = 0.0
 
+    # --- Analysis pass (M9-M3): the writer writes FROM the brief ---
+    # Runs only on record-refreshing runs (samples and --no-refresh reuse
+    # whatever valid briefs exist — read-only). Failure of the whole stage
+    # is a disclosed degrade to today's excerpt behavior, never a dead run.
+    from . import analysis as analysis_mod
+
+    briefs_by_slot: Dict[int, Optional[Dict]] = {}
+    analyst_slot3_tier: Optional[str] = None
+    if refresh and not no_threads:
+        try:
+            a_rep = analysis_mod.run_analysis(
+                date=date, con=con, env=src_env, already_spent=spent,
+                tiers_override=["full", "medium", "medium"])
+            spent += a_rep.get("total_usd") or 0.0
+            report.analysis_usd = a_rep.get("total_usd") or 0.0
+            for w in a_rep.get("warnings", []):
+                report.warnings.append(f"analysis: {w}")
+            if a_rep.get("derating"):
+                report.warnings.append(
+                    "analysis DERATING under the cap — escalation-flag class")
+        except Exception as exc:  # noqa: BLE001 — stage-wide disclosed degrade
+            report.warnings.append(
+                f"analysis stage unavailable this run ({type(exc).__name__}: "
+                f"{exc}) — writer degrades to feed-excerpt material, disclosed")
+    for s in inputs["slots"]:
+        n = int(s["slot"])
+        if n <= 3:
+            doc = analysis_mod.latest_valid_brief(con, date, n)
+            if doc:
+                briefs_by_slot[n] = doc
+    # M3 gate item 2: ONE derivation path for the slot-3 verdict — the
+    # persisted rows — so a demoted story stays quick on --no-refresh
+    # re-runs exactly as on the run that ruled it.
+    analyst_slot3_tier = analysis_mod.analyst_slot3_tier(con, date)
+    inputs["briefs_by_slot"] = briefs_by_slot
+    inputs["analyst_slot3_tier"] = analyst_slot3_tier
+    report.deep_views = {
+        str(n): ("available" if briefs_by_slot.get(n) else "absent")
+        for n in (1, 2, 3) if any(int(s["slot"]) == n for s in inputs["slots"])
+    }
+    if analyst_slot3_tier == "quick":
+        report.deep_views["3"] = "demoted-quick"
+    inputs["deep_views"] = report.deep_views  # assembler reads the ladder label
+
     # --- Narrative pass ---
     n_prompt = build_narrative_prompt(date, report.variant, inputs)
     est = _est_cost(n_prompt, NARRATIVE_MAX_TOKENS)
@@ -1091,6 +1250,7 @@ def _run_generate_body(
         e_template = (paths.PROMPTS_DIR / PROMPT_EDITOR).read_text(encoding="utf-8")
         e_prompt = e_template.format(
             labels_block=build_labels_block(inputs),
+            analysis_facts_block=build_analysis_facts_block(inputs),
             draft_json=json.dumps(draft_payload, ensure_ascii=False),
         )
         est_e = _est_cost(e_prompt, EDITOR_MAX_TOKENS)
@@ -1162,8 +1322,13 @@ def _run_generate_body(
     # GenerateError — never a raw crash.
     try:
         stories, narrative_warnings = validate_narrative_payload(
-            edited_payload, inputs["slots"], report.variant
+            edited_payload, inputs["slots"], report.variant,
+            slots_ctx={"analyst_slot3_tier": inputs.get("analyst_slot3_tier")},
         )
+        # BUG17 wiring (M3 gate 1a): the trace check runs on the EDITED
+        # stories — an invented numeral the editor introduced (or kept)
+        # never reaches the record silently.
+        narrative_warnings.extend(trace_check_numerals(stories, inputs))
     except ValueError as exc:
         if edited_payload is not draft_payload:
             report.warnings.append(
@@ -1173,8 +1338,12 @@ def _run_generate_body(
             editor_note += " [DISCARDED: failed validation]"
             try:
                 stories, narrative_warnings = validate_narrative_payload(
-                    draft_payload, inputs["slots"], report.variant
+                    draft_payload, inputs["slots"], report.variant,
+                    slots_ctx={"analyst_slot3_tier": inputs.get("analyst_slot3_tier")},
                 )
+                # BUG17 wiring, degrade path: the surviving DRAFT stories
+                # get the same trace check — both validation sites covered.
+                narrative_warnings.extend(trace_check_numerals(stories, inputs))
             except ValueError as exc2:
                 raise GenerateError(
                     f"narrative draft failed validation after editor degrade: {exc2}"
@@ -1302,6 +1471,8 @@ def _run_generate_body(
         "tiers": [s.get("tier") for s in stories],
         "framings": [s.get("why_label") for s in stories],
         "editor": editor_note,
+        "analysis_usd": round(report.analysis_usd, 6),
+        "deep_views": report.deep_views,  # Axel's asymmetry instrumentation
         "draft_stories": draft_payload.get("stories"),  # carryover 18b: forensics
         "stories": stories,  # M7: the UI's structured render source (ADR-0010)
         "audio": audio_path_str,
