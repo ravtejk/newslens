@@ -371,6 +371,11 @@ sources:
   - name: Noahpinion Legacy   # inline name comment (BUG-9 fixture)
     rss_url: https://legacy.example/feed
     followed_analyst: true
+  - name: Inline Enabled Writer
+    rss_url: https://inline.example/feed
+    followed_analyst: true
+    enabled: true  # keep while testing the beta feed
+    # enabled: true was flipped manually once — decoy comment (ride 25)
 
 # --- Interests -----------------------------------------------------------------
 interests:
@@ -902,3 +907,240 @@ def test_settings_engine_display_follows_the_config(ui):
     page = body.decode("utf-8")
     assert "OpenAI gpt-4o-mini-tts (~$0.015/min)" in page
     assert "Kokoro (local, $0/episode)" not in page
+# --- M8 final-pass pins ------------------------------------------------------------------------
+
+def _raw_http(ui, request_bytes):
+    """Send a raw request over loopback (lets us omit the Host header)."""
+    import socket as socket_mod
+
+    host, port = "127.0.0.1", int(ui.base.rsplit(":", 1)[1])
+    s = socket_mod.create_connection((host, port), timeout=10)
+    try:
+        s.sendall(request_bytes)
+        data = b""
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        s.close()
+    return data
+
+
+def test_ride22_host_allowlist_on_get_and_post(ui):
+    con = db.connect()
+    seed_briefing(con)
+    con.close()
+    # Hostile Host: 403 on GET…
+    code, _, body = get(ui, "/", headers={"Host": "evil.example"})
+    assert code == 403 and b"Forbidden" in body
+    # …and on POST, independently of the CSRF gate (correct content type).
+    req = urllib.request.Request(
+        ui.base + "/api/follow",
+        data=json.dumps({"topic": "Rebound"}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Host": "evil.example"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            code, body = resp.getcode(), resp.read()
+    except urllib.error.HTTPError as exc:
+        code, body = exc.code, exc.read()
+    assert code == 403
+    assert json.loads(body) == {"ok": False, "error": "forbidden host"}
+    con = db.connect()
+    try:
+        assert con.execute(
+            "SELECT 1 FROM memory WHERE topic='Rebound'").fetchone() is None
+    finally:
+        con.close()
+    # Localhost names pass, any port:
+    for host in ("localhost:9999", "127.0.0.1:1", "[::1]:8484"):
+        code, _, _ = get(ui, "/", headers={"Host": host})
+        assert code == 200, host
+    # No reads were logged by the hostile GET (it never rendered):
+    con = db.connect()
+    try:
+        n = con.execute("SELECT COUNT(*) FROM consumption_events").fetchone()[0]
+    finally:
+        con.close()
+    assert n == 3  # exactly the three allowed-host renders above
+
+
+def test_ride22_absent_host_http10_is_allowed(ui):
+    con = db.connect()
+    seed_briefing(con)
+    con.close()
+    raw = _raw_http(ui, b"GET / HTTP/1.0\r\n\r\n")
+    assert raw.startswith(b"HTTP/1.0 200") or raw.startswith(b"HTTP/1.1 200")
+
+
+def test_ride22_layered_gates_hold_independently(ui):
+    """Belt AND suspenders: good Host + bad content type -> 415; bad Host +
+    good content type -> 403. Neither gate substitutes for the other."""
+    req = urllib.request.Request(
+        ui.base + "/api/follow", data=b"topic=x",
+        headers={"Content-Type": "text/plain", "Host": "localhost"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            code = resp.getcode()
+    except urllib.error.HTTPError as exc:
+        code = exc.code
+    assert code == 415
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_ride24_basexception_never_strands_running(ui, monkeypatch):
+    """The finally-guard: a BaseException in the job thread lands state at
+    error with the abnormal-exit message — the UI never spins forever."""
+    from newslens import generate as generate_mod
+
+    def rude(*a, **kw):
+        raise KeyboardInterrupt  # BaseException, skips `except Exception`
+
+    monkeypatch.setattr(generate_mod, "run_generate", rude)
+    monkeypatch.setattr(config, "load_env", lambda *a, **kw: None)
+    post(ui, "/api/generate", {})
+    deadline = time.time() + 10
+    state = {}
+    while time.time() < deadline:
+        _, _, body = get(ui, "/api/status")
+        state = json.loads(body)
+        if state["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert state["state"] == "error"
+    assert "exited abnormally" in state["error"]
+
+
+def test_ride25_enabled_rewrite_is_key_anchored(replica):
+    """Unfollow flips `enabled: true  # comment` preserving the comment;
+    a comment line merely MENTIONING enabled: is never touched."""
+    ok, msg = server.writer_remove("Inline Enabled Writer")
+    assert ok, msg
+    text = replica.read_text(encoding="utf-8")
+    assert "enabled: false  # keep while testing the beta feed" in text
+    assert "# enabled: true was flipped manually once — decoy comment (ride 25)" in text
+    cfg = config.load_sources()
+    entry = next(s for s in cfg.sources if s.name == "Inline Enabled Writer")
+    assert entry.enabled is False and entry.followed_analyst is False
+
+
+ERROR_PANEL_SENTENCE = (
+    "No half-written edition ever goes out: a failure before the save\n"
+    "     publishes nothing; one during file export after the save leaves the\n"
+    "     saved edition intact."
+)
+
+
+def test_ride23_error_panel_wording_in_both_failure_positions(ui):
+    """The recovery sentence must be TRUE and identical whether the failure
+    happened with no edition at all or on a day that already has one."""
+    server.GEN_JOB.state = "error"
+    server.GEN_JOB.error = "synthetic failure for the wording pin"
+    # Position 1: no briefing row exists.
+    _, _, body = get(ui, "/")
+    page1 = body.decode("utf-8")
+    assert "Today’s edition failed" in page1
+    assert ERROR_PANEL_SENTENCE in page1
+    # Position 2: a briefing row exists (the panel replaces it).
+    con = db.connect()
+    seed_briefing(con)
+    con.close()
+    _, _, body = get(ui, "/")
+    page2 = body.decode("utf-8")
+    assert ERROR_PANEL_SENTENCE in page2
+    assert "Chip export controls pass" not in page2  # the panel replaced it
+    # And neither render logged a read (read-honesty holds here too).
+    con = db.connect()
+    try:
+        assert con.execute("SELECT COUNT(*) FROM consumption_events").fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+def test_ride26_dead_branch_is_gone():
+    src = (PROTOTYPE_ROOT / "src" / "newslens" / "server.py").read_text(encoding="utf-8")
+    assert "not reachable" not in src
+
+
+def test_item27_furniture_contract_through_build_page(ui):
+    """ACCEPTED (item 27): the drift-guard for the trust surface. A synthetic
+    briefing exercising every code-owned furniture element must render all of
+    them from SLOT data, whatever webui evolves into."""
+    slots = [
+        {
+            "slot": 1, "story_title": "Tracked story", "summary": "S.",
+            "item_ids": [1], "outlets": ["Outlet A", "Outlet B"],
+            "matched_tags": [{"name": "AI regulation", "level": "topic"}],
+            "matched_memory": ["Iran War"], "matched_dormant": [],
+            "followed_analyst": False, "personal_score": 1.0,
+            "world_impact": 6, "world_impact_reason": "R",
+            "combined_score": 0.8, "override": False, "override_label": None,
+            "corroboration_count": 2,
+            "corroboration_label": "Reported by 2 named outlets",
+            "wire_items_excluded": 1,
+            "revived_threads": [{"topic": "Iran War", "last_covered": "2026-07-01"}],
+        },
+        {
+            "slot": 2, "story_title": "Override story", "summary": "S.",
+            "item_ids": [2], "outlets": ["Solo"],
+            "matched_tags": [], "matched_memory": [], "matched_dormant": [],
+            "followed_analyst": False, "personal_score": 0.0,
+            "world_impact": 9, "world_impact_reason": "Global systemic thing",
+            "combined_score": 0.4, "override": True,
+            "override_label": ranking.OVERRIDE_LABEL_PREFIX + "Global systemic thing.",
+            "corroboration_count": 1,
+            "corroboration_label": "Reported by 1 named outlet",
+            "wire_items_excluded": 0, "revived_threads": [],
+        },
+    ]
+    # The narrative must parse to story cards (same lesson as the parity
+    # test): build it with the REAL assembler so the fallback recovers it.
+    from newslens import generate
+    stories = [
+        {"tier": "full", "headline": "Tracked story",
+         "lede": "We last covered 2026-07-01 this thread; new movement today.",
+         "why_it_matters": "Concrete effects.", "watch_for": "The vote.",
+         "why_label": "Why it matters", "watch_label": "Watch for",
+         "my_read": None},
+        {"tier": "medium", "headline": "Override story",
+         "lede": "A global development outside your tags.",
+         "why_it_matters": "Systemic consequence.", "watch_for": "The summit.",
+         "why_label": "The stakes", "watch_label": "What happens next",
+         "my_read": None},
+    ]
+    inputs = {"slots": slots, "items_by_slot": {1: [], 2: []}, "threads": [],
+              "prior_ctx": None, "continuity_status": "none",
+              "window_meta": None, "corroboration": {}}
+    narrative = generate.assemble_narrative(DATE, "A", stories, inputs)
+    con = db.connect()
+    con.execute(
+        "INSERT INTO briefings (date, story_slots, corroboration_labels,"
+        " narrative_text, generated_at) VALUES (?, ?, ?, ?, ?)",
+        (DATE, json.dumps(slots),
+         json.dumps({"standing_caveat": ranking.CORROBORATION_CAVEAT,
+                     "per_story": []}),
+         narrative, iso_now()),
+    )
+    con.execute(
+        "INSERT INTO memory (topic, status, created_at, updated_at)"
+        " VALUES ('Iran War', 'active', ?, ?)", (iso_now(), iso_now()),
+    )
+    con.commit()
+    con.close()
+    _, _, body = get(ui, "/")
+    page = body.decode("utf-8")
+    # 1. Tracked marker (from matched_memory + active thread):
+    assert "Tracked ongoing story" in page
+    # 2. Override note (canonical label text, from the slot):
+    assert "Outside your interests" in page or "outside your" in page.lower()
+    # 3. Meta-footnote: corroboration + outlets + provenance, from slots:
+    assert "Reported by 2 named outlets" in page
+    assert "Outlet A" in page
+    assert "Here for" in page
+    # 4. Disclosure trigger: the revival back-reference reaches the surface:
+    assert "2026-07-01" in page
+    # 5. Follow affordance with pressed state:
+    assert "aria-pressed" in page

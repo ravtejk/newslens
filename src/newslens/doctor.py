@@ -248,11 +248,18 @@ def check_openai_key(env: Dict[str, str]) -> List[Result]:
 def check_perplexity_key(env: Dict[str, str]) -> List[Result]:
     key = (env.get("PERPLEXITY_API_KEY") or "").strip()
     if not key:
+        # M8 ruling: the principal DEFERRED this key by choice (RSS-only
+        # discovery is the product's actual running state), so its absence
+        # is information, not failure — a required-✗ here contradicted the
+        # product and kept exit-0 unreachable on the real install. A set-
+        # but-garbage value still fails below: a typo is an error, a
+        # deferral is a decision.
         return [
             Result(
-                FAIL,
-                "PERPLEXITY_API_KEY not set — get one at perplexity.ai/settings/api, "
-                "then add to .env",
+                INFO,
+                "PERPLEXITY_API_KEY not set — deferred by choice; ingest runs "
+                "RSS-only and says so. To add discovery later: "
+                "perplexity.ai/settings/api → .env",
             )
         ]
     ping_file = paths.PROMPTS_DIR / "doctor_sonar_ping.txt"

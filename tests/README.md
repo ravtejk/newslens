@@ -146,6 +146,24 @@ add paths), atomic tmp+os.replace writes with no tmp leftovers, read
 honesty during running/error panels, the follow-revive edition stamp vs
 CLI revive, and the settings engine display. Suite: 590/590 green.
 
+M8 QA pass (2026-07-05 — the final construction pass): 0 red, 605/605
+green. Pinned: `newslens diagnose` (read-only/offline/$0 with byte-identical
+state after; the three 21a-c caveats travel with the falsifier number on
+every run incl. empty installs; the CONSTRUCTION_END_UTC cutover splits
+construction traffic from the usage window at the boundary; trailing-window
+day math; graceful empties; CLI wiring) — `test_diagnose.py`. Rides 22-26
+pinned in `test_server.py`: Host allowlist on GET+POST layered independently
+with the CSRF 415 gate (absent-Host HTTP/1.0 allowed via raw socket),
+GEN_JOB finally-guard (KeyboardInterrupt lands error/"exited abnormally",
+never strands running), key-anchored enabled-rewrite (inline comment
+preserved; decoy comments untouched), the error-panel recovery sentence in
+both failure positions (with read-honesty), dead branch grep-zero. Item 27
+ACCEPTED: the furniture-contract drift-guard renders every code-owned trust
+element from slot data through build_page. Doctor Perplexity flips audited
+faithful (ADR-0011 D3). PREFLIGHT.md spot-check: all sampled file:line
+claims accurate; one cosmetic imprecision (CSRF cited ~1030, gate at 1014).
+Construction ends with this suite as the standing acceptance surface.
+
 ## Implementer contract notes for milestone 3 (for QA — appended per dispatch)
 
 New surfaces: `ranking.py` (clustering/scoring/override/corroboration/persist),

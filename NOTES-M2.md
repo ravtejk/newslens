@@ -264,14 +264,14 @@ NOTES-M2.md milestone records, not just README.
     so open-days measures app-opens per ADR-0010 §3's own definition; (c) the
     2 disclosed synthetic reads on 2026-07-05 (implementer demo + CoS
     verification) are not principal reads.
-22. **Host-header allowlist** (belt-and-braces on the CSRF fix) at M8/preflight.
-23. **Error-panel claim edge:** "Nothing was published" is false in one case —
+22. ~~DONE (M8)~~ **Host-header allowlist** (belt-and-braces on the CSRF fix) at M8/preflight.
+23. ~~DONE (M8)~~ **Error-panel claim edge:** "Nothing was published" is false in one case —
     artifact-write failure AFTER persist (the row IS published). One wording fix.
-24. **GEN_JOB BaseException stranding:** a BaseException in the job thread
+24. ~~DONE (M8)~~ **GEN_JOB BaseException stranding:** a BaseException in the job thread
     strands state at "running" until restart. Cheap guard at M8.
-25. **Unfollow eats an inline comment on the `enabled:` line** (write-side
+25. ~~DONE (M8)~~ **Unfollow eats an inline comment on the `enabled:` line** (write-side
     sibling of BUG-9's read-side fix — same tolerance needed when rewriting).
-26. **`_parse_narrative` dead branch** (server.py:145-148) — remove or exercise.
+26. ~~DONE (M8)~~ **`_parse_narrative` dead branch** (server.py:145-148) — remove or exercise.
 27. **Drift-guard suggestion (QA, optional):** a "furniture contract" test
     rendering a synthetic briefing through build_page asserting the code-owned
     furniture set (tracked marker, override note, meta-footnote, disclosure
@@ -281,3 +281,38 @@ NOTES-M2.md milestone records, not just README.
 28. Carried M6 minors: corrections presence check (when the pipeline exists);
     keyless-refusal log asymmetry; numeral {2,3} exemption; caveat-paraphrase
     double-render edge.
+
+## Milestone 8 record (2026-07-05) — hardening, the readout, the human handoff
+
+Construction's last implementer pass. **Rides 22-26 landed and live-verified:**
+Host-header allowlist (DNS-rebinding belt; hostile Host -> 403 on GET+POST,
+localhost names + absent-Host allowed); error-panel claim now true in both
+failure positions ("No half-written edition ever goes out..."); GEN_JOB
+finally-guard (synthetic KeyboardInterrupt in the job thread -> state lands
+'error', never stranded 'running'); unfollow's enabled:-line rewrite is
+key-anchored and preserves inline comments (BUG-9 write-side sibling,
+verified with a commented canary entry); _parse_narrative dead branch removed
+with the ordering it gestured at documented in place.
+
+**`newslens diagnose` shipped** (src/newslens/diagnose.py): read-only/$0
+readout — falsifier open-days with caveats 21a-c printed inline (21c
+generalized to a construction cutover, ADR-0011 D2), generation record
+(tiers/framings/override/editor stats/hedge warns/disclosure buckets/costs),
+usage-window vs construction split. First real run against live data is in
+the M8 report.
+
+**Doctor ruling (ADR-0011 D3):** Perplexity absence = ○ informational
+(deferred by choice); set-but-garbage still ✗. Exit 0 now reachable on the
+real install. QA pins updated: PERPLEXITY_HINT in test_doctor_offline.py +
+test_preinstall_doctor.py.
+
+**PREFLIGHT.md shipped** (prototype root): human-engineer review guide —
+spend paths table (4 call sites + cap checks), secrets flow, server surface
+(binding/CSRF/host/XSS/audio-range/yaml-surgery), trust-machinery contracts
+(corroboration + LWW undercount direction, tolerance disclosures, editor
+two-lane, code-owned furniture), residual-risk table with ADR pointers,
+verification commands. Every probe in it was executed before it was written
+down.
+
+**Item 27 (furniture-contract drift guard) remains QA's, optional. Item 28
+minors carried, still open — recorded, not silently dropped.**

@@ -88,6 +88,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     mem_note.add_argument("topic")
     mem_note.add_argument("text")
 
+    sub.add_parser(
+        "diagnose",
+        help="read-only readout: the day-30 falsifier + generation record, "
+             "self-caveating ($0, offline)")
+
     serve_p = sub.add_parser(
         "serve",
         help="local web UI at 127.0.0.1 (Today / Following / Archive)")
@@ -145,6 +150,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "memory":
         return _memory_command(args)
+
+    if args.command == "diagnose":
+        from . import diagnose
+
+        # M8 gate residual 1: the verdict instrument is READ-ONLY — no
+        # migrate, no file creation; a fresh/behind DB renders an honestly
+        # empty readout instead of being mutated by its own measurement.
+        print(diagnose.run_diagnose())
+        return 0
 
     if args.command == "serve":
         from . import server

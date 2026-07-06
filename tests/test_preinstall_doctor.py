@@ -27,9 +27,9 @@ OPENAI_HINT = (
     "then add to .env"
 )
 PERPLEXITY_HINT = (
-    "PERPLEXITY_API_KEY not set — get one at perplexity.ai/settings/api, "
-    "then add to .env"
-)
+    "PERPLEXITY_API_KEY not set — deferred by choice; ingest runs RSS-only "
+    "and says so. To add discovery later: perplexity.ai/settings/api → .env"
+)  # M8 ruling: deferred-by-principal-choice = ○ informational, not ✗ required
 
 SITECUSTOMIZE_TEMPLATE = """\
 import socket

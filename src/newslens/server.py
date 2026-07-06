@@ -79,6 +79,19 @@ class _GenJob:
             with self.lock:
                 self.state = "error"
                 self.error = str(exc)
+        finally:
+            # Ride 24 (M8): a BaseException (KeyboardInterrupt delivered to
+            # this thread, SystemExit from deep inside a lib, MemoryError)
+            # would skip the except above and strand state at "running" —
+            # the UI would show the loading panel until restart. The guard
+            # keeps state truthful; the BaseException itself still
+            # propagates and ends the thread.
+            with self.lock:
+                if self.state == "running":
+                    self.state = "error"
+                    self.error = ("generation thread exited abnormally "
+                                  "(BaseException) — check the serve "
+                                  "terminal for the traceback")
 
     def snapshot(self) -> Dict[str, str]:
         with self.lock:
@@ -144,9 +157,11 @@ def _parse_narrative(narrative: str) -> Tuple[List[Dict], List[str]]:
             if block.startswith("*") and not block.startswith("**"):
                 continue  # meta italic line — slots re-render this
             m = _MOVE_RE.match(block)
-            if m and block.startswith("**") and block.rstrip().endswith("**") \
-                    and "\n" not in block and not m.group("text"):
-                pass  # not reachable; headline handled below
+            # Ordering note (ride 26, M8): the headline check below runs
+            # BEFORE the movement branch, so a colon-terminated bold
+            # headline ("**The question now:**") — which _MOVE_RE would
+            # also match, with empty text — binds as the headline. A dead
+            # third branch that restated this was removed here.
             if block.startswith("**") and block.endswith("**") and "headline" not in story:
                 story["headline"] = block.strip("*").strip()
                 continue
@@ -481,12 +496,19 @@ def writer_remove(name: str) -> Tuple[bool, str]:
                 flagged = True
         if not flagged:
             return False, f"{name!r} is not a followed writer", lines
-        if not any("enabled:" in lines[i] for i in range(start, end)):
+        # Ride 25 (M8), BUG-9's write-side sibling: match the KEY, not the
+        # substring (a comment that merely mentions "enabled:" must not be
+        # rewritten), and preserve any inline comment when flipping the
+        # value — the file is the principal's to comment.
+        enabled_re = re.compile(r"^(\s*enabled:\s*)\S+(\s*#.*)?$")
+        hit = next((i for i in range(start, end)
+                    if enabled_re.match(lines[i])), None)
+        if hit is None:
             lines.insert(start + 1, "    enabled: false")
         else:
-            for i in range(start, end):
-                if "enabled:" in lines[i]:
-                    lines[i] = re.sub(r"enabled:.*", "enabled: false", lines[i])
+            lines[hit] = enabled_re.sub(
+                lambda mm: mm.group(1) + "false" + (mm.group(2) or ""),
+                lines[hit])
         return True, f"unfollowed {name!r} (source disabled)", lines
 
     return _yaml_edit(mutate)
@@ -587,7 +609,9 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
 <div class="state-panel">
   <h3>Today’s edition failed</h3>
   <p class="error-text">{_e(gen_state["error"])}</p>
-  <p>Nothing was published — a failed run never produces a partial edition.</p>
+  <p>No half-written edition ever goes out: a failure before the save
+     publishes nothing; one during file export after the save leaves the
+     saved edition intact.</p>
   <button class="cta-quiet" onclick="generateAgain()">Try again</button>
 </div>"""
     if row is None:
@@ -888,6 +912,25 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
 class Handler(BaseHTTPRequestHandler):
     server_version = "newslens"
 
+    # Ride 22 (M8): DNS-rebinding belt over the content-type CSRF gate. A
+    # hostile page can point its own domain at 127.0.0.1 and bypass
+    # same-origin — but the browser still sends the attacker's hostname in
+    # Host. Only localhost names may address this server. Port is ignored
+    # (it varies with --port); an absent Host header is allowed because
+    # HTTP/1.0 tools (and our own curl checks) omit it and the socket is
+    # already bound to loopback.
+    _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
+
+    def _host_allowed(self) -> bool:
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return True
+        if host.startswith("["):
+            bare = host.split("]")[0] + "]"
+        else:
+            bare = host.rsplit(":", 1)[0] if ":" in host else host
+        return bare in self._ALLOWED_HOSTS
+
     def log_message(self, fmt, *args):  # quiet default; errors still raise
         pass
 
@@ -920,6 +963,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- GET ---------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802 (stdlib API)
+        if not self._host_allowed():
+            return self._send_html("<h1>Forbidden</h1>", 403)
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/":
@@ -1003,6 +1048,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- POST ---------------------------------------------------------------
     def do_POST(self) -> None:  # noqa: N802 (stdlib API)
+        if not self._host_allowed():
+            return self._send_json({"ok": False, "error": "forbidden host"}, 403)
         parsed = urlparse(self.path)
         # M7 gate finding 2 (CSRF): a cross-origin no-cors POST cannot carry
         # this content type without a preflight this server never grants; the

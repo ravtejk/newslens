@@ -2,7 +2,11 @@
 
 Goal: everything on this page takes minutes, and `scripts/doctor` tells you
 your exact remaining steps at every point. When the doctor exits `0`, you're
-done with setup.
+done with setup. Exit `0` is reachable with just the OpenAI key: Perplexity
+is deferred-by-choice (informational, not failing). One honest exception: if
+an outlet's feed dies upstream (404/moved), the doctor fails it until you fix
+the URL or set `enabled: false` on that source in `sources.yaml` — a feed you
+believe you're reading but aren't is a real setup problem, not noise.
 
 ## 0. Prerequisites
 
@@ -50,7 +54,11 @@ then fix the leak. `.env` is gitignored.
    at daily cadence only if the fallback wins the milestone-6 listening test).
 3. Put the key in `.env` as `OPENAI_API_KEY=...`
 
-### 2b. PERPLEXITY_API_KEY (required — daily discovery query)
+### 2b. PERPLEXITY_API_KEY (optional — deferred by choice, 2026-07-05)
+
+You deferred this key: ingest runs RSS-only and says so on every run, and
+the doctor reports the absence as informational (○), not failing — the
+product's actual running state. If you want the daily discovery query later:
 
 1. Go to <https://www.perplexity.ai/settings/api> → generate an API key.
 2. Sonar is pay-as-you-go against a **prepaid credit balance — that balance is
