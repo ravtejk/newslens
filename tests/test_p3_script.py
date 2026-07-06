@@ -1,0 +1,119 @@
+"""P3 — podcast-quality milestone (implementer-written; QA extends).
+Offline; the liveness tests fail without the wiring (ENGINEERING.md BUG17
+rule: enforcement is born with the red only it can flip)."""
+
+import json
+import time
+
+import pytest
+
+from newslens import db, generate
+
+from test_generate import (compliant_script, seed_briefing, slot,
+                           stories_payload)
+from test_m3_qa import _stage_fakes, fake_chat  # noqa: F401 (fixture)
+
+DATE = "2026-07-07"
+ENV = {"OPENAI_API_KEY": "sk-qa-fake"}
+
+
+# --- P3 #8: the deterministic TTS-safe pass (unit) --------------------------
+
+@pytest.mark.parametrize("before,after", [
+    ("OPEC+ raised output.", "OPEC plus raised output."),
+    ("a $5T package", "a 5 trillion dollars package"),
+    ("$1.2 billion in aid", "1.2 billion dollars in aid"),
+    ("costs $188,000 today", "costs 188 thousand dollars today"),
+    ("800,000 barrels", "800 thousand barrels"),
+    ("3,000,000 people", "3 million people"),
+    ("the 2024-2026 window", "the 2024 to 2026 window"),
+    ("up 5% on the day", "up 5 percent on the day"),
+])
+def test_tts_safe_transforms(before, after):
+    out, notes = generate.tts_safe_pass(before)
+    assert out == after
+    assert notes  # every transform discloses
+
+
+def test_tts_safe_pass_is_idempotent_and_leaves_prose_alone():
+    text = "OPEC plus holds. Prices rose 5 percent. A plus for markets."
+    out, notes = generate.tts_safe_pass(text)
+    assert out == text and notes == []
+    once, _ = generate.tts_safe_pass("OPEC+ and $5T and 800,000")
+    twice, notes2 = generate.tts_safe_pass(once)
+    assert twice == once and notes2 == []
+
+
+# --- P3 #2/#3/#4: validate_script warns (through the wired surface) --------
+
+def _inputs():
+    return {"slots": [slot(1)]}
+
+
+def _narr(extra=""):
+    return ("The summit opens Tuesday. Officials expect a pledge. " + extra)
+
+
+def test_never_repeat_warn_fires_on_cold_open_phrase_reuse():
+    reused = "the most consequential bilateral meeting of the summit"
+    text = (f"Today brings {reused}. It's Tuesday, July 7. Here's what "
+            f"matters today. First up: {reused}, where leaders gather. "
+            + "That's your briefing.")
+    _, _, warns = generate.validate_script(text, _narr(reused), _inputs())
+    assert any("never-repeat (P3 #2)" in w for w in warns)
+
+
+def test_rhythm_warn_fires_on_three_long_sentences():
+    long_s = ("This sentence carries far too many words for the ear and "
+              "keeps adding clauses until any listener has lost the thread "
+              "of what it was even about at the start. ")
+    text = "It's Tuesday, July 7. " + long_s * 3 + "That's your briefing."
+    _, _, warns = generate.validate_script(text, _narr(long_s), _inputs())
+    assert any("rhythm (P3 #3)" in w for w in warns)
+
+
+def test_register_warn_fires_on_written_constructions():
+    text = ("It's Tuesday, July 7. The former rose; the latter fell. "
+            "That's your briefing.")
+    _, _, warns = generate.validate_script(text, _narr(), _inputs())
+    hit = next(w for w in warns if "speech-not-prose (P3 #4)" in w)
+    assert "the latter" in hit and "semicolon" in hit
+
+
+def test_clean_script_draws_no_p3_warns():
+    text = ("Something happened. It matters because of a named reason. "
+            "It's Tuesday, July 7. Here's what matters today. New details "
+            "arrived this morning. That's your briefing.")
+    _, _, warns = generate.validate_script(text, _narr("New details arrived"),
+                                           _inputs())
+    assert not any("P3 #" in w for w in warns)
+
+
+# --- Liveness: the wiring reds (fail without the call site) ----------------
+
+def test_LIVENESS_tts_safe_pass_reaches_the_persisted_script(
+        tmp_paths, fake_chat, monkeypatch):
+    """Fails if tts_safe_pass is defined but never called on the accepted
+    script (the BUG17 dead-validator class): the persisted script_text and
+    the run warnings must both carry the pass's work."""
+    db.migrate()
+    con = db.connect()
+    try:
+        slots = _stage_fakes(monkeypatch)
+        payload = stories_payload(slots)
+        payload["stories"][0]["lede"] += " OPEC+ moved output."
+        fake_chat.narrative = payload
+        script = compliant_script(slots)
+        fake_chat.script = script.replace(
+            "That's your briefing.",
+            "OPEC+ agreed to move. That's your briefing.")
+        rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
+                                    refresh=True)
+        assert "OPEC plus agreed to move." in rep.script_text
+        assert "OPEC+" not in rep.script_text
+        assert any("tts-safe pass (P3 #8" in w for w in rep.warnings)
+        row = con.execute("SELECT script_text FROM briefings WHERE date=?",
+                          (DATE,)).fetchone()
+        assert "OPEC plus agreed to move." in row["script_text"]
+    finally:
+        con.close()

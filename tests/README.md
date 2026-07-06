@@ -603,3 +603,29 @@ row binds quick on --no-refresh with analysis provably cold).
 trace_check_numerals has zero call sites, so no invented-numeral warning
 reaches any run (draft or edited-swap). Fix contract in the docstring;
 the four unit pins define the behavior. M9 close rides on this wiring.
+
+## P3 — podcast quality (QA)
+
+Files: implementer `test_p3_script.py` (14, incl. the first liveness red
+under the new ENGINEERING.md claims-travel-with-proof rule); QA
+`test_p3_qa.py` (29 green + 1 KNOWN-RED). Floor after this pass:
+**864 green + 1 known-red** (was 835). Liveness pattern VERIFIED to bite:
+call site disabled locally -> red -> restored byte-identical (hash-checked).
+
+Landed: enumerated-only safety battery (3-2 scores, C++, 15+, leading-+,
+non-even comma numbers all byte-identical pass-through); adversarial
+transform pins incl. the gate-routed "A+ rating" -> "A plus rating" case,
+"$5 trillion" word form (no doubling), en-dash ranges, "3-4%%" dash
+survival, and "$1,200,000" -> "1,200 thousand dollars" (value-preserving,
+ear-hostile — gate note); fixed-point idempotence over every output +
+OPEC plus x3; run-level ordering pin (validators see the model's script,
+transforms never trip the pre-transform numeral check); rhythm boundary
+(25 counts, 24 resets); never-repeat proper-noun FP documented as the
+accepted warn-grade cost + dateline-anchor dependence pinned (no dateline
+= silent, two-digit days anchor); register list; all-three-detectors
+warn-grade-never-hard sweep.
+
+**KNOWN-RED — BUG18:** currency transforms don't consume an existing
+trailing "dollars": "$2 billion dollars" -> "2 billion dollars dollars"
+in the persisted script/wav — the tics class P3 exists to kill. Stable
+under re-application (no amplifier); fix contract in the docstring.

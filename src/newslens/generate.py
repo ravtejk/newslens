@@ -886,6 +886,58 @@ def _date_spoken_forms(iso_date: str) -> List[str]:
     return [iso_date, f"{month} {day}", f"{month} {day}{suffix}"]
 
 
+_TTS_PLUS_RE = re.compile(r"\b([A-Z][A-Za-z]*)\+(?=[\s.,;:!?)\"']|$)")
+_TTS_CURRENCY_SUFFIX_RE = re.compile(
+    # BUG18: consume an existing trailing " dollars" so the model's routine
+    # redundancy ("$2 billion dollars") can't double into a spoken stutter.
+    r"\$(\d[\d,]*(?:\.\d+)?)\s*(trillion|billion|million|thousand|[TBMK])\b"
+    r"(?:\s+dollars\b)?")
+_TTS_CURRENCY_BARE_RE = re.compile(r"\$(\d[\d,]*(?:\.\d+)?)(?:\s+dollars\b)?")
+_TTS_THOUSANDS_RE = re.compile(r"\b(\d{1,3}),000,000\b")
+_TTS_THOUSAND_RE = re.compile(r"\b(\d{1,3}),000\b")
+_TTS_RANGE_RE = re.compile(r"\b(\d{4})\s*[–—-]\s*(\d{4})\b")
+_TTS_SUFFIX_WORDS = {"T": "trillion", "B": "billion", "M": "million",
+                     "K": "thousand"}
+
+
+def tts_safe_pass(text: str) -> Tuple[str, List[str]]:
+    """P3 item 8 — deterministic, code-owned, enumerated transforms that
+    cater to the voice model's observed limitations (the tics class:
+    'eight hundred zero zero zero', 'dollar five T'). Runs AFTER script
+    validation (the validators see the model's own output; these are
+    furniture-class rewrites of FORM, never facts), each application
+    disclosed. Idempotent by construction: every output form is a fixed
+    point of every rule."""
+    notes: List[str] = []
+
+    def sub(rx, repl, label):
+        nonlocal text
+        text, n = rx.subn(repl, text)
+        if n:
+            notes.append(f"{label} ×{n}")
+
+    # "$5T" / "$1.2 billion" -> "5 trillion dollars" / "1.2 billion dollars"
+    def currency_suffix(m):
+        num, suf = m.group(1), m.group(2)
+        word = _TTS_SUFFIX_WORDS.get(suf, suf)
+        return f"{num} {word} dollars"
+    sub(_TTS_CURRENCY_SUFFIX_RE, currency_suffix, "currency-with-magnitude")
+    # bare "$188,000" -> "188,000 dollars" (thousands rule below then speaks it)
+    sub(_TTS_CURRENCY_BARE_RE, r"\1 dollars", "bare-currency")
+    # "800,000,000" handled first, then "800,000" -> "800 thousand"
+    sub(_TTS_THOUSANDS_RE, r"\1 million", "even-millions")
+    sub(_TTS_THOUSAND_RE, r"\1 thousand", "even-thousands")
+    # "OPEC+" -> "OPEC plus"
+    sub(_TTS_PLUS_RE, r"\1 plus", "plus-suffix")
+    # "2024-2026" -> "2024 to 2026"
+    sub(_TTS_RANGE_RE, r"\1 to \2", "year-range")
+    # "5%" -> "5 percent"
+    text, n = re.subn(r"(\d)\s*%", r"\1 percent", text)
+    if n:
+        notes.append(f"percent ×{n}")
+    return text, notes
+
+
 def validate_script(
     text: str, narrative: str, inputs: Dict
 ) -> Tuple[str, List[str], List[str]]:
@@ -948,6 +1000,43 @@ def validate_script(
     hits = _scan_banned(body)
     if hits:
         warnings.append(f"script banned strings: {hits}")
+
+    # P3 #2 — never-repeat: a 6-word phrase from the cold open reappearing
+    # later is the three-times-repetition class the principal flagged.
+    dateline_m = re.search(r"\bit's [a-z]+, [a-z]+ \d", low)
+    if dateline_m:
+        open_text = low[:dateline_m.start()]
+        rest = low[dateline_m.end():]
+        open_words = re.findall(r"[a-z']+", open_text)
+        seen = set()
+        for i in range(max(0, len(open_words) - 5)):
+            gram = " ".join(open_words[i:i + 6])
+            if gram in seen:
+                continue
+            seen.add(gram)
+            if gram in rest:
+                warnings.append(
+                    f"never-repeat (P3 #2): cold-open phrasing reappears "
+                    f"later — \"{gram}...\"")
+                break
+    # P3 #3 — rhythm: three consecutive long sentences kill spoken pacing.
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", body) if s.strip()]
+    run = 0
+    for s in sentences:
+        run = run + 1 if len(s.split()) > 24 else 0
+        if run >= 3:
+            warnings.append(
+                "rhythm (P3 #3): three consecutive 25+-word sentences — "
+                "vary length for the ear")
+            break
+    # P3 #4 — written register has no place in speech.
+    register_hits = [w for w in ("the latter", "the former", "aforementioned",
+                                 "respectively") if w in low]
+    if ";" in body:
+        register_hits.append("semicolon")
+    if register_hits:
+        warnings.append(f"speech-not-prose (P3 #4): written-register "
+                        f"constructions: {register_hits}")
     mech = [x for x in MECHANICAL_TRANSITIONS if x in low]
     if mech:
         warnings.append(f"mechanical transition defaults (A4): {mech}")
@@ -1409,6 +1498,13 @@ def _run_generate_body(
     )
     script = script_holder[0]
     report.warnings.extend(script_warnings)
+    # P3 #8: deterministic TTS-safe pass — AFTER validation (validators see
+    # the model's own output; these are enumerated furniture-class rewrites
+    # of form, never facts), disclosed per transform class.
+    script, tts_notes = tts_safe_pass(script)
+    if tts_notes:
+        report.warnings.append(
+            f"tts-safe pass (P3 #8, code-owned): {', '.join(tts_notes)}")
     step_s = {"step": "script_adapt", "model": WRITER_MODEL,
               "prompt_tokens": usage_s.get("prompt_tokens"),
               "completion_tokens": usage_s.get("completion_tokens"),

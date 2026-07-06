@@ -511,3 +511,29 @@ derives via compute_prov_display when uncalled-with-provenance); v6 bare
 freeze, arc-anchor-gap freeze, demotion no-row clause (verdict row now
 required), and the generate-wiring pin's verdict expectation (fake
 per_story without persistence = no verdict under the one-path ruling).
+
+## P3 record (2026-07-06) — podcast quality: the ROUND 2 nine
+
+**Prompt (script_adapt.txt):** items 1 (cold-open orient, 2-3 sentences,
+never pre-play), 2 (never-repeat across open/menu/body), 3 (rhythm), 4
+(speech-not-prose: contractions, natural possessives, written-register ban),
+6 (editorial-judgment license within A1), 7 (one-idea-per-ear), 9 (breath
+points, structural emphasis). Items 5 (transitions) already present (A4).
+**Code (generate.py):** tts_safe_pass (item 8) — enumerated deterministic
+transforms (X+ -> "X plus", $NT -> "N trillion dollars", bare $ -> dollars,
+even thousands/millions spoken, year ranges, percent), idempotent, applied
+AFTER validation (form never facts), disclosed per class; wired at the
+script acceptance site (grep: generate.py:1498 region). validate_script
+gains warn-grade P3 detectors: never-repeat (6-gram cold-open overlap),
+rhythm (3 consecutive 25+-word sentences), written register (latter/former/
+aforementioned/respectively/semicolons). Liveness red proves the wiring
+(test_LIVENESS_tts_safe_pass_reaches_the_persisted_script).
+**Live run:** all machinery fired on today's edition — transforms landed in
+the persisted script, never-repeat detector caught the model's remaining
+cold-open repetition, banned-strings caught "remains to be seen". Honest
+state: model compliance with the new prompt rules is PARTIAL on n=1 (cold
+open still heavy) — warn-documented, ear-test decides significance.
+**Ear test staged:** 2026-07-06-eartest-{kokoro,openai}.wav + NOTES (costs:
+kokoro $0/4.8min/65s, openai $0.067/4.4min/50s; 4.4x-vs-14x note included —
+principal's ruling). Milestone spend: $0.061 (regen) + $0.067 (openai TTS)
+= $0.128.
