@@ -25,7 +25,8 @@ referencing briefing, the three-state lifecycle (`active` / `dormant` /
 `dismissed_user`, ADR-0006) with 14-day dormancy and earned-slot
 auto-revival, and the hand-editable `memory.md` two-way sync (file wins,
 loudly). Narrative text and audio are milestones 5–6. The Sonar discovery
-seam is built but cold (key deferred by choice). New at M5 (as
+seam is LIVE as of 2026-07-06 (key granted post-construction; reliability
+spike passed 5/5 — see the build log). New at M5 (as
 amended by the principal's editorial review, contract §A1-A6):
 `newslens generate` — the end-to-end on-demand briefing (ingest -> rank ->
 narrative -> script) per the Content Lead's contract + amendments
@@ -84,7 +85,7 @@ and every missing item comes with its fix.
 | `newslens memory dismiss "<topic>"` | Stop tracking — stays visible in `memory.md`, never auto-revives. |
 | `newslens memory note "<topic>" "<text>"` | Set the note the generation prompt reads verbatim — the explicit "more/less like this" mechanism. |
 | `newslens generate [--date] [--variant A\|B] [--no-refresh] [--no-threads]` | The whole product, on demand: chains ingest -> rank, writes the tiered narrative (lead full / second medium / rest quick hits) in **voice A — the voice of record** (editorial review A1; alternation ended), adapts it into a podcast script (fact-subset validated), persists both onto the briefing row (prior narrative archived first), renders to stdout + `data/briefings/<date>.md`, logs per-step real costs (incl. per-story tiers) to `briefings.token_cost` and `data/generation_log.jsonl`. All three LLM calls run on **GPT-4o** (writer up-tier: principal, 2026-07-05, register-holding trigger; ranking up-tier: CoS recommendation same day after loose semantic matches — 4o-mini stays as the documented fallback rung on both seams); expect ~$0.10–0.14/full text pipeline (rank + writer + editor); audio adds $0 (kokoro) or ~$0.015/min (openai). `--variant B` renders the retired voice as a labeled comparison SAMPLE; `--no-threads` renders the cold-start view (threads emptied, tags kept) as a labeled SAMPLE — **samples always skip the refresh chain, so the briefing of record is never touched by a sample request**. `--no-refresh` skips the chain for narrative-only iteration on the record. |
-| `scripts/sonar_spike` | The pending Sonar reliability gate — one command the moment the key lands. Refuses politely without it. |
+| `scripts/sonar_spike` | The Sonar reliability gate — **passed live 2026-07-06** (5/5 probes, 2.9–6.6s, 9–10 search_results each, $0.0043). Re-runnable anytime; refuses politely without the key. |
 
 Coming later (deliberately not stubbed): `read`/`listen`
 (M7 — these log the consumption events the day-30 falsifier is computed from;
@@ -163,7 +164,7 @@ format-enforced (`YYYY-MM-DD`) by triggers since migration 0002. Rationale:
 migrations/          numbered .sql files; IF NOT EXISTS everywhere (re-apply safe)
 prompts/             every LLM-facing prompt is a versioned file, never inline
 scripts/doctor       health check; works pre-install (stdlib-only bootstrap)
-scripts/sonar_spike  the pending Sonar reliability gate (needs the key)
+scripts/sonar_spike  the Sonar reliability gate (passed 2026-07-06; re-runnable)
 src/newslens/        paths, db (stdlib-only), config, net, ingest, discovery, ranking, memory, doctor, cli
 sources.yaml         the principal's tiered outlet list + interests (seeded M2)
 memory.md            (gitignored) the hand-editable live-threads surface

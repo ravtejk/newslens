@@ -164,6 +164,16 @@ faithful (ADR-0011 D3). PREFLIGHT.md spot-check: all sampled file:line
 claims accurate; one cosmetic imprecision (CSRF cited ~1030, gate at 1014).
 Construction ends with this suite as the standing acceptance surface.
 
+P1 UI-polish pass (2026-07-06, scoped): 0 red — 618/618. Claims verified
+(three-file diff, sources.yaml byte-identical to f5e3532, 11 construction
+event rows untouched). `test_ui_polish.py` pins the glance restyle (archive
+grammar, slot-derived keywords with the world-impact-pick fallback, anchors
+to in-Today story ids, escaping, reduced-motion scroll), display-only
+ongoing recency (sort + lifecycle untouched proof), and the splash logo
+(no-JS degradation by construction, idempotent single passive listener,
+dashed border both states, dark-mode independence). Item 27's furniture
+contract extended to the glance rows.
+
 ## Implementer contract notes for milestone 3 (for QA — appended per dispatch)
 
 New surfaces: `ranking.py` (clustering/scoring/override/corroboration/persist),

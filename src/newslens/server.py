@@ -288,6 +288,10 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
             "quiet_since": _short_date(r["status_changed_at"]),
             "developing": bool(r["ref_date"] and r["ref_date"] >= cutoff),
         })
+    # P1 polish (2026-07-06): Ongoing sorts by recency of last pickup, most
+    # recent first; never-picked-up threads sink to the end, original (id)
+    # order preserved within ties — display-order only, no lifecycle change.
+    grouped["active"].sort(key=lambda th: th["last"] or "", reverse=True)
     return grouped
 
 
@@ -629,14 +633,29 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
     tiers = (entry or {}).get("tiers") or []
     active = _active_topics_lower(con)
 
-    glance_bits = []
-    for i, st in enumerate(stories):
-        glance_bits.append(
-            f'<a href="#story-{i}">{_e(st.get("headline", ""))}</a>')
+    # P1 polish (2026-07-06): the glance adopts the ARCHIVE's visual grammar
+    # — same row card, serif primary line, soft topic-keyword line — one
+    # vocabulary for "a briefing entry" everywhere. Each row anchors to its
+    # story below (in-page; no navigation). Keywords derive from the SLOT
+    # (code-owned), exactly as archive rows do; the no-match fallback mirrors
+    # the meta-footnote's own language.
     html = []
-    if glance_bits:
-        html.append('<p class="glance">In today’s briefing: '
-                    + '<span class="sep">·</span>'.join(glance_bits) + "</p>")
+    glance_rows = []
+    for i, st in enumerate(stories):
+        slot = slots[i] if i < len(slots) else {}
+        kws = [tg.get("name") for tg in slot.get("matched_tags") or []
+               if isinstance(tg, dict) and tg.get("name")]
+        kws += [m for m in slot.get("matched_memory") or [] if m not in kws]
+        if not kws:
+            kws = ["world-impact pick"]
+        kw_html = '<span class="sep">·</span>'.join(_e(k) for k in kws[:3])
+        glance_rows.append(
+            f'<div class="archive-row glance-row"><a href="#story-{i}">'
+            f'<p class="archive-date">{_e(st.get("headline", ""))}</p>'
+            f'<p class="archive-keywords">{kw_html}</p></a></div>')
+    if glance_rows:
+        html.append('<div class="glance"><p class="section-h">In today’s '
+                    'briefing</p>' + "".join(glance_rows) + "</div>")
 
     for i, st in enumerate(stories):
         slot = slots[i] if i < len(slots) else {}

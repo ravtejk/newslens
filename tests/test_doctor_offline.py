@@ -184,7 +184,9 @@ def test_perplexity_check_passes_and_sends_the_versioned_minimal_ping(
     assert len(posts) == 1
     body = posts[0]["body"]
     assert body["model"] == "sonar"
-    assert body["max_tokens"] == 8  # minimal by construction, not by promise
+    # minimal by construction — but 16 is Perplexity's enforced floor (400
+    # below it, found live 2026-07-06); "as small as the API allows".
+    assert body["max_tokens"] == 16
     ping = (paths.PROMPTS_DIR / "doctor_sonar_ping.txt").read_text(encoding="utf-8")
     assert body["messages"] == [{"role": "user", "content": ping.strip()}]
 

@@ -49,7 +49,15 @@ section.view { display: none; } section.view.active { display: block; }
 .logo-placeholder { flex: 1; text-align: center; font-family: var(--font-serif);
   font-weight: 700; font-size: 1.02rem; letter-spacing: 0.01em; color: var(--ink);
   border: 1px dashed var(--rule); border-radius: 6px; padding: 0.15rem 0.5rem;
-  align-self: center; max-width: 9rem; margin: 0 auto; }
+  align-self: center; max-width: 9rem; margin: 0 auto;
+  transition: font-size 220ms ease-out, padding 220ms ease-out, max-width 220ms ease-out; }
+/* P1 polish: splash state — the logo opens large and shrinks to the masthead
+   size on scroll. JS adds/removes body.splash; with no JS the class never
+   appears and the logo stays at the static masthead size above (graceful
+   degradation by construction). Dashed border stays in BOTH states: it is
+   the placeholder marker and leaves only with the real logo (P4). */
+body.splash .logo-placeholder { font-size: 2.1rem; padding: 0.7rem 1.1rem; max-width: 16rem; }
+@media (prefers-reduced-motion: reduce) { .logo-placeholder { transition: none; } }
 .top-bar-right { flex: 1; display: flex; justify-content: flex-end; }
 .settings-corner { background: transparent; border: 1px solid var(--rule); border-radius: 50%;
   width: 2.1rem; height: 2.1rem; display: flex; align-items: center; justify-content: center;
@@ -65,11 +73,14 @@ section.view { display: none; } section.view.active { display: block; }
 .episode-affordance .episode-meta { color: var(--ink-faint); font-size: 0.85rem; }
 .episode-affordance audio { display: block; width: 100%; margin-top: 0.6rem; }
 
-.glance { font-size: 0.87rem; color: var(--ink-soft); margin: 1.1rem 0 2.25rem;
-  padding-bottom: 1.5rem; border-bottom: 1px solid var(--rule); }
-.glance a { color: var(--ink-soft); text-decoration: none; }
-.glance a:hover { color: var(--accent); }
-.glance .sep { color: var(--ink-faint); margin: 0 0.4em; }
+/* P1 polish: the glance reuses the archive row grammar (one vocabulary for
+   "a briefing entry"); .glance is now only the section wrapper. */
+.glance { margin: 1.1rem 0 2.25rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--rule); }
+.glance .section-h { margin: 0 0 0.75rem; }
+.glance-row .archive-date { font-size: 0.98rem; }
+html { scroll-behavior: smooth; }
+article.story { scroll-margin-top: 0.75rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
 article.story { padding: 0 0 3rem; }
 article.story:last-of-type { padding-bottom: 1rem; }
@@ -425,6 +436,16 @@ function toggleDark(el) {
   document.body.classList.toggle('dark', !on);
   try { localStorage.setItem('newslens-dark', String(!on)); } catch (e) {}
 }
+/* P1 polish: splash-to-masthead logo. Idempotent class sync on scroll;
+   passive listener; both directions (scrolling back to top re-opens large). */
+(function () {
+  var THRESH = 24;
+  function syncSplash() {
+    document.body.classList.toggle('splash', window.scrollY <= THRESH);
+  }
+  window.addEventListener('scroll', syncSplash, { passive: true });
+  syncSplash();
+})();
 try { if (localStorage.getItem('newslens-dark') === 'true') {
   document.body.classList.add('dark');
   var t = document.getElementById('dark-toggle'); if (t) t.setAttribute('aria-checked', 'true');

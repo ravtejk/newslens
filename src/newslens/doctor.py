@@ -286,7 +286,11 @@ def check_perplexity_key(env: Dict[str, str]) -> List[Result]:
         {
             "model": "sonar",
             "messages": [{"role": "user", "content": ping_text}],
-            "max_tokens": 8,
+            # 16 is Perplexity's enforced minimum (HTTP 400 below it, found
+            # live 2026-07-06 on the probe's first real contact — the key was
+            # deferred through all of construction, so this line had never
+            # touched the API).
+            "max_tokens": 16,
         }
     ).encode("utf-8")
     req = urllib.request.Request(

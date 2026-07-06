@@ -1144,3 +1144,9 @@ def test_item27_furniture_contract_through_build_page(ui):
     assert "2026-07-01" in page
     # 5. Follow affordance with pressed state:
     assert "aria-pressed" in page
+    # 6. P1 polish extension: the glance rows are furniture too — archive
+    # grammar, slot-derived keywords, and the honest no-signal fallback.
+    assert page.count('class="archive-row glance-row"') == 2
+    glance = page[page.index('class="glance"'):page.index("<article")]
+    assert "AI regulation" in glance and "Iran War" in glance
+    assert "world-impact pick" in glance  # the override slot's fallback line

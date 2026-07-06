@@ -316,3 +316,33 @@ down.
 
 **Item 27 (furniture-contract drift guard) remains QA's, optional. Item 28
 minors carried, still open — recorded, not silently dropped.**
+
+## Post-construction polish — P1 batch (2026-07-06; not a milestone)
+
+**1. Glance restyle (server.py `_render_today`, webui.py):** "In today's
+briefing" now renders in the ARCHIVE's visual grammar — `.archive-row` cards
+(shared classes, no new vocabulary), serif headline line + soft topic-keyword
+line derived from the SLOT (matched tags + memory, code-owned; fallback
+"world-impact pick" mirrors the meta-footnote's language). Each row anchors
+in-page to its story (`#story-i`; `scroll-margin-top` + smooth scroll with a
+reduced-motion opt-out).
+**2. Ongoing recency order (server.py `_following_rows`):** active threads
+sort by last-picked-up date desc; never-picked-up sink to the end; stable
+within ties. Display-order only — lifecycle untouched.
+**3. Splash logo (webui.py):** logo placeholder opens large
+(`body.splash`, 2.1rem) and shrinks to the masthead size at >24px scroll;
+idempotent passive scroll listener, both directions; transitions honor
+`prefers-reduced-motion`; NO JS -> class never applied -> static masthead
+size (degradation by construction). Dashed border kept in both states (the
+placeholder marker leaves only with the real logo, P4). Interpretation note:
+the top bar is NOT sticky — that's the P4 masthead decision; the shrink
+plays while the bar is still in view at small scroll offsets.
+**4. Politico feed:** investigated the 404 — upstream-transient, now healed.
+The recorded URL (rss.politico.com/politics-news.xml) answers 200 with valid
+RSS ("Politics" channel) through curl, plain urllib with the doctor's UA, and
+net.OPENER. No sources.yaml change made (swapping a correct URL against a
+transient would be churn). Side effect: **doctor exit 0 — first in project
+history** (0 required failing · 1 warning · 49 passing).
+**Verification discipline:** items 1-3 verified by in-process `build_page`
+rendering + suite — zero consumption events generated (the day-30 window
+opens 2026-07-07; the events table stayed at 11 construction rows throughout).
