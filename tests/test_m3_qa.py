@@ -909,11 +909,19 @@ def test_BUG17_trace_check_must_run_at_both_validation_sites(
 
 def test_editor_receives_the_analysis_fact_universe_block(
         tmp_paths, fake_chat, monkeypatch):
-    """Gate 1b ordered pin: the editor's prompt (2nd json call) carries the
-    ANALYSIS FACT UNIVERSE constraint line exactly once and the briefed
+    """Gate 1b ordered pin, RE-INDEXED for P3.1: the editor's prompt carries
+    the ANALYSIS FACT UNIVERSE constraint line exactly once and the briefed
     slot's block — facts, ledger claims, discrepancy VS-never-merge, takes
-    with basis/holder. The M6 editor guard set stays untouched (the whole
-    810 floor is the proof; the shape checks still ran on this run)."""
+    with basis/holder. The M6 editor guard set stays untouched (the shape
+    checks still ran on this run).
+
+    Re-index note (QA, P3.1): this exact setup — persist_valid + the short
+    fixture lead — now ALSO trips the lead tier floor, so a narrative retry
+    precedes the editor and 'the 2nd json call' stopped being the editor.
+    The editor call is selected by its template marker ("You are the copy
+    editor", unique to prompts/editor_pass.txt), never by position; the
+    block itself (generate.build_analysis_facts_block -> editor prompt)
+    is unchanged."""
     db.migrate()
     con = db.connect()
     try:
@@ -923,8 +931,10 @@ def test_editor_receives_the_analysis_fact_universe_block(
         fake_chat.script = compliant_script(slots)
         generate.run_generate(date=DATE, con=con, env=dict(ENV), refresh=True)
         json_calls = [c for c in fake_chat.calls if c["json_mode"]]
-        assert len(json_calls) >= 2
-        editor_prompt = json_calls[1]["prompt"]
+        editor_calls = [c for c in json_calls
+                        if "You are the copy editor" in c["prompt"]]
+        assert len(editor_calls) == 1
+        editor_prompt = editor_calls[0]["prompt"]
         assert editor_prompt.count("ANALYSIS FACT UNIVERSE") == 1
         assert "story 1 (briefed — its fact universe):" in editor_prompt
         assert "fact: A cited fact." in editor_prompt

@@ -8,13 +8,17 @@ gate, (4) detector quality at boundaries and documented false positives,
 (5) liveness-red verification (procedural — see report), (6) hard rules
 untouched / detectors warn-grade only.
 
-KNOWN-RED:
-  BUG18  the currency transforms don't consume an existing trailing
-         "dollars", so the model's common redundancy "$2 billion dollars"
-         becomes "2 billion dollars dollars" in the persisted script and
-         the wav — the exact tics class P3 exists to kill. (Stable under
-         re-application, but the FIRST output already stutters.) Fix:
-         both currency rules consume an optional trailing \\s*dollars\\b.
+P3.1 UPDATE (QA, 2026-07-09): focus 6's "warn-grade only" was overruled
+by principal ruling (DECISIONS.md 2026-07-06 batch) for the repetition
+class — promoted to script_structural_check's hard-with-retry, enforced
+in test_p31_enforcement.py. Three pins in this file were re-characterized
+accordingly (see their docstrings); rhythm + register remain warn-grade.
+
+RESOLVED:
+  BUG18  FIXED (P3.1): both currency rules now consume an optional
+         trailing " dollars" (generate.py _TTS_CURRENCY_SUFFIX_RE /
+         _TTS_CURRENCY_BARE_RE) — test_BUG18_* below is green and stays
+         as the regression pin.
 
 Gate items in docstrings: "A+ rating" -> "A plus rating" pinned as actual
 (recommend ratify — correct for ratings/blood types; enumerated-only
@@ -194,33 +198,69 @@ def test_rhythm_boundary_exactly_25_counts_24_resets():
     assert not any("rhythm (P3 #3)" in w for w in warns2)
 
 
-def test_never_repeat_proper_noun_recurrence_is_a_documented_fp():
-    """Dispatch probe: a legitimately-recurring 6-gram (agency names, org
-    titles) DOES warn — the detector can't tell furniture from echo.
-    Pinned as the accepted warn-grade cost (a log line, never a block);
-    if day-14 listening shows this drowning real repeats, the threshold
-    or a proper-noun allowlist is the gate's dial."""
+def test_proper_noun_recurrence_fp_narrowed_not_relocated():
+    """RE-CHARACTERIZED for P3.1 (was: recurring agency names are a
+    documented warn-grade FP, with a day-14 threshold/allowlist dial).
+    The principal ruling (DECISIONS.md 2026-07-06 batch) promoted
+    never-repeat out of validate_script's warn channel into
+    script_structural_check's paragraph-pair shape: two >=15-word
+    sections sharing >=3 distinct 6-grams. That shape NARROWS the FP
+    class rather than relocating it — a single recurring 6-word
+    proper-noun phrase yields at most 1-2 shared grams and stays silent;
+    the same name carried inside a >=8-word retold run crosses the
+    threshold and correctly fires (echo, not furniture). The promised
+    dial is no longer needed for this class."""
     agency = "the international atomic energy agency said"
+    # The old FP shape no longer draws ANY warn — the channel was removed
+    # (promotion, not duplication; generate.py validate_script).
     text = (f"Overnight, {agency} inspections resumed. It's Friday, July 17. "
             f"Later in the hour, {agency} more. That's your briefing.")
     _, _, warns = generate.validate_script(text, agency, _inputs())
-    assert any("never-repeat (P3 #2)" in w and "atomic energy" in w
-               for w in warns)
-
-
-def test_never_repeat_needs_a_dateline_anchor_and_two_digit_days_work():
-    """No dateline = no cold-open boundary = detector silent (documented
-    limitation — the dateline is enforced by the script contract
-    upstream); a two-digit day anchors fine."""
-    reused = "a six word phrase repeated verbatim exactly"
-    no_dateline = (f"Open with {reused}. More prose. Then {reused}. "
-                   "That's your briefing.")
-    _, _, warns = generate.validate_script(no_dateline, reused, _inputs())
     assert not any("never-repeat" in w for w in warns)
+    # New structural shape, the bare recurring name: SILENT (FP gone).
+    p1 = (f"Overnight the inspections resumed at pace, {agency}, in its "
+          "first statement of the week.")
+    p2 = (f"Later in the hour there was more, {agency}, in a follow-up "
+          "note to member states.")
+    assert generate.script_structural_check(p1 + "\n\n" + p2) == []
+    # Same name inside an 8-word retold run: fires — the narrowed line.
+    said8 = agency + " on monday"
+    p3 = (f"Overnight the inspections resumed at pace, {said8}, in its "
+          "first statement of the week.")
+    p4 = (f"Later in the hour there was more, {said8}, in a follow-up "
+          "note to member states.")
+    out = generate.script_structural_check(p3 + "\n\n" + p4)
+    assert any("retell the same material" in v for v in out)
+
+
+def test_repetition_is_paragraph_based_anchor_limit_is_cold_open_only():
+    """RE-CHARACTERIZED for P3.1 (was: no dateline = never-repeat silent,
+    a documented anchor limitation; two-digit days anchor fine). The
+    promoted repetition check is paragraph-pair based and DATELINE-FREE —
+    the old evasion (drop the dateline, repeat freely) is closed. The
+    anchor limitation survives only where the anchor is load-bearing:
+    the cold-open cap (its evasion variants are pinned in
+    test_p31_enforcement.py). The two-digit-day regression retargets to
+    that surviving consumer."""
+    run8 = "alpha bravo charlie delta echo foxtrot golf hotel"
+    a = f"Opening frame words here, {run8}, and then some closing words too."
+    b = f"Different frame entirely now, {run8}, with another ending altogether."
+    out = generate.script_structural_check(a + "\n\n" + b)  # no dateline anywhere
+    assert any("retell the same material" in v for v in out)
+    assert not any(v.startswith("cold open") for v in out)
+    # Warn channel stays empty even WITH a dateline present.
+    reused = "a six word phrase repeated verbatim"
     with_17 = (f"Open with {reused}. It's Friday, July 17. Then {reused}. "
                "That's your briefing.")
-    _, _, warns2 = generate.validate_script(with_17, reused, _inputs())
-    assert any("never-repeat (P3 #2)" in w for w in warns2)
+    _, _, warns = generate.validate_script(with_17, reused, _inputs())
+    assert not any("never-repeat" in w for w in warns)
+    # Two-digit day anchors the cold-open cap fine (July 17).
+    four = ("One moved. Two answered. Three held. Four slipped. "
+            "It's Friday, July 17. Here's what matters today.\n\n"
+            "Body follows in a longer paragraph with enough words to be a "
+            "real section of spoken prose here today.")
+    assert any(v.startswith("cold open runs 4 sentences")
+               for v in generate.script_structural_check(four))
 
 
 def test_register_detector_lists_each_construction_once():
@@ -232,10 +272,18 @@ def test_register_detector_lists_each_construction_once():
     assert "semicolon" not in hit
 
 
-def test_all_three_detectors_are_warn_grade_never_hard(tmp_paths):
-    """Focus 6: a script tripping never-repeat AND rhythm AND register
-    lands in warnings with the HARD list untouched — no new reject class
-    was smuggled in under the podcast milestone."""
+def test_rhythm_and_register_stay_warn_grade_repetition_hard_by_ruling(tmp_paths):
+    """CONSCIOUS FLIP of the original all-three-warn-grade pin — overruled
+    BY PRINCIPAL RULING (DECISIONS.md 2026-07-06 batch: the never-repeat
+    warn fired on the exact run that shipped to his ears; a warn was not
+    enforcement). What SURVIVES of the original contract, still asserted:
+    rhythm (P3 #3) and register (P3 #4) stay warn-grade, and
+    validate_script's HARD list is untouched by every P3 detector. The
+    ONLY promoted class is the structural pair (cold-open cap +
+    cross-section repetition) in script_structural_check, behind exactly
+    one disclosed retry (liveness + spend-proof in
+    test_p31_enforcement.py) — no further hard-reject class rode in with
+    the promotion."""
     reused = "the most consequential meeting of the year"
     long_s = _sentence(26)
     text = (f"Today: {reused}. It's Tuesday, July 7. {reused} again; "
@@ -243,7 +291,14 @@ def test_all_three_detectors_are_warn_grade_never_hard(tmp_paths):
             "That's your briefing.")
     _, hard, warns = generate.validate_script(text, reused + " word end",
                                               _inputs())
-    assert any("never-repeat (P3 #2)" in w for w in warns)
+    assert hard == []  # stronger than the original 'no P3 #' pin
     assert any("rhythm (P3 #3)" in w for w in warns)
     assert any("speech-not-prose (P3 #4)" in w for w in warns)
-    assert not any("P3 #" in h for h in hard)
+    assert not any("never-repeat" in w for w in warns)  # promoted, not doubled
+    # The promoted home catches the same reuse once it is sectioned:
+    pa = (f"Today the wires bring {reused} and its consequences, framed "
+          "at the open for everyone listening.")
+    pb = (f"The lead this hour returns to {reused} and its consequences, "
+          "told once more in the body.")
+    out = generate.script_structural_check(pa + "\n\n" + pb)
+    assert any("retell the same material" in v for v in out)

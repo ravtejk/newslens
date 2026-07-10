@@ -230,6 +230,15 @@ def test_exit_0_with_warnings_once_everything_required_passes(
     # presence in the sandbox and skip the real synthesis via the DISCLOSED
     # marker (QA ruling: accepted BECAUSE the skip renders an INFO line and
     # never masks engine absence — both pinned in test_audio.py).
+    # P3.1 item 4 flip (mechanical, intended): the synth-skip machinery is
+    # kokoro's; with the default now openai, pin kokoro to keep exercising
+    # it — which also matches the principal's real install (his sources.yaml
+    # pins kokoro; the recommended-default nudge is a non-blocking WARN).
+    paths.SOURCES_FILE.write_text(
+        paths.SOURCES_FILE.read_text(encoding="utf-8")
+        + "settings:\n  tts_engine: kokoro\n",
+        encoding="utf-8",
+    )
     venv_py = paths.DATA_DIR / "tts" / "venv" / "bin" / "python"
     venv_py.parent.mkdir(parents=True, exist_ok=True)
     venv_py.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")

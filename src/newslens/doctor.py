@@ -657,17 +657,27 @@ def check_tts() -> List[Result]:
     try:
         engine = cfg_mod.load_sources().tts_engine
     except Exception:  # sources problems are reported by check_sources
-        engine = "kokoro"
+        engine = audio.DEFAULT_TTS_ENGINE
     problem = audio.kokoro_ready()
     if engine == "openai":
         out.append(Result(INFO, "settings.tts_engine = openai (gpt-4o-mini-tts, "
-                                "~$0.015/min on the OpenAI key)"))
+                                "~$0.015/min on the OpenAI key) — the default "
+                                "(principal ear-test ruling 2026-07-06)"))
         if problem:
             out.append(Result(INFO, f"local kokoro engine not installed ({problem}) "
                                     "— fine while the openai engine is selected"))
         return out
+    # engine == "kokoro" now only happens via an explicit sources.yaml pin
+    # (the default flipped to openai, P3.1 item 4). Nudge on the cap-change
+    # pattern: state the recommended default + the ruling, the pin wins, and
+    # the doctor NEVER edits sources.yaml for the principal.
+    out.append(Result(WARN, (
+        "settings.tts_engine pinned to kokoro — the recommended default is "
+        "now openai (gpt-4o-mini-tts; principal ear-test ruling 2026-07-06). "
+        "kokoro stays fully built as the $0 local fallback; your pin wins — "
+        "switch by editing sources.yaml yourself")))
     if problem:
-        out.append(Result(FAIL, f"tts (kokoro, the default engine): {problem}"))
+        out.append(Result(FAIL, f"tts (kokoro, pinned in sources.yaml): {problem}"))
         return out
     if os.environ.get("NEWSLENS_DOCTOR_TTS_SYNTH") == "0":
         out.append(Result(INFO, "tts real-synthesis check skipped "
@@ -705,11 +715,10 @@ def cost_estimate() -> List[Result]:
             "estimated cost-per-run ~$0.07-0.10 for the full text pipeline (all "
             "three calls on GPT-4o since 2026-07-05: rank ~$0.03-0.04 + "
             "narrative & script ~$0.04-0.06; ~$2-3/month at daily cadence) "
-            "with the v1 default TTS — Kokoro-82M running "
-            "locally, no key, no metered cost; if the hosted fallback "
-            "(gpt-4o-mini-tts) wins the milestone-6 listening test, add "
-            "~$0.18/run (~$5.50/month). Static estimate from spec §C + the "
-            "engineering-2 TTS decision; real per-step costs are logged to "
+            "plus ~$0.07/run audio on the default TTS — gpt-4o-mini-tts "
+            "(~$0.015/min; the 2026-07-06 ear-test ruling; measured $0.067 "
+            "on a 4.4-min episode). Pin settings.tts_engine: kokoro for the "
+            "$0 local fallback. Real per-step costs are logged to "
             "briefings.token_cost on every generate",
         )
     ]

@@ -54,13 +54,26 @@ def _narr(extra=""):
     return ("The summit opens Tuesday. Officials expect a pledge. " + extra)
 
 
-def test_never_repeat_warn_fires_on_cold_open_phrase_reuse():
+def test_never_repeat_promoted_out_of_the_warn_channel():
+    """P3.1 pin FLIP (implementer-authored pin, flipped by its author):
+    the principal ruling 2026-07-06 promoted never-repeat from warn-grade
+    to the structural hard-with-retry class. Two poles pinned: (a) the
+    warn channel NO LONGER carries it — a silent regression back to
+    warn-grade would fail here; (b) the same reuse, expressed as sections,
+    is caught by script_structural_check (full enforcement liveness lives
+    in test_p31_enforcement.py)."""
     reused = "the most consequential bilateral meeting of the summit"
     text = (f"Today brings {reused}. It's Tuesday, July 7. Here's what "
             f"matters today. First up: {reused}, where leaders gather. "
             + "That's your briefing.")
     _, _, warns = generate.validate_script(text, _narr(reused), _inputs())
-    assert any("never-repeat (P3 #2)" in w for w in warns)
+    assert not any("never-repeat" in w for w in warns)
+    para_a = (f"Today the wires bring us {reused}, and the day's shape "
+              "follows from that single story.")
+    para_b = (f"First up this hour: {reused}, where the leaders gather "
+              "and the stakes are plain.")
+    out = generate.script_structural_check(para_a + "\n\n" + para_b)
+    assert any("retell the same material" in v for v in out)
 
 
 def test_rhythm_warn_fires_on_three_long_sentences():

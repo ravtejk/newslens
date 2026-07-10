@@ -3,22 +3,26 @@
 
 ONE function boundary, no provider registry (Remy's seam ruling). Engines:
 
-  * kokoro (v1 DEFAULT, principal-approved 2026-07-02): Kokoro-82M via
-    kokoro-onnx in an ISOLATED Python 3.12 venv (data/tts/venv), invoked by
-    subprocess through tools/tts_runner.py — the app itself stays on the 3.9
-    floor (ADR-0008: current Kokoro packaging requires >=3.10; the engine
-    venv is the boring resolution, one brew dependency, no torch). Local,
-    free, no key. MEASURED on this machine: ~4.4x realtime — LOUDLY below
-    the reconvene's 14x M-series floor (Rook's dissent vindicated), while
-    still clearing the operational bar (~71s for a 5-minute episode; nobody
-    is waiting on a batch job).
-  * openai: gpt-4o-mini-tts on the existing key (~$0.015/min) — the fully
-    built fallback behind the same interface. Scripts exceed the API's
-    4,096-char input cap, so the text is chunked on paragraph boundaries and
-    the WAV segments are concatenated losslessly (stdlib wave).
+  * openai (DEFAULT since the 2026-07-06 ear test — principal ruling, P3.1
+    item 4: "I prefer the voice of the openai wav"): gpt-4o-mini-tts on the
+    existing key (~$0.015/min, ~+$0.07/run at current script lengths).
+    Scripts exceed the API's 4,096-char input cap, so the text is chunked on
+    paragraph boundaries and the WAV segments are concatenated losslessly
+    (stdlib wave).
+  * kokoro (the fully built $0 FALLBACK; was the v1 default 2026-07-02 →
+    2026-07-06): Kokoro-82M via kokoro-onnx in an ISOLATED Python 3.12 venv
+    (data/tts/venv), invoked by subprocess through tools/tts_runner.py — the
+    app itself stays on the 3.9 floor (ADR-0008: current Kokoro packaging
+    requires >=3.10; the engine venv is the boring resolution, one brew
+    dependency, no torch). Local, free, no key. MEASURED on this machine:
+    ~4.4x realtime — LOUDLY below the reconvene's 14x M-series floor (Rook's
+    dissent vindicated), while still clearing the operational bar (~71s for
+    a 5-minute episode). The 4.4x re-open is moot while Kokoro isn't the
+    default; the engine question re-opens if voice quality changes
+    (principal: "maybe this can change in the future").
 
 Engine choice: settings.tts_engine in sources.yaml (kokoro|openai, default
-kokoro) — a config flip, not a code fork. Every path has a timeout and a
+openai) — a config flip, not a code fork. Every path has a timeout and a
 visible failure; generate degrades to a no-audio run WITH disclosure rather
 than dying (audio is the last step; the text briefing must never be hostage
 to a synth failure).
@@ -39,7 +43,9 @@ from typing import Dict, List, Optional
 from . import paths
 
 VALID_TTS_ENGINES = ("kokoro", "openai")
-DEFAULT_TTS_ENGINE = "kokoro"
+# P3.1 item 4 (principal ear-test ruling 2026-07-06): gpt-4o-mini-tts is the
+# default voice; kokoro stays fully built as the $0 local fallback.
+DEFAULT_TTS_ENGINE = "openai"
 
 # Engine paths resolve DYNAMICALLY from paths.DATA_DIR (not import-time
 # constants): sandboxed suites patch paths.DATA_DIR, and binding at import
@@ -167,7 +173,7 @@ def _synthesize_openai(script_text: str, out_path: Path, key: str,
     if not key:
         raise AudioError(
             "OPENAI_API_KEY not set — the openai TTS engine needs it "
-            "(or switch settings.tts_engine back to kokoro)"
+            "(or switch settings.tts_engine to kokoro, the $0 local fallback)"
         )
     # Carryover 16: the one spending path without a cap pre-check.
     est_minutes = len(script_text.split()) / 160.0

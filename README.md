@@ -58,10 +58,12 @@ spoken pass under the hard fact-subset/hedge rules with editorial license
 over script attribution (A5). Selection runs on tags + world impact only —
 threads are recorded and woven into continuity, never steering
 (`settings.threads_steer_selection`, A6). Audio ships at M6: `generate` ends by voicing the
-script — Kokoro-82M locally by default (free; isolated engine env via
-`scripts/setup_tts`; measured ~4.4x realtime on this machine — below the
-community 14x floor, flagged at the ear test) or gpt-4o-mini-tts
-(~$0.015/min) via `settings.tts_engine`; a GPT-4o **editor pass** tightens
+script — gpt-4o-mini-tts by default (~$0.015/min on the OpenAI key; the
+principal's ear-test pick, ruling 2026-07-06) or Kokoro-82M locally as the
+fully built $0 fallback (isolated engine env via `scripts/setup_tts`;
+measured ~4.4x realtime on this machine — below the community 14x floor,
+on record; the 4.4x re-open is moot while kokoro isn't default) via
+`settings.tts_engine`; a GPT-4o **editor pass** tightens
 every draft (cut/concretize only, never adds facts, fully re-validated,
 disclosed in the run log) before validation. Spec:
 `workspace/debates/2026-07-02--newslens--engineering.md` (§A–F); scope change:
@@ -114,7 +116,7 @@ rule). You fill `.env` yourself; agents only ever touch `.env.example`.
 
 | Var | Required | Why / scope |
 |---|---|---|
-| `OPENAI_API_KEY` | Yes | Text generation (GPT-4o-mini): ranking, narrative, script adaptation. Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **Audio (M6): Kokoro-82M local is the v1 default** — no key, no metered cost; gpt-4o-mini-tts on this same key is the built fallback, and the principal picks by ear at the milestone-6 listening test. This key is needed for text generation regardless. |
+| `OPENAI_API_KEY` | Yes | Text generation (GPT-4o-mini): ranking, narrative, script adaptation. Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **Audio: gpt-4o-mini-tts on this same key is the default** (~$0.015/min, ~+$0.07/run — the principal's ear-test pick, ruling 2026-07-06); Kokoro-82M local stays fully built as the $0 fallback (`settings.tts_engine: kokoro`). This key is needed for text generation regardless. |
 | `PERPLEXITY_API_KEY` | Yes | One capped Sonar discovery query per run. Pay-as-you-go; a prepaid credit cap in their dashboard is the primary spend limit. |
 | `BUDGET_CAP_USD_PER_RUN` | Default 0.25 (M9 ruling 2026-07-06; was 0.50) | In-app hard stop per generate run (ENGINEERING.md cost guardrail). Degradation ladder: cheapest inputs first, content protected longest; routine derating at 0.25 escalates to the principal, never absorbed. |
 | `GENERATE_HOUR_LOCAL` | Dormant | Nothing reads it in v1 (on-demand only, DECISIONS.md 2026-07-03). Kept optional in case scheduling ever returns; a set-but-invalid value still fails the doctor (typo'd .env is a config error). |

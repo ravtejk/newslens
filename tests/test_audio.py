@@ -229,25 +229,45 @@ def test_settings_tts_engine_validation(tmp_path):
 
     p.write_text("sources:\n  - name: A\n    rss_url: https://a.example/f\n",
                  encoding="utf-8")
-    assert config.load_sources(p).tts_engine == "kokoro"  # default
+    # P3.1 item 4 pin FLIP (mechanical, intended): default kokoro -> openai
+    # per the principal ear-test ruling 2026-07-06.
+    assert config.load_sources(p).tts_engine == "openai"  # default
 
 
 def test_doctor_missing_engine_is_hard_fail_even_with_synth_skip(monkeypatch):
     """The QA-ruling condition: the skip marker must NEVER mask engine
-    absence — a listening-primary product with no engine is ✗."""
-    from newslens import doctor
+    absence — a listening-primary product with no engine is ✗.
+    P3.1 item 4 flip (mechanical, intended): the SELECTED engine's absence
+    is the ✗; with the default now openai, this contract binds when kokoro
+    is pinned in sources.yaml — so the fixture pins it."""
+    from newslens import doctor, paths
 
+    paths.SOURCES_FILE.write_text(
+        "sources:\n  - name: A\n    rss_url: https://a.invalid/f\n"
+        "settings:\n  tts_engine: kokoro\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("NEWSLENS_DOCTOR_TTS_SYNTH", "0")
     results = doctor.check_tts()
     fails = [r for r in results if r.status == doctor.FAIL]
     assert fails and "run: scripts/setup_tts" in fails[0].text
+    # The pin also draws the recommended-default nudge (cap-change pattern).
+    assert any(r.status == doctor.WARN and "recommended default" in r.text
+               for r in results)
 
 
 def test_doctor_synth_skip_always_renders_its_marker(monkeypatch):
-    """The other ruling condition: skipping is DISCLOSED, never silent."""
-    from newslens import doctor
+    """The other ruling condition: skipping is DISCLOSED, never silent.
+    P3.1 item 4 flip (mechanical, intended): the synth check is kokoro's —
+    the fixture pins the engine now that the default is openai."""
+    from newslens import doctor, paths
 
     _install_shim("ok")
+    paths.SOURCES_FILE.write_text(
+        "sources:\n  - name: A\n    rss_url: https://a.invalid/f\n"
+        "settings:\n  tts_engine: kokoro\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("NEWSLENS_DOCTOR_TTS_SYNTH", "0")
     results = doctor.check_tts()
     assert not any(r.status == doctor.FAIL for r in results)

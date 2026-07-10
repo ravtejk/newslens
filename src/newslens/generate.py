@@ -800,6 +800,25 @@ def trace_check_numerals(stories: List[Dict], inputs: Dict) -> List[str]:
     return warns
 
 
+# P3.1 item 3 (principal ruling (5)): the lead's tier must EXPRESS.
+# Derivation of the floor: the contract's total is 900-1300 lead-weighted
+# and A2's lead band is 250-550; with two mediums at ~200 and two quicks at
+# ~60, a 900 low-end total implies a lead near 380 — but 250 is the band's
+# own minimum. The floor lands at 300: above the band minimum because a
+# valid <=700-word cited lead brief removes the thin-material excuse, a
+# third of the low-end total, and comfortably under the 550 ceiling.
+# Enforced hard-with-retry ONLY when a valid lead brief exists; thin days
+# without a brief stay warn-free (the material excuse is real there).
+LEAD_FLOOR_WORDS = 300
+
+
+def _lead_words(payload: Dict) -> int:
+    stories = payload.get("stories") or []
+    if not stories or not isinstance(stories[0], dict):
+        return 0
+    return wc(" ".join(v for v in stories[0].values() if isinstance(v, str)))
+
+
 def build_analysis_facts_block(inputs: Dict) -> str:
     """M3 gate 1b (§607's assumption shipped): the editor receives, for
     briefed slots, the brief's pinned facts + ledger holders/values — the
@@ -938,6 +957,74 @@ def tts_safe_pass(text: str) -> Tuple[str, List[str]]:
     return text, notes
 
 
+# P3.1 anchor fix (QA contract 2026-07-09, tests/test_p31_enforcement.py
+# test_cold_open_anchor_evasion_variants_pinned_as_actual): accept "it's"
+# OR "it is" — and require one of them, so the possessive "its Monday,
+# July 6 meeting" can no longer false-anchor mid-prose. The typographic
+# apostrophe is handled by _anchor_view below, not the regex.
+_DATELINE_RE = re.compile(r"\bit(?:'s| is) [a-z]+, [a-z]+ \d{1,2}")
+COLD_OPEN_MAX_SENTENCES = 3
+COLD_OPEN_MAX_WORDS = 60        # the ruling's "~50" plus handoff-line slack
+REPEAT_GRAMS_THRESHOLD = 3      # distinct shared 6-grams between two sections
+MAX_STRUCTURAL_REPORTS = 3
+
+
+def _anchor_view(body: str) -> str:
+    """Anchor-matching view of a script: lowercased, with the typographic
+    U+2019 apostrophe normalized to ASCII (1:1 char replacement, so match
+    offsets stay valid against the original text). Common in LLM output
+    and invisible in a text review — without this, curly-quote typography
+    silently switches the HARD cold-open cap off (QA anchor-fix contract
+    2026-07-09, tests/test_p31_enforcement.py)."""
+    return body.lower().replace("’", "'")
+
+
+def script_structural_check(body: str) -> List[str]:
+    """P3.1 (principal rulings 2026-07-06, item 4 — the spoken editorial
+    bar, enforcement-grade): the cold open orients and hands off within
+    <=3 sentences / ~50 words with no story pre-play, and no two sections
+    of the script retell the same material. Violations are HARD-WITH-RETRY
+    at the script stage: one retry with the violations injected, then ship
+    the better attempt WITH disclosure — never silently, never a dead run,
+    never an infinite retry against the cap. Calibrated against the
+    2026-07-06 script that shipped to the principal's ears (must catch)
+    and a legitimate script (must pass) — both pinned as fixtures."""
+    out: List[str] = []
+    low = _anchor_view(body)
+    m = _DATELINE_RE.search(low)
+    if m:
+        pre = body[:m.start()]
+        sents = [x for x in re.split(r"(?<=[.!?])\s+", pre) if x.strip()]
+        words = len(pre.split())
+        if len(sents) > COLD_OPEN_MAX_SENTENCES or words > COLD_OPEN_MAX_WORDS:
+            out.append(
+                f"cold open runs {len(sents)} sentences / {words} words "
+                f"before the dateline — the cap is "
+                f"{COLD_OPEN_MAX_SENTENCES} sentences / ~50 words: a "
+                "one-line hook, then \"It's [date]. Here's what matters "
+                "today.\" The story's facts belong in the story.")
+    paras = [pp for pp in low.split("\n\n") if len(pp.split()) >= 15]
+    gram_sets = []
+    for pp in paras:
+        ws = re.findall(r"[a-z']+", pp)
+        gram_sets.append({" ".join(ws[i:i + 6]) for i in range(len(ws) - 5)})
+    reported = 0
+    for i in range(len(gram_sets)):
+        for j in range(i + 1, len(gram_sets)):
+            shared = gram_sets[i] & gram_sets[j]
+            if len(shared) >= REPEAT_GRAMS_THRESHOLD:
+                ex = sorted(shared)[0]
+                out.append(
+                    f"sections {i + 1} and {j + 1} retell the same material "
+                    f"({len(shared)} shared 6-word runs, e.g. \"{ex}...\") "
+                    "— every layer adds NEW information; say it once, in "
+                    "the right place")
+                reported += 1
+                if reported >= MAX_STRUCTURAL_REPORTS:
+                    return out
+    return out
+
+
 def validate_script(
     text: str, narrative: str, inputs: Dict
 ) -> Tuple[str, List[str], List[str]]:
@@ -1028,24 +1115,9 @@ def validate_script(
     if hits:
         warnings.append(f"script banned strings: {hits}")
 
-    # P3 #2 — never-repeat: a 6-word phrase from the cold open reappearing
-    # later is the three-times-repetition class the principal flagged.
-    dateline_m = re.search(r"\bit's [a-z]+, [a-z]+ \d", low)
-    if dateline_m:
-        open_text = low[:dateline_m.start()]
-        rest = low[dateline_m.end():]
-        open_words = re.findall(r"[a-z']+", open_text)
-        seen = set()
-        for i in range(max(0, len(open_words) - 5)):
-            gram = " ".join(open_words[i:i + 6])
-            if gram in seen:
-                continue
-            seen.add(gram)
-            if gram in rest:
-                warnings.append(
-                    f"never-repeat (P3 #2): cold-open phrasing reappears "
-                    f"later — \"{gram}...\"")
-                break
+    # P3 #2's warn-grade never-repeat detector PROMOTED to the structural
+    # hard-with-retry class (principal ruling 2026-07-06: the warn fired on
+    # the exact run that shipped to his ears) — see script_structural_check.
     # P3 #3 — rhythm: three consecutive long sentences kill spoken pacing.
     sentences = [s for s in re.split(r"(?<=[.!?])\s+", body) if s.strip()]
     run = 0
@@ -1362,6 +1434,63 @@ def _run_generate_body(
     report.steps.append(step_n)
     spent += step_n["usd"] or 0
 
+    # P3.1 item 3: tier expression. A briefed lead under the floor gets ONE
+    # retry with the deficiency injected; a second miss ships with
+    # disclosure (severity judgment: warn-after-retry, not a dead run —
+    # the briefing always ships, per the reconciled ladder's spirit).
+    lead_w = _lead_words(draft_payload)
+    if (inputs.get("briefs_by_slot") or {}).get(1) and lead_w < LEAD_FLOOR_WORDS:
+        floor_msg = (
+            f"story 1 (the lead) ran {lead_w} words — its floor is "
+            f"{LEAD_FLOOR_WORDS} when its analysis brief exists. The brief "
+            "gives you a cited ledger, mechanism, effects, unknowns: write "
+            "the FULL lead (A2 band 250-550, lead-weighted total 900-1300); "
+            "slots 2+ keep their tiers.")
+        retry_n_prompt = (n_prompt + "\n\n=== YOUR PREVIOUS DRAFT WAS "
+                          "REJECTED — TIER-EXPRESSION VIOLATION (fix exactly "
+                          "this; everything above still binds) ===\n- "
+                          + floor_msg)
+        est_rn = _est_cost(retry_n_prompt, NARRATIVE_MAX_TOKENS)
+        if spent + est_rn > cap:
+            report.warnings.append(
+                f"lead tier floor: {lead_w} words < {LEAD_FLOOR_WORDS} "
+                f"(retry skipped — would exceed the cap) — shipped with "
+                "disclosure")
+        else:
+            try:
+                _, usage_rn = call_llm(
+                    key, retry_n_prompt, "narrative_retry",
+                    NARRATIVE_MAX_TOKENS, NARRATIVE_TEMPERATURE, True,
+                    validate=_shape_check,
+                )
+                retry_payload = draft_holder[0]
+                step_rn = {"step": "narrative_retry", "model": WRITER_MODEL,
+                           "prompt_tokens": usage_rn.get("prompt_tokens"),
+                           "completion_tokens": usage_rn.get("completion_tokens"),
+                           "usd": round(_step_cost(usage_rn), 6)}
+                report.steps.append(step_rn)
+                spent += step_rn["usd"] or 0
+                retry_w = _lead_words(retry_payload)
+                if retry_w >= LEAD_FLOOR_WORDS:
+                    draft_payload = retry_payload
+                    report.warnings.append(
+                        f"lead tier floor: retry brought the lead {lead_w} "
+                        f"-> {retry_w} words")
+                elif retry_w > lead_w:
+                    draft_payload = retry_payload
+                    report.warnings.append(
+                        f"lead tier floor: retry improved {lead_w} -> "
+                        f"{retry_w} words, still under {LEAD_FLOOR_WORDS} — "
+                        "shipped with disclosure")
+                else:
+                    report.warnings.append(
+                        f"lead tier floor: retry did not improve ({lead_w} "
+                        f"words) — shipped with disclosure")
+            except GenerateError as exc:
+                report.warnings.append(
+                    f"lead tier floor retry failed ({exc}) — {lead_w}-word "
+                    "lead shipped with disclosure")
+
     # --- Editor pass (M6 mandate 2): cut/tighten/concretize ONLY — the
     # editor may never add facts; the edited payload is what gets fully
     # validated, persisted, and adapted. Editor failure degrades to the
@@ -1443,6 +1572,18 @@ def _run_generate_body(
     # draft with disclosure; a draft that ALSO fails is a logged, visible
     # GenerateError — never a raw crash.
     try:
+        # P3.1 item 3 (editor guard): tightening never cuts a briefed lead
+        # below its tier floor — the M6 cut power gains a floor, not a new
+        # power. A violating edit is DISCARDED via the existing degrade
+        # path (ValueError -> draft, disclosed).
+        if (inputs.get("briefs_by_slot") or {}).get(1) \
+                and edited_payload is not draft_payload \
+                and _lead_words(edited_payload) < LEAD_FLOOR_WORDS \
+                and _lead_words(draft_payload) >= LEAD_FLOOR_WORDS:
+            raise ValueError(
+                f"editor cut the lead to {_lead_words(edited_payload)} words "
+                f"— below its {LEAD_FLOOR_WORDS}-word tier floor (the draft "
+                "met it)")
         stories, narrative_warnings = validate_narrative_payload(
             edited_payload, inputs["slots"], report.variant,
             slots_ctx={"analyst_slot3_tier": inputs.get("analyst_slot3_tier")},
@@ -1530,7 +1671,91 @@ def _run_generate_body(
         SCRIPT_TEMPERATURE, False, validate=_validate_script,
     )
     script = script_holder[0]
-    report.warnings.extend(script_warnings)
+    # Provenance: validate warns travel with the attempt that SHIPS — the
+    # extend happens after the structural block resolves which attempt
+    # that is (previously the first attempt's warns landed here
+    # unconditionally, and the retry's landed at its call site whether or
+    # not that attempt shipped).
+    shipped_script_warns = script_warnings[:]
+    # BUG21 fix (QA contract: tests/test_p31_enforcement.py::
+    # test_structural_retry_skipped_when_real_spend_already_ate_the_cap):
+    # count the script step's REAL cost into `spent` BEFORE the structural
+    # retry decision below — mirroring the narrative twin, which counts
+    # step_n before its floor-retry pre-check. Without this the retry
+    # pre-check under-counts true spend by one script call, and a run can
+    # overshoot the cap by one retry. (report.steps keeps its original
+    # append position after the block.)
+    step_s = {"step": "script_adapt", "model": WRITER_MODEL,
+              "prompt_tokens": usage_s.get("prompt_tokens"),
+              "completion_tokens": usage_s.get("completion_tokens"),
+              "usd": round(_step_cost(usage_s), 6)}
+    spent += step_s["usd"] or 0.0
+
+    # P3.1 items 1+2 — the spoken editorial bar, enforcement-grade: ONE
+    # retry with the exact violations injected; then ship the better
+    # attempt WITH disclosure. Never silent, never a dead run, never a
+    # second retry against the cap.
+    structural = script_structural_check(script)
+    if structural:
+        retry_prompt = (
+            s_prompt
+            + "\n\n=== YOUR PREVIOUS ATTEMPT WAS REJECTED — STRUCTURAL "
+            "VIOLATIONS (fix exactly these; everything else above still "
+            "binds) ===\n"
+            + "\n".join(f"- {v}" for v in structural))
+        est_r = _est_cost(retry_prompt, SCRIPT_MAX_TOKENS)
+        if spent + est_r > cap:
+            report.warnings.append(
+                "script STRUCTURAL violations stand (retry skipped — "
+                f"${est_r:.4f} would exceed the cap): " + " | ".join(structural))
+        else:
+            try:
+                _, usage_r = call_llm(
+                    key, retry_prompt, "script_retry", SCRIPT_MAX_TOKENS,
+                    SCRIPT_TEMPERATURE, False, validate=_validate_script,
+                )
+                retry_script = script_holder[0]
+                retry_script_warns = script_warnings[:]
+                step_r = {"step": "script_retry", "model": WRITER_MODEL,
+                          "prompt_tokens": usage_r.get("prompt_tokens"),
+                          "completion_tokens": usage_r.get("completion_tokens"),
+                          "usd": round(_step_cost(usage_r), 6)}
+                report.steps.append(step_r)
+                spent += step_r["usd"] or 0.0
+                structural_2 = script_structural_check(retry_script)
+                if not structural_2:
+                    script = retry_script
+                    shipped_script_warns = retry_script_warns
+                    report.warnings.append(
+                        "script structural retry: violations cleared "
+                        f"({len(structural)} fixed)")
+                elif len(structural_2) < len(structural):
+                    script = retry_script
+                    shipped_script_warns = retry_script_warns
+                    report.warnings.append(
+                        "script structural retry: improved but "
+                        f"{len(structural_2)} violation(s) REMAIN — shipped "
+                        "with disclosure: " + " | ".join(structural_2))
+                else:
+                    report.warnings.append(
+                        "script structural retry did not improve — first "
+                        "attempt shipped with disclosure: "
+                        + " | ".join(structural))
+            except GenerateError as exc:
+                report.warnings.append(
+                    f"script structural retry failed ({exc}) — first attempt "
+                    "shipped with disclosure: " + " | ".join(structural))
+
+    report.warnings.extend(shipped_script_warns)
+    # P3.1 anchor fix (QA contract 2026-07-09): a shipped script with no
+    # detectable dateline has no cold-open boundary to measure — the HARD
+    # cap is unenforceable. Never a silent exemption: disclose it (the
+    # dateline itself is the script contract's job upstream).
+    if not _DATELINE_RE.search(_anchor_view(script)):
+        report.warnings.append(
+            "cold-open cap unenforceable: no dateline anchor found — the "
+            "hard cold-open cap was not applied to this script")
+
     # P3 #8: deterministic TTS-safe pass — AFTER validation (validators see
     # the model's own output; these are enumerated furniture-class rewrites
     # of form, never facts), disclosed per transform class.
@@ -1538,10 +1763,6 @@ def _run_generate_body(
     if tts_notes:
         report.warnings.append(
             f"tts-safe pass (P3 #8, code-owned): {', '.join(tts_notes)}")
-    step_s = {"step": "script_adapt", "model": WRITER_MODEL,
-              "prompt_tokens": usage_s.get("prompt_tokens"),
-              "completion_tokens": usage_s.get("completion_tokens"),
-              "usd": round(_step_cost(usage_s), 6)}
     report.steps.append(step_s)
     report.script_text = script
     report.script_words = wc(script)

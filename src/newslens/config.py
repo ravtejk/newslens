@@ -108,7 +108,9 @@ class SourcesConfig:
     # regardless. Principal-flippable in sources.yaml `settings:`.
     threads_steer_selection: bool = False
     # M6: which generate_audio engine voices the briefing (ADR-0008).
-    tts_engine: str = "kokoro"
+    # P3.1 item 4: default flipped kokoro -> openai (gpt-4o-mini-tts) per the
+    # principal's ear-test ruling 2026-07-06; kokoro stays the $0 fallback.
+    tts_engine: str = "openai"
 
     @property
     def fetchable_sources(self) -> List[Source]:
@@ -318,7 +320,7 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                 cfg.problems.append("settings.threads_steer_selection must be true or false")
             else:
                 cfg.threads_steer_selection = tss
-            engine = raw_settings.get("tts_engine", "kokoro")
+            engine = raw_settings.get("tts_engine", "openai")
             if not isinstance(engine, str) or engine not in ("kokoro", "openai"):
                 cfg.problems.append("settings.tts_engine must be kokoro or openai")
             else:

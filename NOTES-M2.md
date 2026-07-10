@@ -565,3 +565,66 @@ before the frozen append (stem-match >=3 of outlet/wire/source/count/truth;
 disclosed; never two caveats).
 **5. Sweep:** Topics/Writers hint copy updated to describe the suggestions
 honestly.
+
+## P3.1 record (2026-07-07/09) — editorial enforcement (principal rulings 2026-07-06)
+
+The principal's first full real-use review (morning read + ear test,
+DECISIONS.md "principal rulings batch" 2026-07-06) as hard gates. Build
+interrupted mid-run 2026-07-07 (credits outage); resumed and finished
+2026-07-09 on the frozen Fable line (this tree — DECISIONS.md 2026-07-09).
+
+**Items 1+2 — the spoken editorial bar, hard-with-retry (generate.py):**
+`script_structural_check` — cold-open cap (<=3 sentences / ~50 words +60
+slack before the dateline anchor, no story pre-play) + cross-section
+repetition (>=3 distinct shared 6-grams between any two 15+-word
+paragraphs; reports capped at 3). Violations trigger ONE script retry with
+the violations injected verbatim; a still-violating retry ships the better
+attempt WITH disclosure — never silent, never a dead run, never a second
+retry. Retry cost pre-checked against the remaining cap (skip = disclosed).
+The old warn-grade never-repeat detector REMOVED from validate_script
+(promoted, not duplicated). CALIBRATION pinned as fixtures: the verbatim
+2026-07-06 script that shipped to the principal's ears is CAUGHT (7-sentence
+/97-word cold open + 3 retell pairs — the exact violations he named); a
+legitimately edited script of the same edition passes CLEAN
+(tests/fixtures/script/2026-07-06-{repetitive,legitimate}.txt).
+
+**Item 3 — lead tier floor (generate.py + prompts/editor_pass.txt):**
+LEAD_FLOOR_WORDS=300 (derivation at the constant: 900-1300 lead-weighted
+total with A2's 250-550 lead band; a valid <=700-word cited lead brief
+removes the thin-material excuse). Binds ONLY when a valid slot-1 analysis
+brief exists; severity = warn-shaped hard-with-retry (one narrative retry
+with the deficiency injected; improvement adopted; a second miss ships
+with disclosure — the briefing always ships). The M6 editor's cut power
+gains a floor: an edit cutting a floor-meeting briefed lead below 300 is
+DISCARDED through the existing degrade path, disclosed. editor_pass.txt
+carries the one authorized tier-floor constraint line.
+
+**Item 4 — TTS default flip (config.py / audio.py / doctor.py / docs):**
+DEFAULT_TTS_ENGINE + config default + settings fallback kokoro -> openai
+(gpt-4o-mini-tts; ear-test ruling: "I prefer the voice of the openai wav";
+~$0.015/min, ~+$0.07/run). Kokoro stays fully built as the $0 fallback;
+4.4x re-open moot while not default. Doctor: pinned-kokoro draws the
+cap-change-pattern WARN nudge (recommended default + ruling cite + "your
+pin wins" — the doctor NEVER edits sources.yaml; the principal's own file
+pins kokoro and stays untouched). README/SETUP/.env.example currency done.
+
+**Suite: 877 -> 893 passing.** New: tests/test_p31_enforcement.py
+(implementer-written; calibration, boundary units, LIVENESS reds proven to
+fail with the wiring stubbed, offline spend-proofs: each retry path fires
+at most once and a cap-breaching retry estimate is skipped with
+disclosure, $0). Pin flips, all mechanical cascades of the rulings,
+each commented at the site: test_p3_script.py never-repeat warn ->
+promotion pin (implementer-authored, flipped by its author);
+tts-default cascades in test_audio.py (x3), test_doctor_offline.py
+(exit-0 fixture pins kokoro to keep the synth-skip machinery exercised),
+test_server.py (engine display poles swapped), test_generate.py
+(tts_openai step/warning). **4 stale-by-design QA-owned pins left RED for
+QA's ordered pass** (never weakened by the implementer): test_p3_qa.py x3
+(pin the retired warn-grade never-repeat channel: proper-noun FP,
+dateline-anchor limitation, all-three-warn-grade — each concern transfers
+to script_structural_check and needs QA's re-characterization, note the
+new detector's paragraph-pair shape narrows the proper-noun FP class) +
+test_m3_qa.py::test_editor_receives_the_analysis_fact_universe_block
+(indexes the editor prompt as json_calls[1]; a tier-floor narrative retry
+is json-mode and shifts the editor to [2] — the fact-universe block itself
+is intact; re-index by prompt marker, not position).

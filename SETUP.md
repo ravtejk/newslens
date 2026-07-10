@@ -49,9 +49,9 @@ then fix the leak. `.env` is gitignored.
    (a default project key is fine; no special permissions needed).
 2. **Set a hard spend cap in the dashboard** — Settings → Organization →
    Limits → set a monthly budget (e.g. $10 — expected generation spend is well
-   under $1/month; audio's v1 default is Kokoro-82M running locally at no API
-   cost, with gpt-4o-mini-tts on this key as the built fallback — ~$5.40/month
-   at daily cadence only if the fallback wins the milestone-6 listening test).
+   under $1/month for text; audio's default is gpt-4o-mini-tts on this key —
+   your ear-test pick, 2026-07-06 — at ~$0.015/min, ~+$0.07/run, roughly
+   ~$2/month at daily cadence; Kokoro-82M local remains the $0 fallback).
 3. Put the key in `.env` as `OPENAI_API_KEY=...`
 
 ### 2b. PERPLEXITY_API_KEY (optional — deferred by choice, 2026-07-05)
@@ -146,25 +146,27 @@ That's the designed experience: nothing crashes, every gap names its fix.
   `api.openai.com` and `api.perplexity.ai`; failures say "network-shaped" when
   that's the likely cause.
 
-## The voice (M6) — one-time local TTS setup
+## The voice — engine choice + optional local TTS setup
+
+The default voice is **gpt-4o-mini-tts** on your OpenAI key (~$0.015/min,
+~+$0.07/run) — your ear-test pick, ruling 2026-07-06. Nothing to install;
+the audio lands next to each briefing: `data/briefings/<date>.wav`.
+
+The $0 local fallback (Kokoro-82M) stays fully built. To use it, pin
+`settings.tts_engine: kokoro` in sources.yaml (the doctor will note the pin
+vs. the recommended default) and run the one-time setup:
 
 ```bash
 scripts/setup_tts   # brew python@3.12 + isolated engine venv + ~340MB model
-scripts/doctor      # its TTS section runs a REAL short synthesis
+scripts/doctor      # its TTS section runs a REAL short synthesis (kokoro)
 ```
-
-Kokoro-82M runs locally and free (default). Switch to the hosted voice any
-time: `settings.tts_engine: openai` in sources.yaml (~$0.015/min on your
-OpenAI key). The audio lands next to each briefing:
-`data/briefings/<date>.wav`.
 
 ## Later milestones (placeholders, so this file has one home)
 
 - **On-demand trigger + instrumentation (M7):** `generate` stays manual (v1 is
   on-demand only, your 2026-07-03 call — no cron/launchd), plus the
   `read`/`listen` commands whose usage log feeds the day-30 verdict.
-- **Audio (M6):** v1 default is Kokoro-82M local TTS (no key; ~$0.10/month
-  total run cost), with gpt-4o-mini-tts built in as the hosted fallback
-  (~$5.50/month total). Both sit behind the same `generate_audio()` wrapper;
-  you pick by ear at the milestone-6 listening test — setup steps land here
-  then (per `workspace/debates/2026-07-02--newslens--engineering-2.md`).
+- **Audio:** decided — the ear test ran 2026-07-06 and gpt-4o-mini-tts is the
+  default (your ruling: "I prefer the voice of the openai wav"); Kokoro-82M
+  local is the built $0 fallback. Both sit behind the same `generate_audio()`
+  wrapper; see "The voice" section above for switching.
