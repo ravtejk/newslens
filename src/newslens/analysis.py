@@ -792,6 +792,125 @@ def _require_str(value, where: str) -> str:
     return value
 
 
+# --- NL-12: pinned-fact dedupe + chronological ordering (validator-grade) ----
+# Principal amendment 2026-07-09: "Facts must be chronological and deduplicated"
+# (evidence: a 07-06 OPEC brief rendered two identical pinned facts; the
+# validator carried no near-dup check). This is a VALIDATOR obligation, not a
+# render-time transform — the renderer stays dumb glue and the archive's stored
+# rows keep their persisted order (validators run at generation time only).
+
+# Collapse threshold: near-identical only. Normalized-exact always collapses;
+# above _PIN_DUP_JACCARD the two facts are treated as the same fact. Kept high
+# deliberately — distinct-but-parallel facts ("Outlet one/two/three reports…",
+# token-Jaccard ~0.71) must survive; a false collapse silently deletes a
+# checkable claim, the exact failure mode this guard exists to prevent.
+_PIN_DUP_JACCARD = 0.9
+# Set-Jaccard is word-order-blind: "Iran sanctions US officials…" and "US
+# sanctions Iran officials…" share an IDENTICAL token set (1.0) yet are opposite
+# claims — over-merge would delete one and re-attach its cites to the survivor.
+# So collapse also requires an order-sensitive agreement: token-BIGRAM Jaccard
+# >= this gate, ALONGSIDE the set gate above. A permutation shares few adjacent
+# pairs (~0.4) and survives; a true near-duplicate (one differing mid-token)
+# still shares nearly all bigrams (>=0.8) and still collapses.
+_PIN_DUP_BIGRAM_JACCARD = 0.8
+_ABS_DATE_RES = (
+    # YYYY-MM-DD
+    (re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b"),
+     lambda m: (int(m.group(1)), int(m.group(2)), int(m.group(3)))),
+    # Month D, YYYY  /  Month D YYYY
+    (re.compile(r"\b(" + "|".join(_MONTHS) + r")\.?\s+(\d{1,2}),?\s+(\d{4})\b",
+                re.I),
+     lambda m: (int(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2)))),
+    # D Month YYYY
+    (re.compile(r"\b(\d{1,2})\s+(" + "|".join(_MONTHS) + r")\.?\s+(\d{4})\b",
+                re.I),
+     lambda m: (int(m.group(3)), _MONTHS[m.group(2).lower()], int(m.group(1)))),
+    # Month YYYY  (day unknown -> 0, sorts before dated days that month)
+    (re.compile(r"\b(" + "|".join(_MONTHS) + r")\.?\s+(\d{4})\b", re.I),
+     lambda m: (int(m.group(2)), _MONTHS[m.group(1).lower()], 0)),
+)
+
+
+def _norm_fact(text: str) -> str:
+    return _norm_ws(re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()))
+
+
+def _bigrams(tokens: List[str]) -> set:
+    """Adjacent token pairs — the order-sensitive signal set-Jaccard is blind to.
+    A word-order permutation (identical token SET) shares few bigrams; a true
+    near-duplicate (one differing mid-token) shares nearly all of them."""
+    return set(zip(tokens, tokens[1:]))
+
+
+def _fact_date_key(text: str):
+    """First ABSOLUTE date a fact carries, as a sortable (y, m, d), or None.
+    Bare weekdays and lone years are deliberately NOT dates — too ambiguous to
+    reorder on ('Tuesday' has no chronology; '2026' no month)."""
+    for rx, build in _ABS_DATE_RES:
+        m = rx.search(text or "")
+        if m:
+            return build(m)
+    return None
+
+
+def _dedup_and_order_pinned(pinned: List[Dict]) -> Tuple[List[Dict], List[str]]:
+    """(1) Collapse near-duplicate pinned facts, merging their cites so no
+    provenance is lost, disclosing each collapse as a warning. (2) Order facts
+    that carry absolute dates chronologically, leaving undated facts in place
+    (dated facts fill the slots dated facts already held — stable for the rest).
+    Deterministic; no string similarity beyond the high-threshold dup check."""
+    warnings: List[str] = []
+    kept: List[Dict] = []
+    for p in pinned:
+        norm = _norm_fact(p.get("fact", ""))
+        tlist = norm.split()
+        toks = set(tlist)
+        bg = _bigrams(tlist)
+        hit = None
+        for k in kept:
+            if norm and norm == k["_norm"]:
+                hit = k
+                break
+            ktoks = k["_toks"]
+            if toks and ktoks:
+                jac = len(toks & ktoks) / len(toks | ktoks)
+                if jac < _PIN_DUP_JACCARD:
+                    continue
+                # Set gate cleared — now the order-sensitive gate. Bigram Jaccard
+                # separates a genuine near-duplicate (one differing mid-token,
+                # ~0.8+) from a word-order permutation (identical set, few shared
+                # adjacent pairs, ~0.4): only the former collapses. Empty-bigram
+                # facts (0-1 tokens) score 0.0 and fall through to survive —
+                # under-merge is the safe direction.
+                kbg = k["_bg"]
+                bjac = (len(bg & kbg) / len(bg | kbg)) if (bg and kbg) else 0.0
+                if bjac >= _PIN_DUP_BIGRAM_JACCARD:
+                    hit = k
+                    break
+        if hit is not None:
+            for c in _cites_of(p):
+                if c not in hit["cites"]:
+                    hit["cites"].append(c)
+            warnings.append(
+                "pinned fact collapsed as near-duplicate (cites merged): "
+                f"{(p.get('fact', '') or '')[:70]!r}")
+        else:
+            kept.append({"fact": p.get("fact", ""), "cites": _cites_of(p),
+                         "_norm": norm, "_toks": toks, "_bg": bg})
+
+    dated = [(i, _fact_date_key(k["fact"])) for i, k in enumerate(kept)]
+    dated = [(i, d) for i, d in dated if d is not None]
+    if len(dated) >= 2:
+        slots = [i for i, _ in dated]                       # original positions
+        chrono = sorted(dated, key=lambda t: t[1])          # dated, oldest first
+        ordered = list(kept)
+        for slot, (orig_i, _d) in zip(slots, chrono):
+            ordered[slot] = kept[orig_i]
+        kept = ordered
+
+    return ([{"fact": k["fact"], "cites": k["cites"]} for k in kept], warnings)
+
+
 def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
                    corpus: str, briefing_date: str = "") -> Tuple[Dict, List[str]]:
     """Returns (clean brief with computed furniture, warnings). Raises
@@ -1034,14 +1153,19 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
         warnings.append(f"brief runs {words} words against the {budget}-word "
                         f"{tier} ceiling — Editor's eye at day-14")
 
+    # NL-12: dedupe near-identical pinned facts (cites merged) + order the
+    # dated ones chronologically — validator-grade, disclosed as warnings.
+    pinned_clean, pin_warnings = _dedup_and_order_pinned(pinned)
+    warnings.extend(pin_warnings)
+
     # source table: CODE-BUILT from cited keys only
     used: List[str] = []
     def collect(cites):
         for c in cites:
             if c not in used:
                 used.append(c)
-    for p in pinned:
-        collect(_cites_of(p))
+    for p in pinned_clean:
+        collect(p["cites"])
     for e in ledger_out:
         if e.get("discrepancy"):
             collect(_cites_of(e["a"])); collect(_cites_of(e["b"]))
@@ -1065,8 +1189,7 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
         for k in sorted(used, key=_key_sort)]
 
     clean = {
-        "pinned_facts": [{"fact": p.get("fact", ""), "cites": _cites_of(p)}
-                         for p in pinned],
+        "pinned_facts": pinned_clean,
         "ledger": ledger_out,
         "mechanism": mechanism,
         "effects": effects_out,

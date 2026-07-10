@@ -1046,6 +1046,45 @@ def _cite_qualifier(cites: List[str], src_by_key: Dict[str, Dict],
     return f"({names})"
 
 
+def _glue_sentence(s: str) -> str:
+    """Dumb glue (register spec D5): fixed connective punctuation only — a
+    trailing period so joined field-strings read as separate sentences. Never
+    rewrites, re-cases, truncates, or reorders the field's own words."""
+    s = (s or "").strip()
+    if s and s[-1] not in ".?!:":
+        s += "."
+    return s
+
+
+def _open_unknown_prose(u: Dict) -> str:
+    """One unknown as one editor's-memo paragraph (register spec §B/D1): the
+    three fields join as three sentence-roles — what is unsettled (question),
+    why it bites (why_material), the test (would_resolve, after the fixed
+    phrase). No labels, no beats, no meta-tails. Declarative or survey-register
+    is the analyst's job; the renderer only joins what it is handed."""
+    parts = []
+    q = _glue_sentence(u.get("question", ""))
+    if q:
+        parts.append(q)
+    why = _glue_sentence(u.get("why_material", ""))
+    if why:
+        parts.append(why)
+    res = (u.get("would_resolve", "") or "").strip()
+    if res:
+        parts.append(_glue_sentence("What would settle it — " + res))
+    return " ".join(parts)
+
+
+def _open_watch_prose(watch: List[Dict]) -> str:
+    """All watch observables as one closing forward-calendar paragraph
+    (register spec D2/D3): observables in contract order, `settles` never
+    rendered (it is a join key, not reading material). No lead-in label and no
+    unknowns-flavored opener (D4)."""
+    sents = [_glue_sentence(w.get("observable", "")) for w in watch
+             if (w.get("observable", "") or "").strip()]
+    return " ".join(sents)
+
+
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       date: str, back_label: str = "← Back to today’s edition",
                       return_view: str = "view-today") -> str:
@@ -1063,55 +1102,90 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     ret = "" if return_view == "view-today" else f", '{_e(return_view)}'"
     out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
                f'{_e(back_label)}</a>')
+    # Arc is no longer a section (NL-12): it renders as a cited continuity line
+    # in the title block, carrying the last edition that picked up this thread
+    # and navigating there in-place (reuses NL-11's openEdition; the href is the
+    # no-JS fallback). Zero content loss; the continuity job moves to the top,
+    # where orientation lives.
+    arc = brief.get("arc")
+    arc_line = ""
+    if arc:
+        verdict = {"advances": "Advances the thread",
+                   "reverses": "Reverses the thread",
+                   "merely-matches": "Merely matches the thread"}.get(
+                       arc.get("delta", ""), _e(str(arc.get("delta", ""))))
+        prior_date = None
+        for c in _cites_list(arc):
+            s = src_by_key.get(c)
+            if s and s.get("kind") == "prior-briefing":
+                rd = str(s.get("retrieved_at", ""))[:10]
+                if rd:
+                    prior_date = rd
+                break
+        cite_html = ""
+        if prior_date:
+            cite_html = (
+                f' <a class="deep-arc-link" href={_e_attr("/?date=" + prior_date)} '
+                f'onclick="return openEdition(\'{_e(prior_date)}\', event)">'
+                f'· from the {_e(_human_date(prior_date))} edition</a>')
+        arc_line = (f'<p class="deep-arc-line">'
+                    f'<span class="deep-arc-verdict">{_e(verdict)}</span> — '
+                    f'{_e(arc.get("what_changed", ""))}{cite_html}</p>')
     out.append(f'<div class="deep-title-block"><p class="deep-eyebrow">The full '
-               f'picture</p><h1 class="deep-title">{_e(headline)}</h1></div>')
-    jump_items = [("facts", "Facts"), ("ledger", "Ledger"),
-                  ("mechanism", "Mechanism")]
-    if brief.get("arc"):  # no dead anchors (M7 precedent, gate batch)
-        jump_items.append(("arc", "Arc"))
-    jump_items += [("unknowns", "Unknowns"), ("watch", "Watch for"),
-                   ("sources", "Sources")]
+               f'picture</p><h1 class="deep-title">{_e(headline)}</h1>'
+               f'{arc_line}</div>')
+
+    # "What's still open" paragraphs are computed HERE — before the jumplist —
+    # so the anchor and the section gate on the SAME rendered content (D4,
+    # "absent halves leave no residue"): empty/whitespace watch observables and
+    # empty unknowns collapse to zero paragraphs, so neither a live jumplist
+    # anchor nor a header-only section is emitted. Truthiness on the raw lists
+    # was the wrong signal — a list of all-empty observables is truthy.
+    open_paras = [f'<p>{_e(prose)}</p>'
+                  for prose in (_open_unknown_prose(u)
+                                for u in brief.get("unknowns", []))
+                  if prose]
+    open_watch_para = _open_watch_prose(brief.get("watch", []))
+    if open_watch_para:
+        open_paras.append(f'<p>{_e(open_watch_para)}</p>')
+
+    # NL-12: five reader sections. Facts and Sources always render; Mechanism is
+    # validator-required; "What could follow" and "What's still open" emit only
+    # with content, and no dead jumplist anchor otherwise (M7 precedent).
+    jump_items = [("facts", "Facts"), ("mechanism", "Mechanism")]
+    if brief.get("effects"):
+        jump_items.append(("effects", "What could follow"))
+    if open_paras:
+        jump_items.append(("open", "Still open"))
+    jump_items.append(("sources", "Sources"))
     out.append('<p class="deep-jumplist">'
                + '<span class="sep">·</span>'.join(
                    f'<a href="#{story_anchor}-{sid}">{label}</a>'
                    for sid, label in jump_items)
                + "</p>")
 
-    # 1. pinned facts
+    # 1. The facts — pinned facts ONLY (principal ruling 2026-07-09: the Ledger
+    # and the Unresolved/discrepancy register are removed from the READER view
+    # entirely; the data stays in brief_json and the writer view). Per-fact
+    # citations fold behind a quiet typographic marker (NL-12): the outlet
+    # names + count reveal on tap; `<details open>` means no-JS shows them
+    # expanded (degrade = more information) and the summary is keyboard-native.
     lis = []
     for f in brief.get("pinned_facts", []):
-        q = _cite_qualifier(f.get("cites", []), src_by_key,
-                            compute_prov_display(f.get("cites", []), src_by_key))
-        lis.append(f'<li>{_e(f.get("fact", ""))} '
-                   f'<span class="fact-cite">{_e(q)}</span></li>')
+        cites = f.get("cites", [])
+        q = _cite_qualifier(cites, src_by_key,
+                            compute_prov_display(cites, src_by_key))
+        lis.append(
+            f'<li>{_e(f.get("fact", ""))} '
+            '<span class="fact-cite"><details class="cite-fold" open>'
+            '<summary aria-label="Show sources for this fact">'
+            '<span class="caret" aria-hidden="true">▸</span></summary>'
+            f'<span class="cite-fold-body">{_e(q)}</span></details></span></li>')
     out.append(f'<div class="deep-section" id="{story_anchor}-facts">'
-               '<p class="deep-section-label">Pinned facts</p>'
+               '<p class="deep-section-label">The facts</p>'
                f'<ul class="deep-facts-list">{"".join(lis)}</ul></div>')
 
-    # 2. ledger (discrepancies break the one-line pattern deliberately)
-    led = []
-    for e in brief.get("ledger", []):
-        if e.get("discrepancy"):
-            a, b = e.get("a") or {}, e.get("b") or {}
-            qa_ = _cite_qualifier(_cites_list(a), src_by_key)
-            qb_ = _cite_qualifier(_cites_list(b), src_by_key)
-            led.append(
-                '<div class="deep-discrepancy">'
-                f'<p>{_e(str(a.get("value", "")))} '
-                f'<span class="cite">{_e(qa_)}</span></p>'
-                f'<p>{_e(str(b.get("value", "")))} — '
-                '<span class="unresolved-tag">unresolved</span> '
-                f'<span class="cite">{_e(qb_)}</span></p></div>')
-        else:
-            q = _cite_qualifier(e.get("cites", []), src_by_key,
-                                e.get("provenance", ""))
-            led.append(f'<p class="deep-ledger-entry">{_e(e.get("claim", ""))} '
-                       f'<span class="cite">{_e(q)}</span></p>')
-    out.append(f'<div class="deep-section" id="{story_anchor}-ledger">'
-               '<p class="deep-section-label">The ledger</p>'
-               + "".join(led) + "</div>")
-
-    # 3. mechanism (inline [S#] keys become outlet-named qualifiers)
+    # 2. mechanism (inline [S#] keys become outlet-named qualifiers)
     mech = brief.get("mechanism", "")
     mech_display = re.sub(
         r"\s*\[([SCRP]\d+(?:,\s*[SCRP]\d+)*)\]",
@@ -1122,7 +1196,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                '<p class="deep-section-label">Mechanism</p>'
                f'<p>{mech_display}</p></div>')
 
-    # 4. effects — the citation IS the basis marker (Thread D)
+    # 3. effects — the citation IS the basis marker (Thread D)
     effs = []
     for e in brief.get("effects", []):
         holder = e.get("holder", "")
@@ -1142,47 +1216,19 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                    '<p class="deep-section-label">What could follow</p>'
                    + "".join(effs) + "</div>")
 
-    # 5. arc
-    arc = brief.get("arc")
-    if arc:
-        verdict = {"advances": "Advances the thread",
-                   "reverses": "Reverses the thread",
-                   "merely-matches": "Merely matches the thread"}.get(
-                       arc.get("delta", ""), _e(str(arc.get("delta", ""))))
-        q = _cite_qualifier(_cites_list(arc), src_by_key)
-        out.append(f'<div class="deep-section" id="{story_anchor}-arc">'
-                   '<p class="deep-section-label">Arc</p>'
-                   f'<span class="deep-arc-verdict">{_e(verdict)}</span>'
-                   f'<p>{_e(arc.get("what_changed", ""))} '
-                   f'<span class="cite">{_e(q)}</span></p></div>')
+    # 4. What's still open — Honest Unknowns + Watch For fused at section level
+    # (register spec, 2026-07-09 addendum). One register end to end: editor's-
+    # memo prose, body ink, body size. Unknowns lead as one paragraph each
+    # (three sentence-roles, no beats/labels/tails); one closing paragraph
+    # carries the watch observables; `settles` never renders. Absent halves
+    # leave no residue (D4) — paragraphs precomputed above; emit only if any
+    # rendered content survives (the anchor gates on the same list).
+    if open_paras:
+        out.append(f'<div class="deep-section" id="{story_anchor}-open">'
+                   '<p class="deep-section-label">What’s still open</p>'
+                   + "".join(open_paras) + "</div>")
 
-    # 6. honest unknowns — three beats
-    unk = []
-    for u in brief.get("unknowns", []):
-        unk.append(
-            '<div class="deep-unknown">'
-            f'<p class="unknown-q">{_e(u.get("question", ""))}</p>'
-            f'<span class="unknown-beat">· why it matters: '
-            f'{_e(u.get("why_material", ""))}</span>'
-            f'<span class="unknown-beat">· what would resolve it: '
-            f'{_e(u.get("would_resolve", ""))}</span></div>')
-    out.append(f'<div class="deep-section" id="{story_anchor}-unknowns">'
-               '<p class="deep-section-label">Honest unknowns</p>'
-               + "".join(unk) + "</div>")
-
-    # 7. watch
-    wat = []
-    for w in brief.get("watch", []):
-        settles = w.get("settles", "")
-        tail = (f' <span class="cite">(settles: {_e(settles)})</span>'
-                if settles else "")
-        wat.append(f'<p class="deep-watch-item">{_e(w.get("observable", ""))}'
-                   f'{tail}</p>')
-    out.append(f'<div class="deep-section" id="{story_anchor}-watch">'
-               '<p class="deep-section-label">Watch for</p>'
-               + "".join(wat) + "</div>")
-
-    # 8. source table — rows, real accessible names (Axel)
+    # 5. source table — rows, real accessible names (Axel)
     rows = []
     for s in brief.get("sources", []):
         when = _fmt_local(s.get("retrieved_at")) if "T" in str(s.get("retrieved_at", "")) \

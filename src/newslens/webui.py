@@ -276,24 +276,33 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .deep-facts-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--rule); }
 .deep-facts-list li:last-child { border-bottom: none; }
 .deep-facts-list .fact-cite { color: var(--ink-faint); font-size: 0.85em; }
-.deep-ledger-entry { margin: 0 0 0.65rem; }
-.deep-ledger-entry .cite { color: var(--ink-faint); font-size: 0.9em; }
-.deep-discrepancy { margin: 0 0 0.9rem; padding: 0.7rem 0.9rem;
-  background: var(--surface); border-radius: var(--radius); }
-.deep-discrepancy p { margin: 0 0 0.3rem; }
-.deep-discrepancy p:last-child { margin-bottom: 0; }
-.deep-discrepancy .cite { color: var(--ink-faint); font-size: 0.9em; }
-.deep-discrepancy .unresolved-tag { color: var(--ink-faint); font-style: italic; }
+/* NL-12 citation fold-away: a quiet typographic marker (no chip/pill) that
+   reveals the outlet names + count on tap. <details open> => no-JS shows the
+   citation expanded (degrade = more information); JS collapses it on load.
+   Native <summary> is keyboard-operable (Enter/Space, focusable). */
+.cite-fold { display: inline; }
+/* Explicit collapse — a display:inline <details> defeats the UA's native
+   content-hiding in Chrome, so hide the body ourselves off the open state.
+   No-JS keeps [open] -> body shown (degrade = more information). */
+.cite-fold:not([open]) .cite-fold-body { display: none; }
+.cite-fold summary { display: inline; cursor: pointer; list-style: none;
+  color: var(--ink-faint); }
+.cite-fold summary::-webkit-details-marker { display: none; }
+.cite-fold summary:focus-visible { outline: 2px solid var(--accent);
+  outline-offset: 2px; border-radius: 2px; }
+.cite-fold summary .caret { display: inline-block; font-size: 0.85em;
+  transition: transform 0.12s ease; }
+.cite-fold[open] summary .caret { transform: rotate(90deg); }
+.cite-fold .cite-fold-body { color: var(--ink-faint); }
+/* NL-12 arc continuity line — a cited context line in the title block. */
+.deep-arc-line { font-size: 0.9rem; color: var(--ink-soft); margin: 0.65rem 0 0;
+  line-height: 1.5; }
+.deep-arc-verdict { font-weight: 600; color: var(--ink); }
+.deep-arc-link { color: var(--ink-faint); text-decoration: none;
+  white-space: nowrap; }
+.deep-arc-link:hover { color: var(--accent); }
 .deep-effect { margin: 0 0 0.85rem; }
 .deep-effect .cite { color: var(--ink-faint); font-size: 0.9em; }
-.deep-arc-verdict { display: inline-block; font-size: 0.78rem; font-weight: 600;
-  color: var(--ink); margin-bottom: 0.5rem; }
-.deep-unknown { margin: 0 0 1.1rem; }
-.deep-unknown .unknown-q { margin: 0 0 0.3rem; }
-.deep-unknown .unknown-beat { display: block; font-size: 0.82rem;
-  color: var(--ink-faint); margin-left: 0; line-height: 1.5; }
-.deep-watch-item { margin: 0 0 0.6rem; }
-.deep-watch-item .cite { color: var(--ink-faint); font-size: 0.9em; }
 .deep-source-row { background: var(--surface); border-radius: var(--radius);
   padding: 0.85rem 1rem; margin-bottom: 0.6rem; }
 .deep-source-row .source-outlet { font-weight: 700; margin: 0 0 0.2rem; }
@@ -578,6 +587,13 @@ function closeDeepView(e, returnId) {
   }
   lastStoryAnchor = null;
 }
+function collapseCiteFolds(root) {
+  /* NL-12: per-fact citations ship as <details open> so a no-JS reader sees
+     them expanded (degrade = more information). With JS, collapse them to the
+     quiet marker; re-run against injected archive editions too. */
+  (root || document).querySelectorAll('details.cite-fold[open]').forEach(
+    function (d) { d.removeAttribute('open'); });
+}
 function toggleFooterDisclosure(btn) {
   /* Element-relative (NL-11): Today and an open archive edition each carry a
      footer, so the toggle works off the clicked button, not a fixed id. */
@@ -859,6 +875,7 @@ function openEdition(date, e) {
     .then(function (html) {
       var mount = document.getElementById('edition-mount');
       mount.innerHTML = html;
+      collapseCiteFolds(mount);
       document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
       var ed = document.getElementById('view-edition');
       if (ed) ed.classList.add('active');
@@ -873,6 +890,7 @@ function backToArchive(e) {
   showView('archive');
 }
 restoreViewAfterReload();
+collapseCiteFolds(document);
 function pollGeneration() {
   fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
     if (d.state === 'running') { setTimeout(pollGeneration, 2500); }

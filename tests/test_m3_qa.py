@@ -591,17 +591,24 @@ def test_rejected_brief_page_is_byte_identical_to_never_had_one(
     assert page_a1.count("→ The full picture") == 1
 
 
-def test_deep_view_discrepancy_renders_two_lines_never_averaged(tmp_paths):
-    """The live slot-2 shape as a fixture replica: two values, two cites,
-    the unresolved tag — and no blended third value anywhere."""
-    doc = {"header": {"degraded": None},
-           "brief": m3_brief(with_discrepancy=True)}
+def test_deep_view_reader_drops_ledger_and_unresolved_register(tmp_paths):
+    """NL-12 principal ruling 2026-07-09: 'The facts' is pinned facts ONLY —
+    the Ledger AND the Unresolved/discrepancy register are removed from the
+    READER view entirely. The data is NOT deleted: it stays in brief_json
+    (writer-side, untouched) — only the reader rendering drops it."""
+    brief = m3_brief(with_discrepancy=True)
+    doc = {"header": {"degraded": None}, "brief": brief}
     html = server._render_deep_view("story-1", "Headline", doc, DATE)
-    d = html.split('class="deep-discrepancy"')[1].split("</div>")[0]
-    assert "Meeting July 8" in d and "Meeting Wednesday" in d
-    assert d.index("Meeting July 8") < d.index("Meeting Wednesday")
-    assert "unresolved" in d
-    assert "(rferl.org" in d and "(The Hill" in d
+    # reader view: no ledger section, no discrepancy block, no unresolved tag
+    assert 'class="deep-discrepancy"' not in html
+    assert "unresolved" not in html
+    assert "The ledger" not in html and "story-1-ledger" not in html
+    assert "Meeting July 8" not in html and "Meeting Wednesday" not in html
+    assert "A ledger claim." not in html          # non-discrepancy ledger too
+    # 'The facts' still leads with the pinned facts
+    assert "The facts" in html and "A cited fact." in html
+    # data preserved upstream: the brief dict still carries the ledger
+    assert any(e.get("discrepancy") for e in brief["ledger"])
 
 
 @pytest.mark.parametrize("cites,prov,expected", [
@@ -671,28 +678,36 @@ def test_effects_qualifier_copy_pinned_as_actual_v6_deviation():
     assert "via Sonar)" not in eff
 
 
-def test_deep_view_jumplist_matches_v6_and_arc_anchor_gap_pinned():
-    """v6 parity: exactly seven links — Facts · Ledger · Mechanism · Arc ·
-    Unknowns · Watch for · Sources; effects render as a section but are
-    unlinked (v6's own shape). FLAGGED: an arc-less brief still emits the
-    Arc link with no #...-arc section (dead anchor — cosmetic, gate
-    note); with an arc, the anchor resolves."""
-    doc = {"header": {}, "brief": m3_brief()}       # arc None
+def test_deep_view_jumplist_is_five_sections_no_dead_anchors():
+    """NL-12 regroup: the jumplist reflects the five reader sections —
+    Facts · Mechanism · What could follow · Still open · Sources. Ledger,
+    Arc, Unknowns and Watch are gone as anchors (Arc is a title-block line;
+    Ledger is removed; Unknowns+Watch fuse to 'Still open'). No-content
+    sections emit no anchor (M7 no-dead-affordances precedent)."""
+    doc = {"header": {}, "brief": m3_brief()}       # arc None, effects present
     html = server._render_deep_view("story-0", "H", doc, DATE)
     jump = html.split('class="deep-jumplist"')[1].split("</p>")[0]
-    # CONSCIOUSLY FLIPPED (M3 gate render batch): an arc-less brief emits
-    # NO Arc jumplist link (M7 no-dead-affordances precedent); the other
-    # six anchors stand.
-    for label in ("Facts", "Ledger", "Mechanism", "Unknowns",
-                  "Watch for", "Sources"):
+    for label in ("Facts", "Mechanism", "What could follow", "Still open",
+                  "Sources"):
         assert f">{label}</a>" in jump
-    assert ">Arc</a>" not in jump
-    assert "Effects" not in jump and "What could follow" not in jump
-    assert 'id="story-0-arc"' not in html
-    doc2 = {"header": {}, "brief": m3_brief(with_arc=True)}
-    html2 = server._render_deep_view("story-0", "H", doc2, DATE)
-    assert 'id="story-0-arc"' in html2
-    assert "Advances the thread" in html2
+    for gone in ("Ledger", "Arc", "Unknowns", "Watch for"):
+        assert f">{gone}</a>" not in jump
+    # arc-less brief: no arc line, no arc anchor, no arc section
+    assert 'id="story-0-arc"' not in html and "deep-arc-line" not in html
+    # empty effects -> no 'What could follow' anchor and no section
+    b2 = m3_brief(); b2["effects"] = []
+    html2 = server._render_deep_view("story-0", "H", {"header": {}, "brief": b2},
+                                     DATE)
+    jump2 = html2.split('class="deep-jumplist"')[1].split("</p>")[0]
+    assert ">What could follow</a>" not in jump2
+    assert 'id="story-0-effects"' not in html2
+    # empty unknowns AND watch -> no 'Still open' anchor and no section
+    b3 = m3_brief(); b3["unknowns"] = []; b3["watch"] = []
+    html3 = server._render_deep_view("story-0", "H", {"header": {}, "brief": b3},
+                                     DATE)
+    jump3 = html3.split('class="deep-jumplist"')[1].split("</p>")[0]
+    assert ">Still open</a>" not in jump3
+    assert 'id="story-0-open"' not in html3
 
 
 def test_deep_view_escapes_hostile_source_fields(tmp_paths):
