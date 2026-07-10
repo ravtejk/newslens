@@ -56,7 +56,10 @@ section.view { display: none; } section.view.active { display: block; }
    appears and the logo stays at the static masthead size above (graceful
    degradation by construction). Dashed border stays in BOTH states: it is
    the placeholder marker and leaves only with the real logo (P4). */
-body.splash .logo-placeholder { font-size: 2.1rem; padding: 0.7rem 1.1rem; max-width: 16rem; }
+/* NL-11: the splash logo opens ~40% larger than before (2.1rem -> 2.95rem);
+   the scroll behavior still shrinks it to the masthead size. Border stays in
+   the BASE rule (never overridden here) — the placeholder marker. */
+body.splash .logo-placeholder { font-size: 2.95rem; padding: 0.98rem 1.55rem; max-width: 22rem; }
 @media (prefers-reduced-motion: reduce) { .logo-placeholder { transition: none; } }
 .top-bar-right { flex: 1; display: flex; justify-content: flex-end; }
 .settings-corner { background: transparent; border: 1px solid var(--rule); border-radius: 50%;
@@ -73,11 +76,12 @@ body.splash .logo-placeholder { font-size: 2.1rem; padding: 0.7rem 1.1rem; max-w
 .episode-affordance .episode-meta { color: var(--ink-faint); font-size: 0.85rem; }
 .episode-affordance audio { display: block; width: 100%; margin-top: 0.6rem; }
 
-/* P1 polish: the glance reuses the archive row grammar (one vocabulary for
-   "a briefing entry"); .glance is now only the section wrapper. */
-.glance { margin: 1.1rem 0 2.25rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--rule); }
-.glance .section-h { margin: 0 0 0.75rem; }
-.glance-row .archive-date { font-size: 0.98rem; }
+/* NL-11: the glance section is removed (rework backlogged, NL-20). The lead
+   story now opens the reading surface and gets room to breathe below the
+   Play-episode divider (principal 2026-07-09). */
+#view-today > article.story:first-child { margin-top: 1.75rem; }
+.edition-episode { border-bottom: 1px solid var(--rule); padding-bottom: 1.1rem; margin-bottom: 0.5rem; }
+#view-edition article.story:first-of-type { margin-top: 1.5rem; }
 html { scroll-behavior: smooth; }
 article.story { scroll-margin-top: 0.75rem; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
@@ -186,6 +190,21 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .token button.token-remove { background: transparent; border: none; padding: 0;
   color: var(--ink-faint); font-size: 0.85rem; line-height: 1; cursor: pointer; }
 .token button.token-remove:hover { color: var(--danger); }
+
+/* NL-11: the shared suggestion combobox (replaces the native datalist).
+   House-styled per DIRECTION law — outlined, spaced, uncolored, no chips;
+   emphasis is typography (accent text on the active option), never fill. */
+.suggest { position: relative; }
+.suggest-list { list-style: none; margin: -0.35rem 0 0.6rem; padding: 0.3rem;
+  border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface);
+  max-height: 15rem; overflow-y: auto; }
+.suggest-list[hidden] { display: none; }
+.suggest-list li { padding: 0.5rem 0.65rem; border-radius: 7px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 0.1rem; }
+.suggest-list li .s-label { font-size: 0.9rem; color: var(--ink); }
+.suggest-list li .s-sub { font-size: 0.76rem; color: var(--ink-faint); }
+.suggest-list li:hover, .suggest-list li[aria-selected="true"] { background: var(--bg); }
+.suggest-list li[aria-selected="true"] .s-label { color: var(--accent); font-weight: 600; }
 
 .slide-scrim { position: fixed; inset: 0; background: var(--overlay-scrim); z-index: 30; display: none; }
 .slide-scrim.open { display: block; }
@@ -331,6 +350,9 @@ PAGE = """<!DOCTYPE html>
 <section id="view-following" class="view">{following_html}</section>
 <section id="view-archive" class="view">{archive_html}</section>
 {deep_views_html}
+<!-- NL-11: archive editions inject here as sibling .view sections so opening
+     one never replaces Today; empty until an archive row is opened. -->
+<div id="edition-mount"></div>
 </main>
 <div class="slide-scrim" id="slide-scrim" onclick="closeSettings()"></div>
 <div class="slide-panel" id="slide-panel" role="dialog" aria-label="Settings" aria-hidden="true">
@@ -419,6 +441,9 @@ POPUPS = """
 
 JS = """
 var CURRENT_DATE = document.body.getAttribute('data-briefing-date') || '';
+/* NL-11: own the scroll position across verb reloads (below) rather than
+   letting the browser auto-restore/reset it. */
+try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (e) {}
 function showView(name, navEl) {
   document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
   document.getElementById('view-' + name).classList.add('active');
@@ -440,43 +465,111 @@ function api(path, body, cb) {
     .then(function (d) { if (cb) cb(d); })
     .catch(function (e) { if (cb) cb({ok: false, error: String(e)}); });
 }
+/* NL-11: ONE mechanism for every verb — reload for fresh server-rendered
+   counts, then land the user back on the view + sub-view + scroll they were
+   in (never bounce to Today). Verbs replace location.reload() with this. */
+function reloadPreservingView() {
+  try {
+    var navBtn = document.querySelector('.bottom-nav button.current');
+    var view = navBtn ? navBtn.getAttribute('data-nav') : 'today';
+    var activeSub = document.querySelector('.sub-view.active');
+    var sub = activeSub ? activeSub.id.replace('sub-', '') : null;
+    var y = window.scrollY || window.pageYOffset ||
+            document.documentElement.scrollTop || 0;
+    sessionStorage.setItem('nl-restore',
+      JSON.stringify({view: view, sub: sub, y: y}));
+  } catch (e) {}
+  location.reload();
+}
+function restoreViewAfterReload() {
+  var raw = null;
+  try { raw = sessionStorage.getItem('nl-restore');
+        sessionStorage.removeItem('nl-restore'); } catch (e) { return; }
+  if (!raw) return;
+  var st; try { st = JSON.parse(raw); } catch (e) { return; }
+  if (!st) return;
+  if (st.view && st.view !== 'today') {
+    var sec = document.getElementById('view-' + st.view);
+    if (sec) {
+      document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+      sec.classList.add('active');
+      document.querySelectorAll('.bottom-nav button').forEach(function (b) { b.classList.remove('current'); });
+      var nb = document.querySelector('[data-nav="' + st.view + '"]');
+      if (nb) nb.classList.add('current');
+    }
+  }
+  if (st.sub) {
+    var sv = document.getElementById('sub-' + st.sub);
+    if (sv) {
+      document.querySelectorAll('.sub-view').forEach(function (v) { v.classList.remove('active'); });
+      sv.classList.add('active');
+      document.querySelectorAll('.following-switcher button').forEach(function (b) {
+        b.classList.remove('current');
+        if ((b.getAttribute('onclick') || '').indexOf("'" + st.sub + "'") >= 0) b.classList.add('current');
+      });
+    }
+  }
+  // Defer the scroll to after layout settles (and after the browser's own
+  // restoration, which we opt out of below) so the position actually sticks.
+  if (typeof st.y === 'number' && st.y > 0) {
+    var applyScroll = function () { window.scrollTo(0, st.y); };
+    requestAnimationFrame(function () { requestAnimationFrame(applyScroll); });
+  }
+}
 /* Per-story follow: in-place swap by design (v3 §Today #3) — the one
    popup-pattern carve-out; requires no further input, so no popup. */
 function toggleFollow(btn) {
   var topic = btn.getAttribute('data-topic');
+  var when = btn.getAttribute('data-briefing-date') || CURRENT_DATE;
   var pressed = btn.getAttribute('aria-pressed') === 'true';
   if (pressed) {
-    api('/api/unfollow', {topic: topic}, function () {});
     btn.setAttribute('aria-pressed', 'false');
     btn.classList.remove('followed');
     btn.textContent = '\\uFF0B Follow this story';
+    api('/api/unfollow', {topic: topic}, function (d) {
+      if (d && d.ok === false) {  // server refused: don't lie about the state
+        btn.setAttribute('aria-pressed', 'true');
+        btn.classList.add('followed');
+        btn.textContent = 'Following this story';
+      }
+    });
     return;
   }
-  api('/api/follow', {topic: topic, briefing_date: CURRENT_DATE}, function () {});
   btn.classList.add('confirming');
   btn.textContent = '\\u2713 Following \\u2014 see it under Following \\u2192 Ongoing stories';
-  setTimeout(function () {
-    btn.classList.remove('confirming');
-    btn.classList.add('followed');
-    btn.setAttribute('aria-pressed', 'true');
-    btn.textContent = 'Following this story';
-  }, 1800);
+  api('/api/follow', {topic: topic, briefing_date: when}, function (d) {
+    if (d && d.ok === false) {  // no silent lie — revert on refusal
+      btn.classList.remove('confirming');
+      btn.textContent = '\\uFF0B Follow this story';
+      return;
+    }
+    setTimeout(function () {
+      btn.classList.remove('confirming');
+      btn.classList.add('followed');
+      btn.setAttribute('aria-pressed', 'true');
+      btn.textContent = 'Following this story';
+    }, 1400);
+  });
 }
 /* M9-M3: deep-view navigation — v6's lastStoryAnchor logic is the spec.
    Back-navigation restores scroll to the ORIGINATING story, not page top
    (binding: the "resume where you left off" ritual test). */
 var lastStoryAnchor = null;
-function openDeepView(storyId, e) {
+var lastDeepReturn = 'view-today';
+function openDeepView(storyId, e, returnId) {
   if (e) e.preventDefault();
   lastStoryAnchor = storyId;
+  lastDeepReturn = returnId || 'view-today';
   document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
   document.getElementById('view-deep-' + storyId).classList.add('active');
   window.scrollTo(0, 0);
 }
-function closeDeepView(e) {
+function closeDeepView(e, returnId) {
   if (e) e.preventDefault();
+  var back = returnId || lastDeepReturn || 'view-today';
   document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
-  document.getElementById('view-today').classList.add('active');
+  var backEl = document.getElementById(back) || document.getElementById('view-today');
+  backEl.classList.add('active');
   if (lastStoryAnchor) {
     var target = document.getElementById(lastStoryAnchor);
     if (target) {
@@ -485,15 +578,17 @@ function closeDeepView(e) {
   }
   lastStoryAnchor = null;
 }
-function toggleFooterDisclosure() {
-  var btn = document.getElementById('footer-disclosure-btn');
-  var detail = document.getElementById('footer-disclosure-detail');
+function toggleFooterDisclosure(btn) {
+  /* Element-relative (NL-11): Today and an open archive edition each carry a
+     footer, so the toggle works off the clicked button, not a fixed id. */
+  var detail = btn.parentNode.querySelector('.footer-detail');
   var expanded = btn.getAttribute('aria-expanded') === 'true';
   btn.setAttribute('aria-expanded', String(!expanded));
-  detail.classList.toggle('open', !expanded);
+  if (detail) detail.classList.toggle('open', !expanded);
 }
-function toggleEpisode() {
-  var el = document.getElementById('episode-player');
+function toggleEpisode() { toggleEpisodeEl('episode-player'); }
+function toggleEpisodeEl(id) {
+  var el = document.getElementById(id);
   if (!el) return;
   if (el.style.display === 'none' || !el.style.display) {
     el.style.display = 'block'; el.play();
@@ -581,14 +676,14 @@ function openEditNote(topicName, existing) {
 }
 function saveNote() {
   api('/api/note', {topic: noteTopic, note: document.getElementById('edit-note-textarea').value},
-      function () { closePopup('popup-edit-note'); location.reload(); });
+      function () { closePopup('popup-edit-note'); reloadPreservingView(); });
 }
 function openAddStory() { openPopup('popup-add-story'); }
 function addStory() {
   var v = document.getElementById('add-story-input').value.trim();
   if (!v) return;
   api('/api/follow', {topic: v, briefing_date: CURRENT_DATE},
-      function () { closePopup('popup-add-story'); location.reload(); });
+      function () { closePopup('popup-add-story'); reloadPreservingView(); });
 }
 var pendingTopic = null;
 function openAddTopic(name) {
@@ -600,7 +695,7 @@ function openAddTopic(name) {
 }
 function addTopic(level) {
   api('/api/topic/add', {name: pendingTopic, level: level}, function (d) {
-    if (d.ok) { closePopup('popup-add-topic'); location.reload(); }
+    if (d.ok) { closePopup('popup-add-topic'); reloadPreservingView(); }
     else {
       var s = document.getElementById('add-topic-status');
       s.textContent = d.error || 'Could not add that topic.';
@@ -627,7 +722,7 @@ function addWriter() {
     if (d.ok) {
       s.classList.add('found');
       s.textContent = 'Following ' + (name || 'them') + ' \\u2014 ' + d.detail;
-      setTimeout(function () { closePopup('popup-add-writer'); location.reload(); }, 1200);
+      setTimeout(function () { closePopup('popup-add-writer'); reloadPreservingView(); }, 1200);
     } else { s.classList.add('err'); s.textContent = d.error || 'Could not add that feed.'; }
   });
 }
@@ -639,19 +734,145 @@ function openDeleteConfirm(topicName) {
 }
 function deleteThread() {
   api('/api/thread/delete', {topic: deleteTopic},
-      function () { closePopup('popup-delete-confirm'); location.reload(); });
+      function () { closePopup('popup-delete-confirm'); reloadPreservingView(); });
 }
 function threadAction(action, topic) {
-  api('/api/' + action, {topic: topic}, function () { location.reload(); });
+  api('/api/' + action, {topic: topic}, function () { reloadPreservingView(); });
 }
 function removeToken(kind, name, el) {
+  /* NL-11: remove then reload so the followed COUNT in the group header
+     updates (the old in-place hide left the count stale) — and the reload
+     preserves the Following view + sub-view + scroll. */
   api('/api/' + kind + '/remove', {name: name}, function (d) {
-    if (d.ok) { el.closest('.token').style.display = 'none'; }
+    if (d && d.ok) { reloadPreservingView(); }
   });
 }
 function generateAgain() {
-  api('/api/generate', {}, function () { location.reload(); });
+  api('/api/generate', {}, function () { reloadPreservingView(); });
 }
+/* NL-11: shared house-styled suggestion combobox — keyboard-driven
+   (Arrow/Enter/Escape), excludes already-followed entries (server-filtered),
+   shows a secondary outlet line for writers, and degrades to a plain input
+   with no JS (the list stays hidden). One component, both editors. */
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+  });
+}
+function suggestData(container) {
+  if (container._data) return container._data;
+  var tag = container.querySelector('script.suggest-data');
+  var arr = [];
+  try { arr = JSON.parse((tag && tag.textContent) || '[]'); } catch (e) { arr = []; }
+  container._data = arr;
+  return arr;
+}
+function suggestInput(inp) {
+  var container = inp.closest('.suggest');
+  var list = container.querySelector('.suggest-list');
+  var q = inp.value.trim().toLowerCase();
+  var matches = suggestData(container).filter(function (o) {
+    return (o.l || o.v || '').toLowerCase().indexOf(q) >= 0 ||
+           (o.s || '').toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 8);
+  container._matches = matches;
+  container._active = -1;
+  inp.removeAttribute('aria-activedescendant');
+  if (!matches.length) { list.hidden = true; inp.setAttribute('aria-expanded', 'false'); return; }
+  list.innerHTML = matches.map(function (o, i) {
+    var sub = o.s ? '<span class="s-sub">' + escapeHtml(o.s) + '</span>' : '';
+    return '<li role="option" id="' + list.id + '-opt-' + i + '" data-i="' + i + '"' +
+      ' aria-selected="false" onmousedown="suggestPick(event,this)">' +
+      '<span class="s-label">' + escapeHtml(o.l || o.v) + '</span>' + sub + '</li>';
+  }).join('');
+  list.hidden = false;
+  inp.setAttribute('aria-expanded', 'true');
+}
+function suggestHighlight(container) {
+  var list = container.querySelector('.suggest-list');
+  var inp = container.querySelector('input');
+  Array.prototype.forEach.call(list.children, function (li, i) {
+    var on = i === container._active;
+    li.setAttribute('aria-selected', on ? 'true' : 'false');
+    if (on) { inp.setAttribute('aria-activedescendant', li.id); li.scrollIntoView({block: 'nearest'}); }
+  });
+  if (container._active < 0) inp.removeAttribute('aria-activedescendant');
+}
+function suggestKeydown(e, inp) {
+  var container = inp.closest('.suggest');
+  var list = container.querySelector('.suggest-list');
+  var matches = container._matches || [];
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (list.hidden) { suggestInput(inp); return; }
+    container._active = Math.min((container._active | 0) + 1, matches.length - 1);
+    suggestHighlight(container);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    container._active = Math.max((container._active | 0) - 1, -1);
+    suggestHighlight(container);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!list.hidden && container._active >= 0) { suggestChoose(container, container._active); }
+    else { suggestSubmit(container, inp.value); }
+  } else if (e.key === 'Escape') {
+    if (!list.hidden) {
+      e.stopPropagation();  // close the list; don't also close a popup/settings
+      list.hidden = true; inp.setAttribute('aria-expanded', 'false'); container._active = -1;
+    }
+  }
+}
+function suggestPick(e, li) {
+  e.preventDefault();  // mousedown fires before blur hides the list
+  suggestChoose(li.closest('.suggest'), parseInt(li.getAttribute('data-i'), 10));
+}
+function suggestChoose(container, i) {
+  var o = (container._matches || [])[i];
+  if (!o) return;
+  suggestSubmit(container, o.v || o.l);
+}
+function suggestSubmit(container, value) {
+  value = (value || '').trim();
+  var inp = container.querySelector('input');
+  var list = container.querySelector('.suggest-list');
+  list.hidden = true; inp.setAttribute('aria-expanded', 'false'); container._active = -1;
+  inp.value = '';
+  if (!value) return;
+  if (container.getAttribute('data-kind') === 'writer') { openAddWriter(value); }
+  else { openAddTopic(value); }
+}
+function suggestBlur(inp) {
+  var container = inp.closest('.suggest');
+  setTimeout(function () {
+    var list = container.querySelector('.suggest-list');
+    if (list) { list.hidden = true; inp.setAttribute('aria-expanded', 'false'); }
+  }, 120);
+}
+/* NL-11: archive editions open IN-PLACE (Today is never replaced). Fetch the
+   edition fragment (the server logs the read as it serves the body — same
+   server-side truth as a page-view, not a client beacon), inject it as
+   sibling views, switch to it; the href is the no-JS fallback. */
+function openEdition(date, e) {
+  if (e) e.preventDefault();
+  fetch('/edition?date=' + encodeURIComponent(date))
+    .then(function (r) { return r.text(); })
+    .then(function (html) {
+      var mount = document.getElementById('edition-mount');
+      mount.innerHTML = html;
+      document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+      var ed = document.getElementById('view-edition');
+      if (ed) ed.classList.add('active');
+      document.querySelectorAll('.bottom-nav button').forEach(function (b) { b.classList.remove('current'); });
+      window.scrollTo(0, 0);
+    })
+    .catch(function () { location.href = '/?date=' + encodeURIComponent(date); });
+  return false;
+}
+function backToArchive(e) {
+  if (e) e.preventDefault();
+  showView('archive');
+}
+restoreViewAfterReload();
 function pollGeneration() {
   fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
     if (d.state === 'running') { setTimeout(pollGeneration, 2500); }

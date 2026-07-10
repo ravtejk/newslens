@@ -668,3 +668,38 @@ so the frozen text can't be its own removal target).
 wired->wire, outsourced->source): a legitimate outro sentence with three
 artifact hits is REMOVED from the persisted script. Word-boundary fix
 contract in the docstring; near-miss greens are the keep-green set.
+
+## NL-11 (UI/UX v2) pass (QA, 2026-07-09)
+
+0 red — **921 green** (was 910). QA `test_nl11_qa.py` adds 11 adversarial
+pins over the implementer's own NL-11 coverage (in test_server.py /
+test_ui_polish.py / test_backlog_qa.py), targeting the seams those did not
+reach: XSS through the innerHTML-injected /edition fragment AND the writer
+suggestion `<script>` payload (the topic payload + Today headline were
+already pinned; these are the untested twins — proven non-vacuous via a
+scratch escaped-vs-unescaped control, product source never weakened — the
+sandbox correctly refused the mutation-to-bite, so the control stands in);
+follow/thread coexistence at the render boundary (story_title == an active
+thread with NO matched_memory renders PRESSED, case-insensitively, and the
+button-driven UNFOLLOW resolves the differently-cased thread; empty title
+falls back to the headline, never a blank data-topic); /edition read-count
+honesty under archive rapid-fire (one RAW read per genuine serve — reads are
+raw truth, the metric dedups by distinct day; future/absent/bad-calendar
+dates log nothing; date-scoped `ed{date}-` ids don't collide); suggestion
+exclusion tracking LIVE state (case-variant + after a topic_add); the touch
+pick path (onmousedown + preventDefault + blur timeout — real tap on a
+device is NL-58). Sacred-surface attestation: real DB consumption_events 25
+before/after (delta zero — every test sandboxed), sources.yaml sha256
+`aeb373bb…` byte-identical, memory.md `f1b9aabc…` (NL-14 threads) untouched.
+
+SUPERSEDES (terminology drift from this batch — the dated entries above are
+left intact as the record of what THOSE passes measured, not rewritten): the
+native **datalist** referenced in the "Backlog-minors batch" entry is gone —
+NL-11 replaced it with the shared house-styled suggestion combobox
+(`class="suggest"`, `role="combobox"`, `<script class="suggest-data">`
+payload; pinned by `test_following_uses_suggestion_component_not_datalist`);
+the **glance restyle** in the "P1 UI-polish pass" entry is likewise
+superseded — the glance section is REMOVED (rework backlogged NL-20; pinned
+by `test_glance_section_is_gone`). The dirty-guard's value-diff rationale
+still holds under the combobox (a suggestion PICK commits without keystrokes,
+exactly as a datalist selection did).

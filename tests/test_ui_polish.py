@@ -14,6 +14,11 @@ import pytest
 from newslens import db, paths, ranking, server, webui
 
 
+# NL-11: Today defaults to TODAY's edition (or empty) — never a stale one. So
+# in-process build_page(con) tests must seed today's date to render an edition.
+TODAY = datetime.now().strftime("%Y-%m-%d")
+
+
 def iso_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -38,11 +43,11 @@ def seed(con, slots, stories):
     inputs = {"slots": slots, "items_by_slot": {s["slot"]: [] for s in slots},
               "threads": [], "prior_ctx": None, "continuity_status": "none",
               "window_meta": None, "corroboration": {}}
-    narrative = generate.assemble_narrative("2026-07-06", "A", stories, inputs)
+    narrative = generate.assemble_narrative(TODAY, "A", stories, inputs)
     con.execute(
         "INSERT INTO briefings (date, story_slots, corroboration_labels,"
         " narrative_text, generated_at) VALUES (?, ?, ?, ?, ?)",
-        ("2026-07-06", json.dumps(slots),
+        (TODAY, json.dumps(slots),
          json.dumps({"standing_caveat": ranking.CORROBORATION_CAVEAT,
                      "per_story": []}),
          narrative, iso_now()),
@@ -78,52 +83,27 @@ def page3(tmp_paths):
     seed(con, slots, stories)
     page, rendered = server.build_page(con)
     con.close()
-    assert rendered == "2026-07-06"
+    assert rendered == TODAY
     return page
 
 
-# --- 1. glance restyle -----------------------------------------------------------------
+# --- 1. glance REMOVED (NL-11) -----------------------------------------------------------
 
-def test_glance_rows_use_the_archive_grammar(page3):
-    assert page3.count('class="archive-row glance-row"') == 3  # one per story
-    assert "In today’s briefing" in page3
-    # No new visual vocabulary: the primary/secondary lines are the archive's.
-    glance = page3.split('class="glance"')[1].split("</div>\n")[0]
-    assert 'archive-date' in glance and 'archive-keywords' in glance
-
-
-def test_glance_keywords_are_code_owned_from_slots(page3):
-    glance = page3[page3.index('class="glance"'):page3.index("<article")]
-    assert "AI regulation" in glance                      # matched tag
-    assert "Iran War" in glance                           # matched memory
-    assert glance.count("world-impact pick") == 1         # fallback, story 3 only
-    assert "None" not in glance                           # never a bare None
-
-
-def test_glance_fallback_never_blank_for_no_signal_slots(tmp_paths):
-    db.migrate()
-    con = db.connect()
-    slots = [slot(1, "Lonely override", override=True)]
-    seed(con, slots, [story(1, "Lonely override")])
-    page, _ = server.build_page(con)
-    con.close()
-    row = page[page.index("glance-row"):page.index("</a></div>")]
-    assert "world-impact pick" in row
-    assert '<p class="archive-keywords"></p>' not in page
-
-
-def test_glance_anchors_target_existing_story_ids_in_today(page3):
-    hrefs = re.findall(r'href="#story-(\d+)"', page3)
-    ids = re.findall(r'id="story-(\d+)"', page3)
-    assert sorted(hrefs) == sorted(ids) == ["0", "1", "2"]
-    # The anchors live in Today, and Today is the default ACTIVE view — a
-    # hash-bearing reload lands where the targets are visible.
+def test_glance_section_is_gone(page3):
+    """NL-11: the 'In today’s briefing' glance section is removed (rework
+    backlogged, NL-20). Neither the section wrapper nor its rows may render;
+    the story ids the glance used to anchor still exist for the deep view."""
+    assert 'class="glance"' not in page3
+    assert 'glance-row' not in page3
+    assert "In today’s briefing" not in page3
+    # Today still opens straight onto the stories.
     today = page3.split('id="view-today"')[1].split("<section")[0]
-    assert 'id="story-0"' in today and "glance-row" in today
+    ids = re.findall(r'id="story-(\d+)"', today)
+    assert sorted(ids) == ["0", "1", "2"]
     assert re.search(r'id="view-today"[^>]*class="[^"]*\bactive\b', page3)
 
 
-def test_glance_headlines_render_escaped(tmp_paths):
+def test_headlines_render_escaped(tmp_paths):
     db.migrate()
     con = db.connect()
     evil = 'Breaking <script>alert(1)</script> markets'
@@ -207,8 +187,16 @@ def test_splash_css_contract():
     assert "1px dashed var(--rule)" in base
     splash_rule = webui.CSS.split("body.splash .logo-placeholder {")[1].split("}")[0]
     assert "border" not in splash_rule  # never overridden away in splash
+    # NL-11: the splash opens ~40% larger than the previous 2.1rem.
+    assert "font-size: 2.95rem" in splash_rule
     assert ("@media (prefers-reduced-motion: reduce) { .logo-placeholder "
             "{ transition: none; } }") in webui.CSS
+
+
+def test_lead_story_has_room_below_the_episode_divider():
+    """NL-11: with the glance gone, the lead story keeps breathing room below
+    the Play-episode divider (principal 2026-07-09)."""
+    assert "#view-today > article.story:first-child { margin-top:" in webui.CSS
 
 
 def test_splash_js_is_idempotent_passive_and_two_way():

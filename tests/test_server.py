@@ -27,7 +27,11 @@ from newslens import config, db, memory, paths, ranking, server, webui
 
 from conftest import PROTOTYPE_ROOT
 
-DATE = "2026-07-05"
+# NL-11: Today defaults to TODAY's edition (or the empty state) — never a
+# stale one shown as current. Tests that GET "/" and expect the seeded edition
+# to render must seed today's date; DATE is dynamic so they keep working, and
+# the symbolic `(DATE, "read")` assertions are unaffected.
+DATE = datetime.now().strftime("%Y-%m-%d")
 
 
 def iso_now():
@@ -158,15 +162,35 @@ def test_never_existed_date_renders_empty_copy_not_a_read(ui):
     code, _, body = get(ui, "/?date=1999-01-01")
     assert code == 200
     assert "No edition has been generated" in body.decode("utf-8")
-    code2, _, body2 = get(ui, "/?date=not-a-date")  # malformed -> latest
+    code2, _, body2 = get(ui, "/?date=not-a-date")  # malformed -> today (seeded)
     assert code2 == 200 and "Chip export controls pass" in body2.decode("utf-8")
     con = db.connect()
     try:
         rows = event_rows(con)
     finally:
         con.close()
-    # only the malformed->latest render was a real briefing view
+    # only the malformed->today render was a real briefing view
     assert [(r["date"], r["kind"]) for r in rows] == [(DATE, "read")]
+
+
+def test_today_only_default_hides_stale_edition(ui):
+    """NL-11: a past-dated edition is never shown as today's — Today defaults
+    to the empty state (with Generate) and logs no read; the stale edition is
+    still reachable by explicit ?date= (archive / no-JS deep link)."""
+    con = db.connect()
+    seed_briefing(con, date="2020-01-02")  # unambiguously not today
+    con.close()
+    _, _, body = get(ui, "/")
+    text = body.decode("utf-8")
+    assert "No edition has been generated" in text        # empty copy...
+    assert "Chip export controls pass" not in text        # ...not the stale edition
+    con = db.connect()
+    try:
+        assert event_rows(con) == []                       # empty state is not a read
+    finally:
+        con.close()
+    _, _, body2 = get(ui, "/?date=2020-01-02")             # but explicit date reaches it
+    assert "Chip export controls pass" in body2.decode("utf-8")
 
 
 def test_api_status_starts_idle(ui):
@@ -1145,11 +1169,112 @@ def test_item27_furniture_contract_through_build_page(ui):
     assert "Here for" in page
     # 4. Disclosure trigger: the revival back-reference reaches the surface:
     assert "2026-07-01" in page
-    # 5. Follow affordance with pressed state:
+    # 5. Follow affordance with pressed state (on the NON-tracked story — the
+    # tracked story drops the redundant button per the NL-11 coexistence rule):
     assert "aria-pressed" in page
-    # 6. P1 polish extension: the glance rows are furniture too — archive
-    # grammar, slot-derived keywords, and the honest no-signal fallback.
-    assert page.count('class="archive-row glance-row"') == 2
-    glance = page[page.index('class="glance"'):page.index("<article")]
-    assert "AI regulation" in glance and "Iran War" in glance
-    assert "world-impact pick" in glance  # the override slot's fallback line
+    # 6. NL-11 coexistence: the tracked story shows only its marker (no follow
+    # button); the override story (no thread match) keeps a follow button.
+    today = page[page.index('id="view-today"'):page.index('id="view-following"')]
+    assert today.count('class="tracked-marker"') == 1     # the tracked story
+    assert today.count('class="follow-story"') == 1       # only the override story
+    assert 'class="glance"' not in page                   # glance removed (NL-11)
+
+
+# =====================================================================
+# NL-11 — UI/UX v2: suggestion component, view-preserving verbs, archive
+# in-place, follow coexistence, empty-state default. New wiring is born
+# with the tests only it can turn green (claims-of-wiring proof rule).
+# =====================================================================
+
+def test_following_uses_suggestion_component_not_datalist(ui):
+    _, _, body = get(ui, "/")
+    page = body.decode("utf-8")
+    following = page[page.index('id="view-following"'):page.index('id="view-archive"')]
+    assert "<datalist" not in page                    # native datalist gone everywhere
+    assert following.count('class="suggest"') == 2    # topics + writers, one component
+    assert 'role="combobox"' in following
+    assert 'class="suggest-data"' in following         # JSON payload embedded
+    assert 'role="listbox"' in following and "hidden></ul>" in following  # hidden until JS
+    for token in ("function suggestKeydown", "function suggestInput",
+                  "function suggestChoose", "ArrowDown", "ArrowUp",
+                  "'Enter'", "'Escape'"):
+        assert token in webui.JS                       # keyboard flow is wired
+
+
+def test_topic_suggestions_exclude_already_followed(tmp_paths):
+    db.migrate()
+    con = db.connect()
+    try:
+        con.execute(
+            "INSERT INTO briefings (date, story_slots) VALUES (?, ?)",
+            ("2026-07-01", json.dumps([{"slot": "1", "matched_tags":
+                [{"name": "Economy"}, {"name": "Fusion Power"}]}])))
+        con.commit()
+        cfg = SimpleNamespace(interests_broad=["Economy"], interests_granular=[],
+                              sources=[], followed_analyst_sources=[])
+        sugg = {o["v"] for o in server._topic_suggestions(con, cfg)}
+        assert "Fusion Power" in sugg                  # unfollowed coverage tag -> offered
+        assert "Economy" not in sugg                   # already followed -> excluded
+    finally:
+        con.close()
+
+
+def test_archive_rows_open_in_place_with_no_js_fallback(ui):
+    con = db.connect()
+    seed_briefing(con, date="2020-01-02")
+    con.close()
+    _, _, body = get(ui, "/")
+    page = body.decode("utf-8")
+    archive = page[page.index('id="view-archive"'):page.index('id="edition-mount"')]
+    assert "openEdition('2020-01-02', event)" in archive   # JS opens in-place
+    assert 'href="/?date=2020-01-02"' in archive           # no-JS graceful fallback
+    assert '<div id="edition-mount">' in page              # the in-place mount
+    assert "function openEdition" in webui.JS and "function backToArchive" in webui.JS
+
+
+def test_edition_fragment_renders_in_place_and_logs_a_read(ui):
+    con = db.connect()
+    seed_briefing(con, date="2020-01-02")
+    con.close()
+    code, _, body = get(ui, "/edition?date=2020-01-02")
+    assert code == 200
+    frag = body.decode("utf-8")
+    assert "Back to Archive" in frag and 'id="view-edition"' in frag
+    assert "Chip export controls pass" in frag             # the edition body renders
+    assert 'id="ed2020-01-02-story-0"' in frag             # date-scoped id (no collision)
+    assert "<!DOCTYPE html>" not in frag                   # a fragment, not a full page
+    con = db.connect()
+    try:
+        rows = [(r["date"], r["kind"]) for r in event_rows(con)]
+    finally:
+        con.close()
+    assert rows == [("2020-01-02", "read")]                # serving the body IS a read
+    code2, _, _ = get(ui, "/edition?date=nope")
+    assert code2 == 400                                    # bad date rejected
+
+
+def test_edition_fragment_absent_edition_is_graceful_and_no_read(ui):
+    code, _, body = get(ui, "/edition?date=1999-01-01")
+    assert code == 200 and "unavailable" in body.decode("utf-8")
+    con = db.connect()
+    try:
+        assert event_rows(con) == []                       # nothing served -> no read
+    finally:
+        con.close()
+
+
+def test_verbs_preserve_view_through_one_reload_mechanism():
+    js = webui.JS
+    assert "function reloadPreservingView" in js
+    assert "function restoreViewAfterReload" in js
+    assert "restoreViewAfterReload();" in js               # run on load
+    assert "sessionStorage.setItem('nl-restore'" in js
+    # every mutating verb reloads through the preserving path — no raw bounce:
+    for fn in ("saveNote", "addStory", "addTopic", "addWriter",
+               "deleteThread", "threadAction", "generateAgain", "removeToken"):
+        region = js.split("function " + fn, 1)[1].split("\nfunction ", 1)[0]
+        assert "location.reload()" not in region, fn
+        assert "reloadPreservingView()" in region, fn
+    # removeToken re-fetches (count refresh), never the old silent in-place hide:
+    remove_region = js.split("function removeToken", 1)[1].split("\nfunction ", 1)[0]
+    assert "style.display = 'none'" not in remove_region

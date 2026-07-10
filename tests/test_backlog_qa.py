@@ -99,9 +99,11 @@ def test_popup_snapshots_cannot_bleed_across_popups():
 # ---------------------------------------------------------------------------
 
 def _cfg(sources=(), broad=(), granular=()):
+    src = [types.SimpleNamespace(name=n, followed_analyst=f)
+           for n, f in sources]
     return types.SimpleNamespace(
-        sources=[types.SimpleNamespace(name=n, followed_analyst=f)
-                 for n, f in sources],
+        sources=src,
+        followed_analyst_sources=[s for s in src if s.followed_analyst],
         interests_broad=list(broad), interests_granular=list(granular))
 
 
@@ -132,9 +134,9 @@ def test_topic_vocabulary_dedupes_sorts_and_survives_malformed_rows(tmp_paths):
         con.close()
 
 
-def test_datalist_escapes_hostile_tag_names(tmp_paths):
-    """Tag names arrive from the ranked web: a hostile name must not break
-    out of the option value attribute."""
+def test_suggest_component_escapes_hostile_tag_names(tmp_paths):
+    """NL-11: tag names arrive from the ranked web; a hostile name must not
+    break out of the suggestion component's <script> JSON payload."""
     db.migrate()
     con = db.connect()
     try:
@@ -144,32 +146,36 @@ def test_datalist_escapes_hostile_tag_names(tmp_paths):
                 "INSERT INTO briefings (date, story_slots) VALUES (?, ?)",
                 ("2026-07-01", json.dumps([{"slot": "1",
                                             "matched_tags": [{"name": hostile}]}])))
-        vocab = server._topic_vocabulary(con, _cfg())
-        assert hostile in vocab                      # recalled faithfully...
-        html = server._datalist("topic-vocab", vocab)
-        assert "<script>" not in html                # ...rendered escaped
-        assert '"><script' not in html
+        sugg = server._topic_suggestions(con, _cfg())
+        assert any(o["v"] == hostile for o in sugg)   # recalled faithfully...
+        html = server._render_suggest("topic", "topic-suggest", "p", "a", sugg)
+        payload = html.split('class="suggest-data">')[1].split("</script>")[0]
+        assert "<" not in payload and ">" not in payload   # ...no raw angle brackets
+        assert "\\u003c" in payload                        # the hostile '<' is encoded
+        assert "<script>alert(1)</script>" not in html
     finally:
         con.close()
 
 
-def test_writer_vocabulary_recall_shapes_and_greedy_paren_edge():
+def test_writer_suggestions_recall_shapes_and_exclude_followed():
+    """NL-11: writer suggestions carry the outlet as a secondary line, split
+    "Pub (Name)" to name/outlet, and EXCLUDE already-followed analysts."""
     cfg = _cfg(sources=[
-        ("Politico (Jack Blanchard)", False),   # writer-shaped: both forms
-        ("The Hill", False),                    # plain feed: excluded
-        ("Solo Analyst Feed", True),            # followed: name form only
+        ("Politico (Jack Blanchard)", False),   # writer-shaped, not followed -> rich entry
+        ("The Hill", False),                    # plain feed -> excluded
+        ("Solo Analyst Feed", True),            # already followed -> excluded (NL-11)
         ("A (B) (C)", False),                   # greedy edge, pinned actual
     ])
-    vocab = server._writer_vocabulary(cfg)
-    assert "Politico (Jack Blanchard)" in vocab
-    assert "Jack Blanchard — Politico" in vocab
-    assert "The Hill" not in vocab
-    assert "Solo Analyst Feed" in vocab
-    assert not any("Solo Analyst Feed — " in v for v in vocab)
-    # greedy regex takes the LAST parenthetical as the name — actual,
-    # cosmetic; a double-parenthetical source name is pathological anyway
-    assert "C — A (B)" in vocab
-    assert vocab == sorted(vocab, key=str.lower)
+    sugg = server._writer_suggestions(cfg)
+    by_label = {o["l"]: o for o in sugg}
+    assert by_label["Jack Blanchard"]["s"] == "Politico"   # outlet secondary line
+    assert by_label["Jack Blanchard"]["v"] == "Jack Blanchard"
+    assert "The Hill" not in by_label                      # plain feed excluded
+    assert "Solo Analyst Feed" not in by_label             # already followed excluded
+    # greedy regex takes the LAST parenthetical as the name — actual, cosmetic
+    assert by_label["C"]["s"] == "A (B)"
+    labels = [o["l"] for o in sugg]
+    assert labels == sorted(labels, key=str.lower)
 
 
 # ---------------------------------------------------------------------------

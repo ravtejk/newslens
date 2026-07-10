@@ -531,9 +531,12 @@ def _js_str(v: str) -> str:
 
 
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
-                  active_topics: set, has_file: bool = False) -> str:
+                  active_topics: set, has_file: bool = False,
+                  slug: Optional[str] = None, date: str = "",
+                  deep_return: str = "view-today") -> str:
+    slug = slug or f"story-{i}"
     h = {"full": "h2", "medium": "h3"}.get(tier, "h4")
-    parts = [f'<article class="story{" quick-hit" if tier == "quick" else ""}" id="story-{i}">']
+    parts = [f'<article class="story{" quick-hit" if tier == "quick" else ""}" id="{_e(slug)}">']
 
     marks = list(slot.get("matched_memory") or [])
     if marks:
@@ -578,20 +581,33 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     # (valid brief), absent (quick tier), degraded-hidden (failed brief —
     # renders IDENTICALLY to absent; total absence is the signal).
     if has_file:
+        # 2-arg form for the Today path (the deep view returns there by
+        # default); archive-in-place editions pass their own return view.
+        ret = "" if deep_return == "view-today" else f", '{_e(deep_return)}'"
         parts.append(
             f'<p class="deep-view-entry"><a href="#" '
-            f'onclick="openDeepView(\'story-{i}\', event)">→ The full '
+            f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">→ The full '
             f'picture</a></p>')
 
-    topic = slot.get("story_title") or st.get("headline") or ""
-    followed = topic.lower() in active_topics
-    pressed = "true" if followed else "false"
-    label = "Following this story" if followed else "＋ Follow this story"
-    cls = ' class="followed"' if followed else ""
-    parts.append(
-        f'<div class="follow-story"><button{cls} data-topic={_e_attr(topic)} '
-        f'aria-pressed="{pressed}" onclick="toggleFollow(this)">{_e(label)}'
-        f'</button></div>')
+    # Follow affordance — coexistence resolution (NL-11): a story already
+    # tracked by an ongoing thread (matched_memory) shows only the "Tracked
+    # ongoing story" marker above and DROPS the redundant follow button — the
+    # follow it would offer is the very thread it already lives in (this is
+    # the no-op that read as "Follow doesn't work"). Following a *story* is a
+    # distinct concept, offered only when there is NO thread match; if that
+    # per-story follow already exists the affordance reads "Following this
+    # story" and un-follows on tap (the M7 contract).
+    if not marks:
+        topic = slot.get("story_title") or st.get("headline") or ""
+        followed = topic.lower() in active_topics
+        pressed = "true" if followed else "false"
+        label = "Following this story" if followed else "＋ Follow this story"
+        cls = ' class="followed"' if followed else ""
+        date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
+        parts.append(
+            f'<div class="follow-story"><button{cls} data-topic={_e_attr(topic)}'
+            f'{date_attr} aria-pressed="{pressed}" onclick="toggleFollow(this)">'
+            f'{_e(label)}</button></div>')
     parts.append("</article>")
     return "".join(parts)
 
@@ -629,6 +645,23 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
   <button class="cta-quiet" onclick="generateAgain()">Try again</button>
 </div>"""
     if row is None:
+        # NL-11: no edition for TODAY -> the empty state, never an older
+        # edition dressed as current. If the archive has earlier editions,
+        # point there; the copy still carries "No edition has been generated"
+        # so the drift-guard and the no-briefings case read the same.
+        has_archive = con.execute(
+            "SELECT 1 FROM briefings LIMIT 1").fetchone() is not None
+        if has_archive:
+            return """
+<div class="state-panel">
+  <h3>Nothing for today yet</h3>
+  <p>No edition has been generated for today. A new one takes a couple of
+     minutes: it fetches your sources, picks the stories, writes the briefing,
+     and records the episode.</p>
+  <button class="cta-quiet" onclick="generateAgain()">Generate today’s edition</button>
+  <p class="empty-note" style="margin-top:1rem;">Earlier editions are in your
+     <a href="#" onclick="showView('archive'); return false;">Archive</a>.</p>
+</div>"""
         return """
 <div class="state-panel">
   <h3>Nothing yet</h3>
@@ -638,42 +671,36 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
   <button class="cta-quiet" onclick="generateAgain()">Generate today’s edition</button>
 </div>"""
 
+    # NL-11: the glance ("In today’s briefing") section is REMOVED (rework
+    # backlogged, NL-20). The lead story now opens the reading surface.
+    return _render_briefing_body(con, row, entry, briefs, "", "view-today")
+
+
+def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
+                          briefs: Optional[Dict[int, Dict]],
+                          slug_prefix: str, deep_return: str) -> str:
+    """Stories + trust footer for one edition. Shared by Today and the
+    archive-in-place edition view (NL-11) so both render identically. The
+    slug_prefix keeps ids collision-free when an archive edition is injected
+    alongside Today; deep_return names the view its deep-view back-link
+    returns to."""
     stories, footer_lines = _stories_for(row, entry)
     slots = _slots_for(row)
     tiers = (entry or {}).get("tiers") or []
     active = _active_topics_lower(con)
 
-    # P1 polish (2026-07-06): the glance adopts the ARCHIVE's visual grammar
-    # — same row card, serif primary line, soft topic-keyword line — one
-    # vocabulary for "a briefing entry" everywhere. Each row anchors to its
-    # story below (in-page; no navigation). Keywords derive from the SLOT
-    # (code-owned), exactly as archive rows do; the no-match fallback mirrors
-    # the meta-footnote's own language.
     html = []
-    glance_rows = []
-    for i, st in enumerate(stories):
-        slot = slots[i] if i < len(slots) else {}
-        kws = [tg.get("name") for tg in slot.get("matched_tags") or []
-               if isinstance(tg, dict) and tg.get("name")]
-        kws += [m for m in slot.get("matched_memory") or [] if m not in kws]
-        if not kws:
-            kws = ["world-impact pick"]
-        kw_html = '<span class="sep">·</span>'.join(_e(k) for k in kws[:3])
-        glance_rows.append(
-            f'<div class="archive-row glance-row"><a href="#story-{i}">'
-            f'<p class="archive-date">{_e(st.get("headline", ""))}</p>'
-            f'<p class="archive-keywords">{kw_html}</p></a></div>')
-    if glance_rows:
-        html.append('<div class="glance"><p class="section-h">In today’s '
-                    'briefing</p>' + "".join(glance_rows) + "</div>")
-
     for i, st in enumerate(stories):
         slot = slots[i] if i < len(slots) else {}
         tier = tiers[i] if i < len(tiers) else ("full" if i == 0 else "medium" if i <= 2 else "quick")
-        html.append(_render_story(i, st, slot, tier, active,
-                                  has_file=(i + 1) in (briefs or {})))
+        html.append(_render_story(
+            i, st, slot, tier, active, has_file=(i + 1) in (briefs or {}),
+            slug=f"{slug_prefix}story-{i}", date=row["date"],
+            deep_return=deep_return))
 
-    # Footer disclosure (addendum #3): quiet line; window/caveat/cost a tap away
+    # Footer disclosure (addendum #3): quiet line; window/caveat/cost a tap
+    # away. Ids are slug_prefix-scoped so Today's footer and an open archive
+    # edition's footer never collide; the toggle works off the button element.
     gen_local = _fmt_local(row["generated_at"])
     detail_ps = [f"<p>{_e(ln)}</p>" for ln in footer_lines]
     cost = _run_cost(entry)
@@ -683,13 +710,15 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         edition_bits.append(f"{dur} audio")
     edition_bits.append(cost)
     detail_ps.append(f'<p>This edition: {_e(" · ".join(edition_bits))}</p>')
+    btn_id = f"{slug_prefix}footer-disclosure-btn"
+    dtl_id = f"{slug_prefix}footer-disclosure-detail"
     html.append(f"""
 <div class="footer-tag">
-  <button class="disclosure-trigger" id="footer-disclosure-btn" aria-expanded="false"
-          aria-controls="footer-disclosure-detail" onclick="toggleFooterDisclosure()">
+  <button class="disclosure-trigger" id="{btn_id}" aria-expanded="false"
+          aria-controls="{dtl_id}" onclick="toggleFooterDisclosure(this)">
     <span class="caret">▸</span> Generated {_e(gen_local)}
   </button>
-  <div class="footer-detail" id="footer-disclosure-detail">{"".join(detail_ps)}</div>
+  <div class="footer-detail" id="{dtl_id}">{"".join(detail_ps)}</div>
 </div>""")
     return "".join(html)
 
@@ -737,26 +766,68 @@ def _topic_vocabulary(con: sqlite3.Connection, cfg) -> List[str]:
     return sorted(vocab, key=str.lower)
 
 
-def _writer_vocabulary(cfg) -> List[str]:
-    """Backlog-minors item 3, v1-scoped: RECALL of what the system already
-    knows — followed analysts plus writer-shaped feed entries already in
-    sources.yaml ("Pub (Name)" pattern). Name->feed RESOLUTION stays P4;
-    this suggests, never resolves. Both display forms offered so either
-    matches as the principal types."""
-    names = set()
+def _topic_suggestions(con: sqlite3.Connection, cfg) -> List[Dict]:
+    """NL-11 suggestions for the Topics add-field: the recall vocabulary MINUS
+    what the principal already follows (you can't add what you have). Topics
+    carry no secondary line."""
+    followed = {t.lower() for t in cfg.interests_broad} \
+        | {t.lower() for t in cfg.interests_granular}
+    return [{"v": name, "l": name}
+            for name in _topic_vocabulary(con, cfg)
+            if name.lower() not in followed]
+
+
+def _writer_suggestions(cfg) -> List[Dict]:
+    """NL-11 suggestions for the Writers add-field: writer-shaped feeds the
+    system already knows, EXCLUDING ones already followed, each carrying its
+    outlet as a secondary line. "Pub (Name)" splits to name=label,
+    publication=sub; a plain followed-analyst name has no sub. Name->feed
+    RESOLUTION stays P4 (NL-21); this suggests recall, never resolves."""
+    followed = {s.name.lower() for s in cfg.followed_analyst_sources}
+    out: List[Dict] = []
+    seen = set()
     for s in cfg.sources:
         m = re.match(r"^(.*)\s+\((.+)\)\s*$", s.name)
-        if s.followed_analyst or m:
-            names.add(s.name)
-            if m:
-                names.add(f"{m.group(2)} — {m.group(1)}")
-    return sorted(names, key=str.lower)
+        if not (s.followed_analyst or m):
+            continue
+        if s.name.lower() in followed:
+            continue  # already followed -> excluded (NL-11 ruling)
+        if m:
+            writer, pub = m.group(2).strip(), m.group(1).strip()
+            entry, key = {"v": writer, "l": writer, "s": pub}, writer.lower()
+        else:
+            entry, key = {"v": s.name, "l": s.name}, s.name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+    return sorted(out, key=lambda o: o["l"].lower())
 
 
-def _datalist(list_id: str, options: List[str]) -> str:
-    return (f'<datalist id="{_e(list_id)}">'
-            + "".join(f"<option value={_e_attr(o)}></option>" for o in options)
-            + "</datalist>")
+def _render_suggest(kind: str, list_id: str, placeholder: str,
+                    aria_label: str, data: List[Dict]) -> str:
+    """The shared house-styled suggestion combobox (NL-11) — replaces the
+    native datalist, which is browser-dependent (notoriously weak in Safari)
+    and structurally could not exclude followed entries, carry a secondary
+    line, or be styled. Settings-context editor exception under DIRECTION law:
+    outlined, spaced, uncolored, no chips. Keyboard-driven (arrow/enter/escape)
+    in the shipped JS; with no JS the list stays hidden and the field degrades
+    to a plain text input. The JSON payload is <>&-escaped so a hostile
+    recalled name can't break out of the <script> element."""
+    payload = (json.dumps(data, ensure_ascii=False)
+               .replace("<", "\\u003c").replace(">", "\\u003e")
+               .replace("&", "\\u0026"))
+    return (
+        f'<div class="suggest" data-kind="{_e(kind)}">'
+        f'<input class="token-search" type="text" role="combobox"'
+        f' aria-expanded="false" aria-autocomplete="list"'
+        f' aria-controls="{_e(list_id)}" autocomplete="off"'
+        f' placeholder="{_e(placeholder)}" aria-label="{_e(aria_label)}"'
+        f' oninput="suggestInput(this)" onkeydown="suggestKeydown(event,this)"'
+        f' onfocus="suggestInput(this)" onblur="suggestBlur(this)">'
+        f'<ul class="suggest-list" id="{_e(list_id)}" role="listbox" hidden></ul>'
+        f'<script type="application/json" class="suggest-data">{payload}</script>'
+        f'</div>')
 
 
 def _render_following(con: sqlite3.Connection) -> str:
@@ -804,16 +875,15 @@ def _render_following(con: sqlite3.Connection) -> str:
                 f'<button class="token-remove" aria-label="Remove {_e(label or name)}"'
                 f' onclick="removeToken({_e(_js_str(kind))}, {_e(_js_str(name))}, this)">×</button></span>')
 
-    # item 2: native datalist (degrades to the plain input with no JS and
-    # on browsers that ignore it — the Enter flow is unchanged either way)
+    # NL-11: the shared house-styled suggestion component (replaces the native
+    # datalist). Excludes already-followed topics; keyboard-accessible; no-JS
+    # degrades to a plain input.
     topics = [
-        '<input class="token-search" type="text" placeholder="Search or add a topic…"'
-        ' aria-label="Search or add a topic" list="topic-vocab"'
-        ' onkeydown="if(event.key===\'Enter\'){openAddTopic(this.value); this.value=\'\';}">',
-        _datalist("topic-vocab", _topic_vocabulary(con, cfg)),
-        '<p class="token-search-hint">Type a topic — suggestions draw from '
-        'your interests and everything coverage has matched so far; press '
-        'Enter to add.</p>',
+        _render_suggest("topic", "topic-suggest", "Search or add a topic…",
+                        "Search or add a topic", _topic_suggestions(con, cfg)),
+        '<p class="token-search-hint">Type a topic and press Enter to add, or '
+        'pick a suggestion — suggestions draw from everything coverage has '
+        'matched that you don’t already follow.</p>',
     ]
     for group, label in ((cfg.interests_broad, "Broad"),
                          (cfg.interests_granular, "Specific")):
@@ -825,14 +895,12 @@ def _render_following(con: sqlite3.Connection) -> str:
         topics.append("</div></div>")
 
     writers = [
-        '<input class="token-search" type="text" placeholder="Search or add a writer…"'
-        ' aria-label="Search or add a writer" list="writer-vocab"'
-        ' onkeydown="if(event.key===\'Enter\'){openAddWriter(this.value); this.value=\'\';}">',
-        _datalist("writer-vocab", _writer_vocabulary(cfg)),
+        _render_suggest("writer", "writer-suggest", "Search or add a writer…",
+                        "Search or add a writer", _writer_suggestions(cfg)),
         '<p class="token-search-hint">Following a writer adds their feed to '
         'your sources and boosts their pieces in ranking. Suggestions recall '
-        'writers the system already knows; adding someone new still takes '
-        'their feed link.</p>',
+        'writers the system already knows (with their outlet); adding someone '
+        'new still takes their feed link.</p>',
         '<div class="token-group"><div class="token-list">',
     ]
     followed = cfg.followed_analyst_sources
@@ -873,9 +941,11 @@ def _render_archive(con: sqlite3.Connection) -> str:
     html = ['<h1 class="view-title">Archive</h1>']
     for r in rows:
         kw = '<span class="sep">·</span>'.join(_e(k) for k in r["keywords"])
+        # NL-11: JS opens the edition IN-PLACE (Today never replaced); the
+        # href is the no-JS graceful fallback (full navigation to ?date=).
         html.append(f"""
 <div class="archive-row">
-  <a href="/?date={_e(r["date"])}">
+  <a href="/?date={_e(r["date"])}" onclick="return openEdition('{_e(r["date"])}', event)">
     <p class="archive-date">{_e(r["human"])}</p>
     <p class="archive-keywords">{kw}</p>
   </a>
@@ -977,17 +1047,22 @@ def _cite_qualifier(cites: List[str], src_by_key: Dict[str, Dict],
 
 
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
-                      date: str) -> str:
+                      date: str, back_label: str = "← Back to today’s edition",
+                      return_view: str = "view-today") -> str:
     """The reader rendering — v6-as-edited is the spec. One artifact, two
     renderings (§5.3): this template never re-composes, never re-ledes;
-    'cited' never 'verified'; notes_for_writer never renders."""
+    'cited' never 'verified'; notes_for_writer never renders. NL-11: back-link
+    returns to `return_view` (Today by default; an archive-in-place edition
+    passes its own view) and `story_anchor` may be slug-prefixed so archive
+    editions never collide with Today's deep-view ids."""
     brief = doc.get("brief") or {}
     header = doc.get("header") or {}
     src_by_key = {s["key"]: s for s in brief.get("sources", [])}
 
     out = [f'<section id="view-deep-{story_anchor}" class="view">']
-    out.append('<a class="deep-back" href="#" onclick="closeDeepView(event)">'
-               '← Back to today’s edition</a>')
+    ret = "" if return_view == "view-today" else f", '{_e(return_view)}'"
+    out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
+               f'{_e(back_label)}</a>')
     out.append(f'<div class="deep-title-block"><p class="deep-eyebrow">The full '
                f'picture</p><h1 class="deep-title">{_e(headline)}</h1></div>')
     jump_items = [("facts", "Facts"), ("ledger", "Ledger"),
@@ -1165,10 +1240,75 @@ def compute_prov_display(cites: List[str], src_by_key: Dict[str, Dict]) -> str:
     return ""
 
 
+def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
+                        slug_prefix: str, back_label: str,
+                        return_view: str) -> Tuple[Dict[int, Dict], List[str]]:
+    """Newest-valid-wins brief reads for one edition (M9-M3); renders FROM the
+    persisted row, never regenerates. Returns ({slot_no: doc}, [sections]).
+    Shared by Today and the archive-in-place edition (NL-11)."""
+    briefs: Dict[int, Dict] = {}
+    sections: List[str] = []
+    from . import analysis as analysis_mod
+    stories_probe, _ = _stories_for(row, entry)
+    for i, st in enumerate(stories_probe):
+        doc = analysis_mod.latest_valid_brief(con, row["date"], i + 1)
+        if doc and doc.get("brief"):
+            briefs[i + 1] = doc
+            sections.append(_render_deep_view(
+                f"{slug_prefix}story-{i}", st.get("headline", ""), doc,
+                row["date"], back_label=back_label, return_view=return_view))
+    return briefs, sections
+
+
+def build_edition_fragment(con: sqlite3.Connection,
+                           date: str) -> Tuple[str, Optional[str]]:
+    """NL-11: an archive edition rendered as an in-place view fragment — the
+    edition body + its deep views + a top-left "Back to Archive" affordance
+    (the deep-view back pattern). The client injects this alongside Today, so
+    Today is NEVER replaced. Ids are slug-prefixed per date; deep-view sections
+    are siblings of the edition section (not nested — a nested .view can't show
+    when its ancestor is display:none). Returns (html, date_read_or_None); the
+    caller logs the read server-side exactly as a page-view does."""
+    row = _briefing_row(con, date)
+    if row is None:
+        return ('<section class="view active" id="view-edition">'
+                '<a class="deep-back" href="#" onclick="backToArchive(event)">'
+                '← Back to Archive</a>'
+                '<p class="empty-note">That edition is unavailable.</p>'
+                '</section>', None)
+    entry = _log_entry_for(row["date"])
+    slug_prefix = f"ed{date}-"
+    briefs, deep_sections = _collect_deep_views(
+        con, row, entry, slug_prefix, "← Back to this edition", "view-edition")
+    episode = ""
+    dur = _wav_duration(row["audio_file_path"])
+    if dur:
+        episode = (f'<div class="episode-affordance edition-episode">'
+                   f'<button onclick="toggleEpisodeEl(\'ep-{_e(date)}\')" '
+                   f'aria-label="Play full episode, {_e(dur)}">▷ Play full episode'
+                   f'<span class="episode-meta"> · {_e(dur)}</span></button>'
+                   f'<audio id="ep-{_e(date)}" style="display:none" controls '
+                   f'preload="none" src="/audio/{_e(date)}.wav"></audio></div>')
+    body = _render_briefing_body(con, row, entry, briefs, slug_prefix,
+                                 "view-edition")
+    head = (f'<section class="view active" id="view-edition">'
+            f'<a class="deep-back" href="#" onclick="backToArchive(event)">'
+            f'← Back to Archive</a>'
+            f'<h1 class="view-title">{_e(_human_date(row["date"]))}</h1>'
+            f'{episode}{body}</section>')
+    return head + "".join(deep_sections), row["date"]
+
+
 def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str, Optional[str]]:
     """Returns (html, briefing_date_rendered)."""
     gen_state = GEN_JOB.snapshot()
-    row = _briefing_row(con, date)
+    if date:
+        row = _briefing_row(con, date)
+    else:
+        # NL-11: Today shows TODAY's edition or the empty state — never an
+        # older edition dressed as current. Deep-linked/archive ?date= still
+        # addresses any date (the no-JS archive path).
+        row = _briefing_row(con, datetime.now().strftime("%Y-%m-%d"))
     entry = _log_entry_for(row["date"]) if row is not None else None
 
     date_label = _human_date(row["date"]) if row is not None \
@@ -1191,14 +1331,8 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
     briefs: Dict[int, Dict] = {}
     deep_sections: List[str] = []
     if row is not None and gen_state["state"] != "running":
-        stories_probe, _ = _stories_for(row, entry)
-        from . import analysis as analysis_mod
-        for i, st in enumerate(stories_probe):
-            doc = analysis_mod.latest_valid_brief(con, row["date"], i + 1)
-            if doc and doc.get("brief"):
-                briefs[i + 1] = doc
-                deep_sections.append(_render_deep_view(
-                    f"story-{i}", st.get("headline", ""), doc, row["date"]))
+        briefs, deep_sections = _collect_deep_views(
+            con, row, entry, "", "← Back to today’s edition", "view-today")
 
     page = webui.PAGE.format(
         css=webui.CSS,
@@ -1285,6 +1419,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/":
                 return self._page(parse_qs(parsed.query))
+            if parsed.path == "/edition":
+                return self._edition(parse_qs(parsed.query))
             if parsed.path == "/api/status":
                 return self._send_json(GEN_JOB.snapshot())
             m = re.match(r"^/audio/(\d{4}-\d{2}-\d{2})\.wav$", parsed.path)
@@ -1307,6 +1443,22 @@ class Handler(BaseHTTPRequestHandler):
                 # the day-30 falsifier: an actual open of a real briefing
                 events.log_read(con, rendered)
             self._send_html(page)
+        finally:
+            con.close()
+
+    def _edition(self, qs: Dict[str, List[str]]) -> None:
+        """NL-11: the archive-in-place edition fragment. Same server-side
+        read-logging as a page-view — the read fires because the server
+        actually served the edition body, not a client beacon."""
+        date = (qs.get("date") or [None])[0]
+        if not date or not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+            return self._send_html("<p class='empty-note'>bad date</p>", 400)
+        con = db.connect()
+        try:
+            html, rendered = build_edition_fragment(con, date)
+            if rendered:
+                events.log_read(con, rendered)
+            self._send_html(html)
         finally:
             con.close()
 
