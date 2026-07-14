@@ -568,3 +568,89 @@ def test_prompt_render_errors_are_named_ranking_failures_not_crashes(
     msg = str(excinfo.value)
     assert "did not render" in msg and exc_name in msg
     assert _posts(llm) == []  # failed before any request
+
+
+# --- run 28 (2026-07-14): the fabricated arithmetic id-lattice --------------------
+# Live RANK failure: at temp 0 gpt-4o abandoned transcription of the 550-line
+# item list and emitted 12 clusters of 12 evenly-spaced 3-digit ids (383-613,
+# step ~20) — NONE present in the real 3679-4228 window. Pure fabrication, not a
+# near-miss. These pin (a) that the closed-vocab guard hard-rejects the exact
+# shape and (b) the safety property that makes it work: fabrications land
+# OUTSIDE the sparse real id set. A dense 1..N id remap would break (b).
+
+# The real window the failed run saw, and the exact lattice the model emitted.
+_RUN28_WINDOW_IDS = set(range(3679, 4229))          # 550 real ids, all 4-digit
+_RUN28_LATTICE = [                                  # 12 clusters x 12 ids, step ~20
+    list(range(base, base + 12 * 20, 20)) for base in (395, 386, 387, 383, 388, 389,
+                                                       390, 391, 392, 393, 394, 396)
+]
+
+
+def test_run28_fabricated_id_lattice_is_hard_rejected():
+    payload = {"clusters": [cluster(ids, title=f"c{n}") for n, ids in enumerate(_RUN28_LATTICE)]}
+    with pytest.raises(ValueError) as excinfo:
+        ranking.validate_payload(payload, _RUN28_WINDOW_IDS, TAGS, MEMORY)
+    msg = str(excinfo.value)
+    # Every fabricated cluster is named as invented — no row can be written.
+    assert msg.count("invented item_ids") == 12
+
+
+def test_run28_fabrication_lands_outside_the_real_vocabulary():
+    """The guard's power is that a fabricated id is OUTSIDE the sparse real id
+    set, so it rejects. A future 'compress ids to 1..N' change would put this
+    same lattice INSIDE the vocabulary and silently mis-attribute it — this
+    test fails loudly if the id vocabulary is ever densified under the model."""
+    fabricated = {i for ids in _RUN28_LATTICE for i in ids}
+    assert fabricated.isdisjoint(_RUN28_WINDOW_IDS)
+
+
+# --- the CORRECTED retry: not a byte-identical re-POST (run 28 fix) ----------------
+
+def _resp(payload, finish_reason=None):
+    """A parsed /chat/completions response as _post_chat returns it (a dict,
+    not bytes) — for monkeypatching _post_chat to sequence attempts."""
+    choice = {"message": {"content": json.dumps(payload)}}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    return {"choices": [choice], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+
+def test_malformed_retry_carries_a_correction_and_recovers(monkeypatch):
+    """Attempt 1 fabricates -> validation fails; the retry must send a DIFFERENT
+    prompt (carrying RETRY_CORRECTION), which recovers. Proves the retry is a
+    real second draw, not the guaranteed-identical re-POST that burned run 28's
+    second ~$0.025."""
+    sent = []
+    responses = [
+        _resp({"clusters": [cluster([9999])]}),          # invented id -> rejected
+        _resp({"clusters": [cluster([1, 2])]}),          # valid -> recovers
+    ]
+    monkeypatch.setattr(ranking, "_post_chat",
+                        lambda key, prompt: (sent.append(prompt), responses.pop(0))[1])
+    clusters, usage = ranking.call_llm_validated("sk-x", "BASE-PROMPT", KNOWN_IDS, TAGS, MEMORY)
+    assert [c["item_ids"] for c in clusters] == [[1, 2]]   # recovered on the retry
+    assert len(sent) == 2
+    assert sent[0] == "BASE-PROMPT"                        # attempt 1 unchanged
+    assert sent[1] != sent[0]                              # retry is NOT identical
+    assert "CORRECTION" in sent[1] and sent[1].startswith("BASE-PROMPT")
+
+
+def test_transport_retry_re_sends_the_original_prompt_unchanged(monkeypatch):
+    """Scope guard: a 5xx/transport retry is NOT the model's fault, so its retry
+    must re-send the original prompt with no correction appended (the correction
+    is malformed-output only)."""
+    sent = []
+    calls = {"n": 0}
+
+    def fake_post(key, prompt):
+        sent.append(prompt)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError("u", 503, "down", {}, None)
+        return _resp({"clusters": [cluster([1])]})
+
+    monkeypatch.setattr(ranking, "_post_chat", fake_post)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    clusters, _ = ranking.call_llm_validated("sk-x", "BASE-PROMPT", KNOWN_IDS, TAGS, MEMORY)
+    assert len(sent) == 2 and sent[0] == sent[1] == "BASE-PROMPT"
+    assert all("CORRECTION" not in p for p in sent)

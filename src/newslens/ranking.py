@@ -300,6 +300,13 @@ def build_prompt(
     # Brackets are sanitized out of titles so a headline can never fabricate
     # an "[id=N]" token (M4 gate: closes the id-in-headline class outright,
     # including a hostile feed publishing literal id markers).
+    # SPARSE-ID LAW (run 28, 2026-07-14 — never densify these ids): the ids
+    # below are RAW DB ids, rendered sparse ON PURPOSE. The closed-vocab
+    # guard's rejection power depends on fabricated ids landing OUTSIDE the
+    # real id set; a "compress ids to 1..N" remap here would have put run
+    # 28's fabricated lattice (383-613) INSIDE the vocabulary and silently
+    # mis-attributed every cluster. Detection property pinned by
+    # test_run28_fabrication_lands_outside_the_real_vocabulary.
     items_block = "\n".join(
         f"[id={r['id']}] {r['outlet']} | "
         + r["title"].replace("[", "(").replace("]", ")")
@@ -554,6 +561,37 @@ def repair_duplicate_ids(payload: object) -> Tuple[object, Dict]:
     return {**payload, "clusters": new_clusters}, info
 
 
+# The ONE retry, CORRECTED (run 28, 2026-07-14 live finding). A blind retry
+# re-POSTs byte-identical bytes, so at temperature 0 the model returns the
+# byte-identical output: run 28's call+retry both emitted the SAME fabricated
+# id-lattice (ids 383-613, arithmetic step ~20, none of them in the real
+# 3679-4228 window) — ~$0.025 spent twice for a guaranteed-identical failure,
+# the retry powerless by construction. The retry for the MALFORMED-OUTPUT class
+# now carries a concrete correction turn: temperature stays 0 (the M4 exact-copy
+# finding holds — raising temp trades away the transcription discipline that
+# temp 0 buys), but the retry INPUT differs, so attempt 2 is a genuine second
+# draw steered at the exact rule that failed. Scoped to malformed output only —
+# a 5xx/timeout/429 retry re-sends the original prompt unchanged (those failures
+# are transport, not the model's doing). The id vocabulary is NOT compressed:
+# the closed-vocab guard's power is that fabricated ids land OUTSIDE the real
+# (sparse, 4-digit) id set and hard-reject; a dense 1..N remap would put the
+# same fabrication INSIDE the vocabulary and silently mis-attribute it.
+RETRY_CORRECTION = (
+    "CORRECTION — your previous response was rejected as invalid, most likely "
+    "for one of these hard rules:\n"
+    "1. Every item_id MUST be copied verbatim from an [id=N] bracket in the "
+    "INPUT ITEMS list above. Do NOT invent, guess, renumber, or generate ids, "
+    "and never emit an evenly-spaced or made-up sequence of numbers; if you are "
+    "unsure of an item's id, leave that item out. Numbers inside titles are "
+    "never ids.\n"
+    "2. matched_tags / matched_memory / matched_dormant entries must be copied "
+    "EXACTLY from the provided lists (tags with their listed level), or left "
+    "empty.\n"
+    "Re-cluster the SAME INPUT ITEMS and return only the one JSON object of the "
+    "required shape."
+)
+
+
 def call_llm_validated(
     key: str,
     prompt: str,
@@ -573,13 +611,19 @@ def call_llm_validated(
     Retryable: 5xx, timeouts/connection failures, transient 429 rate limits,
     malformed/failed-validation output (the spec'd path). NOT retryable:
     auth (401/403), insufficient_quota 429 (retrying spends nothing and fixes
-    nothing — it needs the principal's billing action), other 4xx."""
+    nothing — it needs the principal's billing action), other 4xx.
+
+    The malformed-output retry is CORRECTED, not blind: after a validation
+    failure the retry prompt carries RETRY_CORRECTION so attempt 2 is not a
+    byte-identical re-POST (run 28 fix — see the constant). Transport retries
+    (5xx/429/network) re-send the original prompt unchanged."""
     last_error = "unknown"
     backoff = 1.0
     usage: Dict = {}
+    next_prompt = prompt  # augmented below only after a malformed-output failure
     for attempt in (1, 2):
         try:
-            response = _post_chat(key, prompt)
+            response = _post_chat(key, next_prompt)
             usage = response.get("usage") or {}
             choice = response["choices"][0]
             if choice.get("finish_reason") == "length":
@@ -629,8 +673,11 @@ def call_llm_validated(
                     + (f"; {detail}" if detail else "") + ")"
                 ) from exc
         except (ValueError, KeyError, IndexError, TypeError) as exc:
-            # malformed JSON / failed validation — the spec'd retry-then-fail path
+            # malformed JSON / failed validation — the spec'd retry-then-fail path.
+            # Correct the retry so it is not a byte-identical re-POST (run 28):
+            # a plain re-send at temp 0 reproduces the exact same fabrication.
             last_error = f"malformed LLM output ({exc})"
+            next_prompt = prompt + "\n\n" + RETRY_CORRECTION
         except Exception as exc:  # timeout / connection — network-shaped
             last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
         if attempt == 1:
