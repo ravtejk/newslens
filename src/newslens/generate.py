@@ -173,6 +173,8 @@ class GenReport:
     continuity_status: str = "none"   # ok | none | corrupt
     analysis_usd: float = 0.0          # M9-M3: the analysis stage's spend
     deep_views: Dict[str, str] = field(default_factory=dict)  # slot -> availability (Axel instrumentation)
+    memory_usd: float = 0.0            # NL-63: state-rewrite spend (the only new LLM cost)
+    memory: Dict = field(default_factory=dict)  # NL-63: ledger/state instrumentation for diagnose
 
 
 def wc(text: str) -> int:
@@ -1142,6 +1144,66 @@ def validate_script(
 # Persistence + instrumentation + artifact
 # ---------------------------------------------------------------------------
 
+def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
+                    spent: float, briefs_by_slot: Dict[int, Optional[Dict]],
+                    slots: List[Dict], report: "GenReport",
+                    state_chat=None) -> float:
+    """NL-63 M1 memory pass. Two writes: (1) the delta LEDGER — Pax's economy,
+    ~$0, the validated arc persists as the thread's delta; (2) the standing
+    STATE — the ONLY new LLM spend, and ONLY for threads that advanced/reversed
+    today (write law), pre-checked against the $0.25 cap, stale-but-honest on
+    any failure. Returns the updated `spent`. `state_chat` is injectable so the
+    offline suite exercises this exact path without spending."""
+    from . import memory_core
+    brow = con.execute("SELECT id FROM briefings WHERE date = ?",
+                       (date,)).fetchone()
+    briefing_id = brow["id"] if brow else None
+    delta_rep = memory_core.write_deltas_for_edition(
+        con, date, briefing_id, briefs_by_slot, slots)
+    report.warnings.append("memory: " + delta_rep.summary())
+    state_results: List[Dict] = []
+    try:
+        state_template = (paths.PROMPTS_DIR / "thread_state.txt").read_text(
+            encoding="utf-8")
+    except OSError as exc:
+        state_template = ""
+        report.warnings.append(
+            f"memory: state prompt unreadable ({exc}) — state rewrites "
+            "skipped, prior states kept stale-but-honest")
+    for tid in delta_rep.moved_thread_ids:
+        if not state_template:
+            break
+        trow = con.execute("SELECT topic FROM memory WHERE id = ?",
+                           (tid,)).fetchone()
+        topic = trow["topic"] if trow else f"thread {tid}"
+        sr = memory_core.rewrite_state(
+            con, tid, topic, date, briefing_id, key, state_template,
+            remaining_usd=cap - spent, chat=state_chat)
+        spent += sr.cost_usd
+        report.memory_usd += sr.cost_usd
+        state_results.append({"thread": topic, "outcome": sr.outcome,
+                              "detail": sr.detail, "usd": round(sr.cost_usd, 6)})
+        if sr.outcome in ("stale", "rejected", "skipped-budget", "skipped-no-ledger"):
+            report.warnings.append(
+                f"memory: state for {topic!r} {sr.outcome} — {sr.detail}")
+    if report.memory_usd:
+        report.steps.append({"step": "state_rewrites",
+                             "model": memory_core.STATE_MODEL,
+                             "usd": round(report.memory_usd, 6)})
+    report.memory = {
+        "deltas_written": len(delta_rep.written),
+        "deltas_skipped": len(delta_rep.skipped),
+        # BUG-29: the skip REASONS ride into the durable report (not just a
+        # count) — a self-reference / two-clause / unresolvable-thread refusal
+        # is the trust case; a silent refusal is indistinguishable from amnesia.
+        # From here they reach the generation log and diagnose's MEMORY section.
+        "deltas_skipped_reasons": list(delta_rep.skipped),
+        "threads_moved": len(delta_rep.moved_thread_ids),
+        "state_rewrites": state_results,
+    }
+    return spent
+
+
 def persist_generation(
     con: sqlite3.Connection, date: str, narrative: str, script: str,
     steps: List[Dict], audio_path: Optional[str] = None
@@ -1389,6 +1451,15 @@ def _run_generate_body(
     if analyst_slot3_tier == "quick":
         report.deep_views["3"] = "demoted-quick"
     inputs["deep_views"] = report.deep_views  # assembler reads the ladder label
+
+    # --- Memory core (NL-63 M1): the delta ledger + standing state ---
+    # Runs on record-refreshing runs only (samples/--no-refresh never write the
+    # moat). Extracted into _run_memory_pass so the wiring is exercised by an
+    # OFFLINE liveness test (the state-rewrite model injected) — not only on a
+    # real network refresh.
+    if refresh and not no_threads:
+        spent = run_memory_pass(con, date, key, cap, spent, briefs_by_slot,
+                                inputs["slots"], report)
 
     # --- Narrative pass ---
     n_prompt = build_narrative_prompt(date, report.variant, inputs)
@@ -1811,6 +1882,8 @@ def _run_generate_body(
         "framings": [s.get("why_label") for s in stories],
         "editor": editor_note,
         "analysis_usd": round(report.analysis_usd, 6),
+        "memory_usd": round(report.memory_usd, 6),   # NL-63: state-rewrite spend
+        "memory": report.memory,                     # NL-63: ledger/state instrumentation
         "deep_views": report.deep_views,  # Axel's asymmetry instrumentation
         "draft_stories": draft_payload.get("stories"),  # carryover 18b: forensics
         "stories": stories,  # M7: the UI's structured render source (ADR-0010)

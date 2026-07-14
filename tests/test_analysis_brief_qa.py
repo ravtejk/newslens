@@ -511,12 +511,15 @@ def test_r_only_cites_are_retrieved_single_with_the_outlet_named():
         "retrieved-single (reuters.com)"  # first R named; still single-class
 
 
-def test_prior_briefing_only_cites_are_stable_background():
+def test_prior_briefing_only_cites_are_prior_coverage():
     """P-cites are contract-legal material (§5 universe item b) but earn no
-    corroboration: a P-only claim carries the stable-background label — a
-    prior NewsLens edition can never be laundered into a source outlet."""
+    corroboration. NL-63 (Rook's loop mitigation, engineering council
+    2026-07-10): a P-only claim is now labeled 'prior-coverage', NOT
+    'stable-background' — a prior NewsLens edition is our OWN prior coverage,
+    never laundered into a source outlet or external background. A TRULY
+    uncited claim (empty cites) is still stable-background."""
     src = qa_sources()
-    assert analysis.compute_provenance(["P1"], src) == "stable-background"
+    assert analysis.compute_provenance(["P1"], src) == "prior-coverage"
     assert analysis.compute_provenance([], src) == "stable-background"
 
 

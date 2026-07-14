@@ -778,6 +778,13 @@ def compute_provenance(cites: List[str], sources: Dict[str, Dict]) -> str:
         return "cluster-single"
     if retrieved:
         return f"retrieved-single ({sources[retrieved[0]]['outlet']})"
+    # Rook's loop mitigation (NL-63, engineering council 2026-07-10): a claim
+    # cited ONLY to prior-briefing (P) keys is OUR OWN prior coverage — label
+    # it honestly so the self-reference loop stays visible, never laundered as
+    # external "stable-background". P still earns ZERO corroboration (it is not
+    # in cluster_outlets/retrieved above); this only fixes the display class.
+    if any(c in sources and c[0] == "P" for c in cites):
+        return "prior-coverage"
     return "stable-background"
 
 
@@ -1101,12 +1108,23 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
     if isinstance(arc, dict):
         arc_cites = _cites_of(arc)
         check_cites(arc_cites, "arc")
-        p_keys_exist = any(k[0] == "P" for k in sources)
-        if p_keys_exist and not any(c[0] == "P" for c in arc_cites):
+        # NL-63 (memory architecture, ruling A): the arc now feeds the delta
+        # LEDGER, anchored to EXTERNAL evidence (Rook's loop guard) — not the
+        # writer's mechanical P-callback. The old Editor-item-10 rule ("drop
+        # unless it cites P") is retired: an arc anchored to today's S/C/R
+        # sources is the DESIRED shape. Only a fully-uncited arc is dropped.
+        # The two-clause SIGNIFICANCE fields (what_happened + significance) are
+        # new claim-carriers on the trust surface, so their quotes are checked
+        # like every other rendered field; `what_changed` stays as the legacy
+        # single-clause fallback (unquoted, as before).
+        for fld in ("what_happened", "significance"):
+            v = arc.get(fld)
+            if isinstance(v, str) and v:
+                check_quotes(v, f"arc.{fld}")
+        if not arc_cites:
             warnings.append(
-                "arc dropped (Editor item 10): cites no prior-briefing key "
-                "though one exists — the delta verdict must trace to P "
-                "material (it feeds the writer's callback mechanically)")
+                "arc dropped: carries no citation — a delta must trace to its "
+                "evidence (NL-63 ledger contract)")
             arc = None
         elif arc.get("delta") not in ("advances", "reverses", "merely-matches"):
             warnings.append(f"arc delta {arc.get('delta')!r} outside the verdict "
@@ -1390,7 +1408,15 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         sa.cost_usd += s_cost
         remaining_usd -= s_cost
 
-    sources = build_source_map(records, items, sonar_results, prior)
+    # NL-63 item 3: thread-scoped P-material. When this slot's threads carry a
+    # record, P becomes the thread's OWN prior coverage (dated ledger + state),
+    # replacing the two generic 4KB narrative dumps — the fix for Content's
+    # P1-cite proof. No thread record yet -> the generic `prior` stands (honest
+    # cold-start / no-thread story). Zero new LLM spend; it re-allocates the
+    # same P material budget.
+    from . import memory_core
+    slot_prior = memory_core.prior_for_slot(con, date, slot, prior)
+    sources = build_source_map(records, items, sonar_results, slot_prior)
 
     # Slot-3 reconciliation, binding here (M2): the analyst holds the
     # medium-vs-quick call for slot 3 — thin material (which INCLUDES
@@ -1647,7 +1673,11 @@ def render_writer_view(brief: Dict) -> str:
                          f"[{', '.join(e['cites'])}]")
     if brief.get("arc"):
         a = brief["arc"]
-        parts.append(f"\nARC: {a.get('delta')} — {a.get('what_changed', '')} "
+        # NL-63 two-clause shape (what_happened + significance), with the legacy
+        # single-clause what_changed as the fallback.
+        arc_body = (f"{a.get('what_happened', '')} — {a.get('significance', '')}"
+                    if a.get("what_happened") else a.get("what_changed", ""))
+        parts.append(f"\nARC: {a.get('delta')} — {arc_body} "
                      f"[{', '.join(_cites_of(a))}]")
     parts.append("\nUNKNOWNS (first-class):")
     for u in brief.get("unknowns", []):

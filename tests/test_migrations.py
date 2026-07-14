@@ -24,14 +24,16 @@ MIGRATION_0006 = "0006_memory_lifecycle_v2.sql"       # M4 lifecycle amendment
 MIGRATION_0007 = "0007_consumption_events.sql"        # M7 day-30 falsifier
 MIGRATION_0008 = "0008_analysis_briefs.sql"           # M9-M2 the Analyst's artifact
 MIGRATION_0009 = "0009_analysis_append_only_and_retrieval.sql"  # M2 fix loop: BUG14 + receipts
+MIGRATION_0010 = "0010_thread_memory.sql"             # NL-63 M1: the memory core
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
-    MIGRATION_0008, MIGRATION_0009,
+    MIGRATION_0008, MIGRATION_0009, MIGRATION_0010,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
     "consumption_events", "analysis_briefs", "analysis_retrieval",
+    "thread_deltas", "thread_state",
 }
 
 

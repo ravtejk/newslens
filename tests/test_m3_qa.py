@@ -616,7 +616,7 @@ def test_deep_view_reader_drops_ledger_and_unresolved_register(tmp_paths):
      "(The Hill, CNBC · 2 outlets)"),
     (["S1"], "cluster-single", "(The Hill · 1 outlet)"),
     (["R1"], "retrieved-single (reuters.com)", "(reuters.com · via Sonar)"),
-    (["P1"], "", "(NewsLens (prior edition))"),
+    (["P1"], "", "(per our prior coverage)"),   # NL-63: Rook's honest P-only label
     ([], "", "(background)"),
     (["S9"], "", "(background)"),          # unresolvable key -> background
     (["R1"], "", "(reuters.com · via Sonar)"),   # kinds fallback, no provenance

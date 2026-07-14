@@ -343,6 +343,12 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
         # the reported "Last picked up Jul 13" (a future date) at the source.
         ref_date = r["ref_date"] or ""
         last = ref_date if (ref_date and ref_date <= today) else ""
+        # NL-63 item 6: the thread's standing state + last-delta line for the
+        # dossier state card (the v7 [mock] Spine lines become REAL here).
+        from . import memory_core
+        state = memory_core.latest_state(con, r["id"])
+        ledger = memory_core.ledger_for_thread(con, r["id"])
+        last_delta = ledger[-1] if ledger else None
         grouped.setdefault(r["status"], []).append({
             "topic": r["topic"],
             "note": r["principal_note"] or "",
@@ -350,6 +356,12 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
             "last": last,
             "quiet_since": _short_date(r["status_changed_at"]),
             "developing": bool(last and last >= cutoff),
+            "state_text": (state or {}).get("state_text", ""),
+            "state_as_of": (state or {}).get("as_of_date", ""),
+            "last_delta": ({"date": last_delta["edition_date"],
+                            "what_happened": last_delta["what_happened"],
+                            "significance": last_delta.get("significance", "")}
+                           if last_delta else None),
         })
     # P1 polish (2026-07-06): Ongoing sorts by recency of last pickup, most
     # recent first; never-picked-up threads sink to the end, original (id)
@@ -593,10 +605,49 @@ def _js_str(v: str) -> str:
     return json.dumps(str(v or ""))
 
 
+def _today_arc_html(con, slot: Dict, st: Dict, date: str) -> str:
+    """NL-63 item 4: the then -> now -> difference continuity line under the
+    lead, gated by Sten's kill-test AS CODE (renders ONLY when it carries a
+    dated past fact absent from today's story) and Kass's reversion law AS CODE
+    (a ledger-integrity failure shows a bare citation line, disclosed). Day-one
+    threads get NO arc, ever. Deterministic — no LLM, computed from the ledger.
+    The kill-test runs against today's RENDERED story text (headline + lede +
+    movements)."""
+    if con is None or not _is_calendar_date(date):
+        return ""
+    from . import memory_core
+    today_text = " ".join(
+        [st.get("headline", ""), st.get("lede", "")]
+        + [m.get("text", "") for m in (st.get("movements") or [])
+           if isinstance(m, dict)])
+    seen: set = set()
+    out: List[str] = []
+    for topic in slot.get("matched_memory") or []:
+        tid = memory_core.resolve_thread_id(con, topic)
+        if tid is None:
+            continue
+        arc = memory_core.render_today_arc(con, tid, topic, today_text, date)
+        if arc is None or arc.text in seen:
+            continue
+        seen.add(arc.text)
+        link = ""
+        if arc.prior_date and _is_calendar_date(arc.prior_date):
+            link = (
+                f' <a class="today-arc-link" '
+                f'href={_e_attr("/?date=" + arc.prior_date)} '
+                f'onclick="return openEdition(\'{_e(arc.prior_date)}\', event)">'
+                f'· from the {_e(_human_date(arc.prior_date))} edition</a>')
+        disc = (f'<span class="today-arc-disclosure"> — {_e(arc.disclosure)}</span>'
+                if arc.disclosure else "")
+        cls = "today-arc-line" + (" reverted" if arc.kind == "reverted" else "")
+        out.append(f'<p class="{cls}">{_e(arc.text)}{disc}{link}</p>')
+    return "".join(out)
+
+
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   active_topics: set, has_file: bool = False,
                   slug: Optional[str] = None, date: str = "",
-                  deep_return: str = "view-today") -> str:
+                  deep_return: str = "view-today", con=None) -> str:
     slug = slug or f"story-{i}"
     h = {"full": "h2", "medium": "h3"}.get(tier, "h4")
     parts = [f'<article class="story{" quick-hit" if tier == "quick" else ""}" id="{_e(slug)}">']
@@ -627,6 +678,9 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
 
     if st.get("lede"):
         parts.append(f'<p class="lede">{_e(st["lede"])}</p>')
+    arc_html = _today_arc_html(con, slot, st, date)
+    if arc_html:
+        parts.append(arc_html)
     for mv in st.get("movements") or []:
         em = ' my-read' if mv.get("em") else ""
         parts.append(
@@ -792,7 +846,7 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
         html.append(_render_story(
             i, st, slot, tier, active, has_file=(i + 1) in (briefs or {}),
             slug=f"{slug_prefix}story-{i}", date=row["date"],
-            deep_return=deep_return))
+            deep_return=deep_return, con=con))
 
     # Footer disclosure (addendum #3): quiet line; window/caveat/cost a tap
     # away. Ids are slug_prefix-scoped so Today's footer and an open archive
@@ -833,7 +887,7 @@ def _run_cost(entry: Optional[Dict]) -> str:
         return "cost not recorded for this edition"
 
 
-def _dossier(t: Dict, actions: str, meta: str) -> str:
+def _dossier(t: Dict, actions: str, meta: str, spine: str = "") -> str:
     dot = "●" if t.get("developing") else ""
     return f"""
 <div class="dossier">
@@ -842,6 +896,7 @@ def _dossier(t: Dict, actions: str, meta: str) -> str:
     <div class="dossier-main">
       <p class="dossier-topic">{_e(t["topic"])}</p>
       <p class="dossier-meta">{meta}</p>
+      {spine}
     </div>
     <div class="dossier-actions">{actions}</div>
   </div>
@@ -929,6 +984,35 @@ def _render_suggest(kind: str, list_id: str, placeholder: str,
         f'</div>')
 
 
+def _thread_state_card(t: Dict) -> str:
+    """NL-63 item 6: the standing state + last-delta line inside a Following
+    dossier. The state carries a stale-but-honest 'as of <date>' when it is
+    older than the last delta; a thread with no state yet shows just the last
+    delta. Structure now; v7 visual styling refines after sight-approval."""
+    from . import memory_core
+    today = datetime.now().strftime("%Y-%m-%d")
+    bits: List[str] = []
+    state_text = t.get("state_text") or ""
+    as_of = t.get("state_as_of") or ""
+    if state_text:
+        stale, note = memory_core.state_is_stale(
+            {"as_of_date": as_of}, today)
+        as_of_html = (f' <span class="state-asof">({_e(note)})</span>'
+                      if stale and note else
+                      (f' <span class="state-asof">(as of '
+                       f'{_e(memory_core.human_date(as_of))})</span>'
+                       if as_of else ""))
+        bits.append(f'<p class="dossier-state">{_e(state_text)}{as_of_html}</p>')
+    d = t.get("last_delta")
+    if d:
+        signif = f" — {_e(d['significance'])}" if d.get("significance") else ""
+        bits.append(
+            f'<p class="dossier-delta"><span class="delta-label">Latest '
+            f'({_e(memory_core.human_date(d["date"]))}):</span> '
+            f'{_e(d["what_happened"])}{signif}</p>')
+    return "".join(bits)
+
+
 def _render_following(con: sqlite3.Connection) -> str:
     g = _following_rows(con)
     cfg = config.load_sources()
@@ -953,7 +1037,7 @@ def _render_following(con: sqlite3.Connection) -> str:
                 meta = f"Following since {_e(t['since'])} · Not yet picked up"
             acts = note_btn(t) + (
                 f'<button onclick="threadAction(\'dismiss\', {_e(_js_str(t["topic"]))})">Stop</button>')
-            ongoing.append(_dossier(t, acts, meta))
+            ongoing.append(_dossier(t, acts, meta, spine=_thread_state_card(t)))
     else:
         ongoing.append('<p class="empty-note">Nothing yet</p>')
 
@@ -963,7 +1047,7 @@ def _render_following(con: sqlite3.Connection) -> str:
             meta = f"Quiet since {_e(t['quiet_since'])} · revives on its own if the story returns"
             acts = note_btn(t) + (
                 f'<button onclick="threadAction(\'revive\', {_e(_js_str(t["topic"]))})">Resume</button>')
-            ongoing.append(_dossier(t, acts, meta))
+            ongoing.append(_dossier(t, acts, meta, spine=_thread_state_card(t)))
 
     if g["dismissed_user"]:
         ongoing.append('<p class="section-h">You stopped following</p>')
@@ -1146,7 +1230,10 @@ def _cite_qualifier(cites: List[str], src_by_key: Dict[str, Dict],
     if provenance.startswith("retrieved-single") or kinds == {"retrieved"}:
         return f"({names} · via Sonar)"
     if kinds == {"prior-briefing"}:
-        return f"({names})"
+        # Rook's loop mitigation (NL-63, 2026-07-10): a P-only claim is OUR
+        # prior coverage — say so, never launder a prior edition into an
+        # outlet name. P earns no corroboration; this is the honest label.
+        return "(per our prior coverage)"
     return f"({names})"
 
 
@@ -1189,9 +1276,49 @@ def _open_watch_prose(watch: List[Dict]) -> str:
     return " ".join(sents)
 
 
+def _deep_timeline_html(con, slot: Optional[Dict], date: str,
+                        anchor: str) -> str:
+    """NL-63 item 5: the deep view's flagship 'story so far' — a deterministic
+    render of the thread's ledger (dated entries, edition-linked via the
+    calendar-guarded openEdition pattern from NL-60). Never-re-lede: it ends
+    BEFORE today (today is the page you're already on — retro-mock §4). No LLM."""
+    if con is None or not slot or not _is_calendar_date(date):
+        return ""
+    from . import memory_core
+    for topic in slot.get("matched_memory") or []:
+        tid = memory_core.resolve_thread_id(con, topic)
+        if tid is None:
+            continue
+        rows = memory_core.ledger_for_thread(con, tid, before_date=date)
+        if not rows:
+            continue
+        have_edition = {r["date"] for r in con.execute(
+            "SELECT date FROM briefings")}
+        items = []
+        for e in rows:
+            d = e["edition_date"]
+            hd = memory_core.human_date(d)
+            if _is_calendar_date(d) and d in have_edition:
+                date_html = (
+                    f'<a class="tl-date-link" href={_e_attr("/?date=" + d)} '
+                    f'onclick="return openEdition(\'{_e(d)}\', event)">{_e(hd)}</a>')
+            else:
+                date_html = f'<span class="tl-date">{_e(hd)}</span>'
+            signif = (f' <span class="tl-signif">— {_e(e["significance"])}</span>'
+                      if e.get("significance") else "")
+            items.append(
+                f'<li class="tl-entry">{date_html} — '
+                f'{_e(e["what_happened"])}{signif}</li>')
+        return (f'<div class="deep-section deep-timeline" id="{anchor}-timeline">'
+                '<p class="deep-section-label">The story so far</p>'
+                f'<ul class="deep-timeline-list">{"".join(items)}</ul></div>')
+    return ""
+
+
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       date: str, back_label: str = "← Back to today’s edition",
-                      return_view: str = "view-today") -> str:
+                      return_view: str = "view-today", con=None,
+                      slot: Optional[Dict] = None) -> str:
     """The reader rendering — v6-as-edited is the spec. One artifact, two
     renderings (§5.3): this template never re-composes, never re-ledes;
     'cited' never 'verified'; notes_for_writer never renders. NL-11: back-link
@@ -1235,12 +1362,21 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                 f' <a class="deep-arc-link" href={_e_attr("/?date=" + prior_date)} '
                 f'onclick="return openEdition(\'{_e(prior_date)}\', event)">'
                 f'· from the {_e(_human_date(prior_date))} edition</a>')
+        # NL-63: the two-clause significance shape, legacy what_changed fallback.
+        arc_body = (arc.get("significance") or arc.get("what_changed")
+                    or arc.get("what_happened") or "")
         arc_line = (f'<p class="deep-arc-line">'
                     f'<span class="deep-arc-verdict">{_e(verdict)}</span> — '
-                    f'{_e(arc.get("what_changed", ""))}{cite_html}</p>')
+                    f'{_e(arc_body)}{cite_html}</p>')
     out.append(f'<div class="deep-title-block"><p class="deep-eyebrow">The full '
                f'picture</p><h1 class="deep-title">{_e(headline)}</h1>'
                f'{arc_line}</div>')
+
+    # NL-63 item 5: the "story so far" timeline — the deep view's flagship
+    # section, deterministic from the ledger, sitting under the title block.
+    timeline_html = _deep_timeline_html(con, slot, date, story_anchor)
+    if timeline_html:
+        out.append(timeline_html)
 
     # "What's still open" paragraphs are computed HERE — before the jumplist —
     # so the anchor and the section gate on the SAME rendered content (D4,
@@ -1435,13 +1571,15 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
     sections: List[str] = []
     from . import analysis as analysis_mod
     stories_probe, _ = _stories_for(row, entry)
+    slots = _slots_for(row)
     for i, st in enumerate(stories_probe):
         doc = analysis_mod.latest_valid_brief(con, row["date"], i + 1)
         if doc and doc.get("brief"):
             briefs[i + 1] = doc
             sections.append(_render_deep_view(
                 f"{slug_prefix}story-{i}", st.get("headline", ""), doc,
-                row["date"], back_label=back_label, return_view=return_view))
+                row["date"], back_label=back_label, return_view=return_view,
+                con=con, slot=slots[i] if i < len(slots) else None))
     return briefs, sections
 
 

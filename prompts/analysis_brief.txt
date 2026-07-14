@@ -42,9 +42,16 @@ workspace/debates/2026-07-06--newslens--editor-analysis-briefs.md):
     a previous, similar event renders as historical-pattern with its date
     shown, or not at all" — G3). When the source material carries a date
     for the take, include it as "take_date" (YYYY-MM-DD) in the effect.
-  - arc.what_changed names a specific fact ABSENT from the prior briefing —
-    the actual delta, never a re-description of the standing story — and
-    arc.cites includes the prior-briefing key (P#) it moved against (G5).
+  - The arc is the thread's SIGNIFICANCE delta, in TWO clauses (NL-63):
+      arc.what_happened = the concrete development today (the event);
+      arc.significance  = what that development CHANGED about the story — why
+        it matters now, not a re-description. "The war is no longer contained
+        to shipping," never "strikes occurred."
+    arc.cites carry the EXTERNAL evidence for the delta — the S/C/R keys this
+    development is drawn from, so the thread's record stays anchored OUTSIDE
+    our own prior prose; add the prior-briefing key (P#) too when the change
+    is against it. Emit arc ONLY when today genuinely moves the thread; a
+    story with no tracked thread, or one that merely repeats, has arc: null.
 
 UNKNOWNS are first-class, and the reader sees them as an editor's-memo
 paragraph — write the three fields as three joinable SENTENCE-ROLES, not a
@@ -92,7 +99,10 @@ Return ONLY a JSON object, no prose around it, with EXACTLY these keys:
                 "holder": "named analyst/actor or rule/precedent name",
                 "take_date": "YYYY-MM-DD when the material dates the take, else omit",
                 "cites": ["R1"]} ],
-  "arc": {"delta": "advances|reverses|merely-matches", "what_changed": "...", "cites": ["P1"]} | null,
+  "arc": {"delta": "advances|reverses|merely-matches",
+          "what_happened": "the concrete development today (the event)",
+          "significance": "what it changed about the story — why it matters now",
+          "cites": ["S1"]} | null,   // cites carry the EXTERNAL evidence (S/C/R); add P# when moving against prior coverage
   "unknowns": [ {"question": "declarative default; the test lives in would_resolve",
                  "why_material": "present-tense mechanics, no importance-adjectives",
                  "would_resolve": "the test + its date, never the outcome"} ],  // 1-3

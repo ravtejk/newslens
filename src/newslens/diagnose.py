@@ -91,6 +91,84 @@ def _fmt_usd(v: float) -> str:
     return f"${v:.2f}" if v >= 0.10 else f"${v:.3f}"
 
 
+def _memory_readout(entries: List[Dict]) -> List[str]:
+    """NL-63 item 7: the MEMORY section — ledger growth, standing-state
+    rewrites, reversion risk, arc-eligible population. Read-only ($0, offline):
+    the ledger/state counts come from the DB; the rewrite outcomes come from
+    the generation log's `memory` field. Absent tables read as an honest empty
+    (a pre-migration DB simply has no memory core yet)."""
+    from . import memory_core
+    out: List[str] = []
+    try:
+        con = db.connect_readonly()
+    except Exception:
+        return out
+    try:
+        try:
+            deltas = con.execute(
+                "SELECT thread_id, edition_date, verdict FROM thread_deltas"
+            ).fetchall()
+        except Exception:
+            return out            # table absent -> no memory core yet
+        out.append("")
+        out.append("THE MEMORY CORE (NL-63; thread_deltas + thread_state, read-only)")
+        if not deltas:
+            out.append("  ledger: empty — no thread has moved under the memory "
+                       "loop yet (no-backfill: it fills forward from here)")
+        else:
+            adv = sum(1 for d in deltas if d["verdict"] == "advances")
+            rev = sum(1 for d in deltas if d["verdict"] == "reverses")
+            thread_ids = sorted({d["thread_id"] for d in deltas})
+            dates = sorted({d["edition_date"] for d in deltas})
+            out.append(f"  ledger: {len(deltas)} delta(s) across {len(thread_ids)} "
+                       f"thread(s) — advances {adv} · reverses {rev} · "
+                       f"editions {dates[0]}..{dates[-1]}")
+            rows = con.execute(
+                "SELECT m.topic, td.thread_id, COUNT(*) n, MAX(td.edition_date) last"
+                " FROM thread_deltas td JOIN memory m ON m.id = td.thread_id"
+                " GROUP BY td.thread_id ORDER BY n DESC, last DESC").fetchall()
+            for r in rows[:8]:
+                out.append(f"    {r['topic']}: {r['n']} entr"
+                           f"{'y' if r['n'] == 1 else 'ies'}, last {r['last']}")
+            # reversion risk: a thread whose ledger currently fails integrity
+            # would show a bare citation line (Kass's reversion law).
+            reverting = 0
+            for tid in thread_ids:
+                ok, _ = memory_core._ledger_integrity(
+                    memory_core.ledger_for_thread(con, tid))
+                if not ok:
+                    reverting += 1
+            out.append(f"  reversion risk: {reverting} thread(s) whose ledger "
+                       "currently fails integrity (would show a bare citation line)")
+            # arc-eligible: >=1 prior entry means an arc CAN render when today
+            # moves the thread (the kill-test then decides per story at render).
+            eligible = sum(1 for tid in thread_ids
+                           if len(memory_core.ledger_for_thread(con, tid)) >= 2)
+            out.append(f"  arc-eligible: {eligible} thread(s) carry >=1 prior "
+                       "entry — kill-test suppressions are a render-time measure "
+                       "(the arc line suppresses per story), counted at read time")
+        try:
+            srows = con.execute(
+                "SELECT COUNT(*) n, COUNT(DISTINCT thread_id) t,"
+                " ROUND(SUM(cost_usd), 4) usd FROM thread_state").fetchone()
+            out.append(f"  standing state: {srows['n']} version(s) across "
+                       f"{srows['t']} thread(s) · rewrite spend "
+                       f"${srows['usd'] or 0:.4f}")
+        except Exception:
+            pass
+    finally:
+        con.close()
+    # rewrite outcomes from the log (written/stale/rejected/skipped)
+    outc: Dict[str, int] = {}
+    for e in entries:
+        for sr in ((e.get("memory") or {}).get("state_rewrites") or []):
+            outc[sr.get("outcome", "?")] = outc.get(sr.get("outcome", "?"), 0) + 1
+    if outc:
+        out.append("  state rewrites (from the log): "
+                   + " · ".join(f"{k} {v}" for k, v in sorted(outc.items())))
+    return out
+
+
 def run_diagnose(now_utc: Optional[datetime] = None) -> str:
     now_utc = now_utc or datetime.now(timezone.utc)
     out: List[str] = []
@@ -294,6 +372,10 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
                       if v not in ("available",)]
             push(f"    {e['date']}: {avail}/{depth} depth stories carry a "
                  f"file" + (f" ({'; '.join(extras)})" if extras else ""))
+
+    # ---------------- The Memory Core (NL-63) ----------------
+    for line in _memory_readout(entries):
+        push(line)
 
     push("")
     push("Interpretation guardrails: construction-period numbers describe "
