@@ -21,6 +21,18 @@ to fill: cold open + date + menu up to ~{budget_open} · then per covered story:
 {budget_stories} · outro up to ~{budget_outro}. The lead is the episode's
 center of gravity — its deepest segment; every other covered story is tight.
 
+THE LOWER EDGE IS A HARD BOOKEND, not a soft target. "Emergent" and "naturally
+short" mean the length settles wherever quality lands INSIDE the band — never
+below its floor. On a normal edition (the lead plus two or more supporting
+stories) a script that comes in under ~{band_low} words is NOT VIABLE: at that
+length the LEAD did not get its depth. The remedy is never to pad and never to
+stretch the supporting stories — those stay tight. The one remedy is to go
+DEEPER into the lead: work its three movements and its receipts — the specific
+figures, named actors, and mechanism already in the narrative below, the
+material a center-of-gravity segment is built from. (A genuine single- or
+two-story edition legitimately runs shorter than that floor, and that is
+correct — the floor scales down with coverage.)
+
 STRUCTURE, in order:
 1. THE INTRO (formula is binding): what happened + why the listener cares +
    what's uncertain — THEN the dateline. Model the shape on this example:

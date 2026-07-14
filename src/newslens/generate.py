@@ -302,6 +302,26 @@ def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
         return json.load(resp)
 
 
+# The validation/truncation retry is CORRECTED, not blind (rank-side twin —
+# ranking.RETRY_CORRECTION / commit 3b40d6a). A byte-identical re-POST at the
+# same knobs reproduces the same near-miss: run 28 spent ~$0.025 twice for a
+# guaranteed-identical rank failure; today's script run failed the viability
+# floor twice at 565/still-short with the model never told it was under. call_llm
+# is SHARED by the narrative/editor/script steps, so the correction can't name
+# one step's rule the way rank's fixed id-fabrication text does — it ECHOES the
+# validator's own ValueError, so attempt 2 is steered at exactly the rule that
+# failed, uniformly for every validate-bearing step. Scoped like the rank fix:
+# only the (ValueError/KeyError/IndexError/TypeError) malformed-or-validation
+# class gets the correction; transport retries (429/5xx/timeout/connection)
+# re-send the ORIGINAL prompt unchanged (those failures are not the model's
+# doing). The block is anchored to the ORIGINAL prompt below, never compounding.
+RETRY_CORRECTION_PREFIX = "CORRECTION — your previous draft was rejected: "
+RETRY_CORRECTION_SUFFIX = (
+    ". Fix exactly that failure and nothing else; every other contract rule "
+    "above still binds. Return only the corrected output."
+)
+
+
 def call_llm(key: str, prompt: str, step: str, max_tokens: int,
              temperature: float, json_mode: bool,
              validate=None, cost_sink: Optional[List[Dict]] = None
@@ -309,6 +329,13 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
     """One call + ONE retry total (network-shaped, truncation, or validation
     failure), then GenerateError. Returns (content, usage). `validate`
     raises ValueError to trigger the retry path.
+
+    The validation/truncation retry is CORRECTED, not blind (rank-side twin,
+    ranking.call_llm_validated): after a malformed/failed-validation attempt the
+    retry prompt carries RETRY_CORRECTION_PREFIX + the exact ValueError text +
+    RETRY_CORRECTION_SUFFIX, anchored to the ORIGINAL `prompt` (never
+    compounding, never leaking across calls). Transport retries
+    (5xx/429/timeout/connection) re-send the original prompt unchanged.
 
     `cost_sink` (money honesty, BUG-6/32 family): if given, EVERY attempt that
     reaches the API and returns usage records its real cost here BEFORE
@@ -318,9 +345,10 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
     usage; this sink is a separate, complete per-attempt ledger."""
     last_error = "unknown"
     backoff = 1.0
+    next_prompt = prompt  # augmented below only after a validation/malformed miss
     for attempt in (1, 2):
         try:
-            response = _chat(key, prompt, max_tokens, temperature, json_mode)
+            response = _chat(key, next_prompt, max_tokens, temperature, json_mode)
             usage = response.get("usage") or {}
             if cost_sink is not None:
                 cost_sink.append({
@@ -362,8 +390,20 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
                     + (f"; {detail}" if detail else "") + ")"
                 ) from exc
         except (ValueError, KeyError, IndexError, TypeError) as exc:
+            # malformed output / failed validation / truncation — the spec'd
+            # retry-then-fail path. Correct the retry so it is not a byte-
+            # identical re-POST (rank run-28 precedent): quote the exact failure
+            # so attempt 2 is steered at the rule that failed. Anchored to the
+            # ORIGINAL `prompt`, not `next_prompt`, so a correction can never
+            # compound if the attempt count ever grows past two.
             last_error = f"invalid {step} output ({exc})"
+            next_prompt = (
+                prompt + "\n\n"
+                + RETRY_CORRECTION_PREFIX + str(exc) + RETRY_CORRECTION_SUFFIX
+            )
         except Exception as exc:  # timeout / connection — network-shaped
+            # transport, not the model's doing: the retry re-sends ORIGINAL bytes
+            # (next_prompt stays `prompt` — no correction).
             last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
         if attempt == 1:
             time.sleep(backoff)
