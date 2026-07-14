@@ -1,11 +1,15 @@
-"""Live-contact fix loop #3 — the script viability floor (Implementer, 2026-07-14).
+"""Live-contact fix loop #3 — script length language + informed retry
+(Implementer, 2026-07-14; PART 1 consciously FLIPPED same day by DECISIONS
+'podcast floor REMOVED' — the floor-removal batch).
 
-Two new contracts, red-first:
+Two contracts, red-first:
 
-  PART 1 — floor language in prompts/script_adapt.txt. The band's lower edge is
-  a named HARD bookend of the editorial contract, with a stated remedy (a thin
-  draft means the LEAD didn't get its depth -> go deeper into the narrative's
-  lead material; NEVER pad, never stretch the supporting stories). Pinned like
+  PART 1 — length language in prompts/script_adapt.txt. AS FIRST LANDED the
+  lower edge was a named HARD bookend with a depth remedy; the principal's
+  same-day floor-REMOVED ruling retired the bookend, and the pin flipped with
+  it (see test_script_prompt_is_ceiling_only_with_no_floor_language's WAS/NOW):
+  the prompt is now CEILING-ONLY — no floor claim of any kind, 'no minimum'
+  stated, lead-depth steering surviving as pure quality guidance. Pinned like
   the text-pin precedent in test_rank_retry_qa.py::test_correction_text_only_
   tightens_compliance so a silent wordsmith goes red instead of drifting.
 
@@ -46,43 +50,48 @@ from test_generate import A_DAY, slot, _inputs_for
 
 
 # =========================================================================
-# PART 1 — floor-language liveness (the prompt file carries the bookend)
+# PART 1 — length-language liveness (ceiling-only since floor REMOVED 07-14)
 # =========================================================================
 
-def test_script_prompt_floor_bookend_and_remedy_language():
-    """The lower edge is a NAMED HARD bookend with a stated remedy, and every
-    existing compression directive survives intact (the contract is emergent-
-    length INSIDE hard bookends — the fix must not resurrect fill-to-target).
-    Pinned against the raw template file AND the built prompt."""
+def test_script_prompt_is_ceiling_only_with_no_floor_language():
+    """CONSCIOUS FLIP (was test_script_prompt_floor_bookend_and_remedy_language;
+    DECISIONS 2026-07-14 'podcast floor REMOVED'). WAS: the lower edge pinned as
+    a NAMED HARD bookend with the depth remedy + thin-day carve-out. NOW: the
+    prompt is ceiling-only — the bookend paragraph is GONE, no floor claim of
+    any kind survives, 'no minimum' is stated, and the lead-depth steering
+    (three movements, receipts) lives on as pure quality guidance in the
+    center-of-gravity sentence. Compression directives run unopposed."""
     raw = (paths.PROMPTS_DIR / generate.PROMPT_SCRIPT).read_text(encoding="utf-8")
-
-    # the bookend is named as HARD, not a soft target
-    assert "HARD BOOKEND" in raw
-    assert "not viable" in raw or "NOT VIABLE" in raw
-    # the remedy: go DEEPER into the lead's own material — never pad, never stretch
     norm = " ".join(raw.split())
-    assert "go\nDEEPER into the lead" in raw or "go DEEPER into the lead" in norm
+
+    # the floor is GONE — no bookend, no viability claim, no carve-out
+    assert "HARD BOOKEND" not in raw
+    assert "not viable" not in norm.lower()
+    assert "band_low" not in raw and "minutes_low" not in raw
+    assert "scales down with coverage" not in norm
+    # the ceiling-only framing is explicit
+    assert "up to ~{minutes_high} minutes" in norm
+    assert "a ceiling, not a target" in norm
+    assert "There is no minimum." in norm
+    # lead-depth steering survives as quality guidance (not floor remedy)
     assert "three movements" in raw
     assert "receipts" in raw
-    assert "never to pad" in norm
-    assert "never to\nstretch" in raw or "never to stretch" in norm
-    # the thin-edition carve-out (the floor scales down with coverage) is stated
-    assert "runs shorter" in norm
-    assert "scales down with coverage" in norm
+    assert "center of gravity" in norm
 
-    # every existing compression directive is untouched (no fill-to-target)
+    # every compression directive is untouched (now unopposed — the intent)
     assert "LENGTH is EMERGENT, never filled" in raw
     assert "CEILINGS and guides, NOT floors" in raw
-    assert "a naturally short episode is\ncorrect" in raw or \
-           "a naturally short episode is correct" in norm
+    assert "a naturally short episode is correct" in norm
     assert "aim for the FULL target" not in raw  # the killed fullness ask stays dead
 
-    # it reaches the built prompt, with band_low rendered (~600, the 4-min edge)
+    # it reaches the built prompt: ceiling rendered, no floor number anywhere
     built = generate.build_script_prompt(
         A_DAY, "A", "The narrative body.", _inputs_for([slot(1), slot(2), slot(3)]))
-    assert "HARD BOOKEND" in built
-    assert "under ~600 words" in built
-    assert "go DEEPER into the lead" in " ".join(built.split())
+    bnorm = " ".join(built.split())
+    assert "HARD BOOKEND" not in built
+    assert "up to ~11 minutes" in bnorm and "(~1650 words)" in bnorm
+    assert "under ~600 words" not in built and "600-1650" not in built
+    assert "three movements" in built and "receipts" in built
 
 
 # =========================================================================
@@ -90,9 +99,11 @@ def test_script_prompt_floor_bookend_and_remedy_language():
 # =========================================================================
 
 BASE = "SCRIPT-PROMPT-BODY"
-# the live failure text (today's paid run), quoted verbatim into the correction
-ERRTEXT = ("script not viable: 565 words — under the 600-word floor "
-           "for a 5-story digest")
+# a representative validator failure text, quoted verbatim into the correction
+# (refreshed for the floor-REMOVED contract: the machinery under test is
+# failure-class-general — it echoes whatever the validator raises)
+ERRTEXT = ("script degenerate: 40 words — below the 120-word brokenness "
+           "backstop")
 
 
 def _resp(content, finish_reason="stop", pt=900, ct=200):

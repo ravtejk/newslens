@@ -1,20 +1,24 @@
 """Live-contact fix loop #3 — QA extensions (QA-written, 2026-07-14; extends,
 never replaces, the implementer's tests/test_script_floor_retry.py).
 
+(Hammers 1/2/5 consciously RE-ANCHORED same day by DECISIONS 'podcast floor
+REMOVED' — the bookend/369-501 shapes they first pinned are retired; each
+flipped test carries its own WAS/NOW.)
+
 What this file adds over the implementer's nine:
 
-  HAMMER 1 — built-prompt rendering across coverage k=1/2/5: the bookend's
-  conditional sentence stays ATTACHED to its condition at every k, the
-  carve-out survives .format, no k renders a false floor claim, and the
-  number the prompt promises is byte-derived from the SAME constant the code
-  enforces (with the thin-day 369/501 relaxation deliberately UNnamed in the
-  prompt — the pending flat-vs-scaled ruling is neither widened nor narrowed).
+  HAMMER 1 — built-prompt rendering across coverage k: ceiling-only renders
+  clean at every k (no floor claim, no carve-out, no minimum, no template
+  residue), and the only length number the prompt states is the ceiling,
+  rendered from the SAME constant the code enforces — the degenerate
+  backstop is deliberately UNnamed in the prompt (not part of the model's
+  contract), so it can never act as a hidden floor.
 
   HAMMER 2 — the informed retry through the REAL pipeline validators, not
   synthetic ones: the exact ValueError text of _shape_check/_editor_shape/
   _validate_script lands in attempt 2's POST for all three validate-bearing
-  steps, uniformly, in one run — including a byte-exact replay of today's
-  live paid failure (thin script -> corrected retry -> ships).
+  steps, uniformly, in one run — including a byte-exact degenerate-stub
+  replay (stub -> corrected retry quoting the backstop text -> ships).
 
   HAMMER 3 — correction-text discipline beyond the implementer's pin: the
   full binding clause is pinned verbatim, the composed block survives error
@@ -29,10 +33,10 @@ What this file adds over the implementer's nine:
   correction lands exactly once in its own scope, outer retry bases stay
   pristine (no leaked CORRECTION block), and nothing compounds.
 
-  HAMMER 5 — the fact-subset rule: the bookend's depth remedy points INTO
-  the narrative's own material ("already in the narrative below") and the
-  paragraph carries no fact-licensing language; the FACT-SUBSET RULE block
-  still precedes and binds.
+  HAMMER 5 — the fact-subset rule: the LENGTH paragraph's lead-depth
+  steering points INTO the narrative's own material ("already in the
+  narrative below") and carries no fact-licensing language; the FACT-SUBSET
+  RULE block still precedes and binds.
 
   Plus the third-attempt anchor pin: the 2-attempt loop cannot exhibit a
   third send, so the non-compounding guarantee for a grown loop is pinned at
@@ -74,76 +78,68 @@ def _built(n_slots):
         _inputs_for([slot(i) for i in range(1, n_slots + 1)]))
 
 
-def test_bookend_condition_claim_and_carveout_render_at_every_k():
-    """k=1 (single-story), k=2 (two-story), k=5 (7-slot edition, the live
-    failure's shape): the NOT-VIABLE claim renders with its 'On a normal
-    edition' condition fused to it as ONE sentence — so no k reads an
-    unconditional 600 floor — and the thin-edition carve-out is present in
-    the SAME rendered prompt. No template residue survives formatting."""
-    claim = ("On a normal edition (the lead plus two or more supporting "
-             "stories) a script that comes in under ~600 words is NOT VIABLE")
-    carve = ("A genuine single- or two-story edition legitimately runs "
-             "shorter than that floor, and that is correct — the floor "
-             "scales down with coverage.")
-    remedy = ("work its three movements and its receipts — the specific "
-              "figures, named actors, and mechanism already in the "
-              "narrative below")
+def test_ceiling_only_renders_clean_at_every_k():
+    """CONSCIOUS FLIP (was test_bookend_condition_claim_and_carveout_render_
+    at_every_k; DECISIONS 2026-07-14 'podcast floor REMOVED'). WAS: the
+    NOT-VIABLE claim + carve-out render at every k. NOW: at k=1, k=2, and the
+    7-slot shape alike the prompt renders ceiling-only — no floor claim, no
+    carve-out, no minimum of any kind — while the lead-depth steering still
+    renders, and no template residue survives formatting."""
+    steering = ("work its three movements and its receipts — the specific "
+                "figures, named actors, and mechanism already in the "
+                "narrative below")
     for n_slots in (1, 2, 7):
         built = _built(n_slots)
         norm = " ".join(built.split())
-        assert claim in norm, f"conditional claim broken at n_slots={n_slots}"
-        assert carve in norm, f"carve-out missing at n_slots={n_slots}"
-        assert remedy in norm, f"depth remedy missing at n_slots={n_slots}"
-        assert "band_low" not in built          # no unrendered placeholder
-        assert "{" not in built.split("=== LABEL DATA")[0].replace(
-            "{band_low}", "")                   # nothing else unformatted
+        assert "NOT VIABLE" not in norm, f"floor claim survives at {n_slots}"
+        assert "HARD BOOKEND" not in norm
+        assert "scales down with coverage" not in norm
+        assert "There is no minimum." in norm, f"missing at n_slots={n_slots}"
+        assert steering in norm, f"depth steering missing at n_slots={n_slots}"
+        assert "band_low" not in built and "minutes_low" not in built
+        assert "{" not in built.split("=== LABEL DATA")[0]  # fully formatted
 
 
 def test_prompt_promises_only_the_number_the_code_enforces():
-    """Decision (1) held, both directions: the prompt's stated floor is
-    rendered from SCRIPT_MIN_VIABLE_WORDS (the k>=3 run-time floor, exactly),
-    so prompt and enforcement cannot drift apart silently; and the prompt
-    never names the thin-day 369/501 relaxations — the pending flat-vs-scaled
-    ruling stays open, qualitative carve-out only. The code side of that
-    table is pinned in test_generate.test_viability_floor_derivation_table_
-    pinned_AS_BUILT; here we pin the prompt side against the same constant."""
-    assert generate.SCRIPT_MIN_VIABLE_WORDS == 600
-    # k>=3 enforcement is the SAME constant the prompt renders
-    for k in (3, 4, 5):
-        ceiling = generate._script_budgets(k)[0]
-        assert min(generate.SCRIPT_MIN_VIABLE_WORDS,
-                   int(ceiling * 0.66)) == generate.SCRIPT_MIN_VIABLE_WORDS
+    """RE-ANCHORED (DECISIONS 2026-07-14 'podcast floor REMOVED'). WAS: the
+    prompt's ~600 floor == the k>=3 enforcement constant. NOW, both directions
+    under the new contract: the ONLY length number the prompt states is the
+    ceiling (rendered from SCRIPT_CEILING_WORDS), and the only lower check the
+    code runs is the flat SCRIPT_DEGENERATE_WORDS brokenness backstop — which
+    the prompt does NOT state (it is not part of the model's contract) and
+    which sits far below any plausible complete episode (under the k=1 guide
+    ceiling by a wide margin), so it can never act as a hidden floor."""
+    assert not hasattr(generate, "SCRIPT_MIN_VIABLE_WORDS")  # retired for real
+    assert generate.SCRIPT_DEGENERATE_WORDS < generate._script_budgets(1)[0] / 2
     for n_slots in (1, 2, 3, 7):
         built = _built(n_slots)
-        assert f"under ~{generate.SCRIPT_MIN_VIABLE_WORDS} words" in built
-        # thin-day relaxed values stay out of the model's contract text
-        assert "369" not in built
-        assert "501" not in built
-        # and the code never enforces harsher than the prompt states
-        k = generate._script_coverage(n_slots)
-        floor = min(generate.SCRIPT_MIN_VIABLE_WORDS,
-                    int(generate._script_budgets(n_slots)[0] * 0.66))
-        assert floor <= generate.SCRIPT_MIN_VIABLE_WORDS, (n_slots, k, floor)
+        norm = " ".join(built.split())
+        assert f"(~{generate.SCRIPT_CEILING_WORDS} words)" in norm
+        # no floor number reaches the model: not the old 600, not the backstop
+        assert "under ~600 words" not in norm
+        assert str(generate.SCRIPT_DEGENERATE_WORDS) + "-word" not in norm
+        assert "369" not in built and "501" not in built
 
 
 # =========================================================================
 # HAMMER 5 — fact-subset discipline of the new paragraph
 # =========================================================================
 
-def test_bookend_remedy_licenses_no_new_facts():
-    """The one remedy is depth INTO the narrative's existing material. The
-    paragraph must anchor its receipts to 'already in the narrative below'
-    and carry zero fact-licensing language; the FACT-SUBSET RULE block still
-    appears BEFORE it and intact, template and built prompt both."""
+def test_length_paragraph_licenses_no_new_facts():
+    """RE-ANCHORED (was test_bookend_remedy_licenses_no_new_facts; the bookend
+    paragraph is GONE — DECISIONS 2026-07-14 'podcast floor REMOVED'). The
+    surviving LENGTH paragraph carries the lead-depth steering, which must
+    still point INTO the narrative's existing material ('already in the
+    narrative below') and carry zero fact-licensing language; the FACT-SUBSET
+    RULE block still appears BEFORE it and intact, template and built both."""
     raw = (paths.PROMPTS_DIR / generate.PROMPT_SCRIPT).read_text(
         encoding="utf-8")
-    start = raw.index("THE LOWER EDGE IS A HARD BOOKEND")
+    start = raw.index("LENGTH is EMERGENT")
     end = raw.index("STRUCTURE, in order:")
     para = " ".join(raw[start:end].split())
-    # positive anchors: depth remedy points INTO the narrative's material
+    # positive anchors: depth steering points INTO the narrative's material
     assert "already in the narrative below" in para
-    assert "The remedy is never to pad" in para
-    assert "never to stretch the supporting stories" in para
+    assert "Never pad" in para
     # licensing language absent from the paragraph (lowercased scan)
     lowered = para.lower()
     for licensing in (
@@ -154,7 +150,7 @@ def test_bookend_remedy_licenses_no_new_facts():
         "recall", "invent", "draw on", "supplement",
     ):
         assert licensing not in lowered, f"licensing phrase: {licensing!r}"
-    # the fact-subset rule precedes the bookend, verbatim and binding
+    # the fact-subset rule precedes the length paragraph, verbatim and binding
     assert raw.index("THE FACT-SUBSET RULE (binding)") < start
     assert ("The script introduces no factual claim\nabsent from the "
             "narrative text" in raw
@@ -164,7 +160,7 @@ def test_bookend_remedy_licenses_no_new_facts():
     bnorm = " ".join(built.split())
     assert "introduces no factual claim absent from the narrative text" in bnorm
     assert bnorm.index("THE FACT-SUBSET RULE") < bnorm.index(
-        "THE LOWER EDGE IS A HARD BOOKEND")
+        "LENGTH is EMERGENT")
 
 
 # =========================================================================
@@ -207,24 +203,29 @@ def _ledger(rep):
     return [(e["step"], e["attempt"]) for e in rep.attempt_ledger]
 
 
-K3_FLOOR_ERR = ("script not viable: 550 words — under the 600-word floor "
-                "for a 3-story digest (disclosures and truncation checked "
-                "and clear; this is empty/degenerate output, not a "
-                "legitimately short episode)")
+# RE-TARGETED (DECISIONS 2026-07-14 'podcast floor REMOVED'): 550 words now
+# SHIPS — the replay/interplay attempt-1 failure must be genuinely DEGENERATE
+# (under the flat 120-word brokenness backstop) to exercise the informed retry
+# through the real validator. Text mirrors generate._validate_script verbatim.
+K3_DEGEN_ERR = ("script degenerate: 80 words — below the 120-word brokenness "
+                "backstop (NOT a length contract; disclosures and truncation "
+                "checked and clear — this output cannot contain intro + lead "
+                "+ outro, it is a stub, not a short episode)")
 
 
 # =========================================================================
 # HAMMER 2 — informed retry through the REAL validators, in-pipeline
 # =========================================================================
 
-def test_pipeline_replay_of_the_live_paid_failure_now_recovers(rec_chat):
-    """The acceptance contract of this fix loop, replayed end-to-end: a
-    3-story run whose script attempt 1 lands at 550 words (the 565-word
-    live shape) gets a retry whose POSTed prompt is byte-exactly the
-    ORIGINAL script prompt + one correction block quoting _validate_script's
-    OWN failure text — and the corrected 620-word attempt ships. Both
-    billed script attempts are on the money ledger. Before this fix the
-    retry bytes were identical to attempt 1 and the run died."""
+def test_pipeline_degenerate_stub_draws_informed_retry_and_recovers(rec_chat):
+    """CONSCIOUS FLIP (was test_pipeline_replay_of_the_live_paid_failure_now_
+    recovers; DECISIONS 2026-07-14 'podcast floor REMOVED' — the 550-word live
+    shape now SHIPS, see test_generate's short-digest pins). The informed-retry
+    coverage through the REAL _validate_script survives re-targeted at the
+    surviving failure class: a genuinely DEGENERATE 80-word stub draws a retry
+    whose POSTed prompt is byte-exactly the ORIGINAL script prompt + one
+    correction block quoting the validator's OWN degenerate-backstop text —
+    and the corrected 620-word attempt ships. Both billed attempts ledgered."""
     con = _con()
     try:
         slots = [slot(1), slot(2), slot(3)]
@@ -232,7 +233,7 @@ def test_pipeline_replay_of_the_live_paid_failure_now_recovers(rec_chat):
         rec_chat.replies = [
             json.dumps(stories_payload(slots)),      # narrative, clean
             json.dumps(stories_payload(slots)),      # editor echo, clean
-            _digest_script(slots, 550),              # script attempt 1: thin
+            _digest_script(slots, 80),               # script attempt 1: a stub
             _digest_script(slots, 620),              # corrected attempt: ships
         ]
         rep = generate.run_generate(date=A_DAY, con=con, env=dict(ENV),
@@ -240,10 +241,12 @@ def test_pipeline_replay_of_the_live_paid_failure_now_recovers(rec_chat):
         assert rep.script_words == 620
         s_calls = [c for c in rec_chat.calls if not c["json_mode"]]
         assert len(s_calls) == 2
-        assert "HARD BOOKEND" in s_calls[0]["prompt"]   # part 1 reaches attempt 1
+        # ceiling-only prompt reaches attempt 1 (floor language gone)
+        assert "HARD BOOKEND" not in s_calls[0]["prompt"]
+        assert "There is no minimum." in " ".join(s_calls[0]["prompt"].split())
         assert PREFIX not in s_calls[0]["prompt"]
         assert s_calls[1]["prompt"] == (
-            s_calls[0]["prompt"] + "\n\n" + PREFIX + K3_FLOOR_ERR + SUFFIX)
+            s_calls[0]["prompt"] + "\n\n" + PREFIX + K3_DEGEN_ERR + SUFFIX)
         assert s_calls[1]["prompt"].count(PREFIX) == 1
         # no cross-step contamination
         for c in rec_chat.calls:
@@ -399,7 +402,7 @@ def test_structural_retry_base_stays_pristine_after_informed_recovery(
         rec_chat.replies = [
             json.dumps(stories_payload(slots)),            # narrative
             json.dumps(stories_payload(slots)),            # editor echo
-            _digest_script(slots, 550),                    # script 1: thin
+            _digest_script(slots, 80),                     # script 1: a stub
             _viable_but_cold_open_violating(slots, 700),   # script 2: viable, bad open
             _digest_script(slots, 620),                    # structural retry: clean
         ]
@@ -408,7 +411,7 @@ def test_structural_retry_base_stays_pristine_after_informed_recovery(
         s = [c["prompt"] for c in rec_chat.calls if not c["json_mode"]]
         assert len(s) == 3
         assert PREFIX not in s[0]
-        assert s[1] == s[0] + "\n\n" + PREFIX + K3_FLOOR_ERR + SUFFIX
+        assert s[1] == s[0] + "\n\n" + PREFIX + K3_DEGEN_ERR + SUFFIX
         # the structural retry rebuilds from the pristine s_prompt
         assert s[2].startswith(s[0])
         assert "STRUCTURAL VIOLATIONS" in s[2]

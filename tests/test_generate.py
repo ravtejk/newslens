@@ -151,10 +151,10 @@ def compliant_script(slots, narrative=""):
         parts.append(seg)
     parts.append(generate.SPOKEN_CAVEAT)
     parts.append(generate.SIGNOFF)
-    # Pad to clear the severe-shortfall floor (0.55 * script target) for ANY
-    # narrative size. NL-63 M2: the amended editions are bigger, so the script
-    # target grows with them — scale the filler to ~0.85x the slot budget, which
-    # sits above the floor whatever the narrative length (target <= slot_budget).
+    # Pad to a realistic episode size (floor REMOVED 2026-07-14 — no length
+    # gate to clear; the degenerate backstop is far below this filler anyway).
+    # NL-63 M2: the amended editions are bigger, so the script target grows
+    # with them — scale the filler to ~0.85x the slot budget.
     slot_budget = (generate.SCRIPT_OPEN_WORDS + generate.SCRIPT_OUTRO_WORDS
                    + sum(generate.script_segment(int(s["slot"])) for s in slots))
     body_words = sum(len(p.split()) for p in parts)
@@ -706,10 +706,13 @@ def test_script_budgets_are_digest_ceilings_over_covered_stories_only():
     # the per-story figures are the per-slot guides (lead the largest)
     _, desc, _ = generate._script_budgets(5)
     assert "slot 1: up to ~400" in desc and "slot 2: up to ~200" in desc
-    # every guide ceiling sits inside the hard 4-11 min band
-    assert generate.SCRIPT_MIN_VIABLE_WORDS == 600
+    # every guide ceiling sits under the <11-min episode ceiling (the only
+    # length contract left — floor REMOVED, principal 2026-07-14 second
+    # amendment); the degenerate backstop is far beneath every guide
+    assert not hasattr(generate, "SCRIPT_MIN_VIABLE_WORDS")
     assert generate.SCRIPT_CEILING_WORDS == 1650
-    assert c2 >= generate.SCRIPT_MIN_VIABLE_WORDS and c5 < generate.SCRIPT_CEILING_WORDS
+    assert c5 < generate.SCRIPT_CEILING_WORDS
+    assert generate.SCRIPT_DEGENERATE_WORDS < generate._script_budgets(1)[0]
 
 
 def test_script_covers_top_slots_by_rank_never_every_story():
@@ -724,16 +727,18 @@ def test_script_covers_top_slots_by_rank_never_every_story():
     assert generate.script_covered_slots(_inputs_for(one)) == {1}
 
 
-def test_script_prompt_states_coverage_and_emergent_band():
-    """Wiring: the digest contract reaches the model — the covered-story
-    instruction, the emergent 4-11 min band, and 'up to' ceilings (not
-    floors)."""
+def test_script_prompt_states_coverage_and_emergent_ceiling():
+    """Wiring (re-pinned, DECISIONS 2026-07-14 'podcast floor REMOVED'): the
+    digest contract reaches the model — the covered-story instruction, the
+    ceiling-only emergent length ('up to ~11 minutes', no band, no minimum),
+    and 'up to' per-story ceilings (not floors)."""
     slots = [slot(i) for i in range(1, 7)]
     prompt = generate.build_script_prompt(A_DAY, "A", "The narrative body text.",
                                           _inputs_for(slots))
     assert "covers 5 stories" in prompt              # 6-story edition -> 5 covered
     assert "Cover stories 1 through 5 ONLY" in prompt
-    assert "4-11 minutes" in prompt
+    assert "up to ~11 minutes" in " ".join(prompt.split())
+    assert "4-11 minutes" not in prompt              # the band is gone
     assert "up to ~400" in prompt and "up to ~200" in prompt   # ceilings, lead deepest
 
 
@@ -784,33 +789,36 @@ def test_hard_per_story_targets_reach_the_narrative_prompt():
     assert "TARGET ~220 words" in prompt          # In Brief
 
 
-def test_broken_short_script_retries_then_fails_viability(migrated_con, fake_model):
-    """The guard's FLIPPED job (principal 2026-07-14): it no longer measures
-    fullness — it catches genuinely BROKEN output. A near-empty body (disclosures
-    and truncation clear) fails the coverage-aware viability floor: one retry,
-    then a visible, logged failure."""
+def test_broken_stub_script_retries_then_fails_degenerate(migrated_con, fake_model):
+    """RE-PINNED (was ...fails_viability; DECISIONS 2026-07-14 'podcast floor
+    REMOVED'): the guard is now a flat brokenness backstop, NOT a length
+    contract — and a genuine stub still bites it. A near-empty body
+    (disclosures and truncation clear) fails SCRIPT_DEGENERATE_WORDS: one
+    informed retry, then a visible, logged failure."""
     slots = [slot(1), slot(2), slot(3)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
-    fake_model.script = "Way too short. " + generate.SIGNOFF   # ~5 words -> broken
+    fake_model.script = "Way too short. " + generate.SIGNOFF   # ~5 words -> stub
     with pytest.raises(generate.GenerateError) as excinfo:
         run(migrated_con, date=A_DAY)
-    assert "script not viable" in str(excinfo.value)
+    assert "script degenerate" in str(excinfo.value)
+    assert "NOT a length contract" in str(excinfo.value)
     script_calls = [c for c in fake_model.calls if not c["json_mode"]]
     assert len(script_calls) == 2  # one retry, then visible failure
 
 
 def test_naturally_short_digest_ships_no_false_shortfall(migrated_con, fake_model):
-    """Emergent length (principal 2026-07-14): a legitimately short but viable
-    digest ships — the dead fullness guard raised no lower-bound 'short' warn or
-    failure. compliant_script clears the coverage-aware floor without filling."""
+    """Emergent length (principal 2026-07-14, floor REMOVED same day): a
+    legitimately short complete digest ships — no floor exists to fail it, no
+    lower-bound 'short' warn fires, and the only length check left is the
+    degenerate backstop it clears by construction."""
     slots = [slot(1), slot(2), slot(3)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
     fake_model.script = compliant_script(slots)
     rep = run(migrated_con, date=A_DAY)
-    assert rep.script_text and rep.script_words >= generate.SCRIPT_MIN_VIABLE_WORDS
-    assert not any("not viable" in w or "severely short" in w
+    assert rep.script_text and rep.script_words > generate.SCRIPT_DEGENERATE_WORDS
+    assert not any("not viable" in w or "degenerate" in w or "severely short" in w
                    or ("vs ~" in w and "target" in w) for w in rep.warnings)
 
 
@@ -897,26 +905,21 @@ def test_disclosure_grades_covered_bites_uncovered_silent():
     assert any("story 6" in w for w in warns_all)                  # revival = warn grade
 
 
-def test_viability_floor_derivation_table_pinned_AS_BUILT():
-    """QA pin of the implementer's JUDGMENT CALL — FLAGGED for the principal,
-    who rules if he wants flat (dispatch item 7). The ruling's floor is
-    'definitely >4 min' ~= 600 words; AS BUILT the run-time floor is
-    min(SCRIPT_MIN_VIABLE_WORDS, int(guide_ceiling * 0.66)), which relaxes on
-    thin editions:
-        k=1 -> 369  (ceiling 560: the per-story guides themselves sum BELOW
-                     600 — a 1-story edition cannot reach the flat floor
-                     without filling; never-fill outranks the bookend)
-        k=2 -> 501  (ceiling 760: the softer half of the call — a 2-story
-                     digest COULD honestly reach 600, yet as built a 510-word
-                     one ships)
-        k>=3 -> 600 (the flat ruling floor, exactly — no relaxation)
-    If the principal rules FLAT 600 at every k, this table and
-    test_k1_relaxed_floor_bites_and_ships_as_derived flip consciously."""
+def test_degenerate_backstop_is_flat_and_far_below_every_guide():
+    """CONSCIOUS FLIP (was test_viability_floor_derivation_table_pinned_
+    AS_BUILT; DECISIONS 2026-07-14 'podcast floor REMOVED'). WAS: the pending
+    flat-vs-scaled floor table {1: 369, 2: 501, 3+: 600} awaiting the
+    principal's ruling. NOW: the ruling landed as NEITHER — the floor is gone;
+    the pending question dissolved. The only lower check is the flat,
+    coverage-INDEPENDENT degenerate backstop (brokenness isn't a function of
+    k), pinned here to sit far beneath every k's guide ceiling so it can never
+    masquerade as a floor — and the guide-ceiling table survives unchanged."""
     ceilings = {k: generate._script_budgets(k)[0] for k in (1, 2, 3, 4, 5)}
     assert ceilings == {1: 560, 2: 760, 3: 960, 4: 1160, 5: 1360}
-    floors = {k: min(generate.SCRIPT_MIN_VIABLE_WORDS, int(c * 0.66))
-              for k, c in ceilings.items()}
-    assert floors == {1: 369, 2: 501, 3: 600, 4: 600, 5: 600}
+    assert generate.SCRIPT_DEGENERATE_WORDS == 120
+    assert not hasattr(generate, "SCRIPT_MIN_VIABLE_WORDS")
+    for k, c in ceilings.items():
+        assert generate.SCRIPT_DEGENERATE_WORDS <= c * 0.25, (k, c)
 
 
 def _digest_script(slots, total_words):
@@ -980,25 +983,36 @@ def test_overrun_warn_is_one_directional_only(migrated_con, fake_model):
     assert "tighten, never fill" in over[0] and "1650" in over[0]
 
 
-def test_k1_relaxed_floor_bites_and_ships_as_derived(migrated_con, fake_model):
-    """QA (the judgment call, live in the pipeline — see the AS-BUILT table
-    pin): on a 1-story edition the run-time viability floor is the relaxed 369,
-    and the failure message names it. A 300-word stub ABORTS (one retry, then
-    visible failure); a 400-word single-story digest — under the flat 600 —
-    then ships. Both flip consciously if the principal rules flat."""
+def test_k1_short_complete_digest_ships_flat_degenerate_guard(migrated_con, fake_model):
+    """CONSCIOUS FLIP — podcast floor REMOVED (principal 2026-07-14, DECISIONS
+    'NewsLens — podcast floor REMOVED'; supersedes the pending thin-day
+    relaxation, which dissolves with the floor).
+      WAS (loop #3, b0cc572): a 1-story edition had a coverage-RELAXED viability
+        floor of 369 — a 300-word single-story digest ABORTED as 'script not
+        viable', only a 400-word one shipped (the 369/501/600 table).
+      NOW: no length floor and no coverage relaxation. A short-but-COMPLETE
+        1-story digest ships at ANY length the material earns; only genuinely
+        degenerate output (below the FLAT SCRIPT_DEGENERATE_WORDS structural-
+        sanity floor, coverage-independent) aborts.
+    The 300-word ship is the red->green wiring proof: it FAILED on b0cc572
+    (rejected at the 369 floor) and passes only once the flat guard is live."""
     slots = [slot(1)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
+    # 300 words: under the OLD 369 k=1 floor (would have aborted) — now a
+    # correct, complete short episode. Ships, unwarned.
     fake_model.script = _digest_script(slots, 300)
+    rep = run(migrated_con, date=A_DAY)
+    assert rep.script_words == 300
+    assert not any("not viable" in w or "degenerate" in w or "broken" in w
+                   for w in rep.warnings)
+    # genuinely degenerate: furniture wrapped around a stub, below the flat
+    # brokenness floor -> aborts (one informed retry, then visible failure).
+    # Coverage-independent: k=1 gets the SAME flat guard as k=5, not a fraction.
+    fake_model.script = _digest_script(slots, 60)
     with pytest.raises(generate.GenerateError) as excinfo:
         run(migrated_con, date=A_DAY)
-    msg = str(excinfo.value)
-    assert "script not viable" in msg
-    assert "369-word floor for a 1-story digest" in msg
-    fake_model.script = _digest_script(slots, 400)
-    rep = run(migrated_con, date=A_DAY)
-    assert rep.script_words == 400
-    assert not any("not viable" in w for w in rep.warnings)
+    assert "degenerate" in str(excinfo.value)
 
 
 def test_script_prompt_emergent_language_and_single_story_branch():
@@ -1048,7 +1062,9 @@ def test_amended_steering_reaches_the_sent_prompts(migrated_con, fake_model):
     assert "~300" not in e_prompt                                 # stale floor gone
     s_prompt = [c for c in fake_model.calls if not c["json_mode"]][0]["prompt"]
     assert "THIS EPISODE COVERS (binding): This episode covers 5 stories" in s_prompt
-    assert "(~600-1650 words)" in s_prompt and "4-11 minutes" in s_prompt
+    assert "(~1650 words)" in s_prompt          # ceiling-only (floor REMOVED)
+    assert "up to ~11 minutes" in " ".join(s_prompt.split())
+    assert "600-1650" not in s_prompt and "4-11 minutes" not in s_prompt
 
 
 def test_pipeline_scopes_disclosures_to_covered_stories_LIVENESS(
@@ -1326,13 +1342,13 @@ def test_per_step_costs_merge_into_token_cost(migrated_con, fake_model):
 
 def test_failed_run_folds_accumulated_spend_into_log(migrated_con, fake_model):
     """BUG-6/32 family (NL-63 M2 obs): a run that aborts at the script step
-    still spent real money — narrative, editor, and BOTH severe-short script
+    still spent real money — narrative, editor, and BOTH degenerate-stub script
     attempts all billed before the raise. The failed generation_log entry must
     carry that spend (total_usd + a per-attempt ledger), never a null."""
     slots = [slot(1), slot(2), slot(3)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
-    fake_model.script = "Way too short. " + generate.SIGNOFF  # severe-short -> abort
+    fake_model.script = "Way too short. " + generate.SIGNOFF  # stub -> abort
     with pytest.raises(generate.GenerateError):
         run(migrated_con, date=A_DAY)
     entry = json.loads(

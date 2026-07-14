@@ -83,8 +83,8 @@ REUSED_RUN = ("the ministers agreed to keep the arrangement under review "
 
 
 def violating_script(slots):
-    """A script that clears every OTHER gate (hard checks, severe-short
-    floor, furniture) and violates EXACTLY the two structural rules:
+    """A script that clears every OTHER gate (hard checks, the degenerate
+    backstop, furniture) and violates EXACTLY the two structural rules:
     a 4-sentence cold open before the dateline + one repeated 13-word run
     across two 15+-word paragraphs."""
     para_a = ("In the first section, " + REUSED_RUN

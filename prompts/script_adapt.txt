@@ -12,26 +12,17 @@ uncertainty markers transfer with their claims: a "could" never becomes a
 THIS EPISODE COVERS (binding): {coverage_line}
 
 LENGTH is EMERGENT, never filled. This episode is a SHORTER digest of the
-briefing, not a reading of it. It runs {minutes_low}-{minutes_high} minutes
-(~{band_low}-{band_high} words) — and inside that band the length is however
-long it NEEDS to be: write to quality and stop. Never pad to reach a number,
-and never give up accuracy or depth to fill time; a naturally short episode is
-correct. The per-story word figures below are CEILINGS and guides, NOT floors
-to fill: cold open + date + menu up to ~{budget_open} · then per covered story:
+briefing, not a reading of it. It runs up to ~{minutes_high} minutes
+(~{band_high} words) — a ceiling, not a target — and beneath it the length is
+however long it NEEDS to be: write to quality and stop. There is no minimum.
+Never pad to reach a number, and never give up accuracy or depth to fill time;
+a naturally short episode is correct at any length the material earns. The
+per-story word figures below are CEILINGS and guides, NOT floors to fill:
+cold open + date + menu up to ~{budget_open} · then per covered story:
 {budget_stories} · outro up to ~{budget_outro}. The lead is the episode's
-center of gravity — its deepest segment; every other covered story is tight.
-
-THE LOWER EDGE IS A HARD BOOKEND, not a soft target. "Emergent" and "naturally
-short" mean the length settles wherever quality lands INSIDE the band — never
-below its floor. On a normal edition (the lead plus two or more supporting
-stories) a script that comes in under ~{band_low} words is NOT VIABLE: at that
-length the LEAD did not get its depth. The remedy is never to pad and never to
-stretch the supporting stories — those stay tight. The one remedy is to go
-DEEPER into the lead: work its three movements and its receipts — the specific
-figures, named actors, and mechanism already in the narrative below, the
-material a center-of-gravity segment is built from. (A genuine single- or
-two-story edition legitimately runs shorter than that floor, and that is
-correct — the floor scales down with coverage.)
+center of gravity — its deepest segment: work its three movements and its
+receipts — the specific figures, named actors, and mechanism already in the
+narrative below. Every other covered story is tight.
 
 STRUCTURE, in order:
 1. THE INTRO (formula is binding): what happened + why the listener cares +
