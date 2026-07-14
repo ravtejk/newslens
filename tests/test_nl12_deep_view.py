@@ -40,21 +40,31 @@ def _section(html, anchor_id):
 # 1. Five reader sections — 'The facts' is pinned facts ONLY
 # ---------------------------------------------------------------------------
 
-def test_the_facts_section_is_pinned_only_no_ledger_no_unresolved():
-    """Principal ruling: the reader's 'The facts' shows pinned facts only; the
-    Ledger and the Unresolved/discrepancy register are removed from the reader
-    view (data stays in brief_json / the writer view, both untouched)."""
+def test_the_facts_is_pinned_only_and_unresolved_returns_as_its_own_section():
+    """'The facts' stays pinned facts ONLY (07-09 ruling, the surviving half).
+    Decision B (2026-07-10) SUPERSEDES the register-removal half: the Unresolved/
+    discrepancy register RETURNS deep-view-only, IN NEW FORM — as its OWN
+    section, never folded into 'The facts' and never the old raw ledger dump.
+    (Was test_the_facts_section_is_pinned_only_no_ledger_no_unresolved; updated
+    by the M3 implementer to the superseding contract.)"""
     brief = m3_brief(with_discrepancy=True)
     html = _deep(brief)
     facts = _section(html, "story-0-facts")
     assert '<p class="deep-section-label">The facts</p>' in facts
     assert "A cited fact." in facts                     # the pinned fact leads
     assert "Pinned facts" not in html                   # old label retired
-    # ledger + unresolved register gone from the reader render entirely
+    # 'The facts' stays pinned-only: the discrepancy does NOT leak into it
+    assert "Meeting Wednesday" not in facts and "Meeting July 8" not in facts
+    # the OLD raw-ledger form stays gone (new form only): no ledger section/label,
+    # no plain-claim dump — only cross-source discrepancies return
     for gone in ('id="story-0-ledger"', "The ledger", "A ledger claim.",
-                 'class="deep-discrepancy"', "unresolved", "Meeting Wednesday"):
+                 'class="deep-discrepancy"'):
         assert gone not in html
-    # but the brief object itself still carries the ledger data (writer-side)
+    # the register RETURNS as its own section (Decision B, new form)
+    assert 'id="story-0-unresolved"' in html
+    assert '<p class="deep-section-label">Unresolved</p>' in html
+    assert "Meeting July 8" in html and "Meeting Wednesday" in html
+    # the brief object still carries the ledger data (writer-side untouched)
     assert brief["ledger"] and any(e.get("discrepancy") for e in brief["ledger"])
 
 

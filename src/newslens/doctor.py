@@ -773,6 +773,7 @@ def run_doctor() -> int:
 
 
 def main() -> int:
+    paths.allow_real_paths()  # the real entrypoint (incident guard, 2026-07-14)
     return run_doctor()
 
 

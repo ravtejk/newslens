@@ -1004,8 +1004,22 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
                     f"false discrepancy dropped: {a_val!r} and {b_val!r} "
                     "resolve to the same day (Editor F2 same-referent rule)")
                 continue
-            ledger_out.append({"discrepancy": True, "a": e["a"], "b": e["b"],
-                               "note": e.get("note", "")})
+            # D1 (M3 gate): `note` typed at the boundary like every field
+            # (BUG-10 law) — non-str note dropped as a disclosed repair
+            # (garnish, not substance); a str note is quote-checked because
+            # M3's Unresolved section makes it reader-visible (Gate residual 2
+            # applies artifact-wide). Side values persist str()-coerced so no
+            # non-str scalar can launder a repr into the rendered register.
+            raw_note = e.get("note", "")
+            note = raw_note if isinstance(raw_note, str) else ""
+            if note is not raw_note:
+                warnings.append(f"discrepancy {i+1} note dropped: not text "
+                                f"(got {type(raw_note).__name__})")
+            check_quotes(note, f"discrepancy {i+1} note")
+            ledger_out.append({"discrepancy": True,
+                               "a": {**e["a"], "value": a_val},
+                               "b": {**e["b"], "value": b_val},
+                               "note": note})
             continue
         cites = _cites_of(e)
         check_cites(cites, f"ledger entry {i+1}")

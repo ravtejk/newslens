@@ -693,7 +693,7 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     # spans both signals so a follow is never shown as "＋ Follow this story"
     # when either its thread is active (marks) or its title is followed.
     affordances = _story_affordances(st, slot, marks, active_topics,
-                                     has_file, slug, date, deep_return)
+                                     has_file, slug, date, deep_return, tier)
     if affordances:
         parts.append(affordances)
 
@@ -709,15 +709,7 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
             f'{_e(mv["label"])}</span><p class="{em.strip()}">{_e(mv["text"])}</p></div>')
 
     # Meta footnote — CODE-OWNED, from the slot (never prose)
-    matches = ", ".join(
-        [t.get("name", "") for t in slot.get("matched_tags") or []
-         if isinstance(t, dict)] + marks)
-    if matches:
-        here_for = matches
-    elif slot.get("override"):
-        here_for = "editor's override — see note above"
-    else:
-        here_for = "world-impact selection (no tag or thread match)"
+    here_for = _here_for(slot)
     outlets = slot.get("outlets") or []
     meta = slot.get("corroboration_label", "")
     if outlets:
@@ -729,11 +721,28 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     return "".join(parts)
 
 
+def _here_for(slot: Dict) -> str:
+    """The 'Here for' rationale — CODE-OWNED, from the slot (never prose). One
+    source of truth shared by Today's meta-footnote and NL-66(b)'s sources-&-
+    context view: matched tags + tracked threads, else the editor's override,
+    else the world-impact fallback."""
+    marks = list(slot.get("matched_memory") or [])
+    matches = ", ".join(
+        [t.get("name", "") for t in slot.get("matched_tags") or []
+         if isinstance(t, dict)] + marks)
+    if matches:
+        return matches
+    if slot.get("override"):
+        return "editor's override — see note above"
+    return "world-impact selection (no tag or thread match)"
+
+
 def _story_affordances(st: Dict, slot: Dict, marks: List[str],
                        active_topics: set, has_file: bool, slug: str,
-                       date: str, deep_return: str) -> str:
+                       date: str, deep_return: str, tier: str = "") -> str:
     """The single story-affordance row under the title (NL-58 ruling 4): the
-    merged tracked-marker/follow control plus "The full picture" entry, grouped
+    merged tracked-marker/follow control plus the deep-view entry (analyst 'The
+    full picture', or — NL-66(b) — the In-Brief '$0 Sources & context'), grouped
     and aligned so nothing floats or mis-indents.
 
     Recognition (NL-58 P3a, both directions): a story reads as followed when
@@ -767,17 +776,25 @@ def _story_affordances(st: Dict, slot: Dict, marks: List[str],
             f'<button class="follow-story-btn{cls}" data-topic={_e_attr(topic)}'
             f'{date_attr} aria-pressed="{pressed}" onclick="toggleFollow(this)">'
             f'{_e(label)}</button>')
-    # M9-M3 entry affordance — three binding states (v4 addendum): present
-    # (valid brief), absent (quick tier), degraded-hidden (failed brief —
-    # renders IDENTICALLY to absent; total absence is the signal).
+    # M9-M3 analyst entry affordance — three binding states (v4 addendum):
+    # present (valid brief), degraded-hidden (failed full/medium brief — renders
+    # IDENTICALLY to absent; total absence is the signal), and — NL-66(b) — the
+    # In-Brief quick tier, which now carries its OWN honestly-labeled $0 entry
+    # ('Sources & context', NOT the analyst 'full picture'). has_file wins: a
+    # briefed slot is never demoted to the sources-&-context label.
+    ret = "" if deep_return == "view-today" else f", '{_e(deep_return)}'"
     if has_file:
         # 2-arg form for the Today path (the deep view returns there by
         # default); archive-in-place editions pass their own return view.
-        ret = "" if deep_return == "view-today" else f", '{_e(deep_return)}'"
         bits.append(
             f'<a class="deep-view-entry-link" href="#" '
             f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">→ The full '
             f'picture</a>')
+    elif tier == "quick":
+        bits.append(
+            f'<a class="deep-view-entry-link sources-context-link" href="#" '
+            f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">→ Sources '
+            f'&amp; context</a>')
     if not bits:
         return ""
     return '<div class="story-affordances">' + "".join(bits) + "</div>"
@@ -1344,6 +1361,89 @@ def _deep_timeline_html(con, slot: Optional[Dict], date: str,
     return ""
 
 
+_NUMBER_RE = re.compile(r"\d")
+
+
+def _deep_numbers_html(brief: Dict, story_anchor: str,
+                       src_by_key: Dict[str, Dict]) -> str:
+    """NL-63 M3 item 1 (principal ruling 2026-07-10, Decision B): 'The numbers'
+    — the story's verified specifics, a display-only recombination of ALREADY-
+    VERIFIED material. Surfaces every pinned fact AND every non-discrepancy
+    ledger claim that carries a figure, each as its FULL statement (never a
+    decontextualized bare number — extracting a figure out of its sentence would
+    be a new claim, which the two-lane source rule forbids) with the same quiet
+    cite-fold attribution the facts use. Zero LLM, zero schema change. Gated on
+    content: no numeric receipts -> no section, no dead anchor (D4, the
+    effects/'still open' idiom). Digit-presence is the MVP figure test; a finer
+    count-vs-calendar-date heuristic is NL-29/polish, flagged for the gate."""
+    items = []
+
+    def _row(text: str, cites: List[str], provenance: str = "") -> str:
+        q = _cite_qualifier(cites, src_by_key,
+                            provenance or compute_prov_display(cites, src_by_key))
+        return (f'<li>{_e(text)} '
+                + _cite_fold(q, "Show sources for this figure") + '</li>')
+
+    for f in brief.get("pinned_facts", []):
+        text = f.get("fact", "")
+        if _NUMBER_RE.search(text or ""):
+            items.append(_row(text, f.get("cites", [])))
+    for e in brief.get("ledger", []):
+        if e.get("discrepancy"):
+            continue                      # contested figures live in Unresolved
+        text = e.get("claim", "")
+        if _NUMBER_RE.search(text or ""):
+            items.append(_row(text, e.get("cites", []), e.get("provenance", "")))
+    if not items:
+        return ""
+    return (f'<div class="deep-section" id="{story_anchor}-numbers">'
+            '<p class="deep-section-label">The numbers</p>'
+            f'<ul class="deep-facts-list deep-numbers-list">'
+            f'{"".join(items)}</ul></div>')
+
+
+def _deep_unresolved_html(brief: Dict, story_anchor: str,
+                          src_by_key: Dict[str, Dict]) -> str:
+    """NL-63 M3 item 2 (principal ruling 2026-07-10, Decision B): the Unresolved
+    register RETURNS, DEEP-VIEW ONLY, IN NEW FORM. The 07-09 ruling pulled the
+    ledger's cross-source `discrepancy` entries out of the reader view (they
+    stayed in brief_json + the writer view); this restores them as their OWN
+    section — the two sides the record actually reports, EACH attributed, plus
+    the record's own note. This is NOT 'What's still open' (that is forward-
+    looking unknowns/watch — what we don't know YET); this is where the receipts
+    themselves disagree RIGHT NOW. Display-only recombination, no LLM; gated on
+    content (no discrepancies -> no section, no dead anchor). Section label
+    'Unresolved' is provisional — final naming is NL-29's business."""
+    rows = []
+    for e in brief.get("ledger", []):
+        if not e.get("discrepancy"):
+            continue
+        a, b = e.get("a") or {}, e.get("b") or {}
+        # D1 (M3 gate): non-str treated as absent, never str()-ed — a dict
+        # repr is not disclosure; historical rows bypass the validator-side
+        # typing, so both surfaces guard.
+        raw_note = e.get("note")
+        note = raw_note.strip() if isinstance(raw_note, str) else ""
+        note_html = (f'<p class="deep-unresolved-note">{_e(note)}</p>'
+                     if note else "")
+        rows.append(
+            '<div class="deep-unresolved-row">'
+            f'<p class="deep-unresolved-side">{_e(a.get("value", ""))} '
+            f'<span class="cite">{_e(_cite_qualifier(_cites_list(a), src_by_key))}'
+            '</span></p>'
+            '<p class="deep-unresolved-vs" aria-hidden="true">vs</p>'
+            f'<p class="deep-unresolved-side">{_e(b.get("value", ""))} '
+            f'<span class="cite">{_e(_cite_qualifier(_cites_list(b), src_by_key))}'
+            '</span></p>'
+            f'{note_html}</div>')
+    if not rows:
+        return ""
+    return (f'<div class="deep-section deep-unresolved" '
+            f'id="{story_anchor}-unresolved">'
+            '<p class="deep-section-label">Unresolved</p>'
+            + "".join(rows) + "</div>")
+
+
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       date: str, back_label: str = "← Back to today’s edition",
                       return_view: str = "view-today", con=None,
@@ -1424,7 +1524,19 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     # NL-12: five reader sections. Facts and Sources always render; Mechanism is
     # validator-required; "What could follow" and "What's still open" emit only
     # with content, and no dead jumplist anchor otherwise (M7 precedent).
-    jump_items = [("facts", "Facts"), ("mechanism", "Mechanism")]
+    # NL-63 M3 (Decision B): 'The numbers' and 'Unresolved' are computed here —
+    # before the jumplist — so the anchor and the section gate on the SAME
+    # rendered content (the facts/effects/open precedent): an empty well emits
+    # neither a live jumplist anchor nor a header-only section.
+    numbers_html = _deep_numbers_html(brief, story_anchor, src_by_key)
+    unresolved_html = _deep_unresolved_html(brief, story_anchor, src_by_key)
+
+    jump_items = [("facts", "Facts")]
+    if numbers_html:
+        jump_items.append(("numbers", "The numbers"))
+    if unresolved_html:
+        jump_items.append(("unresolved", "Unresolved"))
+    jump_items.append(("mechanism", "Mechanism"))
     if brief.get("effects"):
         jump_items.append(("effects", "What could follow"))
     if open_paras:
@@ -1453,6 +1565,16 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     out.append(f'<div class="deep-section" id="{story_anchor}-facts">'
                '<p class="deep-section-label">The facts</p>'
                f'<ul class="deep-facts-list">{"".join(lis)}</ul></div>')
+
+    # NL-63 M3 (Decision B): the receipts-forward cluster — 'The numbers'
+    # (verified specifics) then 'Unresolved' (where the receipts disagree) sit
+    # with the facts, the settled record before the interpretation (mechanism/
+    # effects). Both are ADDITIONS (NL-65/NL-29 own any relocation/rename, not
+    # M3); both gate on content and were precomputed above with the jumplist.
+    if numbers_html:
+        out.append(numbers_html)
+    if unresolved_html:
+        out.append(unresolved_html)
 
     # 2. mechanism — inline [S#] keys become the SAME quiet citation fold the
     # facts use (NL-58 parity ruling): the qualifier reveals on tap behind a
@@ -1590,25 +1712,131 @@ def compute_prov_display(cites: List[str], src_by_key: Dict[str, Dict]) -> str:
     return ""
 
 
+def _sources_context_source_rows(con, slot: Dict) -> List[str]:
+    """NL-66(b): the In-Brief slot's source list, resolved FROM persisted rows.
+    Primary path — item_ids -> source_items (outlet + linked title), in slot
+    order. Fallback — bare outlet rows from slot['outlets'] when nothing
+    resolves (a slot whose items were pruned). Honest empty -> [] (the caller
+    renders the empty note; never a fabricated source)."""
+    rows: List[str] = []
+    item_ids = [i for i in (slot.get("item_ids") or []) if isinstance(i, int)]
+    if con is not None and item_ids:
+        qs = ",".join("?" * len(item_ids))
+        by_id = {r["id"]: r for r in con.execute(
+            f"SELECT id, outlet, title, url FROM source_items WHERE id IN ({qs})",
+            item_ids)}
+        for iid in item_ids:                        # preserve slot order
+            r = by_id.get(iid)
+            if r is None:
+                continue
+            title = _e(r["title"] or "(untitled)")
+            link = (f'<a href={_e_attr(r["url"])}>{title}</a>'
+                    if r["url"] else title)
+            rows.append('<div class="deep-source-row">'
+                        f'<p class="source-outlet">{_e(r["outlet"] or "")}</p>'
+                        f'<p class="source-title">{link}</p></div>')
+    if rows:
+        return rows
+    for o in slot.get("outlets") or []:             # fallback: outlets only
+        rows.append('<div class="deep-source-row">'
+                    f'<p class="source-outlet">{_e(o)}</p></div>')
+    return rows
+
+
+def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
+                                 slot: Dict, con, date: str,
+                                 back_label: str = "← Back to today’s edition",
+                                 return_view: str = "view-today") -> str:
+    """NL-66(b) ruled option (b): the In-Brief (quick-tier) deep view — a $0
+    sources-and-context surface built ENTIRELY from what already exists for the
+    slot, honestly labeled. It is NOT the analyst tier: no generation, no model
+    call, and no 'cited, not verified' analyst trust footer — surfacing that
+    line here would misrepresent an unanalyzed item as analyzed. It shows the
+    slot summary, the source list (item_ids -> source_items), the matched
+    tags/threads, and the 'Here for' rationale. Missing inputs render an honest
+    empty state (the NL-11 missing-input class), never a fabricated source."""
+    out = [f'<section id="view-deep-{story_anchor}" class="view">']
+    ret = "" if return_view == "view-today" else f", '{_e(return_view)}'"
+    out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
+               f'{_e(back_label)}</a>')
+    out.append('<div class="deep-title-block">'
+               '<p class="deep-eyebrow">Sources &amp; context</p>'
+               f'<h1 class="deep-title">{_e(headline)}</h1></div>')
+
+    summary = (slot.get("summary") or st.get("lede") or "").strip()
+    if summary:
+        out.append(f'<div class="deep-section" id="{story_anchor}-summary">'
+                   '<p class="deep-section-label">In brief</p>'
+                   f'<p>{_e(summary)}</p></div>')
+
+    # why-you're-seeing-this — matched topics, tracked threads, and the shared
+    # 'Here for' rationale (the same code path as Today's meta-footnote)
+    tags = [t.get("name", "") for t in slot.get("matched_tags") or []
+            if isinstance(t, dict) and t.get("name")]
+    threads = [m for m in slot.get("matched_memory") or [] if m]
+    ctx = []
+    if tags:
+        ctx.append('<p class="sc-tags">Matched topics: '
+                   f'{_e(", ".join(tags))}</p>')
+    if threads:
+        ctx.append('<p class="sc-threads">Tracked threads: '
+                   f'{_e(", ".join(threads))}</p>')
+    ctx.append(f'<p class="sc-herefor">Here for: {_e(_here_for(slot))}.</p>')
+    out.append(f'<div class="deep-section" id="{story_anchor}-context">'
+               '<p class="deep-section-label">Why you’re seeing this</p>'
+               + "".join(ctx) + "</div>")
+
+    # sources — outlets/corroboration label; honest empty when none resolve
+    src_rows = _sources_context_source_rows(con, slot)
+    corrob = (slot.get("corroboration_label") or "").strip()
+    corrob_html = f'<p class="sc-corrob">{_e(corrob)}</p>' if corrob else ""
+    body = corrob_html + ("".join(src_rows) if src_rows else
+                          '<p class="empty-note">No sources are recorded for '
+                          'this In-Brief item.</p>')
+    out.append(f'<div class="deep-section" id="{story_anchor}-sources">'
+               '<p class="deep-section-label">Sources</p>' + body + "</div>")
+
+    # honest footer — this is context, NOT the analyst report (no trust-line
+    # borrowing; the two-lane distinction is the whole point of NL-66(b))
+    out.append('<div class="deep-footer"><p>This is the sources-and-context view '
+               'for an In-Brief item — the summary and sources already '
+               'collected, not a full-picture analysis.</p></div>')
+    out.append("</section>")
+    return "".join(out)
+
+
 def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
                         slug_prefix: str, back_label: str,
                         return_view: str) -> Tuple[Dict[int, Dict], List[str]]:
     """Newest-valid-wins brief reads for one edition (M9-M3); renders FROM the
     persisted row, never regenerates. Returns ({slot_no: doc}, [sections]).
-    Shared by Today and the archive-in-place edition (NL-11)."""
+    Shared by Today and the archive-in-place edition (NL-11). NL-66(b): a quick-
+    tier In-Brief slot with no analyst brief gets the $0 sources-&-context view
+    (a failed full/medium brief stays degraded-hidden — only quick tier does)."""
     briefs: Dict[int, Dict] = {}
     sections: List[str] = []
     from . import analysis as analysis_mod
     stories_probe, _ = _stories_for(row, entry)
     slots = _slots_for(row)
+    tiers = (entry or {}).get("tiers") or []
     for i, st in enumerate(stories_probe):
+        slot = slots[i] if i < len(slots) else None
+        # tier derivation MATCHES _render_briefing_body's so the entry link and
+        # the collected view agree for every slot (no link without a view).
+        tier = tiers[i] if i < len(tiers) else (
+            "full" if i == 0 else "medium" if i <= 2 else "quick")
         doc = analysis_mod.latest_valid_brief(con, row["date"], i + 1)
         if doc and doc.get("brief"):
             briefs[i + 1] = doc
             sections.append(_render_deep_view(
                 f"{slug_prefix}story-{i}", st.get("headline", ""), doc,
                 row["date"], back_label=back_label, return_view=return_view,
-                con=con, slot=slots[i] if i < len(slots) else None))
+                con=con, slot=slot))
+        elif tier == "quick":
+            sections.append(_render_sources_context_view(
+                f"{slug_prefix}story-{i}", st.get("headline", ""), st,
+                slot or {}, con, row["date"], back_label=back_label,
+                return_view=return_view))
     return briefs, sections
 
 

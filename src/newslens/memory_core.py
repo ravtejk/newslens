@@ -627,16 +627,32 @@ def _sentences(text: str) -> List[str]:
 
 
 def validate_state(state_text: str, ledger_dates: set,
-                   edition_dates: set) -> Tuple[str, List[str]]:
+                   edition_dates: Optional[set] = None) -> Tuple[str, List[str]]:
     """The write law, checkable. HARD-REJECT (StateRejected) the fabrication
-    class: a sentence cited to a date that resolves to NO ledger entry / no
-    edition (a past the record never published). Returns (clean, warnings);
-    an over-long paragraph warns (Content's <=5-sentence cap) but does not
-    reject — length is editorial, a fabricated cite is a trust breach."""
+    class: a sentence cited to a date that resolves to NO ledger entry (a past
+    THIS thread never moved on). Returns (clean, warnings); an over-long
+    paragraph warns (Content's <=5-sentence cap) but does not reject — length
+    is editorial, a fabricated cite is a trust breach.
+
+    M3 cites-fork decision (carried from the M2 gate; DECISIONS 2026-07-14):
+    LEDGER-RESOLVED-ONLY. thread_state.cites_json persists ledger-resolved cites
+    only — rewrite_state resolves the clean text against the thread's ledger
+    dates alone (below, `cites = _resolve_cites(clean, ledger_dates)[0]`), and
+    it already calls this with edition_dates=set(). Acceptance is narrowed to
+    MATCH that persistence: a cite must resolve to a date THIS thread moved on
+    (a ledger date). An edition date that is not a ledger date is the BUG-25
+    fabrication class (some other edition ran that day, but this thread did not
+    move) — it is rejected here rather than accepted-then-silently-dropped by
+    cites_json. The wider `resolvable = ledger|edition` was headroom no consumer
+    ever used: M3's first render consumers of receipts (The numbers / Unresolved
+    / the In-Brief view) read BRIEF-level source-key cites, not this surface, so
+    nothing needs the wider set. `edition_dates` is retained inert (every caller
+    passes an empty set) so the QA call sites keep compiling; a follow-up may
+    drop the parameter once those sites are updated."""
     text = (state_text or "").strip()
     if not text:
         raise StateRejected("empty state paragraph")
-    resolvable = ledger_dates | edition_dates
+    resolvable = set(ledger_dates)
     resolved, unresolved, ambiguous = _resolve_cites(text, resolvable)
     if not (resolved or unresolved or ambiguous):
         # A parenthetical that carries digits but parses to no date form is a
@@ -674,7 +690,7 @@ def validate_state(state_text: str, ledger_dates: set,
             return human_date(u)
         bad = sorted(_name(u) for u in unresolved)
         raise StateRejected(
-            "state cites date(s) with no ledger entry or edition — fabrication "
+            "state cites date(s) with no ledger entry — fabrication "
             f"class: {', '.join(bad)}")
     warnings: List[str] = []
     # BUG-26: the write law says EVERY sentence traces to a dated edition. The
@@ -785,7 +801,7 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
     """Content's WRITE LAW, end to end. LLM write on a trust surface:
       * regenerated from LEDGER + today, NEVER the prior state (photocopier);
       * every sentence cited to a dated edition; cites must resolve to ledger
-        entries/editions (hard-reject on fabrication class);
+        entries (hard-reject on fabrication class);
       * diff-logged; versioned (append-only row);
       * stale-but-honest on ANY failure — the prior state stays, no new row,
         the render discloses the staleness.

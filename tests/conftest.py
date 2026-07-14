@@ -28,6 +28,7 @@ PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
 # Every env var the milestone-1 code reads, plus proxy vars that could
 # redirect urllib away from our local fake server.
 SCRUBBED_ENV_VARS = [
+    "NEWSLENS_REAL_DATA",  # the paths-guard opt-in must never leak into tests
     "OPENAI_API_KEY",
     "PERPLEXITY_API_KEY",
     "GNEWS_API_KEY",
@@ -80,8 +81,9 @@ def sandbox_paths(tmp_path, monkeypatch):
     active sources); tests write their own content over it as needed.
     """
     data_dir = tmp_path / "data"
-    monkeypatch.setattr(paths, "DATA_DIR", data_dir)
-    monkeypatch.setattr(paths, "DB_PATH", data_dir / "newslens.db")
+    monkeypatch.setattr(paths, "DATA_DIR", data_dir, raising=False)
+    monkeypatch.setattr(paths, "DB_PATH", data_dir / "newslens.db",
+                        raising=False)
 
     sources = tmp_path / "sources.yaml"
     sources.write_text(SYNTHETIC_TEMPLATE, encoding="utf-8")

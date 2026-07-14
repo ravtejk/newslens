@@ -592,22 +592,31 @@ def test_rejected_brief_page_is_byte_identical_to_never_had_one(
     assert page_a1.count("→ The full picture") == 1
 
 
-def test_deep_view_reader_drops_ledger_and_unresolved_register(tmp_paths):
-    """NL-12 principal ruling 2026-07-09: 'The facts' is pinned facts ONLY —
-    the Ledger AND the Unresolved/discrepancy register are removed from the
-    READER view entirely. The data is NOT deleted: it stays in brief_json
-    (writer-side, untouched) — only the reader rendering drops it."""
+def test_deep_view_reader_restores_unresolved_register_new_form(tmp_paths):
+    """NL-63 M3 (principal ruling 2026-07-10, Decision B) SUPERSEDES the 07-09
+    register removal for the deep view: the Unresolved/discrepancy register
+    RETURNS, DEEP-VIEW ONLY, IN NEW FORM. 'The facts' stays pinned-only (the
+    surviving 07-09 half); the register renders as its OWN section — cross-source
+    discrepancies only, never the old raw ledger dump. Data still lives in
+    brief_json (writer-side untouched).
+
+    (Was test_deep_view_reader_drops_ledger_and_unresolved_register, which
+    encoded the now-superseded 07-09 removal; updated by the M3 implementer.)"""
     brief = m3_brief(with_discrepancy=True)
     doc = {"header": {"degraded": None}, "brief": brief}
     html = server._render_deep_view("story-1", "Headline", doc, DATE)
-    # reader view: no ledger section, no discrepancy block, no unresolved tag
+    # the register RETURNS as its own section (new form): both attributed sides
+    assert 'id="story-1-unresolved"' in html
+    assert '<p class="deep-section-label">Unresolved</p>' in html
+    assert "Meeting July 8" in html and "Meeting Wednesday" in html
+    # the OLD raw-ledger form stays gone (new form only, not a ledger dump):
     assert 'class="deep-discrepancy"' not in html
-    assert "unresolved" not in html
     assert "The ledger" not in html and "story-1-ledger" not in html
-    assert "Meeting July 8" not in html and "Meeting Wednesday" not in html
-    assert "A ledger claim." not in html          # non-discrepancy ledger too
-    # 'The facts' still leads with the pinned facts
-    assert "The facts" in html and "A cited fact." in html
+    assert "A ledger claim." not in html          # plain claims are NOT dumped
+    # 'The facts' still leads with the pinned facts, discrepancy kept OUT of it
+    facts = html.split('id="story-1-facts"')[1].split("</div>")[0]
+    assert '<p class="deep-section-label">The facts</p>' in facts
+    assert "A cited fact." in facts and "Meeting Wednesday" not in facts
     # data preserved upstream: the brief dict still carries the ledger
     assert any(e.get("discrepancy") for e in brief["ledger"])
 
@@ -1131,3 +1140,114 @@ def test_a_pre_persist_failure_strands_no_delta(tmp_paths, fake_chat, monkeypatc
         assert con.execute("SELECT COUNT(*) c FROM thread_deltas").fetchone()["c"] == 0
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------------------
+# 9. NL-63 M3 QA extensions — the receipts-forward surfaces, hammered
+# ---------------------------------------------------------------------------
+
+M3_QA_SOURCES = {
+    "S1": {"kind": "cluster-full-text", "outlet": "The Hill", "title": "t",
+           "url": "https://thehill.com/a", "retrieved_at": "", "text": "body"},
+    "C1": {"kind": "cluster-excerpt", "outlet": "rferl.org", "title": "w",
+           "url": "https://rferl.org/b", "retrieved_at": "", "text": "body"},
+}
+
+
+def test_D1_validator_accepted_note_must_never_crash_the_render():
+    """KNOWN-RED (D1, M3 QA find). The model author is an adversary and every
+    field is typed before use (BUG-10/BUG-31 law; analysis._require_str). The
+    validator types discrepancy SIDES (a/b must be dicts, cited, distinct) but
+    persists `note` untyped — `e.get("note", "")` only defaults when the key is
+    ABSENT (analysis.py, ledger_out discrepancy append). A model emitting
+    {"note": {...}} or {"note": 7} therefore persists as a VALID brief, and
+    M3's _deep_unresolved_html calls (e.get("note") or "").strip()
+    (server.py:1422) — AttributeError. Blast radius is the WHOLE page:
+    _collect_deep_views has no failure path, so build_page raises and Today AND
+    the archive render for that edition 500 until the row is deleted. Pre-M3
+    the reader never read `note`; Decision B's restoration created the
+    exposure. Observed: AttributeError('dict' object has no attribute 'strip').
+
+    Fix contract (either surface flips this green; both is better):
+      * validator-side — type `note` at the boundary like every other field:
+        coerce non-str to "" (or reject), so no untyped note can persist; or
+      * renderer-side — treat a non-str note as absent (isinstance gate),
+        never str()-ing it into the page (a dict repr is not disclosure).
+    The render must complete and must not carry a repr of the payload."""
+    raw = {"pinned_facts": [{"fact": "A cited fact.", "cites": ["S1"]},
+                            {"fact": "Fact two.", "cites": ["S1"]},
+                            {"fact": "Fact three.", "cites": ["C1"]}],
+           "ledger": [{"discrepancy": True,
+                       "a": {"value": "Toll is 20 percent", "cites": ["C1"]},
+                       "b": {"value": "Toll is a quarter", "cites": ["S1"]},
+                       "note": {"model": "gone rogue"}}],
+           "mechanism": "An actor answers to a constraint [S1].",
+           "effects": [], "arc": None,
+           "unknowns": [{"question": "q", "why_material": "w",
+                         "would_resolve": "r"}],
+           "watch": [], "notes_for_writer": ""}
+    try:
+        brief, _ = analysis.validate_brief(raw, M3_QA_SOURCES, "full", "body",
+                                           briefing_date=DATE)
+    except analysis.BriefRejected:
+        return          # validator-side fix landed: typed at the boundary
+    doc = {"header": {"degraded": None}, "brief": brief}
+    html = server._render_deep_view("story-1", "Headline", doc, DATE)
+    assert "gone rogue" not in html     # no dict-repr laundered into the page
+    assert 'id="story-1-unresolved"' in html   # register itself still renders
+
+
+def test_numbers_excludes_contested_figures_they_live_in_unresolved():
+    """Full-statement discipline, the contested half: a numeric value inside a
+    cross-source discrepancy is a CONTESTED figure — it renders under
+    Unresolved (both sides, attributed) and never under 'The numbers' (which
+    would present one side as a verified specific)."""
+    brief = m3_brief(with_discrepancy=True)
+    brief["pinned_facts"].append(
+        {"fact": "At least 11 people died.", "cites": ["S1"]})
+    brief["ledger"].append({"discrepancy": True,
+                            "a": {"value": "9 dead", "cites": ["C1"]},
+                            "b": {"value": "12 dead", "cites": ["S1"]},
+                            "note": "tolls differ"})
+    html = server._render_deep_view(
+        "story-1", "H", {"header": {}, "brief": brief}, DATE)
+    numbers = html.split('id="story-1-numbers"')[1].split("</div>")[0]
+    assert "At least 11 people died." in numbers
+    assert "9 dead" not in numbers and "12 dead" not in numbers
+    unresolved = html.split('id="story-1-unresolved"')[1]
+    assert "9 dead" in unresolved and "12 dead" in unresolved
+
+
+def test_unresolved_side_with_unresolvable_cites_says_background():
+    """Attribution honesty parity: a persisted discrepancy side whose cites
+    resolve to no manifest source attributes as '(background)' — the same
+    honest fallback the facts' qualifier uses — never a crash, never an
+    invented outlet."""
+    brief = m3_brief()
+    brief["ledger"].append({"discrepancy": True,
+                            "a": {"value": "Nine dead", "cites": ["Z9"]},
+                            "b": {"value": "Twelve dead", "cites": ["S1"]},
+                            "note": ""})
+    html = server._render_deep_view(
+        "story-1", "H", {"header": {}, "brief": brief}, DATE)
+    sec = html.split('id="story-1-unresolved"')[1]
+    assert "Nine dead" in sec and "(background)" in sec
+    assert "The Hill" in sec            # the resolvable side still attributes
+
+
+def test_sources_context_view_escapes_hostile_slot_content():
+    """NL-66(b) is a NEW raw-HTML surface fed by slot JSON and source_items
+    rows; every dynamic value crosses _e/_e_attr. Hostile outlet, headline,
+    summary, tag, thread and label must arrive entity-escaped — no script,
+    no attribute breakout. (con=None exercises the outlets fallback.)"""
+    hostile = '<script>alert(1)</script>"onmouseover="x'
+    slot_d = {"slot": "1", "story_title": hostile, "summary": hostile,
+              "item_ids": [], "outlets": [hostile],
+              "matched_tags": [{"name": hostile}], "matched_memory": [hostile],
+              "override": False, "corroboration_label": hostile}
+    st = {"headline": hostile, "lede": hostile, "movements": []}
+    html = server._render_sources_context_view(
+        "story-0", hostile, st, slot_d, None, DATE)
+    assert "<script>alert(1)</script>" not in html
+    assert hostile not in html          # raw payload never survives verbatim
+    assert "&lt;script&gt;" in html     # escaped form is what renders

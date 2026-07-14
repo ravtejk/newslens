@@ -17,6 +17,8 @@ from . import __version__
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from . import paths
+    paths.allow_real_paths()  # the real entrypoint (incident guard, 2026-07-14)
     parser = argparse.ArgumentParser(
         prog="newslens",
         description="NewsLens — memory-threaded daily news briefing (personal prototype).",

@@ -336,6 +336,23 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .deep-source-row a:hover { color: var(--accent); text-decoration: underline; }
 .deep-source-row .source-title { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.3rem; }
 .deep-source-row .source-meta { color: var(--ink-faint); font-size: 0.78rem; margin: 0; }
+/* NL-63 M3 (Decision B): 'The numbers' reuses the facts list; 'Unresolved'
+   renders each cross-source discrepancy as two attributed sides + the note.
+   Structural only — v7 visual refinement rides after sight-approval. */
+.deep-numbers-list li { font-variant-numeric: tabular-nums; }
+.deep-unresolved-row { padding: 0.5rem 0; border-bottom: 1px solid var(--rule); }
+.deep-unresolved-row:last-child { border-bottom: none; }
+.deep-unresolved-side { margin: 0 0 0.15rem; }
+.deep-unresolved-side .cite { color: var(--ink-faint); font-size: 0.9em; }
+.deep-unresolved-vs { color: var(--ink-faint); font-size: 0.78rem;
+  text-transform: uppercase; letter-spacing: 0.06em; margin: 0.1rem 0; }
+.deep-unresolved-note { color: var(--ink-soft); font-size: 0.85rem;
+  font-style: italic; margin: 0.2rem 0 0; }
+/* NL-66(b): the In-Brief sources-&-context view — matched topics/threads,
+   corroboration label, and the shared 'Here for' rationale. */
+.sc-tags, .sc-threads, .sc-herefor { color: var(--ink-soft); font-size: 0.9rem;
+  margin: 0 0 0.35rem; }
+.sc-corrob { color: var(--ink-faint); font-size: 0.85rem; margin: 0 0 0.6rem; }
 .deep-footer { font-size: 0.74rem; color: var(--ink-faint); padding-top: 1.25rem;
   margin-top: 0.5rem; border-top: 1px solid var(--rule); line-height: 1.6; }
 .deep-footer p { margin: 0 0 0.4rem; }
