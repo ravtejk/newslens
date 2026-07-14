@@ -1363,26 +1363,32 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
         report.warnings.append(
             f"memory: state prompt unreadable ({exc}) — state rewrites "
             "skipped, prior states kept stale-but-honest")
-    for tid in delta_rep.moved_thread_ids:
-        if not state_template:
-            break
-        trow = con.execute("SELECT topic FROM memory WHERE id = ?",
-                           (tid,)).fetchone()
-        topic = trow["topic"] if trow else f"thread {tid}"
-        sr = memory_core.rewrite_state(
-            con, tid, topic, date, briefing_id, key, state_template,
-            remaining_usd=cap - spent, chat=state_chat)
-        spent += sr.cost_usd
-        report.memory_usd += sr.cost_usd
-        state_results.append({"thread": topic, "outcome": sr.outcome,
-                              "detail": sr.detail, "usd": round(sr.cost_usd, 6)})
-        if sr.outcome in ("stale", "rejected", "skipped-budget", "skipped-no-ledger"):
-            report.warnings.append(
-                f"memory: state for {topic!r} {sr.outcome} — {sr.detail}")
-    if report.memory_usd:
-        report.steps.append({"step": "state_rewrites",
-                             "model": memory_core.STATE_MODEL,
-                             "usd": round(report.memory_usd, 6)})
+    try:
+        for tid in delta_rep.moved_thread_ids:
+            if not state_template:
+                break
+            trow = con.execute("SELECT topic FROM memory WHERE id = ?",
+                               (tid,)).fetchone()
+            topic = trow["topic"] if trow else f"thread {tid}"
+            sr = memory_core.rewrite_state(
+                con, tid, topic, date, briefing_id, key, state_template,
+                remaining_usd=cap - spent, chat=state_chat)
+            spent += sr.cost_usd
+            report.memory_usd += sr.cost_usd
+            state_results.append({"thread": topic, "outcome": sr.outcome,
+                                  "detail": sr.detail, "usd": round(sr.cost_usd, 6)})
+            if sr.outcome in ("stale", "rejected", "skipped-budget", "skipped-no-ledger"):
+                report.warnings.append(
+                    f"memory: state for {topic!r} {sr.outcome} — {sr.detail}")
+    finally:
+        # The step lands even when a later thread's rewrite raises mid-loop
+        # (gate Fix 1, loop #5): paid spend must reach report.steps BEFORE the
+        # exception propagates, or both callers' containment folds see nothing
+        # and briefings.token_cost under-reports money the CLI prints.
+        if report.memory_usd:
+            report.steps.append({"step": "state_rewrites",
+                                 "model": memory_core.STATE_MODEL,
+                                 "usd": round(report.memory_usd, 6)})
     report.memory = {
         "deltas_written": len(delta_rep.written),
         "deltas_skipped": len(delta_rep.skipped),
@@ -1395,6 +1401,149 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
         "state_rewrites": state_results,
     }
     return spent
+
+
+@dataclass
+class BackfillReport:
+    """The outcome of a memory backfill (live-contact fix #4). `refused` is a
+    first-class, honest outcome (stale-but-honest beats fabricated context) — the
+    edition's gap stays recorded, never filled with invented material."""
+    date: str
+    refused: bool = False
+    reason: str = ""
+    deltas_written: int = 0
+    deltas_skipped: int = 0
+    threads_moved: int = 0
+    memory_usd: float = 0.0
+    cap: float = 0.0
+    state_rewrites: List[Dict] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+def run_memory_backfill(
+    date: Optional[str] = None, con: Optional[sqlite3.Connection] = None,
+    env: Optional[dict] = None, state_chat=None,
+) -> BackfillReport:
+    """Live-contact fix #4 — run the NL-63 memory pass for an ALREADY-PUBLISHED
+    edition of record whose moat was never written (a `--no-refresh` record
+    completion under the old gate). A gate flip alone cannot cure an edition that
+    already shipped: re-running `generate` would archive and REWRITE the edition
+    of record (unacceptable). This thin driver reaches the same run_memory_pass
+    path WITHOUT regenerating anything.
+
+    CONTEXT FIDELITY (disclosed): run_memory_pass reads its inputs from PERSISTED
+    rows, not volatile narrative-stage state — briefs_by_slot from
+    latest_valid_brief, slots from the briefing's story_slots, the ledger from
+    thread_deltas. The live inline pass reads the SAME sources (see
+    _run_generate_body). So the backfill's delta-write + state-rewrite context is
+    byte-identical to a live inline pass — there is NO degradation. The only
+    difference is `spent`=0.0 (the backfill is its own run doing only the memory
+    pass; the edition's generation cost was already billed to its token_cost), so
+    the FULL cap is available to the state rewrite. The state-rewrite spend is
+    folded into the edition's token_cost exactly as the live path's
+    _fold_cost_steps does — WITHOUT re-archiving; the narrative/script are never
+    touched.
+
+    REFUSES (never fabricates) when context is unrecoverable:
+      * no briefing of record for the date (nothing published to backfill);
+      * no valid analysis brief persisted for the date — the arc a delta writes
+        FROM never existed; the backfill refuses rather than invent it.
+
+    Idempotent: a second backfill writes no new delta, moves no thread, bills $0.
+    `state_chat` is injectable so the offline suite exercises this exact path
+    without spending; disclose-don't-crash contains any pass failure.
+    """
+    import os
+
+    src_env = env if env is not None else os.environ
+    date = date or ranking.local_today()
+    key = (src_env.get("OPENAI_API_KEY") or "").strip()
+    bf = BackfillReport(date=date)
+
+    own_con = con is None
+    if own_con:
+        db.migrate()
+        con = db.connect()
+    try:
+        # 1. the edition of record must exist (recoverable-context gate 1).
+        try:
+            inputs = load_briefing_inputs(con, date)
+        except GenerateError as exc:
+            bf.refused = True
+            bf.reason = str(exc)
+            return bf
+        slots = inputs["slots"]
+
+        # 1b. the edition must be PUBLISHED, not merely ranked (gate Fix 3,
+        # loop #5): rank creates the briefings row before generate publishes,
+        # so a rank-succeeded/generate-failed day leaves row + valid briefs +
+        # NULL narrative — and a backfill here would write ledger deltas
+        # citing an edition that never shipped, the orphan-delta class the
+        # M1 gate-F reorder exists to prevent.
+        nrow = con.execute(
+            "SELECT narrative_text FROM briefings WHERE date = ?", (date,)
+        ).fetchone()
+        if nrow is None or not (nrow["narrative_text"] or "").strip():
+            bf.refused = True
+            bf.reason = (
+                f"the {date} edition was ranked but never PUBLISHED (no "
+                "narrative on the record) — a delta may only cite a published "
+                "edition; complete it first (`newslens generate --no-refresh`) "
+                "and then backfill")
+            return bf
+
+        # 2. reconstruct briefs_by_slot from PERSISTED valid briefs — the SAME
+        #    source the live inline pass reads (_run_generate_body lines ~1666).
+        from . import analysis as analysis_mod
+        briefs_by_slot: Dict[int, Optional[Dict]] = {}
+        for s in slots:
+            n = int(s["slot"])
+            if n <= 3:
+                doc = analysis_mod.latest_valid_brief(con, date, n)
+                if doc:
+                    briefs_by_slot[n] = doc
+        if not briefs_by_slot:
+            bf.refused = True
+            bf.reason = (
+                f"no valid analysis brief persisted for {date} — the delta arc "
+                "the ledger writes FROM was never on the record; backfill refuses "
+                "rather than fabricate context (stale-but-honest: the gap stays "
+                "recorded, not filled with invented material)")
+            return bf
+
+        cap = config.budget_cap_usd_per_run(src_env)
+        bf.cap = cap
+        report = GenReport(date=date, variant=ACTIVE_VOICE)
+        spent = 0.0
+        # disclose-don't-crash containment (BUG-34 twin): the edition is already
+        # PUBLISHED — a pass failure must not raise past this driver.
+        try:
+            spent = run_memory_pass(con, date, key, cap, spent, briefs_by_slot,
+                                    slots, report, state_chat=state_chat)
+        except Exception as exc:  # noqa: BLE001 — the edition is on the record
+            report.warnings.append(
+                f"memory backfill pass failed ({exc}) — the edition {date} is "
+                "already PUBLISHED and unaffected; its delta ledger / standing "
+                "state may be only partially updated — a repeat backfill "
+                "completes missing ledger entries; standing state catches up "
+                "on the thread's next real move")
+        # money honesty: fold any state-rewrite spend into the edition's
+        # token_cost (only the memory pass populates report.steps here) WITHOUT
+        # re-archiving — the narrative/script of record stay untouched.
+        late_steps = list(report.steps)
+        if late_steps:
+            _fold_cost_steps(con, date, late_steps)
+
+        bf.deltas_written = report.memory.get("deltas_written", 0)
+        bf.deltas_skipped = report.memory.get("deltas_skipped", 0)
+        bf.threads_moved = report.memory.get("threads_moved", 0)
+        bf.state_rewrites = report.memory.get("state_rewrites", [])
+        bf.memory_usd = report.memory_usd
+        bf.warnings = list(report.warnings)
+        return bf
+    finally:
+        if own_con:
+            con.close()
 
 
 def persist_generation(
@@ -2142,12 +2291,26 @@ def _run_generate_body(
         # M1 gate F (orphan-delta reorder): runs AFTER persist_generation so a
         # delta is written ONLY once its edition is published — a narrative,
         # script, or audio failure now aborts BEFORE any ledger write, never
-        # stranding an entry that cites an unpublished edition. Record-refreshing
-        # runs only (samples/--no-refresh never write the moat, and never reach
-        # this block). run_memory_pass appends the state-rewrite step to
-        # report.steps; fold that late spend into the persisted briefing cost so
-        # briefings.token_cost stays honest (the money-honesty rule).
-        if refresh and not no_threads:
+        # stranding an entry that cites an unpublished edition.
+        #
+        # M1 gate F REVISED — live-contact fix #4 (the moat gap on --no-refresh
+        # record runs): the trigger is PERSISTENCE, not the refresh chain. Any
+        # run that reaches this block has already persisted the edition of record
+        # (the enclosing `if not report.sample`), so it writes the moat — INCLUDING
+        # a `--no-refresh` record completion (rank already paid, generate's re-rank
+        # failed, --no-refresh was the correct publish path — the 2026-07-14 case).
+        # The old `refresh` gate assumed --no-refresh == iteration; the record
+        # proved it can be the edition of record. briefs_by_slot here is read from
+        # latest_valid_brief (persisted rows) on BOTH the refresh and --no-refresh
+        # path, so the moat write is identical either way. Samples never persist and
+        # never reach here; `not no_threads` stays as a defensive guard (a
+        # no_threads run is always a sample, so it is structurally already excluded).
+        # Idempotency makes re-runs self-limiting: a repeat finds every delta on
+        # file, writes nothing, moves no thread, and bills nothing (see
+        # write_deltas_for_edition's moved_thread_ids). run_memory_pass appends the
+        # state-rewrite step to report.steps; fold that late spend into the persisted
+        # briefing cost so briefings.token_cost stays honest (money-honesty rule).
+        if not no_threads:
             steps_before = len(report.steps)
             try:
                 spent = run_memory_pass(con, date, key, cap, spent, briefs_by_slot,
@@ -2163,8 +2326,11 @@ def _run_generate_body(
                 report.warnings.append(
                     f"memory pass failed after persist ({exc}) — the edition is "
                     "already PUBLISHED and unaffected; its delta ledger / "
-                    "standing state were NOT updated this run (re-run to "
-                    "backfill the moat)")
+                    "standing state may be incomplete for this run — run "
+                    "`newslens memory-backfill --date <date>` for missing "
+                    "ledger entries; a stale standing state catches up on the "
+                    "thread's next real move (never re-run `generate` for "
+                    "this: it would archive and rewrite the published edition)")
             finally:
                 # _fold_cost_steps stays honest for any PARTIAL state spend the
                 # pass recorded before raising (empty steps fold to nothing).

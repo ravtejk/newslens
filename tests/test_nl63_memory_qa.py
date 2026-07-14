@@ -620,16 +620,25 @@ class TestLedgerWriteGates:
                           (tid,)).fetchone()
         assert json.loads(row["cites_json"]) == ["S1", "P1", "R2"]
 
-    def test_regeneration_deltas_once_states_versioned(self, migrated_con):
-        """Drive run_memory_pass TWICE for the same date (regeneration is
-        routine — briefings rows UPDATE): the ledger holds ONE delta; the
-        state appends a SECOND version (newest wins) whose diff_json records
-        the change against version one; spend accrues on both runs (money
-        honesty: a re-run re-pays the state model)."""
+    def test_regeneration_ledger_unchanged_does_not_re_version_state(self, migrated_con):
+        """RE-CHARACTERIZED — live-contact fix #4 (CONSCIOUS FLIP).
+
+        WAS: driving run_memory_pass twice for the same date re-versioned the
+        state (2 rows) and re-paid the model — an idempotent delta skip still
+        'moved' the thread, so the paid state rewrite fired on every re-run.
+
+        NOW: a re-run whose LEDGER is UNCHANGED moves no thread — ONE delta, ONE
+        state version, and the second run bills $0. Re-paying to re-synthesize an
+        identical state from an unchanged ledger was pure waste, and it is exactly
+        what would re-bill a `--no-refresh` record re-run; the fix makes repeats
+        self-limiting no-ops (moved_thread_ids is newly-written only). A genuine
+        SAME-DAY change to the ledger (a new slot's delta) still moves the thread
+        and re-versions — that path is covered by the sanctioned-split tests."""
         con = migrated_con
         tid = _seed_thread(con, "T")
         _seed_briefing(con, "2026-07-10")
         slots = [{"slot": "1", "matched_memory": ["T"]}]
+        # the 2nd text must NEVER be consumed — the repeat pass fires no rewrite.
         texts = iter(["It is a war now (Jul 10).",
                       "It is a wider war now (Jul 10)."])
 
@@ -645,13 +654,12 @@ class TestLedgerWriteGates:
                 state_chat=chat)
         assert con.execute("SELECT COUNT(*) c FROM thread_deltas").fetchone()["c"] == 1
         srows = con.execute("SELECT * FROM thread_state ORDER BY id").fetchall()
-        assert len(srows) == 2
+        assert len(srows) == 1                       # ONE version — repeat did not re-version
         assert memory_core.latest_state(con, tid)["state_text"] == \
-            "It is a wider war now (Jul 10)."
-        diff = json.loads(srows[1]["diff_json"])
-        assert diff["from_as_of"] == "2026-07-10"
-        assert any("wider" in s for s in diff["added"])
-        assert spent == pytest.approx(0.002)
+            "It is a war now (Jul 10)."              # version one stands
+        assert spent == pytest.approx(0.001)         # only the first run paid
+        assert report.memory["threads_moved"] == 0   # the repeat moved nothing
+        assert report.memory["deltas_written"] == 0
 
     def test_append_only_triggers_speak_their_law(self, migrated_con):
         """Both tables, both verbs — and the RAISE message names the law so a
@@ -1004,16 +1012,26 @@ class TestMemoryPassEndToEnd:
         assert r.outcome == "skipped-no-ledger" and "day-one" in r.detail
         assert con.execute("SELECT COUNT(*) c FROM thread_state").fetchone()["c"] == 0
 
-    def test_memory_pass_only_runs_on_refreshing_thread_aware_runs(self):
-        """Wiring pin: the generate body gates the memory pass behind
-        `refresh and not no_threads` — samples/--no-refresh runs never write
-        the moat. Source-anchored (grep-proof class)."""
+    def test_memory_pass_runs_on_any_persisted_edition_not_only_refresh(self):
+        """Wiring pin — RE-CHARACTERIZED (live-contact fix #4). WAS: the memory
+        pass gated on `refresh and not no_threads`, so a `--no-refresh` record
+        completion wrote no moat (the 2026-07-14 gap). NOW: the trigger is
+        PERSISTENCE — the pass sits inside the `if not report.sample:` persist
+        block (samples never reach it) and directly under `if not no_threads:`,
+        so ANY persisted edition of record, incl. a `--no-refresh` completion,
+        writes the moat. Source-anchored (grep-proof class)."""
         src = inspect.getsource(generate._run_generate_body)
         call = src.index("run_memory_pass(")
-        guard = src.rindex("if refresh and not no_threads:", 0, call)
-        assert 0 < call - guard < 300, (
-            "run_memory_pass must sit directly under the refresh/threads "
+        guard = src.rindex("if not no_threads:", 0, call)
+        assert 0 < call - guard < 400, (
+            "run_memory_pass must sit directly under the `if not no_threads:` "
             "guard (nearest guard occurrence before the call)")
+        # persistence is the real trigger: the memory block lives INSIDE the
+        # `if not report.sample:` persist guard, so samples never write the moat.
+        persist = src.rindex("if not report.sample:", 0, guard)
+        assert guard - persist > 0, (
+            "the memory pass must sit inside the `if not report.sample:` persist "
+            "block (persistence is the trigger; samples never persist)")
 
     def test_memory_pass_never_touches_memory_md(self, migrated_con):
         """The sync surface is deliberately NOT expanded (engineering ruling

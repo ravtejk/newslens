@@ -174,7 +174,13 @@ def resolve_thread_id(con: sqlite3.Connection, topic: str) -> Optional[int]:
 class DeltaWriteReport:
     written: List[Dict] = field(default_factory=list)     # {thread, date, verdict}
     skipped: List[str] = field(default_factory=list)      # reasons
-    moved_thread_ids: List[int] = field(default_factory=list)  # advance/reverse -> state rewrite
+    # The threads whose ledger THIS PASS MOVED — i.e. a delta was NEWLY written
+    # this pass. Drives the (paid) state rewrite. Live-contact fix #4: an
+    # idempotent skip (delta already on file) NO LONGER moves the thread, so a
+    # repeat pass on an already-written edition rewrites no state and bills
+    # nothing — the self-limiting property that makes the "any persisted run
+    # writes the moat" gate (incl. --no-refresh record runs, re-runs) safe.
+    moved_thread_ids: List[int] = field(default_factory=list)  # newly-written -> state rewrite
 
     def summary(self) -> str:
         return (f"ledger: {len(self.written)} delta(s) written"
@@ -264,9 +270,13 @@ def write_deltas_for_edition(
                 report.skipped.append(f"slot {n}: thread {topic!r} not resolvable")
                 continue
             if _delta_exists(con, tid, date, happened, int(n)):
+                # Live-contact fix #4: an idempotent skip does NOT move the
+                # thread. The ledger is unchanged, so its state already reflects
+                # this delta — re-firing the paid state rewrite on every re-run
+                # was pure waste (and would re-bill a --no-refresh record re-run,
+                # breaking the gate's self-limiting guarantee). moved_thread_ids
+                # now means "the ledger MOVED this pass" (newly-written only).
                 report.skipped.append(f"{topic}: delta for {date} already on file (idempotent)")
-                if tid not in report.moved_thread_ids:
-                    report.moved_thread_ids.append(tid)
                 continue
             with con:
                 con.execute(

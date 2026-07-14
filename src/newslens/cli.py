@@ -133,6 +133,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         "(tags kept) to a labeled file; the briefing of record is untouched",
     )
 
+    mb_p = sub.add_parser(
+        "memory-backfill",
+        help="write the NL-63 memory moat (delta ledger + standing state) for an "
+        "ALREADY-PUBLISHED edition whose memory pass never ran (a --no-refresh "
+        "record completion). Reconstructs the pass from PERSISTED rows only; the "
+        "edition's narrative/script are NEVER touched. Idempotent; refuses rather "
+        "than fabricate when the source arc is unrecoverable.",
+    )
+    mb_p.add_argument(
+        "--date", default=None, metavar="YYYY-MM-DD",
+        help="edition date to backfill (default: today, local)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "migrate":
@@ -249,6 +262,46 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         print(f"  cost this stage: {step_bits} = ${total:.4f}")
         print(f"  artifact: {rep.artifact_path}")
+        return 0
+
+    if args.command == "memory-backfill":
+        import re as _re
+        from datetime import datetime as _dt
+
+        from . import config, generate
+
+        if args.date:
+            ok_shape = bool(_re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date))
+            if ok_shape:
+                try:
+                    _dt.strptime(args.date, "%Y-%m-%d")
+                except ValueError:
+                    ok_shape = False
+            if not ok_shape:
+                print(
+                    f"--date must be YYYY-MM-DD (a real calendar date), "
+                    f"got {args.date!r}", file=sys.stderr,
+                )
+                return 2
+        config.load_env()
+        try:
+            bf = generate.run_memory_backfill(date=args.date)
+        except Exception as exc:  # CLI boundary: loud, human-readable, nonzero
+            print(f"memory-backfill failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1
+        if bf.refused:
+            print(f"memory-backfill REFUSED for {bf.date}: {bf.reason}",
+                  file=sys.stderr)
+            return 1
+        print(f"memory-backfill — {bf.date}")
+        print(f"  cap ${bf.cap:.2f} | state-rewrite spend ${bf.memory_usd:.4f}")
+        print(f"  deltas written: {bf.deltas_written}, threads moved: "
+              f"{bf.threads_moved}, skipped: {bf.deltas_skipped}")
+        for sr in bf.state_rewrites:
+            print(f"    state[{sr['thread']}]: {sr['outcome']} — {sr['detail']}")
+        for w in bf.warnings:
+            print(f"  ⚠ {w}")
         return 0
 
     if args.command == "rank":
