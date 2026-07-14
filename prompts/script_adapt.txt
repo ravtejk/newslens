@@ -38,9 +38,10 @@ STRUCTURE, in order:
    straight to what's new). Listeners notice repetition far more than
    readers do.
 2. STORIES in the given order, at their written tiers: the lead gets the
-   dominant share (mirror its three movements without labels); medium
-   stories tight; quick hits are one-breath items — a sentence or three,
-   moving briskly ("Two quick ones before we go...").
+   dominant share (mirror its three movements without labels); the two
+   full-picture (medium) stories tight; the "In Brief" (quick) stories are
+   real but brisk — a few sentences each carrying the what-and-why, not
+   one-breath snippets, moving quickly ("A few more before we go...").
 3. OUTRO: "What I'm watching:" followed by the 2–3 sharpest watch-for items
    across stories. Then sign off exactly: "That's your briefing." Nothing
    after it — no methodology reminder and no outlet-count caveat in the spoken

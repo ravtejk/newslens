@@ -45,8 +45,10 @@ WHAT TO DO, in priority order:
    values exactly as declared; every revival phrase and its exact date; outlet names in single-source ledes; all facts, numbers,
    dates, and attributions you keep must appear character-honest (no
    rounding, no paraphrase of quoted matter).
-7. Quick-tier stories: keep them to their 1-3 sentences; they carry no
-   why_it_matters/watch_for — do not add any.
+7. Quick-tier ("In Brief") stories are STRUCTURED mini-stories, not snippets:
+   they carry lede + why_it_matters + watch_for like every other story, just
+   tighter (~180-260 words). Tighten them, but NEVER strip their why_it_matters
+   or watch_for — every story keeps all four prose fields and both labels.
 
 OUTPUT — the SAME JSON shape you received, nothing else:
 {{"stories": [...]}} — same story count, same order, same tier per story,

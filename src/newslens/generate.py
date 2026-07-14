@@ -60,14 +60,23 @@ WRITER_MODEL = "gpt-4o"
 WRITER_USD_PER_MTOK_IN = 2.50
 WRITER_USD_PER_MTOK_OUT = 10.00
 LLM_TIMEOUT_S = 120
-NARRATIVE_MAX_TOKENS = 2800
+# NL-63 M2 (amended slot contract): the writer's completion cap grows with the
+# doubled Today-page depth — a 6-7 story edition at ~1,800-2,500 words is
+# ~3,300-3,600 completion tokens of prose plus the JSON scaffold. 2,800 truncated
+# it (a length-finish = a failed run + a paid retry, MORE spend than the headroom
+# costs). 4,600 fits the largest edition with margin; the per-step cap pre-check
+# still keeps the run under $0.25 (est output at 4,600 tok = $0.046).
+NARRATIVE_MAX_TOKENS = 4600
 SCRIPT_MAX_TOKENS = 3200
 NARRATIVE_TEMPERATURE = 0.3
 SCRIPT_TEMPERATURE = 0.4
 
 PROMPT_A = "narrative_variant_a.txt"
 PROMPT_EDITOR = "editor_pass.txt"
-EDITOR_MAX_TOKENS = 2800
+# The editor re-emits the full (now doubled) story JSON to tighten it — its
+# completion cap tracks the narrative's (NL-63 M2). 2,800 would clip the edited
+# payload of a full edition, tripping the degrade-to-draft path spuriously.
+EDITOR_MAX_TOKENS = 4600
 EDITOR_TEMPERATURE = 0.2
 PROMPT_B = "narrative_variant_b.txt"
 PROMPT_SCRIPT = "script_adapt.txt"
@@ -76,10 +85,33 @@ BRIEFINGS_DIR_NAME = "briefings"
 GENERATION_LOG_NAME = "generation_log.jsonl"
 
 # Word bands [KNOB] — §5.1 totals / §5.8 script band. Warn-grade (§5.9 #9).
-NARRATIVE_BAND = (900, 1300)               # 5-slot day; scaled by slot count
-SCRIPT_BAND = (1600, 2000)
-PER_SLOT_WORDS = {1: 320, 2: 220, 3: 220, 4: 140, 5: 140}
-SCRIPT_SEGMENTS = {1: 500, 2: 350, 3: 350, 4: 200, 5: 200}
+#
+# NL-63 M2 — the AMENDED slot contract (DECISIONS 2026-07-13). DERIVATION of the
+# doubled budgets from the contract's lead-weighted logic:
+#   pre-amendment per-slot targets (the shipped shape): lead 320 · full-picture
+#   (2-3) 220 each · In-Brief (4+) 140 each; edition band (900, 1300).
+#   RULINGS: (a) stories 2-3 DOUBLE their Today-page depth -> 220 -> 440.
+#   (b) "In Brief" carries the depth stories 2-3 had BEFORE -> the old medium
+#       register, 220 (structured, NOT the dead <=60-word snippet). (c) 1 lead +
+#       3 full-picture unchanged in COUNT. (d) lead-weighted: the lead must stay
+#       the HEAVIEST register — at 440-per-medium the old 320 lead would sink
+#       BELOW a full-picture story, breaking the weighting, so the lead doubles
+#       too (320 -> 640), holding the same lead:medium ratio (~1.45) it had.
+#   RESULT: lead 640 · full-picture (2-3) 440 · In-Brief (4+) 220. A 6-story day
+#   = 640 + 2*440 + 3*220 = 2,180; a 7-story day = 2,400 — both inside the new
+#   ~1,800-2,500 edition band the ruling names. The old 900-1,300 target is dead.
+NARRATIVE_BAND = (1800, 2500)              # amended contract; 6-7 story edition
+# (SCRIPT_BAND removed — dead constant; the script word target is computed from
+#  total_target at the script step, never from this band. Obs 5.)
+# Per-slot Today-page targets — a function so it is unbounded over 6-7 slots and
+# the three registers stay explicit (documentation for the prompt/warn bands).
+def per_slot_words(n: int) -> int:
+    return 640 if n == 1 else 440 if n in (2, 3) else 220
+# Podcast segment guidance stays at the pre-amendment per-slot values (the spoken
+# episode keeps its ~10-13 min listening-time contract; the amendment is a
+# Today-PAGE depth change, not a longer podcast). A function so 6-7 slots resolve.
+def script_segment(n: int) -> int:
+    return 500 if n == 1 else 350 if n in (2, 3) else 200
 SCRIPT_OPEN_WORDS = 120
 SCRIPT_OUTRO_WORDS = 120
 
@@ -392,21 +424,20 @@ def _override_reason(slot: Dict) -> str:
 
 
 def _slot_budget_line(slot_n: int) -> str:
-    # M5 gate finding 2: budget lines are tier-aware (A2) — the old lines
-    # instructed movements the validator hard-rejects on quick tier.
+    # Budget lines are tier-aware (A2). NL-63 M2 — the AMENDED slot contract:
+    # the lead and both full-picture stories DOUBLE their Today-page depth, and
+    # "In Brief" (slot 4+) is the OLD medium register (structured — NOT the dead
+    # <=60-word snippet). Slots 1-3 are EXACTLY the three full-picture stories.
     if slot_n == 1:
-        return ("FULL tier — lede 2-4 sentences; why_it_matters 4-7 sentences; "
-                "watch_for 1-2 sentences; ~350-450 words total")
-    if slot_n == 2:
-        return ("MEDIUM tier — lede 2-3 sentences; why_it_matters 3-5 sentences; "
-                "watch_for 1-2 sentences; ~100-300 words total")
-    if slot_n == 3:
-        return ("MEDIUM tier (or QUICK if the story doesn't warrant depth) — "
-                "medium: lede 2-3 sentences, why_it_matters 3-5 sentences, "
-                "watch_for 1-2 sentences, ~100-300 words; quick: lede ONLY, "
-                "1-3 sentences, ~40-80 words, NO why_it_matters or watch_for")
-    return ("QUICK tier — lede ONLY, 1-3 sentences, ~40-80 words; "
-            "NO why_it_matters or watch_for fields")
+        return ("FULL tier (the lead) — lede 3-6 sentences; why_it_matters 8-12 "
+                "sentences; watch_for 2-3 sentences; ~550-750 words total")
+    if slot_n in (2, 3):
+        return ("MEDIUM tier (a full-picture story, DOUBLED depth) — lede 3-5 "
+                "sentences; why_it_matters 5-8 sentences; watch_for 1-2 "
+                "sentences; ~350-500 words total")
+    return ("QUICK tier (the 'In Brief' register — a compact STRUCTURED mini-"
+            "story, NOT a headline snippet) — lede 2-3 sentences; why_it_matters "
+            "3-5 sentences; watch_for 1-2 sentences; ~180-260 words total")
 
 
 def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
@@ -439,10 +470,10 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
     for s in inputs["slots"]:
         n = s["slot"]
         lines = [f"STORY {n} — budget: {_slot_budget_line(n)}"]
-        if int(n) == 3 and inputs.get("analyst_slot3_tier"):
-            lines.append(
-                f"TIER RULED BY THE ANALYST: {inputs['analyst_slot3_tier']} "
-                "(the medium-vs-quick call moved upstream — write to it)")
+        # NL-63 M2: slots 1-3 are the EXACTLY-THREE full-picture stories (1 lead
+        # + 2 medium); slot 3 no longer demotes to quick (the amended contract
+        # pins it to full-picture), so the old analyst medium-vs-quick annotation
+        # is gone — _slot_budget_line already states MEDIUM for it.
         lines.append(f"working title (rewrite it): {s.get('story_title', '')}")
         lines.append(f"what happened (one line): {s.get('summary', '')}")
         if s.get("world_impact_reason"):
@@ -541,7 +572,6 @@ def _scan_banned(text: str) -> List[str]:
 
 def validate_narrative_payload(
     payload: object, slots: List[Dict], variant: str,
-    slots_ctx: Optional[Dict] = None
 ) -> Tuple[List[Dict], List[str]]:
     """Structural checks BLOCK (retry-then-fail); style checks warn.
     Mandatory disclosures (revival dates) block."""
@@ -559,16 +589,16 @@ def validate_narrative_payload(
         if not isinstance(s, dict):
             raise ValueError(f"story {n}: not an object")
         tier = s.get("tier")
-        # A2 sanity: the model proposes only story 3's tier; code enforces
-        # the rest (lead is always full; 2 medium; 4+ quick).
-        analyst_t = (slots_ctx or {}).get("analyst_slot3_tier") if i == 2 else None
+        # A2 tier positions — NL-63 M2 AMENDED slot contract: EXACTLY 3 full-
+        # picture stories at positions 1-3 (1 lead "full" + 2 "medium"), every
+        # remaining story is "quick" (the In-Brief register). Slot 3 is pinned to
+        # "medium" — the old analyst medium-vs-quick demotion is RETIRED, because
+        # a demoted slot 3 would leave only 2 full-picture stories, violating the
+        # exactly-3 ruling. Code enforces every position now; the model proposes
+        # no tier of its own.
         allowed = (
             ("full",) if i == 0 else
-            ("medium",) if i == 1 else
-            # M9 reconciliation (confirmed M9-M1, bound M2/M3): the ANALYST
-            # holds slot 3's medium-vs-quick call when it ran; the model
-            # chooses only when no analyst verdict exists (fallback rung).
-            ((analyst_t,) if analyst_t else ("medium", "quick")) if i == 2 else
+            ("medium",) if i in (1, 2) else
             ("quick",)
         )
         if tier not in allowed:
@@ -577,33 +607,28 @@ def validate_narrative_payload(
                 f"(expected one of {allowed})"
             )
         out = {"tier": tier}
-        required = ("headline", "lede", "why_it_matters", "watch_for") \
-            if tier in ("full", "medium") else ("headline", "lede")
+        # NL-63 M2: EVERY tier is now a structured story — the amended "In Brief"
+        # (quick) register carries the depth stories 2-3 had before (lede +
+        # why_it_matters + watch_for), NOT the dead <=60-word headline snippet.
+        required = ("headline", "lede", "why_it_matters", "watch_for")
         for fld in required:
             v = s.get(fld)
             if not isinstance(v, str) or not v.strip():
                 raise ValueError(f"story {n}: {fld} missing/empty (tier {tier})")
             out[fld] = v.strip()
-        if tier in ("full", "medium"):
-            # A7: declared framings, menu-membership enforced.
-            wl = s.get("why_label")
-            if wl not in WHY_FRAMINGS:
-                raise ValueError(
-                    f"story {n}: why_label {wl!r} not in the sanctioned menu"
-                )
-            xl = s.get("watch_label")
-            if xl not in WATCH_FRAMINGS:
-                raise ValueError(
-                    f"story {n}: watch_label {xl!r} not in the sanctioned menu"
-                )
-            out["why_label"], out["watch_label"] = wl, xl
-        if tier == "quick":
-            for fld in ("why_it_matters", "watch_for"):
-                if isinstance(s.get(fld), str) and s[fld].strip():
-                    raise ValueError(
-                        f"story {n}: quick hits carry no {fld} (A2)"
-                    )
-                out[fld] = None
+        # A7: declared framings, menu-membership enforced — on every tier now
+        # (In Brief stories frame their movements from the menu like the rest).
+        wl = s.get("why_label")
+        if wl not in WHY_FRAMINGS:
+            raise ValueError(
+                f"story {n}: why_label {wl!r} not in the sanctioned menu"
+            )
+        xl = s.get("watch_label")
+        if xl not in WATCH_FRAMINGS:
+            raise ValueError(
+                f"story {n}: watch_label {xl!r} not in the sanctioned menu"
+            )
+        out["why_label"], out["watch_label"] = wl, xl
         my_read = s.get("my_read")
         if variant == "A":
             if isinstance(my_read, str) and my_read.strip():
@@ -661,14 +686,16 @@ def validate_narrative_payload(
             f"all {len(why_labels)} movement stories share one framing "
             f"({why_labels[0]!r}) — A7 wants varied rhythm [warn-only]"
         )
-    # A8 lead-depth pressure: a lead near slot-2 length is a flag.
+    # A8 lead-depth pressure: a lead near full-picture (slot-2) length is a flag.
+    # NL-63 M2: full-picture stories now run ~440 words, so the flag threshold
+    # rises with them — a doubled lead should clear ~440 comfortably.
     if clean and clean[0].get("tier") == "full":
         lead_words = len(_WORD_RE.findall(
             " ".join(v for v in clean[0].values() if isinstance(v, str))))
-        if lead_words <= 240:
+        if lead_words <= 440:
             warnings.append(
-                f"lead landed at {lead_words} words — near slot-2 length; A8 "
-                "wants the lead's why-movement built from source specifics"
+                f"lead landed at {lead_words} words — near full-picture length; "
+                "A8 wants the lead's why-movement built from source specifics"
             )
     return clean, warnings
 
@@ -691,18 +718,21 @@ def assemble_narrative(
         parts.append("")
         parts.append(st["lede"])
         parts.append("")
-        if st.get("tier") in ("full", "medium"):
+        # NL-63 M2: EVERY tier is a structured story now — the In Brief (quick)
+        # register carries its why/watch movements like the rest (the dead
+        # bare-lede snippet is gone). Guard on the field's presence so an
+        # archived edition's old headline-only quick story still renders clean.
+        if st.get("why_it_matters"):
             why_label = st.get("why_label") or "Why it matters"
-            watch_label = st.get("watch_label") or "Watch for"
             parts.append(f"**{why_label}:** {st['why_it_matters']}")
             if st.get("my_read"):
                 parts.append("")
                 parts.append(f"**My read:** {st['my_read']}")
             parts.append("")
-            parts.append(f"**{watch_label}:** {st['watch_for']}")
-            parts.append("")
-        # quick hits (A2): headline + the 1-3 sentence hit + trust furniture
-        # only — no movement structure.
+            if st.get("watch_for"):
+                watch_label = st.get("watch_label") or "Watch for"
+                parts.append(f"**{watch_label}:** {st['watch_for']}")
+                parts.append("")
         matches = ", ".join(
             [t["name"] for t in slot.get("matched_tags", [])]
             + slot.get("matched_memory", [])
@@ -751,19 +781,20 @@ def assemble_narrative(
 # ---------------------------------------------------------------------------
 
 def _script_budgets(n_slots: int, narrative_words: int) -> Tuple[int, str]:
-    """Script target scales with the NARRATIVE, not slot count alone: the
-    contract's bands (900-1300 written -> 1600-2000 spoken) imply ~1.5x, and
-    its own rule — "fewer or thinner stories = shorter episode; never pad" —
-    means a thin 3-story day must not demand a full-fat script (M5 live
-    finding: a 667-word narrative can't honestly fill 1,440 spoken words).
-    Segment guidance scales proportionally for the prompt."""
+    """Script target scales with the NARRATIVE, capped at the slot budget: the
+    podcast keeps its 1,600-2,000 spoken listening-time contract even though the
+    amended Today page doubled (NL-63 M2) — the min() below caps the episode at
+    slot_budget so a ~2,400-word narrative does NOT demand a 3,600-word script.
+    The 1.5x floor still binds thin days ("fewer or thinner stories = shorter
+    episode; never pad" — M5 live finding: a 667-word narrative can't honestly
+    fill 1,440 spoken words). Segment guidance scales proportionally."""
     slot_budget = SCRIPT_OPEN_WORDS + SCRIPT_OUTRO_WORDS + sum(
-        SCRIPT_SEGMENTS[i] for i in range(1, n_slots + 1)
+        script_segment(i) for i in range(1, n_slots + 1)
     )
     total = min(slot_budget, max(400, int(narrative_words * 1.5)))
     scale = total / slot_budget if slot_budget else 1.0
     desc = " · ".join(
-        f"slot {i}: ~{int(SCRIPT_SEGMENTS[i] * scale)}"
+        f"slot {i}: ~{int(script_segment(i) * scale)}"
         for i in range(1, n_slots + 1)
     )
     return total, desc
@@ -809,15 +840,13 @@ def trace_check_numerals(stories: List[Dict], inputs: Dict) -> List[str]:
 
 
 # P3.1 item 3 (principal ruling (5)): the lead's tier must EXPRESS.
-# Derivation of the floor: the contract's total is 900-1300 lead-weighted
-# and A2's lead band is 250-550; with two mediums at ~200 and two quicks at
-# ~60, a 900 low-end total implies a lead near 380 — but 250 is the band's
-# own minimum. The floor lands at 300: above the band minimum because a
-# valid <=700-word cited lead brief removes the thin-material excuse, a
-# third of the low-end total, and comfortably under the 550 ceiling.
-# Enforced hard-with-retry ONLY when a valid lead brief exists; thin days
-# without a brief stay warn-free (the material excuse is real there).
-LEAD_FLOOR_WORDS = 300
+# NL-63 M2 re-derivation under the AMENDED contract: the edition total is now
+# 1,800-2,500 lead-weighted and A2's lead band is 450-900; the lead target is
+# ~640. The floor lands at 450 — the band minimum, above a full-picture story's
+# ~440 so a briefed lead can never sink to full-picture length, and well under
+# the 900 ceiling. Enforced hard-with-retry ONLY when a valid lead brief exists;
+# thin days without a brief stay warn-free (the material excuse is real there).
+LEAD_FLOOR_WORDS = 450
 
 
 def _lead_words(payload: Dict) -> int:
@@ -1243,6 +1272,28 @@ def persist_generation(
         )
 
 
+def _fold_cost_steps(con: sqlite3.Connection, date: str,
+                     steps: List[Dict]) -> None:
+    """Append late-arriving steps (the post-persist memory pass) into the
+    briefing row's token_cost WITHOUT re-archiving — persist_generation already
+    published the edition; this only keeps the persisted cost total honest."""
+    if not steps:
+        return
+    with con:
+        row = con.execute("SELECT id, token_cost FROM briefings WHERE date = ?",
+                          (date,)).fetchone()
+        if row is None:
+            return
+        try:
+            tc = json.loads(row["token_cost"] or "{}")
+        except ValueError:
+            tc = {}
+        all_steps = (tc.get("steps") or []) + steps
+        total = round(sum(s.get("usd") or 0 for s in all_steps), 6)
+        con.execute("UPDATE briefings SET token_cost = ? WHERE id = ?",
+                    (json.dumps({"steps": all_steps, "total_usd": total}), row["id"]))
+
+
 def log_generation(entry: Dict) -> None:
     paths.DATA_DIR.mkdir(parents=True, exist_ok=True)
     log_path = paths.DATA_DIR / GENERATION_LOG_NAME
@@ -1438,9 +1489,10 @@ def _run_generate_body(
             doc = analysis_mod.latest_valid_brief(con, date, n)
             if doc:
                 briefs_by_slot[n] = doc
-    # M3 gate item 2: ONE derivation path for the slot-3 verdict — the
-    # persisted rows — so a demoted story stays quick on --no-refresh
-    # re-runs exactly as on the run that ruled it.
+    # NL-63 M2: slot 3 is pinned to full-picture (medium) — the demote-to-quick
+    # verdict is RETIRED (exactly-3 full-picture). analyst_slot3_tier is kept
+    # only as the inputs marker some paths still read; it no longer alters tiers
+    # or the deep-view ladder. deep_views reflects analyst-brief PRESENCE alone.
     analyst_slot3_tier = analysis_mod.analyst_slot3_tier(con, date)
     inputs["briefs_by_slot"] = briefs_by_slot
     inputs["analyst_slot3_tier"] = analyst_slot3_tier
@@ -1448,18 +1500,14 @@ def _run_generate_body(
         str(n): ("available" if briefs_by_slot.get(n) else "absent")
         for n in (1, 2, 3) if any(int(s["slot"]) == n for s in inputs["slots"])
     }
-    if analyst_slot3_tier == "quick":
-        report.deep_views["3"] = "demoted-quick"
     inputs["deep_views"] = report.deep_views  # assembler reads the ladder label
 
-    # --- Memory core (NL-63 M1): the delta ledger + standing state ---
-    # Runs on record-refreshing runs only (samples/--no-refresh never write the
-    # moat). Extracted into _run_memory_pass so the wiring is exercised by an
-    # OFFLINE liveness test (the state-rewrite model injected) — not only on a
-    # real network refresh.
-    if refresh and not no_threads:
-        spent = run_memory_pass(con, date, key, cap, spent, briefs_by_slot,
-                                inputs["slots"], report)
+    # NL-63 M1 gate F (orphan-delta reorder): the memory pass no longer runs
+    # HERE (before the narrative). Writing the ledger before the edition is
+    # persisted stranded delta entries citing an UNPUBLISHED edition whenever a
+    # narrative/script/audio failure raised after this point. The pass now runs
+    # AFTER persist_generation (below), so deltas are written only once the
+    # edition is on the record — see the memory block near the run's end.
 
     # --- Narrative pass ---
     n_prompt = build_narrative_prompt(date, report.variant, inputs)
@@ -1504,8 +1552,8 @@ def _run_generate_body(
             f"story 1 (the lead) ran {lead_w} words — its floor is "
             f"{LEAD_FLOOR_WORDS} when its analysis brief exists. The brief "
             "gives you a cited ledger, mechanism, effects, unknowns: write "
-            "the FULL lead (A2 band 250-550, lead-weighted total 900-1300); "
-            "slots 2+ keep their tiers.")
+            "the FULL lead (A2 band 450-900, lead-weighted edition total "
+            "1,800-2,500); slots 2+ keep their tiers.")
         retry_n_prompt = (n_prompt + "\n\n=== YOUR PREVIOUS DRAFT WAS "
                           "REJECTED — TIER-EXPRESSION VIOLATION (fix exactly "
                           "this; everything above still binds) ===\n- "
@@ -1646,7 +1694,6 @@ def _run_generate_body(
                 "met it)")
         stories, narrative_warnings = validate_narrative_payload(
             edited_payload, inputs["slots"], report.variant,
-            slots_ctx={"analyst_slot3_tier": inputs.get("analyst_slot3_tier")},
         )
         # BUG17 wiring (M3 gate 1a): the trace check runs on the EDITED
         # stories — an invented numeral the editor introduced (or kept)
@@ -1662,7 +1709,6 @@ def _run_generate_body(
             try:
                 stories, narrative_warnings = validate_narrative_payload(
                     draft_payload, inputs["slots"], report.variant,
-                    slots_ctx={"analyst_slot3_tier": inputs.get("analyst_slot3_tier")},
                 )
                 # BUG17 wiring, degrade path: the surviving DRAFT stories
                 # get the same trace check — both validation sites covered.
@@ -1681,7 +1727,10 @@ def _run_generate_body(
     report.per_story_words = [
         wc(" ".join(v for v in st.values() if isinstance(v, str))) for st in stories
     ]
-    TIER_BANDS = {"full": (250, 550), "medium": (100, 300), "quick": (15, 110)}
+    # NL-63 M2 amended registers (A2 warn guidance, ~2x the pre-amendment bands):
+    #   full = lead (doubled); medium = full-picture (doubled); quick = In Brief
+    #   (the OLD medium register — structured, NOT the dead <=60-word snippet).
+    TIER_BANDS = {"full": (450, 900), "medium": (200, 600), "quick": (100, 300)}
     for st, words in zip(stories, report.per_story_words):
         lo_t, hi_t = TIER_BANDS[st["tier"]]
         if not lo_t <= words <= hi_t:
@@ -1689,12 +1738,16 @@ def _run_generate_body(
                 f"{st['tier']} story {words} words — outside the "
                 f"{lo_t}-{hi_t} tier guidance (A2) [KNOB; warn-only]"
             )
-    lo, hi = NARRATIVE_BAND
-    scale = len(inputs["slots"]) / 5.0
-    if not (lo * scale * 0.7 <= report.narrative_words <= hi * 1.15):
+    # NL-63 M2: the edition band scales off the ACTUAL per-slot targets (lead
+    # 640 / full-picture 440 / In-Brief 220), not a fixed /5 divisor — so a 6-,
+    # 7-, or thin-day edition each warns against its own expected total. The
+    # NARRATIVE_BAND (1,800-2,500) is the canonical 6-7 story reference.
+    expected = sum(per_slot_words(int(s["slot"])) for s in inputs["slots"])
+    lo_band, hi_band = int(expected * 0.7), int(expected * 1.25)
+    if not (lo_band <= report.narrative_words <= hi_band):
         report.warnings.append(
             f"narrative {report.narrative_words} words — outside the "
-            f"~{int(lo * scale)}-{int(hi * max(scale, 0.4))} guidance band for "
+            f"~{lo_band}-{hi_band} guidance band for "
             f"{len(inputs['slots'])} slot(s) [KNOB; warn-only]"
         )
 
@@ -1870,6 +1923,39 @@ def _run_generate_body(
     if not report.sample:
         persist_generation(con, date, narrative, script, report.steps,
                            audio_path=audio_path_str)
+        # --- Memory core (NL-63 M1): the delta ledger + standing state ---
+        # M1 gate F (orphan-delta reorder): runs AFTER persist_generation so a
+        # delta is written ONLY once its edition is published — a narrative,
+        # script, or audio failure now aborts BEFORE any ledger write, never
+        # stranding an entry that cites an unpublished edition. Record-refreshing
+        # runs only (samples/--no-refresh never write the moat, and never reach
+        # this block). run_memory_pass appends the state-rewrite step to
+        # report.steps; fold that late spend into the persisted briefing cost so
+        # briefings.token_cost stays honest (the money-honesty rule).
+        if refresh and not no_threads:
+            steps_before = len(report.steps)
+            try:
+                spent = run_memory_pass(con, date, key, cap, spent, briefs_by_slot,
+                                        inputs["slots"], report)
+            except Exception as exc:  # noqa: BLE001 — post-persist containment
+                # BUG-34: the memory pass runs AFTER persist_generation (M1 gate
+                # F reorder) — the edition is already ON THE RECORD. A raise here
+                # must NOT crash a published edition. Disclose and contain: the
+                # run completes, the artifact + generation log below still write,
+                # and the moat is simply left unchanged for this run. (A failure
+                # BEFORE persist keeps its abort behavior — this catches only the
+                # post-persist window.)
+                report.warnings.append(
+                    f"memory pass failed after persist ({exc}) — the edition is "
+                    "already PUBLISHED and unaffected; its delta ledger / "
+                    "standing state were NOT updated this run (re-run to "
+                    "backfill the moat)")
+            finally:
+                # _fold_cost_steps stays honest for any PARTIAL state spend the
+                # pass recorded before raising (empty steps fold to nothing).
+                late_steps = report.steps[steps_before:]
+                if late_steps:
+                    _fold_cost_steps(con, date, late_steps)
     report.artifact_path = str(
         write_artifact(date, report.variant, report.sample, narrative, script,
                        no_threads=no_threads)

@@ -79,7 +79,29 @@ USER_AGENT = "NewsLens/0.1 (personal news briefing prototype; ranking)"
 RECENCY_CAP_DAYS = 14
 MAX_INPUT_ITEMS = 550       # most-recent cap so the prompt stays bounded
 MAX_CLUSTERS = 12
-MAX_SLOTS = 5
+# NL-63 M2 — the AMENDED slot contract (DECISIONS 2026-07-13): minimum SIX
+# stories surfaced, 6-7 by the day's material. MAX_SLOTS is the upper clamp;
+# SLOT_FLOOR is the floor a normal day should clear — a thinner day ships fewer
+# WITH a disclosure line, never padded to the floor (Rook's thin-day rule).
+MAX_SLOTS = 7
+SLOT_FLOOR = 6
+# The analyst-briefed FULL-PICTURE tier = the top 3 slots (1 lead + 2 medium).
+# EXACTLY three, and — the fragmentation contract — thread-DISTINCT (a causal
+# arc gets ONE prominent slot; siblings demote to In Brief).
+ANALYST_TIER_SLOTS = 3
+# Fragmentation (NL-61/62 item D): the tripwire flags a suspected same-event
+# FAMILY in the analyst tier when two of its slots share this many proper nouns
+# — Rook's deterministic check that catches a no-thread day-zero crisis the
+# thread cap can't (FLAGS for the day-14 read, never folds).
+TRIPWIRE_PROPER_NOUN_OVERLAP = 3
+# Quiet-thread demotion (NL-57): a tracked thread (has a ledger) re-covered
+# without new development yields its prominent slot. Content-novelty proxy —
+# max token-Jaccard of a candidate against the PRIOR edition's stories: at/above
+# ZERO it is the same story with nothing new (Following only); at/above SMALL it
+# has moved a notch (a still-tracking In Brief snippet); below, a real new
+# development (normal selection). Deterministic, code-owned (Remy's proxy).
+QUIET_ZERO_JACCARD = 0.60
+QUIET_SMALL_JACCARD = 0.35
 
 # Personal-impact weights (taxonomy contract §B rule 4 + §A followed_analyst).
 # Deliberately code constants, not env vars: tuning them is a reviewed diff.
@@ -141,6 +163,13 @@ class RankedSlot:
     # "Why it matters" movement (content contract §5.1) — persisted per slot
     # from this milestone on; older rows simply lack it (writer handles "").
     world_impact_reason: str = ""
+    # NL-57 quiet-thread demotion: a tracked thread re-covered with only a small
+    # development since the last edition surfaces as a demoted "still tracking"
+    # In-Brief snippet, never a prominent slot. The note carries the dated
+    # context ("no movement since <date>") from the ledger; the render composes
+    # the full still-tracking register (state + next fixed point) at read time.
+    still_tracking: bool = False
+    still_tracking_note: str = ""
 
 
 @dataclass
@@ -689,11 +718,183 @@ def _near_duplicate(a: Dict, b: Dict) -> bool:
     return len(ta & tb) / len(ta | tb) >= DEDUP_JACCARD
 
 
+_PROPER_NOUN_RE = re.compile(r"\b[A-Z][A-Za-z]{3,}\b")
+
+
+def _proper_nouns(cluster: Dict) -> frozenset:
+    """Distinctive proper-noun set of a cluster (title+summary) for Rook's
+    fragmentation tripwire — capitalized alphabetic tokens len>=4, minus the
+    dedupe stopwords. Deterministic, conservative (under-counts)."""
+    text = f"{cluster.get('story_title', '')} {cluster.get('summary', '')}"
+    return frozenset(
+        w.lower() for w in _PROPER_NOUN_RE.findall(text)
+        if w.lower() not in _DEDUP_STOPWORDS)
+
+
+def _thread_has_ledger(con: sqlite3.Connection, topic: str) -> bool:
+    from . import memory_core
+    tid = memory_core.resolve_thread_id(con, topic)
+    return tid is not None and bool(memory_core.ledger_for_thread(con, tid))
+
+
+def _still_tracking_note(con: sqlite3.Connection, tracked: List[str],
+                         prior_date: Optional[str]) -> str:
+    """The dated context for a quiet thread's still-tracking snippet — 'no
+    movement since <last ledger date>' (content §5.2's A8 teeth). The render
+    composes the full register (state + next fixed point) at read time."""
+    from . import memory_core
+    for topic in tracked:
+        tid = memory_core.resolve_thread_id(con, topic)
+        if tid is None:
+            continue
+        entries = memory_core.ledger_for_thread(con, tid)
+        if entries:
+            return f"no movement since {memory_core.human_date(entries[-1]['edition_date'])}"
+    return "still tracking"
+
+
+def _classify_quiet_threads(scored: List, con: sqlite3.Connection,
+                            prior_edition: Optional[Dict]) -> Dict[int, Tuple[str, str]]:
+    """NL-57 (item 3): a candidate that re-covers a TRACKED thread (one with a
+    ledger) without a new development is quiet. Content-novelty proxy: the
+    candidate's max token-Jaccard against the PRIOR edition's stories decides
+    the magnitude — >= QUIET_ZERO is the same story with nothing new (Following
+    only), >= QUIET_SMALL is a notch (a still-tracking In-Brief snippet), below
+    is a real development (normal). Returns id(cluster) -> (magnitude, note).
+    Empty when there is no prior edition (day-one / cold start)."""
+    out: Dict[int, Tuple[str, str]] = {}
+    prior_stories = (prior_edition or {}).get("stories") or []
+    prior_date = (prior_edition or {}).get("date")
+    prior_sigs = [ps for ps in (_sig_tokens(st) for st in prior_stories) if ps]
+    if not prior_sigs:
+        return out
+    for (c, _items, _f, _p, _comb) in scored:
+        tracked = [t for t in (c.get("matched_memory") or [])
+                   if _thread_has_ledger(con, t)]
+        if not tracked:
+            continue
+        cand = _sig_tokens(c)
+        if not cand:
+            continue
+        overlap = max(len(cand & ps) / len(cand | ps) for ps in prior_sigs)
+        if overlap >= QUIET_ZERO_JACCARD:
+            out[id(c)] = ("zero", _still_tracking_note(con, tracked, prior_date))
+        elif overlap >= QUIET_SMALL_JACCARD:
+            out[id(c)] = ("small", _still_tracking_note(con, tracked, prior_date))
+    return out
+
+
+def _apply_thread_cap(chosen: List,
+                      quiet: Dict[int, Tuple[str, str]]
+                      ) -> Tuple[List, List[Dict], List[Dict]]:
+    """Fragmentation contract (item 2) + quiet-small demotion (item 3): reorder
+    `chosen` (score order in) so the ANALYST tier (the top ANALYST_TIER_SLOTS
+    slots) is thread-DISTINCT — one prominent slot per causal arc — and carries
+    no still-tracking demotion. A same-arc sibling or a quiet-small candidate is
+    pushed below the analyst tier (into In Brief); nothing is dropped (Rook's
+    non-destructive rule — a wrongly capped sibling still appears, as a snippet).
+
+    Exhausted-pool edge (BUG-33): when fewer than ANALYST_TIER_SLOTS thread-
+    distinct/non-quiet entries exist, the leftover analyst-tier positions have
+    nothing distinct to fill them, so a demoted sibling positionally re-enters
+    the prominent tier. The one-slot-per-arc LAW is violated at that edge — this
+    makes it LOUD, not silent: the affected demotion records that it stayed
+    in-tier (never claiming a demotion its slot contradicts), and
+    `tier_underfilled` names every sibling that occupies an analyst slot.
+
+    Returns (reordered, demotions, tier_underfilled)."""
+    analyst_threads: set = set()
+    promoted, demoted = [], []
+    demotions: List[Dict] = []
+    demo_by_entry: Dict[int, Dict] = {}
+    for entry in chosen:                       # score order
+        c = entry[0]
+        threads = {t for t in (c.get("matched_memory") or []) if t}
+        is_quiet_small = quiet.get(id(c), (None,))[0] == "small"
+        collide = threads & analyst_threads
+        if (len(promoted) < ANALYST_TIER_SLOTS and not collide
+                and not is_quiet_small):
+            promoted.append(entry)
+            analyst_threads |= threads
+            continue
+        demoted.append(entry)
+        d = None
+        if collide:
+            d = {"story": c["story_title"],
+                 "reason": "same-arc sibling (fragmentation cap)",
+                 "threads": sorted(collide)}
+        elif is_quiet_small:
+            d = {"story": c["story_title"],
+                 "reason": "quiet thread (still-tracking)",
+                 "threads": sorted(threads)}
+        if d is not None:
+            demotions.append(d)
+            demo_by_entry[id(entry)] = d
+
+    reordered = promoted + demoted
+    # BUG-33: every analyst-tier position past the last genuinely-promoted slot
+    # is held by a demoted entry (the pool ran out of thread-distinct
+    # candidates) — disclose it, and correct that entry's demotion record so the
+    # log never claims a demotion the position contradicts.
+    tier_underfilled: List[Dict] = []
+    for pos, entry in enumerate(reordered[:ANALYST_TIER_SLOTS], start=1):
+        if pos <= len(promoted):
+            continue                           # a genuinely promoted, distinct slot
+        c = entry[0]
+        tier_underfilled.append({
+            "story": c["story_title"], "slot": pos,
+            "threads": sorted({t for t in (c.get("matched_memory") or []) if t})})
+        d = demo_by_entry.get(id(entry))
+        if d is not None:                      # honest: it did NOT leave the tier
+            d["in_tier_slot"] = pos
+            d["reason"] += (f" — pool exhausted, kept in analyst slot {pos} "
+                            "(no thread-distinct candidate to replace it)")
+    return reordered, demotions, tier_underfilled
+
+
+def _tripwire_families(analyst_entries: List) -> List[Dict]:
+    """Rook's fragmentation tripwire: FLAG (never fold) a suspected same-event
+    family in the analyst tier — two thread-distinct analyst slots sharing
+    >= TRIPWIRE_PROPER_NOUN_OVERLAP proper nouns are probably one arc the thread
+    cap couldn't see (a no-thread day-zero crisis). Data for the day-14 read."""
+    nouns = [(e[0]["story_title"], _proper_nouns(e[0])) for e in analyst_entries]
+    flags = []
+    for i in range(len(nouns)):
+        for j in range(i + 1, len(nouns)):
+            shared = nouns[i][1] & nouns[j][1]
+            if len(shared) >= TRIPWIRE_PROPER_NOUN_OVERLAP:
+                flags.append({"slots": [i + 1, j + 1],
+                              "stories": [nouns[i][0], nouns[j][0]],
+                              "shared": sorted(shared)})
+    return flags
+
+
+def _prior_edition(con: sqlite3.Connection, date: str) -> Optional[Dict]:
+    """The most recent edition BEFORE `date` (its selected stories), for NL-57's
+    content-novelty proxy. story_slots is the ranker's persisted selection — the
+    stories the reader last saw for this line. None on a first-ever edition."""
+    row = con.execute(
+        "SELECT date, story_slots FROM briefings WHERE date < ?"
+        " AND story_slots IS NOT NULL ORDER BY date DESC LIMIT 1", (date,)).fetchone()
+    if row is None:
+        return None
+    try:
+        slots = json.loads(row["story_slots"] or "[]")
+    except (ValueError, TypeError):
+        return None
+    stories = [{"story_title": s.get("story_title", ""),
+                "summary": s.get("summary", "")}
+               for s in slots if isinstance(s, dict)]
+    return {"date": row["date"], "stories": stories}
+
+
 def select_slots(
     clusters: List[Dict],
     items_by_id: Dict[int, sqlite3.Row],
     followed_outlets: set,
     memory_steers: bool = False,
+    con: Optional[sqlite3.Connection] = None,
+    prior_edition: Optional[Dict] = None,
 ) -> Tuple[List[RankedSlot], Dict]:
     scored = []
     for c in clusters:
@@ -702,11 +903,23 @@ def select_slots(
         p = personal_score(c, followed, memory_steers)
         scored.append((c, cluster_items, followed, p, combined_score(p, c["world_impact"])))
 
+    # NL-57 quiet-thread classification (item 3) — needs the ledger + the prior
+    # edition; without a DB it degrades to normal selection (test-friendly).
+    quiet = (_classify_quiet_threads(scored, con, prior_edition)
+             if con is not None else {})
+    quiet_zero = [
+        {"story": s[0]["story_title"], "note": quiet[id(s[0])][1]}
+        for s in scored if quiet.get(id(s[0]), (None,))[0] == "zero"
+    ]
+    # Quiet-ZERO candidates leave Today entirely (Following only — the thread
+    # stays visible in Following, it just does not re-surface as a story).
+    active = [s for s in scored if quiet.get(id(s[0]), (None,))[0] != "zero"]
+
     primaries = sorted(
-        (s for s in scored if s[3] > 0), key=lambda s: s[4], reverse=True
+        (s for s in active if s[3] > 0), key=lambda s: s[4], reverse=True
     )
     zero_pool = sorted(
-        (s for s in scored if s[3] == 0),
+        (s for s in active if s[3] == 0),
         key=lambda s: (s[0]["world_impact"], s[4]),
         reverse=True,
     )
@@ -751,11 +964,20 @@ def select_slots(
         deduped.sort(key=lambda s: s[4], reverse=True)
     chosen = deduped
 
+    # Fragmentation cap (item 2) + quiet-small demotion (item 3): the analyst
+    # tier becomes thread-distinct and still-tracking-free; siblings fall to In
+    # Brief. Then the tripwire reads the (thread-distinct) analyst tier for a
+    # no-thread family it could not catch.
+    chosen, cap_demotions, tier_underfilled = _apply_thread_cap(chosen, quiet)
+    family_flags = _tripwire_families(chosen[:ANALYST_TIER_SLOTS])
+
     slots: List[RankedSlot] = []
     for n, (c, cluster_items, followed, p, comb) in enumerate(chosen, start=1):
         count, label, wire_excluded, named = corroborate(cluster_items)
         is_override = override_pick is not None and c is override_pick[0]
         reason = c["world_impact_reason"].rstrip(".") + "."
+        q = quiet.get(id(c))
+        is_still = q is not None and q[0] == "small"
         slots.append(
             RankedSlot(
                 slot=n,
@@ -778,6 +1000,8 @@ def select_slots(
                 # carried through so persist() can apply earned-slot revival
                 matched_dormant=c.get("matched_dormant", []),
                 world_impact_reason=c["world_impact_reason"],
+                still_tracking=is_still,
+                still_tracking_note=(q[1] if is_still else ""),
             )
         )
     override_slot = next((s.slot for s in slots if s.override), None)
@@ -793,6 +1017,24 @@ def select_slots(
             "story": override_pick[0]["story_title"] if override_pick else None,
             "reason": override_pick[0]["world_impact_reason"] if override_pick else None,
             "slot": override_slot,
+        },
+        # NL-63 M2 selection-layer instrumentation (the day-14 read).
+        "slot_contract": {
+            "count": len(slots), "floor": SLOT_FLOOR, "max": MAX_SLOTS,
+            "analyst_tier": ANALYST_TIER_SLOTS,
+            "thin_day": len(slots) < SLOT_FLOOR,
+        },
+        "fragmentation": {
+            "demotions": cap_demotions,        # same-arc siblings + quiet demotes
+            "family_flags": family_flags,      # Rook's tripwire (flag, never fold)
+            # BUG-33: siblings that positionally occupy analyst slots because the
+            # thread-distinct pool was exhausted (one-slot-per-arc's edge case,
+            # disclosed not silent). Empty on any day with a full distinct tier.
+            "tier_underfilled": tier_underfilled,
+        },
+        "quiet_threads": {
+            "following_only": quiet_zero,       # zero-delta re-surfaces dropped
+            "still_tracking": [s.story_title for s in slots if s.still_tracking],
         },
         "weights": {
             "topic": TOPIC_WEIGHT, "domain": DOMAIN_WEIGHT, "memory": MEMORY_WEIGHT,
@@ -1086,6 +1328,7 @@ def _run_rank_body(
     slots, meta = select_slots(
         clusters, items_by_id, followed_outlets,
         memory_steers=cfg.threads_steer_selection,
+        con=con, prior_edition=_prior_edition(con, date),
     )
     meta["threads_steer_selection"] = cfg.threads_steer_selection
     meta["window"] = window
@@ -1121,6 +1364,44 @@ def _run_rank_body(
             f"slot-dup guard: collapsed {len(meta['dedup']['dropped'])} "
             f"near-duplicate selection(s) — {names}"
         )
+    # NL-63 M2 selection-layer disclosures (never silent; the day-14 read).
+    sc = meta.get("slot_contract") or {}
+    if sc.get("thin_day"):
+        report.warnings.append(
+            f"thin day: {sc['count']} slot(s) surfaced, under the {sc['floor']}-"
+            "story floor — shipped as-is, never padded to the floor "
+            "(the material wasn't there)")
+    frag = meta.get("fragmentation") or {}
+    for d in frag.get("demotions") or []:
+        if d.get("in_tier_slot"):
+            # BUG-33: this sibling did NOT leave the prominent tier — the
+            # under-fill line below tells that truth; a "demoted out" line here
+            # would contradict its own slot.
+            continue
+        report.warnings.append(
+            f"selection: {d['story']!r} demoted out of the prominent tier — "
+            f"{d['reason']} (threads: {', '.join(d['threads']) or 'none'})")
+    for u in frag.get("tier_underfilled") or []:
+        report.warnings.append(
+            f"selection: analyst tier under-filled — {u['story']!r} kept in "
+            f"analyst slot {u['slot']} despite sharing arc "
+            f"({', '.join(u['threads']) or 'none'}); fewer than "
+            f"{ANALYST_TIER_SLOTS} thread-distinct stories were available "
+            "(one-slot-per-arc violated at the edge — disclosed, not silent)")
+    for fl in frag.get("family_flags") or []:
+        report.warnings.append(
+            "fragmentation tripwire (FLAG, not folded): analyst slots "
+            f"{fl['slots']} share proper nouns {fl['shared']} — possible same "
+            f"event ({fl['stories'][0]!r} / {fl['stories'][1]!r}); day-14 read")
+    qt = meta.get("quiet_threads") or {}
+    for q in qt.get("following_only") or []:
+        report.warnings.append(
+            f"quiet thread: {q['story']!r} not surfaced on Today ({q['note']}) — "
+            "no new development; it stays visible under Following (NL-57)")
+    if qt.get("still_tracking"):
+        report.warnings.append(
+            "quiet thread: still-tracking snippet(s) for "
+            + ", ".join(repr(s) for s in qt["still_tracking"]) + " (NL-57)")
     if repair_sink.get("tag_shape_normalized"):
         report.warnings.append(
             f"tag-shape normalization: {repair_sink['tag_shape_normalized']} "

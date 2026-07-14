@@ -140,13 +140,17 @@ def _memory_readout(entries: List[Dict]) -> List[str]:
                     reverting += 1
             out.append(f"  reversion risk: {reverting} thread(s) whose ledger "
                        "currently fails integrity (would show a bare citation line)")
-            # arc-eligible: >=1 prior entry means an arc CAN render when today
-            # moves the thread (the kill-test then decides per story at render).
+            # arc-eligible (M1 gate F, comment/code aligned): a thread with >=2
+            # ledger entries carries >=1 entry PRIOR to its latest, so an arc CAN
+            # render on some edition (the kill-test then decides per story at
+            # render). The metric counts >=2-entry threads; the first entry of
+            # any thread has no prior and can never front an arc.
             eligible = sum(1 for tid in thread_ids
                            if len(memory_core.ledger_for_thread(con, tid)) >= 2)
-            out.append(f"  arc-eligible: {eligible} thread(s) carry >=1 prior "
-                       "entry — kill-test suppressions are a render-time measure "
-                       "(the arc line suppresses per story), counted at read time")
+            out.append(f"  arc-eligible: {eligible} thread(s) carry >=2 entries "
+                       "(>=1 prior to the latest) — kill-test suppressions are a "
+                       "render-time measure (the arc line suppresses per story), "
+                       "counted at read time")
         try:
             srows = con.execute(
                 "SELECT COUNT(*) n, COUNT(DISTINCT thread_id) t,"

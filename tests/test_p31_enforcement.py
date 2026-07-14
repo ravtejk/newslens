@@ -95,9 +95,10 @@ def violating_script(slots):
             + "\n\n" + para_a + "\n\n" + para_b)
 
 
-def payload_with_lead_words(slots, sentinel, n_repeats=32):
+def payload_with_lead_words(slots, sentinel, n_repeats=50):
     """stories_payload with story 1's lede padded past LEAD_FLOOR_WORDS
-    using numeral-free, hedge-free filler + a unique sentinel sentence."""
+    using numeral-free, hedge-free filler + a unique sentinel sentence.
+    n_repeats=50 (~450 filler words) clears the NL-63 M2 floor of 450."""
     payload = copy.deepcopy(stories_payload(slots))
     filler = "The analysis continues with sourced detail and measured context. "
     payload["stories"][0]["lede"] += " " + filler * n_repeats + sentinel

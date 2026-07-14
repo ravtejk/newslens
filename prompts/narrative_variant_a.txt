@@ -99,18 +99,19 @@ CONTINUITY RULES:
   SILENTLY: never quote or paraphrase a note back to the reader — simply
   lead with the angle the note asks for.
 
-TIERED STRUCTURE (the shape of the briefing — propose a tier per story):
-- Story 1 is always tier "full": the lead. Real depth and the dominant share
-  of the budget — expanded why-it-matters (5-8 sentences), full movements.
-  ~350-450 words.
-- Story 2 is tier "medium" (story 3 may be "medium" too when its importance
-  genuinely warrants; otherwise "quick"): tight three movements, ~150-220
+TIERED STRUCTURE (each story's tier is FIXED by its position — given to you
+below; write to it, do not choose your own):
+- Story 1 is tier "full": the lead. Real depth and the dominant share of the
+  budget — expanded why-it-matters (8-12 sentences), full movements. ~550-750
   words.
-- Every remaining story is tier "quick": headline + 1-3 sentences of
-  what-happened-and-why-it-matters in the lede field ONLY — no
-  why_it_matters, no watch_for, no movement structure. ~40-80 words.
-Total stays ~900-1,300 words on a five-story day — allocation is lead-heavy,
-never even.
+- Stories 2 and 3 are tier "medium": the two full-picture stories. Real depth,
+  all three movements, ~350-500 words each.
+- Every remaining story is tier "quick" — the "In Brief" register: a compact
+  but fully STRUCTURED mini-story. It carries all three movements (lede,
+  why_it_matters, watch_for), just tighter than a full-picture story. ~180-260
+  words. This is NOT a headline snippet — never a bare lede.
+Total ~1,800-2,500 words on a six-to-seven-story day — allocation is
+lead-heavy, never even.
 
 STORY MECHANICS:
 - headline: 12 words or fewer, declarative sentence case, carries the actual
@@ -119,8 +120,8 @@ STORY MECHANICS:
   or the prior briefing. If the story is single-outlet (corroboration data
   says so), NAME the outlet inside the lede prose ("— reported so far only
   by the FT"). Developing/unconfirmed status is stated here, not buried.
-- FRAMING (A7): for each full/medium story, CHOOSE the second movement's
-  framing from this menu to fit the story's nature — "Why it matters",
+- FRAMING (A7): for EVERY story (In Brief included), CHOOSE the second
+  movement's framing from this menu to fit the story's nature — "Why it matters",
   "Why markets care", "The debate", "What's unknown", "The background",
   "The stakes", "What changed" — and the third movement's from: "Watch for",
   "What happens next", "The next test", "What would change this". Declare
@@ -146,9 +147,9 @@ STORY MECHANICS:
 - watch_for: 1–2 sentences of concrete, TIME-BOUND observables that would
   settle the analysis above ("If the vote slips past Friday, the coalition
   version of this story is dead"). Never vague.
-- Respect each story's sentence budgets (given per story below). Slot 5
-  differs from slot 1 by compression, not by kind — every story gets all
-  three movements with real analysis.
+- Respect each story's sentence budgets (given per story below). An In Brief
+  story differs from the lead by compression, not by kind — every story gets
+  all three movements with real analysis.
 - Do NOT write: story meta-lines, corroboration counts, override labels,
   footers, scores, or the at-a-glance list — the pipeline assembles those
   deterministically. Never mention numeric scores.
@@ -156,7 +157,8 @@ STORY MECHANICS:
   lede may acknowledge that naturally ("Off your usual map, but:") — the
   pipeline still renders its own label above your text.
 
-OUTPUT — one JSON object, nothing else:
+OUTPUT — one JSON object, nothing else. EVERY story carries all four prose
+fields and both labels — the "quick" (In Brief) entry too:
 {{"stories": [
   {{"tier": "full", "headline": "...", "lede": "...",
     "why_label": "<from the menu>", "why_it_matters": "...",
@@ -164,12 +166,13 @@ OUTPUT — one JSON object, nothing else:
   {{"tier": "medium", "headline": "...", "lede": "...",
     "why_label": "...", "why_it_matters": "...",
     "watch_label": "...", "watch_for": "..."}},
-  {{"tier": "quick", "headline": "...", "lede": "<the 1-3 sentence hit>"}}
+  {{"tier": "quick", "headline": "...", "lede": "...",
+    "why_label": "...", "why_it_matters": "...",
+    "watch_label": "...", "watch_for": "..."}}
 ]}}
-Exactly one entry per story below, in the same order. Story 1 must be
-"full"; story 2 "medium"; story 3 "medium" or "quick" (your judgment on its
-importance); stories 4+ "quick". Quick entries carry NO why_it_matters and
-NO watch_for.
+Exactly one entry per story below, in the same order. Story 1 must be "full";
+stories 2 and 3 "medium"; stories 4+ "quick". Every entry — quick included —
+carries a lede, why_it_matters, watch_for, and both framing labels.
 
 === THE READER'S TAGS (relevance map; also the do-not-explain map) ===
 {tags_block}

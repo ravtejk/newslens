@@ -55,7 +55,11 @@ def test_followed_boost_constant_is_bounded_below_topic_weight():
     assert ranking.PERSONAL_SHARE == 0.55
     assert ranking.RECENCY_CAP_DAYS == 14
     assert ranking.OVERRIDE_THRESHOLD == 8
-    assert ranking.MAX_SLOTS == 5
+    # NL-63 M2 amended slot contract: 6-7 stories (min-6 floor, 7 max), 3
+    # analyst full-picture slots.
+    assert ranking.MAX_SLOTS == 7
+    assert ranking.SLOT_FLOOR == 6
+    assert ranking.ANALYST_TIER_SLOTS == 3
 
 
 def test_followed_only_at_world_10_loses_to_topic_match_at_world_3():
@@ -74,19 +78,21 @@ def test_followed_only_at_world_10_loses_to_topic_match_at_world_3():
 
 
 def test_followed_content_never_gets_a_guaranteed_slot():
-    """Five stronger topic clusters fill the budget; the followed-only cluster
-    is simply outranked — no followed=>slot branch exists to rescue it."""
+    """Seven stronger topic clusters fill the budget (MAX_SLOTS=7); the
+    followed-only cluster is simply outranked — no followed=>slot branch exists
+    to rescue it."""
     titles = ["Fed rate decision", "Chip export rules", "Grain corridor talks",
-              "Court docket shakeup", "Energy grid strain"]
+              "Court docket shakeup", "Energy grid strain", "Housing bill vote",
+              "Trade pact clause", "Water rights suit"]
     clusters = [
-        cluster([i], title=titles[i - 1], tags=TOPIC, impact=4 + i)
-        for i in range(1, 6)
+        cluster([i], title=titles[i - 1], tags=TOPIC, impact=1 + i)
+        for i in range(1, 9)
     ]
     clusters.append(cluster([9], title="Followed only", impact=10))
-    items = {i: item(i, f"Outlet {i}") for i in range(1, 6)}
+    items = {i: item(i, f"Outlet {i}") for i in range(1, 9)}
     items[9] = item(9, "Followed Blog")
     slots, _ = ranking.select_slots(clusters, items, followed_outlets={"Followed Blog"})
-    assert len(slots) == 5
+    assert len(slots) == 7  # the 7 strongest topic clusters
     assert all(s.story_title != "Followed only" for s in slots)
 
 
@@ -209,18 +215,19 @@ def test_override_label_carries_prefix_and_reason_and_only_on_the_override():
     assert all(s.override_label is None for s in slots if not s.override)
 
 
-def test_override_consumes_one_of_the_five_slots():
+def test_override_consumes_one_of_the_seven_slots():
     titles = ["Fed rate decision", "Chip export rules", "Grain corridor talks",
-              "Court docket shakeup", "Energy grid strain", "Housing bill vote"]
+              "Court docket shakeup", "Energy grid strain", "Housing bill vote",
+              "Trade pact clause", "Water rights suit"]
     clusters = [
         cluster([i], title=titles[i - 1], tags=TOPIC, impact=5)
-        for i in range(1, 7)
+        for i in range(1, 9)
     ]
     clusters.append(cluster([9], title="Zero 9", impact=9))
-    items = {i: item(i, f"O{i}") for i in list(range(1, 7)) + [9]}
+    items = {i: item(i, f"O{i}") for i in list(range(1, 9)) + [9]}
     slots, _ = ranking.select_slots(clusters, items, set())
-    assert len(slots) == 5
-    assert sum(1 for s in slots if s.override) == 1  # 4 primaries + 1 override
+    assert len(slots) == 7
+    assert sum(1 for s in slots if s.override) == 1  # 6 primaries + 1 override
 
 
 # --- corroboration ----------------------------------------------------------------------

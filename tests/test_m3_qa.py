@@ -217,35 +217,36 @@ def test_analyst_medium_verdict_rejects_a_quick_payload():
     payload = stories_payload(slots)
     payload["stories"][2]["tier"] = "quick"
     with pytest.raises(ValueError, match="tier 'quick' not allowed"):
-        generate.validate_narrative_payload(
-            payload, slots, "A", slots_ctx={"analyst_slot3_tier": "medium"})
+        generate.validate_narrative_payload(payload, slots, "A")
 
 
-@pytest.mark.parametrize("tier3", ["medium", "quick"])
-def test_no_verdict_leaves_slot3_to_the_model(tier3):
+def test_slot3_is_pinned_to_full_picture_medium():
+    """NL-63 M2: slot 3 is one of the EXACTLY-3 full-picture stories — always
+    'medium'. The old analyst medium-vs-quick demotion is RETIRED (a demoted
+    slot 3 would leave only 2 full-picture stories); 'quick' at slot 3 is
+    rejected."""
     slots = [slot(1), slot(2), slot(3)]
     payload = stories_payload(slots)
-    if tier3 == "quick":
-        # A2 quick shape: no why_it_matters — borrow the canonical quick
-        # entry from a 4-slot payload, keep story 3's headline
-        q = stories_payload([slot(1), slot(2), slot(3), slot(4)])["stories"][3]
-        payload["stories"][2] = {**q,
-                                 "headline": payload["stories"][2]["headline"]}
-    payload["stories"][2]["tier"] = tier3
-    stories, _ = generate.validate_narrative_payload(payload, slots, "A",
-                                                     slots_ctx=None)
-    assert stories[2]["tier"] == tier3
+    stories, _ = generate.validate_narrative_payload(payload, slots, "A")
+    assert stories[2]["tier"] == "medium"
+    demoted = stories_payload(slots)
+    demoted["stories"][2]["tier"] = "quick"
+    with pytest.raises(ValueError) as excinfo:
+        generate.validate_narrative_payload(demoted, slots, "A")
+    assert "tier 'quick' not allowed at this position" in str(excinfo.value)
 
 
-def test_binding_line_renders_under_story_3_only():
+def test_slot3_carries_no_analyst_tier_binding_line():
+    """NL-63 M2: with slot 3 pinned to full-picture, the old 'TIER RULED BY THE
+    ANALYST' prompt line is gone — the budget line already states MEDIUM."""
     slots = [slot(1), slot(2), slot(3)]
     inputs = _inputs_for(slots)
     inputs["briefs_by_slot"] = {}
     inputs["analyst_slot3_tier"] = "medium"
     prompt = generate.build_narrative_prompt(DATE, "A", inputs)
+    assert "TIER RULED BY THE ANALYST" not in prompt
     s3 = prompt.split("STORY 3 —", 1)[1]
-    assert "TIER RULED BY THE ANALYST: medium" in s3
-    assert prompt.count("TIER RULED BY THE ANALYST") == 1
+    assert "MEDIUM tier" in s3
 
 
 def test_ladder_label_string_slot_sweep():
@@ -1000,9 +1001,9 @@ def test_analyst_slot3_tier_newest_row_wins_across_all_three_states(tmp_paths):
 
 def test_recut_fresh_run_binds_medium_from_a_persisted_valid_slot3_brief(
         tmp_paths, fake_chat, monkeypatch):
-    """The RE-CUT of my flipped wiring pin, against the real shape: the
-    verdict is read back from PERSISTED rows, so a valid slot-3 brief —
-    not a report row — is what binds the writer to medium."""
+    """NL-63 M2: a valid slot-3 brief renders slot 3 as a full-picture (medium)
+    deep-view — the verdict is read back from PERSISTED rows. The old 'TIER
+    RULED BY THE ANALYST' line is gone (slot 3 is always full-picture)."""
     db.migrate()
     con = db.connect()
     try:
@@ -1017,20 +1018,19 @@ def test_recut_fresh_run_binds_medium_from_a_persisted_valid_slot3_brief(
         rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
                                     refresh=True)
         prompt = fake_chat.calls[0]["prompt"]
-        assert "TIER RULED BY THE ANALYST: medium" in prompt
+        assert "TIER RULED BY THE ANALYST" not in prompt
         assert rep.deep_views == {"1": "available", "2": "absent",
                                   "3": "available"}
     finally:
         con.close()
 
 
-def test_recut_no_refresh_run_binds_quick_from_the_persisted_verdict_row(
+def test_recut_no_refresh_run_pins_slot3_medium_despite_a_stale_quick_verdict(
         tmp_paths, fake_chat, monkeypatch):
-    """The other re-cut half: a persisted demoted-quick VERDICT row rules
-    the writer on a --no-refresh re-run — the exact consistency gap my
-    M3 pass flagged, now closed. Analysis stays provably cold; the A2
-    validation accepts only quick for slot 3; deep_views carries the
-    demotion for Axel's readout."""
+    """NL-63 M2: the demote-to-quick verdict is RETIRED. Even a persisted
+    demoted-quick verdict row no longer renders slot 3 as quick — slot 3 is
+    pinned to full-picture (exactly-3), so a quick slot-3 draft is REJECTED and
+    deep_views never carries a 'demoted-quick' label."""
     db.migrate()
     con = db.connect()
     try:
@@ -1046,17 +1046,88 @@ def test_recut_no_refresh_run_binds_quick_from_the_persisted_verdict_row(
             raise AssertionError("run_analysis called on --no-refresh")
 
         monkeypatch.setattr(analysis, "run_analysis", sentinel)
+        # A quick slot-3 draft is now a validation error (a dead run, disclosed).
         payload = stories_payload(slots)
-        q = stories_payload([slot(1), slot(2), slot(3), slot(4)])["stories"][3]
-        payload["stories"][2] = {**q,
-                                 "headline": payload["stories"][2]["headline"],
-                                 "tier": "quick"}
+        payload["stories"][2]["tier"] = "quick"
         fake_chat.narrative = payload
         fake_chat.script = compliant_script(slots)
+        with pytest.raises(generate.GenerateError) as excinfo:
+            generate.run_generate(date=DATE, con=con, env=dict(ENV),
+                                  refresh=False)
+        assert "tier 'quick' not allowed at this position" in str(excinfo.value)
+        # And a well-formed medium slot-3 draft renders with NO demoted-quick label.
+        fake_chat.narrative = stories_payload(slots)
         rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
                                     refresh=False)
-        prompt = fake_chat.calls[0]["prompt"]
-        assert "TIER RULED BY THE ANALYST: quick" in prompt
-        assert rep.deep_views["3"] == "demoted-quick"
+        assert rep.deep_views.get("3") != "demoted-quick"
+    finally:
+        con.close()
+
+
+# --- NL-63 M2 item 4b: the orphan-delta reorder ------------------------------
+
+def test_memory_pass_runs_after_persist_generation(tmp_paths, fake_chat, monkeypatch):
+    """NL-63 M2 orphan-delta reorder: the memory pass writes the ledger only
+    AFTER persist_generation publishes the edition — proven by call order."""
+    db.migrate()
+    con = db.connect()
+    try:
+        slots = _stage_fakes(monkeypatch)
+        persist_valid(con)
+        fake_chat.narrative = stories_payload(slots)
+        fake_chat.script = compliant_script(slots)
+        order = []
+        real_persist, real_memory = generate.persist_generation, generate.run_memory_pass
+        monkeypatch.setattr(generate, "persist_generation",
+                            lambda *a, **k: (order.append("persist"), real_persist(*a, **k))[1])
+        monkeypatch.setattr(generate, "run_memory_pass",
+                            lambda *a, **k: (order.append("memory"), real_memory(*a, **k))[1])
+        generate.run_generate(date=DATE, con=con, env=dict(ENV), refresh=True)
+        assert order == ["persist", "memory"]        # persist FIRST, then the ledger
+    finally:
+        con.close()
+
+
+def test_a_pre_persist_failure_strands_no_delta(tmp_paths, fake_chat, monkeypatch):
+    """The reorder's payoff: a narrative/script failure aborts BEFORE the memory
+    pass, so a thread that WOULD have moved leaves no orphan delta citing an
+    unpublished edition (under the old ordering this stranded one)."""
+    from newslens import ingest as ingest_mod, ranking
+    db.migrate()
+    con = db.connect()
+    try:
+        now = "2026-07-01T00:00:00.000Z"
+        con.execute("INSERT INTO memory (topic, status, status_changed_at,"
+                    " created_at, updated_at) VALUES ('TestThread','active',?,?,?)",
+                    (now, now, now))
+        con.commit()
+
+        def fake_ingest(con=None, env=None, **kw):
+            r = type("R", (), {})()
+            r.succeeded, r.attempted, r.items_new = ["A"], 1, 3
+            r.discovery_status, r.degradation_message = "not attempted", None
+            return r
+
+        def fake_rank(date=None, con=None, env=None, **kw):
+            s1 = slot(1, mem=("TestThread",))
+            seed_briefing(con, date, [s1, slot(2), slot(3)])
+            r = type("R", (), {})()
+            r.warnings = []
+            return r
+
+        monkeypatch.setattr(ingest_mod, "run_ingest", fake_ingest)
+        monkeypatch.setattr(ranking, "run_rank", fake_rank)
+        monkeypatch.setattr(analysis, "run_analysis", lambda **kw: canned_report())
+        paths.SOURCES_FILE.write_text(
+            "sources:\n  - name: The Hill\n    rss_url: https://x.example/f\n"
+            "interests:\n  tags:\n    - AI regulation\n", encoding="utf-8")
+        # slot 1 carries an advancing arc that WOULD write a delta for TestThread
+        persist_valid(con, slot_no=1, with_arc=True)
+        fake_chat.narrative = stories_payload([slot(1, mem=("TestThread",)),
+                                               slot(2), slot(3)])
+        fake_chat.script = "too short"           # fails the script floor -> abort
+        with pytest.raises(generate.GenerateError):
+            generate.run_generate(date=DATE, con=con, env=dict(ENV), refresh=True)
+        assert con.execute("SELECT COUNT(*) c FROM thread_deltas").fetchone()["c"] == 0
     finally:
         con.close()

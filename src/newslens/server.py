@@ -330,7 +330,11 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
         "SELECT m.*, b.date AS ref_date FROM memory m LEFT JOIN briefings b"
         " ON b.id = m.last_referenced_briefing_id ORDER BY m.id"
     ).fetchall()
-    cutoff = (datetime.now(timezone.utc)
+    # Obs 7: the developing-window cutoff must share the LOCAL clock that
+    # briefing dates are stamped in (ranking.local_today, i.e. datetime.now()
+    # below) — a UTC cutoff here skewed the "developing" dot by a day across the
+    # UTC/local boundary. `today` was already local; now both agree.
+    cutoff = (datetime.now()
               - timedelta(days=DEVELOPING_WINDOW_DAYS)).strftime("%Y-%m-%d")
     today = datetime.now().strftime("%Y-%m-%d")
     grouped: Dict[str, List[Dict]] = {"active": [], "dormant": [],
@@ -605,14 +609,22 @@ def _js_str(v: str) -> str:
     return json.dumps(str(v or ""))
 
 
-def _today_arc_html(con, slot: Dict, st: Dict, date: str) -> str:
+def _today_arc_html(con, slot: Dict, st: Dict, date: str,
+                    seen: Optional[set] = None) -> str:
     """NL-63 item 4: the then -> now -> difference continuity line under the
     lead, gated by Sten's kill-test AS CODE (renders ONLY when it carries a
     dated past fact absent from today's story) and Kass's reversion law AS CODE
     (a ledger-integrity failure shows a bare citation line, disclosed). Day-one
     threads get NO arc, ever. Deterministic — no LLM, computed from the ledger.
     The kill-test runs against today's RENDERED story text (headline + lede +
-    movements)."""
+    movements).
+
+    BUG-35: `seen` is the caller's per-EDITION dedup set. On a sanctioned-split
+    day (two same-thread slots in one edition) the ledger composes the IDENTICAL
+    arc text for both — the prominent (earliest-rendered) slot wins and the
+    sibling suppresses its duplicate. The per-story kill-test is unchanged (it
+    runs above, against each story's own text); this dedups only the rendered
+    line. Passed None (standalone) it falls back to a per-slot set."""
     if con is None or not _is_calendar_date(date):
         return ""
     from . import memory_core
@@ -620,7 +632,14 @@ def _today_arc_html(con, slot: Dict, st: Dict, date: str) -> str:
         [st.get("headline", ""), st.get("lede", "")]
         + [m.get("text", "") for m in (st.get("movements") or [])
            if isinstance(m, dict)])
-    seen: set = set()
+    # NL-60 never-a-dead-link law (M1 gate F): the arc line's prior-edition link
+    # must point at an edition that EXISTS. A seeded ledger (the A′ Hormuz seed)
+    # or a corrupt date can cite an edition with no briefing row; rendering a
+    # link to it is a dead link. Guard on real briefing rows, exactly as the
+    # deep-view timeline does.
+    have_edition = {r["date"] for r in con.execute("SELECT date FROM briefings")}
+    if seen is None:                           # standalone: per-slot fallback
+        seen = set()
     out: List[str] = []
     for topic in slot.get("matched_memory") or []:
         tid = memory_core.resolve_thread_id(con, topic)
@@ -631,7 +650,8 @@ def _today_arc_html(con, slot: Dict, st: Dict, date: str) -> str:
             continue
         seen.add(arc.text)
         link = ""
-        if arc.prior_date and _is_calendar_date(arc.prior_date):
+        if arc.prior_date and _is_calendar_date(arc.prior_date) \
+                and arc.prior_date in have_edition:
             link = (
                 f' <a class="today-arc-link" '
                 f'href={_e_attr("/?date=" + arc.prior_date)} '
@@ -647,7 +667,8 @@ def _today_arc_html(con, slot: Dict, st: Dict, date: str) -> str:
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   active_topics: set, has_file: bool = False,
                   slug: Optional[str] = None, date: str = "",
-                  deep_return: str = "view-today", con=None) -> str:
+                  deep_return: str = "view-today", con=None,
+                  arc_seen: Optional[set] = None) -> str:
     slug = slug or f"story-{i}"
     h = {"full": "h2", "medium": "h3"}.get(tier, "h4")
     parts = [f'<article class="story{" quick-hit" if tier == "quick" else ""}" id="{_e(slug)}">']
@@ -678,7 +699,7 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
 
     if st.get("lede"):
         parts.append(f'<p class="lede">{_e(st["lede"])}</p>')
-    arc_html = _today_arc_html(con, slot, st, date)
+    arc_html = _today_arc_html(con, slot, st, date, arc_seen)
     if arc_html:
         parts.append(arc_html)
     for mv in st.get("movements") or []:
@@ -840,13 +861,17 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     active = _active_topics_lower(con)
 
     html = []
+    # BUG-35: one dedup set per EDITION — a same-thread arc line renders under
+    # its most prominent (earliest) slot only; a split-day sibling suppresses
+    # the identical continuity paragraph.
+    arc_seen: set = set()
     for i, st in enumerate(stories):
         slot = slots[i] if i < len(slots) else {}
         tier = tiers[i] if i < len(tiers) else ("full" if i == 0 else "medium" if i <= 2 else "quick")
         html.append(_render_story(
             i, st, slot, tier, active, has_file=(i + 1) in (briefs or {}),
             slug=f"{slug_prefix}story-{i}", date=row["date"],
-            deep_return=deep_return, con=con))
+            deep_return=deep_return, con=con, arc_seen=arc_seen))
 
     # Footer disclosure (addendum #3): quiet line; window/caveat/cost a tap
     # away. Ids are slug_prefix-scoped so Today's footer and an open archive
@@ -989,8 +1014,12 @@ def _thread_state_card(t: Dict) -> str:
     dossier. The state carries a stale-but-honest 'as of <date>' when it is
     older than the last delta; a thread with no state yet shows just the last
     delta. Structure now; v7 visual styling refines after sight-approval."""
-    from . import memory_core
-    today = datetime.now().strftime("%Y-%m-%d")
+    from . import memory_core, ranking
+    # M1 gate F: derive "today" from the SAME clock that mints edition dates
+    # (ranking.local_today) — an ad-hoc datetime.now() here risked a local-vs-UTC
+    # split with the as_of_date it compares against, mislabeling a fresh state
+    # stale (or the reverse) across a midnight boundary.
+    today = ranking.local_today()
     bits: List[str] = []
     state_text = t.get("state_text") or ""
     as_of = t.get("state_as_of") or ""

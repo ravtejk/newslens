@@ -63,25 +63,31 @@ def test_briefed_story_material_is_the_writer_view_not_excerpts(tmp_paths):
     con.close()
 
 
-def test_slot3_tier_ruled_by_analyst_binds_validation(tmp_paths):
+def test_slot3_is_pinned_full_picture_medium(tmp_paths):
+    """NL-63 M2: slot 3 is one of the exactly-3 full-picture stories — pinned to
+    'medium'. No 'TIER RULED BY THE ANALYST' line; a medium slot-3 is accepted,
+    a quick slot-3 is rejected (the demote-to-quick path is retired)."""
     db.migrate()
     con = db.connect()
     _seed(con, with_brief=False)
     inputs = generate.load_briefing_inputs(con, DATE)
     inputs["briefs_by_slot"] = {}
-    inputs["analyst_slot3_tier"] = "quick"
+    inputs["analyst_slot3_tier"] = None
     prompt = generate.build_narrative_prompt(DATE, "A", inputs)
-    assert "TIER RULED BY THE ANALYST: quick" in prompt
+    assert "TIER RULED BY THE ANALYST" not in prompt
     base = {"lede": "L", "why_it_matters": "W", "watch_for": "X",
             "why_label": "Why it matters", "watch_label": "Watch for"}
-    stories = [{**base, "tier": "full", "headline": "H1 one two"},
-               {**base, "tier": "medium", "headline": "H2 one two"},
-               {**base, "tier": "medium", "headline": "H3 one two"}]
+    ok = [{**base, "tier": "full", "headline": "H1 one two"},
+          {**base, "tier": "medium", "headline": "H2 one two"},
+          {**base, "tier": "medium", "headline": "H3 one two"}]
+    stories, _ = generate.validate_narrative_payload(
+        {"stories": ok}, inputs["slots"], "A")
+    assert stories[2]["tier"] == "medium"
     import pytest
-    with pytest.raises(ValueError, match="tier 'medium' not allowed"):
+    bad = [dict(ok[0]), dict(ok[1]), {**base, "tier": "quick", "headline": "H3 one two"}]
+    with pytest.raises(ValueError, match="tier 'quick' not allowed"):
         generate.validate_narrative_payload(
-            {"stories": stories}, inputs["slots"], "A",
-            slots_ctx={"analyst_slot3_tier": "quick"})
+            {"stories": bad}, inputs["slots"], "A")
     con.close()
 
 

@@ -116,15 +116,16 @@ def stories_payload(slots, variant="A", lede_extra="", my_read=None):
             "headline": f"Rewritten headline {s['slot']}",
             "lede": lede + (lede_extra or ""),
         }
-        if tier != "quick":  # A2: movement fields on a quick hit are an ERROR
-            story["why_it_matters"] = (
-                "It matters because of concrete effects on the reader's interests."
-            )
-            story["watch_for"] = "Watch the next scheduled decision."
-            # A7: declared framings, sanctioned-menu members (varied to keep
-            # the all-one-rhythm warn out of unrelated tests).
-            story["why_label"] = generate.WHY_FRAMINGS[(i - 1) % len(generate.WHY_FRAMINGS)]
-            story["watch_label"] = generate.WATCH_FRAMINGS[(i - 1) % len(generate.WATCH_FRAMINGS)]
+        # NL-63 M2 amended contract: EVERY story (In Brief/quick included) is a
+        # structured mini-story carrying all four prose fields and both labels.
+        story["why_it_matters"] = (
+            "It matters because of concrete effects on the reader's interests."
+        )
+        story["watch_for"] = "Watch the next scheduled decision."
+        # A7: declared framings, sanctioned-menu members (varied to keep
+        # the all-one-rhythm warn out of unrelated tests).
+        story["why_label"] = generate.WHY_FRAMINGS[(i - 1) % len(generate.WHY_FRAMINGS)]
+        story["watch_label"] = generate.WATCH_FRAMINGS[(i - 1) % len(generate.WATCH_FRAMINGS)]
         if my_read is not None and variant == "B":
             story["my_read"] = my_read
         stories.append(story)
@@ -150,9 +151,18 @@ def compliant_script(slots, narrative=""):
         parts.append(seg)
     parts.append(generate.SPOKEN_CAVEAT)
     parts.append(generate.SIGNOFF)
-    # Pad to clear the severe-shortfall floor deterministically.
-    filler = " ".join(["The detail continues in measured spoken prose."] * 60)
-    parts.insert(1, filler)
+    # Pad to clear the severe-shortfall floor (0.55 * script target) for ANY
+    # narrative size. NL-63 M2: the amended editions are bigger, so the script
+    # target grows with them — scale the filler to ~0.85x the slot budget, which
+    # sits above the floor whatever the narrative length (target <= slot_budget).
+    slot_budget = (generate.SCRIPT_OPEN_WORDS + generate.SCRIPT_OUTRO_WORDS
+                   + sum(generate.script_segment(int(s["slot"])) for s in slots))
+    body_words = sum(len(p.split()) for p in parts)
+    need = int(slot_budget * 0.85) - body_words
+    if need > 0:
+        filler = " ".join(["The detail continues in measured spoken prose."]
+                          * (need // 7 + 1))
+        parts.insert(1, filler)
     return "\n\n".join(parts)
 
 
@@ -1012,8 +1022,10 @@ def test_A1_prediction_rule_and_no_methodology_prompt_guards():
 
 
 def test_A2_tier_gate_positions_and_quick_movements():
-    """Model proposes, code enforces: 1 full / 2 medium / 3 medium-or-quick /
-    4+ quick; a movement field on a quick hit is a validation ERROR."""
+    """NL-63 M2 amended contract: code enforces every position — 1 full / 2
+    medium / 3 medium (pinned; the demote-to-quick call is RETIRED, exactly 3
+    full-picture) / 4+ quick. Every tier — quick/In Brief included — is a
+    STRUCTURED story that MUST carry why_it_matters + watch_for."""
     slots5 = [slot(i) for i in range(1, 6)]
     payload = stories_payload(slots5)
     stories, _ = generate.validate_narrative_payload(payload, slots5, "A")
@@ -1030,40 +1042,43 @@ def test_A2_tier_gate_positions_and_quick_movements():
     with pytest.raises(ValueError):
         generate.validate_narrative_payload(missing, slots5, "A")
 
-    # Story 3 is the model's judgment call: quick is legal there too.
+    # Slot 3 is PINNED to full-picture (medium) now — quick is NOT legal there
+    # (a demoted slot 3 would leave only 2 full-picture stories, violating the
+    # exactly-3 ruling).
     s3_quick = stories_payload(slots5)
-    s3_quick["stories"][2] = {
-        "tier": "quick",
-        "headline": "Quick three",
-        "lede": "One sentence hit.",
-    }
-    stories2, _ = generate.validate_narrative_payload(s3_quick, slots5, "A")
-    assert stories2[2]["tier"] == "quick"
-
-    smuggled = stories_payload(slots5)
-    smuggled["stories"][4]["why_it_matters"] = "movement on a quick hit"
+    s3_quick["stories"][2]["tier"] = "quick"
     with pytest.raises(ValueError) as excinfo:
-        generate.validate_narrative_payload(smuggled, slots5, "A")
-    assert "quick hits carry no why_it_matters" in str(excinfo.value)
+        generate.validate_narrative_payload(s3_quick, slots5, "A")
+    assert "tier 'quick' not allowed at this position" in str(excinfo.value)
+
+    # An In Brief (quick) story MISSING its why_it_matters is an ERROR now — the
+    # amended register is a structured mini-story, not a bare-lede snippet.
+    stripped = stories_payload(slots5)
+    del stripped["stories"][4]["why_it_matters"]
+    with pytest.raises(ValueError) as excinfo:
+        generate.validate_narrative_payload(stripped, slots5, "A")
+    assert "why_it_matters missing/empty (tier quick)" in str(excinfo.value)
 
 
-def test_A2_quick_hits_render_lean_with_trust_furniture():
+def test_A2_quick_in_brief_renders_structured_with_trust_furniture():
+    """NL-63 M2: the In Brief (quick) register carries all three movements now
+    (the dead <=60-word snippet is gone) AND its trust furniture."""
     slots4 = [slot(i) for i in range(1, 5)]
     slots4[3] = slot(4, tags=(), corroboration_count=1, outlets=("Solo",))
     stories, _ = generate.validate_narrative_payload(
         stories_payload(slots4), slots4, "A"
     )
     text = generate.assemble_narrative(A_DAY, "A", stories, _inputs_for(slots4))
-    # Three tiered stories carry movements (each with its declared A7
-    # framing); the quick hit carries none…
+    # ALL four stories now carry a why-movement and a watch-movement (the In
+    # Brief story included).
     movement_labels = sum(
         text.count(f"**{w}:**") for w in generate.WHY_FRAMINGS
     )
     watch_labels = sum(
         text.count(f"**{w}:**") for w in generate.WATCH_FRAMINGS
     )
-    assert movement_labels == 3 and watch_labels == 3
-    # …but its trust furniture is intact (meta-line with corroboration).
+    assert movement_labels == 4 and watch_labels == 4
+    # …and the In Brief story's trust furniture is intact (meta-line).
     assert "Reported by 1 named outlet — Solo. Here for:" in text
 
 
@@ -1071,7 +1086,8 @@ def test_A2_tier_word_bands_warn_only(migrated_con, fake_model):
     slots = [slot(1)]
     seed_briefing(migrated_con, A_DAY, slots)
     fat = stories_payload(slots)
-    fat["stories"][0]["why_it_matters"] = "Very long movement. " * 200  # >>550 words
+    # NL-63 M2: the full (lead) band is now (450, 900) — overshoot it clearly.
+    fat["stories"][0]["why_it_matters"] = "Very long movement. " * 400  # >>900 words
     fake_model.narrative = fat
     fake_model.script = compliant_script(slots)
     rep = run(migrated_con, date=A_DAY, refresh=False)
@@ -1508,15 +1524,17 @@ def test_A7_all_one_rhythm_warns():
     assert not any("varied rhythm" in w for w in warns2)
 
 
-def test_A8_lead_near_slot2_length_warns():
+def test_A8_lead_near_full_picture_length_warns():
+    # NL-63 M2: the A8 flag threshold rises with the doubled full-picture
+    # register — a briefed lead should clear ~440 words comfortably.
     slots = [slot(1)]
-    thin = stories_payload(slots)  # fixture lead is well under 240 words
+    thin = stories_payload(slots)  # fixture lead is well under 440 words
     _, warns = generate.validate_narrative_payload(thin, slots, "A")
-    assert any("near slot-2 length" in w for w in warns)
+    assert any("near full-picture length" in w for w in warns)
     deep = stories_payload(slots)
-    deep["stories"][0]["why_it_matters"] = "specific detail " * 130  # ~260+ words
+    deep["stories"][0]["why_it_matters"] = "specific detail " * 250  # ~500+ words
     _, warns2 = generate.validate_narrative_payload(deep, slots, "A")
-    assert not any("near slot-2 length" in w for w in warns2)
+    assert not any("near full-picture length" in w for w in warns2)
 
 
 def test_A8_delete_on_sight_and_never_add_facts_prompt_guards():

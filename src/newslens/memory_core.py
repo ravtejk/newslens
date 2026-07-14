@@ -97,33 +97,60 @@ def human_date(iso: str) -> str:
     return f"{_MONTH_ABBR[d.month - 1]} {d.day}"
 
 
-def _dates_in(text: str, base_year: int = 2026) -> set:
-    """Every resolvable YYYY-MM-DD referent in a blob (ISO + 'Month D')."""
-    out = set()
-    for m in _ISO_RE.finditer(text or ""):
-        out.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
-    for m in _MONTH_DAY_RE.finditer(text or ""):
-        mon = _MONTH_NUM[m.group(1).lower()]
-        try:
-            out.add(datetime(base_year, mon, int(m.group(2))).strftime("%Y-%m-%d"))
-        except ValueError:
-            continue
-    return out
-
-
 _PAREN_RE = re.compile(r"\(([^)]*)\)")
 
 
-def _edition_cites_in(text: str) -> set:
-    """The EDITION citations a state paragraph carries — the PARENTHETICAL
-    dates only, e.g. '(Jul 10)' / '(Jul 5, Jul 10)' / '(2026-07-10)'. A bare
-    in-prose date (a scheduled talks date, a toll figure's day) is CONTENT,
-    not a citation, and is not required to resolve to an edition — the write
-    law binds the parenthetical cite that dates each sentence."""
-    out = set()
+# M1 gate F (year-anchor, DEADLINE-class): a state paragraph's human-form cite
+# ("(Jul 10)") carries no year, so it must resolve against the thread's ACTUAL
+# edition dates — never a hardcoded base year. From 2027 a `base_year=2026`
+# assumption mismatched every human-form cite against the ledger and bricked the
+# state surface. Resolution is now year-agnostic: a "Month D" form resolves to
+# the unique year Y with Y-MM-DD in the resolvable set; a form matching MULTIPLE
+# years is AMBIGUOUS and fails closed (the safe direction — reject, never guess).
+def _resolve_cites(text: str, resolvable: set) -> Tuple[set, set, set]:
+    """Resolve every PARENTHETICAL edition cite in `text` against `resolvable`
+    (a set of ISO edition dates). ISO cites ('2026-07-10') resolve to themselves
+    (year explicit). Human-form cites ('Jul 10', 'July 10') resolve YEAR-
+    AGNOSTICALLY to the unique year present in `resolvable`. A bare in-prose date
+    (a scheduled talks date, a toll figure's day) is CONTENT, not a citation, and
+    is ignored — only parentheticals date a sentence (the write law).
+
+    Returns (resolved, unresolved, ambiguous):
+      * resolved   — ISO dates that map into `resolvable`;
+      * unresolved — ISO cites not in `resolvable` (fabrication class) and human
+                     forms whose (month, day) matches NO year (labeled 'md:MM-DD');
+      * ambiguous  — human forms whose (month, day) matches >1 year in
+                     `resolvable` — the fail-closed class ('MM-DD')."""
+    resolved: set = set()
+    unresolved: set = set()
+    ambiguous: set = set()
+    by_md: Dict[Tuple[str, str], set] = {}
+    for iso in resolvable:
+        by_md.setdefault((iso[5:7], iso[8:10]), set()).add(iso[:4])
     for m in _PAREN_RE.finditer(text or ""):
-        out |= _dates_in(m.group(1))
-    return out
+        blob = m.group(1)
+        for im in _ISO_RE.finditer(blob):
+            iso = f"{im.group(1)}-{im.group(2)}-{im.group(3)}"
+            (resolved if iso in resolvable else unresolved).add(iso)
+        for dm in _MONTH_DAY_RE.finditer(blob):
+            mon = _MONTH_NUM[dm.group(1).lower()]
+            mm, dd = f"{mon:02d}", f"{int(dm.group(2)):02d}"
+            years = by_md.get((mm, dd), set())
+            if len(years) == 1:
+                resolved.add(f"{next(iter(years))}-{mm}-{dd}")
+            elif len(years) > 1:
+                ambiguous.add(f"{mm}-{dd}")
+            else:
+                unresolved.add(f"md:{mm}-{dd}")
+    return resolved, unresolved, ambiguous
+
+
+def _has_edition_cite(text: str, resolvable: set) -> bool:
+    """True when `text` carries at least one parenthetical date cite in any
+    parseable form (resolved, ambiguous, or unresolved) — the per-sentence
+    warn asks 'is there a cite at all', not 'does it resolve'."""
+    resolved, unresolved, ambiguous = _resolve_cites(text, resolvable)
+    return bool(resolved or unresolved or ambiguous)
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +263,7 @@ def write_deltas_for_edition(
             if tid is None:
                 report.skipped.append(f"slot {n}: thread {topic!r} not resolvable")
                 continue
-            if _delta_exists(con, tid, date, happened):
+            if _delta_exists(con, tid, date, happened, int(n)):
                 report.skipped.append(f"{topic}: delta for {date} already on file (idempotent)")
                 if tid not in report.moved_thread_ids:
                     report.moved_thread_ids.append(tid)
@@ -264,13 +291,26 @@ def _all_cites(arc: Dict) -> List[str]:
 
 
 def _delta_exists(con: sqlite3.Connection, thread_id: int, date: str,
-                  what_happened: str) -> bool:
-    """Idempotency by brief IDENTITY, not just (thread, date). BUG-27: a
-    sanctioned-split day writes TWO distinct same-day developments for one
-    thread (the strikes AND the diplomatic track, logged separately) — keying
-    on (thread, edition) alone made the second delta impossible, mislabeled as
-    idempotency. Keying on the event clause too lets both land while a plain
-    regeneration (identical clauses) still cannot double-write."""
+                  what_happened: str, slot: Optional[int] = None) -> bool:
+    """Idempotency by WRITING SLOT (primary) with an event-clause fallback.
+
+    BUG-27: a sanctioned-split day writes TWO distinct same-day developments for
+    one thread (the strikes at slot 1 AND the diplomatic track at slot 3) — so a
+    (thread, edition) key alone made the second delta impossible. Keying on the
+    slot lets both land (they come from DIFFERENT slots — one arc per brief per
+    slot) while a regeneration re-analyzes the SAME slots and dedups cleanly.
+
+    M1 gate F (regen-dedup): keying on what_happened ALONE only caught IDENTICAL
+    regenerations; a same-day full refresh that REPHRASED the arc slipped a
+    duplicate delta onto the ledger (and thus the timeline/state prompt). The
+    slot key closes that hole — a rephrased re-run of slot N still matches
+    (thread, date, N). The what_happened clause stays as the fallback for
+    seeds/legacy rows whose slot is NULL (never regenerated, so no rephrase
+    risk), preserving BUG-27's guarantee for them."""
+    if slot is not None and con.execute(
+            "SELECT 1 FROM thread_deltas WHERE thread_id = ? AND edition_date = ?"
+            " AND slot = ? LIMIT 1", (thread_id, date, slot)).fetchone():
+        return True
     return con.execute(
         "SELECT 1 FROM thread_deltas WHERE thread_id = ? AND edition_date = ?"
         " AND what_happened = ? LIMIT 1",
@@ -451,13 +491,6 @@ def _decap_article(s: str) -> str:
     return s
 
 
-def _ensure_period(s: str) -> str:
-    s = (s or "").strip()
-    if s and s[-1] not in ".?!":
-        s += "."
-    return s
-
-
 def _ordinal(n: int) -> str:
     return {1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth",
             6: "Sixth", 7: "Seventh"}.get(n, f"{n}th")
@@ -593,11 +626,12 @@ def validate_state(state_text: str, ledger_dates: set,
     text = (state_text or "").strip()
     if not text:
         raise StateRejected("empty state paragraph")
-    cited = _edition_cites_in(text)
-    if not cited:
-        # A parenthetical that carries digits but resolves to no date is a cite
-        # in a form we cannot read (e.g. 'Sept 10' — only 'Sep'/'September'
-        # parse); that is a different diagnosis from a dateless parenthetical
+    resolvable = ledger_dates | edition_dates
+    resolved, unresolved, ambiguous = _resolve_cites(text, resolvable)
+    if not (resolved or unresolved or ambiguous):
+        # A parenthetical that carries digits but parses to no date form is a
+        # cite we cannot read (e.g. 'Sept 10' — only 'Sep'/'September' parse);
+        # that is a different diagnosis from a dateless parenthetical
         # ('(no editions)') or no cite at all. Both fail closed — the safe
         # direction — but say so accurately.
         dateish = any(re.search(r"\d", m.group(1))
@@ -610,12 +644,28 @@ def validate_state(state_text: str, ledger_dates: set,
         raise StateRejected("state carries no parenthetical edition cite — the "
                             "write law requires every sentence trace to a dated "
                             "edition, e.g. '(Jul 10)'")
-    resolvable = ledger_dates | edition_dates
-    bad = sorted(d for d in cited if d not in resolvable)
-    if bad:
+    # M1 gate F (year-anchor): a human-form cite matching >1 year in the record
+    # is ambiguous — fail closed rather than guess a year (the DEADLINE-class
+    # fix: never silently pick 2026).
+    if ambiguous:
+        raise StateRejected(
+            "state cite(s) resolve to more than one year in this thread's record "
+            f"— ambiguous, fails closed: {', '.join(sorted(ambiguous))} "
+            "(pin the year, e.g. '(2027-07-10)')")
+    if unresolved:
+        # ISO cites not in the record, and human forms matching NO edition —
+        # both the fabrication class (a past the record never published). A
+        # human-form miss ('md:07-08') renders as the reader wrote it ('Jul 8');
+        # an ISO miss keeps its explicit year.
+        def _name(u: str) -> str:
+            if u.startswith("md:"):
+                mm, dd = u[3:].split("-")
+                return f"{_MONTH_ABBR[int(mm) - 1]} {int(dd)}"
+            return human_date(u)
+        bad = sorted(_name(u) for u in unresolved)
         raise StateRejected(
             "state cites date(s) with no ledger entry or edition — fabrication "
-            f"class: {', '.join(human_date(d) for d in bad)}")
+            f"class: {', '.join(bad)}")
     warnings: List[str] = []
     # BUG-26: the write law says EVERY sentence traces to a dated edition. The
     # paragraph-level cite check above is the hard floor (fabrication class);
@@ -624,7 +674,7 @@ def validate_state(state_text: str, ledger_dates: set,
     # length cap), not reject: the retro-mock's own state ends with an uncited
     # render-trailer sentence, so reject would fail the shipped quality bar.
     for sent in _sentences(text):
-        if not _edition_cites_in(sent):
+        if not _has_edition_cite(sent, resolvable):
             snippet = sent if len(sent) <= 70 else sent[:67] + "..."
             warnings.append(
                 f"sentence carries no dated edition cite: {snippet!r} — every "
@@ -782,7 +832,8 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
     prior = latest_state(con, thread_id)
     diff = _state_diff((prior or {}).get("state_text", ""), clean,
                        (prior or {}).get("as_of_date", ""))
-    cites = sorted(_edition_cites_in(clean))
+    # Store the RESOLVED ISO cites (year-agnostic against this thread's ledger).
+    cites = sorted(_resolve_cites(clean, ledger_dates)[0])
     with con:
         con.execute(
             "INSERT INTO thread_state (thread_id, briefing_id, as_of_date,"
