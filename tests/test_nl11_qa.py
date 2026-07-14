@@ -186,7 +186,7 @@ def test_coexistence_title_equals_active_thread_without_matched_memory(tmp_paths
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
     assert 'class="tracked-marker"' not in today       # no matched_memory -> no marker
     assert 'class="follow-story-btn' in today           # the merged follow control
-    assert 'class="story-affordances"' in today         # NL-58: single row per story
+    assert 'class="deck"' in today                      # v7/NL-65: under-title control row
     assert 'aria-pressed="true"' in today              # ...in the followed state
     assert "Following this story" in today
     assert 'data-topic="Iran War"' in today            # the story's own casing travels

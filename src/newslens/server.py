@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import config, db, events, memory, paths, webui
+from . import config, db, events, labels, memory, paths, webui
 
 DEFAULT_PORT = 8484
 DEVELOPING_WINDOW_DAYS = 7  # dot = thread picked up within this many days
@@ -266,6 +266,121 @@ def _short_date(iso: Optional[str]) -> str:
         return f"{d.strftime('%b')} {d.day}"
     except ValueError:
         return iso[:10]
+
+
+# ---------------------------------------------------------------------------
+# v7 shell (DIRECTION-v5 §4) — the masthead ceremony, section line, mini-head.
+# Each view renders its OWN masthead/mini-head + section line; there is no
+# shared top-bar or bottom-nav chrome (both killed by §4).
+# ---------------------------------------------------------------------------
+
+_SETTINGS_GEAR = (
+    '<button class="settings-corner" aria-label="Settings" onclick="openSettings()">'
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7">'
+    '<line x1="4" y1="7" x2="20" y2="7"/><circle cx="14" cy="7" r="2" fill="var(--paper)"/>'
+    '<line x1="4" y1="12" x2="20" y2="12"/><circle cx="9" cy="12" r="2" fill="var(--paper)"/>'
+    '<line x1="4" y1="17" x2="20" y2="17"/><circle cx="16" cy="17" r="2" fill="var(--paper)"/>'
+    '</svg></button>')
+
+
+def _utc_hm(iso_utc: Optional[str]) -> str:
+    """HH:MM in UTC from a stored ISO timestamp (storage is UTC). Empty on a bad
+    value — the dispatch strip omits the clause rather than show garbage."""
+    if not iso_utc:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso_utc).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%H:%M")
+    except ValueError:
+        return ""
+
+
+def _dateline_html(date_str: str) -> str:
+    """The masthead dateline: 'Friday, July [10] [2026]' — day numeral in terra,
+    year quiet (§2 LOUD register). Plain text on a non-calendar date."""
+    if _is_calendar_date(date_str):
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+        return (f'<h1 class="dateline">{_e(d.strftime("%A, %B"))} '
+                f'<span class="dl-num">{d.day}</span> '
+                f'<span class="dl-year">{d.year}</span></h1>')
+    return f'<h1 class="dateline">{_e(date_str)}</h1>'
+
+
+def _wordmark_row() -> str:
+    """The masthead's top line: the wordmark + the quiet settings entry. The v7
+    mockup shows no settings control (design-incomplete); the gear rides the
+    wordmark row — never the section line, which §4 reserves for the three
+    destinations — so settings stays reachable on every view (implementer call,
+    disclosed)."""
+    return f'<div class="mast-top"><p class="wordmark">NewsLens</p>{_SETTINGS_GEAR}</div>'
+
+
+def _section_line(current: str) -> str:
+    """The sticky, one-line nav (§4): Today · Following · Archive, nothing else.
+    Each view renders its own with the right aria-current; showView toggles the
+    active view (no bottom-nav). The href is the no-JS fallback."""
+    def link(view: str, label: str) -> str:
+        cur = ' aria-current="page"' if view == current else ''
+        return (f'<a href="#view-{view}" onclick="showView(\'{view}\'); '
+                f'return false;"{cur}>{_e(label)}</a>')
+    return (f'<nav class="section-line" aria-label="Sections"><div class="page">'
+            f'{link("today", labels.NAV_TODAY)}'
+            f'{link("following", labels.NAV_FOLLOWING)}'
+            f'{link("archive", labels.NAV_ARCHIVE)}</div></nav>')
+
+
+def _mono_date(date_str: str) -> str:
+    """FRI · JUL 10 · 2026 for the mini-masthead (machine register). Stdlib
+    strftime only — no %-d (not portable)."""
+    if _is_calendar_date(date_str):
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+        return f"{d.strftime('%a').upper()} · {d.strftime('%b').upper()} {d.day} · {d.year}"
+    return date_str
+
+
+def _mini_head(date_str: str) -> str:
+    """Following/Archive open with the compressed ceremony (wordmark + mono date)
+    then the section line (§4)."""
+    return (f'<div class="page mini-head">{_wordmark_row()}'
+            f'<span class="mh-date">{_e(_mono_date(date_str))}</span></div>')
+
+
+def _edition_bar(row) -> str:
+    """The podcast player as edition-level furniture (§6): present only when a
+    real episode exists (duration reads from the wav); absence is the signal
+    (pre-generation / no audio). The player JS is unchanged; only the frame is
+    v7. (The 'skipped this run' state needs a run-log field the empty log can't
+    supply today — degrades to absent, honestly.)"""
+    dur = _wav_duration(row["audio_file_path"])
+    if not dur:
+        return ""
+    return (f'<div class="episode-affordance">'
+            f'<button onclick="toggleEpisode()" '
+            f'aria-label="Play full episode, {_e(dur)}">▶ Listen to the edition'
+            f'<span class="episode-meta"> · {_e(dur)}</span></button>'
+            f'<audio id="episode-player" style="display:none" controls '
+            f'preload="none" src="/audio/{_e(row["date"])}.wav"></audio>'
+            f'{_player_extra_controls("episode-player")}</div>')
+
+
+def _masthead(row, date_str: str) -> str:
+    """The full Today ceremony, fixed order (§4): wordmark → dateline →
+    [signature] → dispatch strip → edition bar. The SIGNATURE (the kind-of-
+    morning line) and the strip's source-count / threads-advanced clauses are
+    NL-63's to compute and are NOT in the data yet; per A8 no-fabrication we OMIT
+    them (degrade to dateline + assembled time), never invent them. `row` is
+    None on empty/running/error states — then only the ceremony frame renders."""
+    parts = ['<header class="page masthead">', _wordmark_row(),
+             _dateline_html(date_str)]
+    if row is not None:
+        hm = _utc_hm(row["generated_at"])
+        if hm:
+            parts.append(f'<p class="dispatch-strip">Edition assembled {_e(hm)} UTC</p>')
+        parts.append(_edition_bar(row))
+    parts.append('</header>')
+    return "".join(parts)
 
 
 _WINDOW_RE = re.compile(r"overs items fetched\s+(\S+)\s*(?:→|->)\s*(\S+)")
@@ -668,15 +783,21 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   active_topics: set, has_file: bool = False,
                   slug: Optional[str] = None, date: str = "",
                   deep_return: str = "view-today", con=None,
-                  arc_seen: Optional[set] = None) -> str:
+                  arc_seen: Optional[set] = None, role: str = "story") -> str:
+    """One story in the v7 grid. `role` selects the shape:
+    - "lead"    → article.lead: kicker + h1 + deck + body + [full picture] + furniture
+    - "story"   → article.story (col-right full-picture story): h2 + deck + body + …
+    - "snippet" → article.snippet (In Brief, quick tier): h3 + compact deck + body + …
+    NL-65: the DECK under the title carries ONLY the follow control; the deep-view
+    entry moves to the story BOTTOM (`.story-more`), just before the furniture."""
     slug = slug or f"story-{i}"
-    h = {"full": "h2", "medium": "h3"}.get(tier, "h4")
-    parts = [f'<article class="story{" quick-hit" if tier == "quick" else ""}" id="{_e(slug)}">']
+    wrap_cls, h = {"lead": ("lead", "h1"), "snippet": ("snippet", "h3")}.get(
+        role, ("story", "h2"))
+    parts = [f'<article class="{wrap_cls}" id="{_e(slug)}">']
 
     marks = list(slot.get("matched_memory") or [])
     # The override callout stays ABOVE the title (it explains why an off-beat
-    # story is here); the tracked-ongoing marker moved DOWN into the merged
-    # control under the title (NL-58 ruling 4).
+    # story is here); the tracked-ongoing marker sits in the deck under the title.
     if slot.get("override"):
         label = slot.get("override_label") or "Editor's override"
         reason = slot.get("world_impact_reason") or ""
@@ -685,40 +806,68 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
             + (f'<span class="reason">{_e(reason)}</span>' if reason else "")
             + "</p>")
 
+    if role == "lead":
+        parts.append(f'<p class="kicker">{_e(labels.KICKER_LEAD)}</p>')
     parts.append(f'<{h} class="headline">{_e(st.get("headline", ""))}</{h}>')
 
-    # NL-58 ruling 4: the tracked-ongoing marker and the follow button are ONE
-    # control, and it sits with "The full picture" in a single row directly
-    # under the title (layout only; DIRECTION tokens binding). Recognition
-    # spans both signals so a follow is never shown as "＋ Follow this story"
-    # when either its thread is active (marks) or its title is followed.
-    affordances = _story_affordances(st, slot, marks, active_topics,
-                                     has_file, slug, date, deep_return, tier)
-    if affordances:
-        parts.append(affordances)
+    # NL-65: the follow control (tracked marker OR follow toggle) STAYS under the
+    # title, alone, in the deck. Recognition spans thread (marks) + title-follow.
+    follow = _follow_control(st, slot, marks, active_topics, date)
+    if follow:
+        parts.append(f'<p class="deck">{follow}</p>')
 
+    # Body: lede, arc continuity line, then the "Why it matters"/"Watch for"
+    # beats as .move-label headers (§2). Quick-tier snippets carry the lede only.
+    body_parts: List[str] = []
     if st.get("lede"):
-        parts.append(f'<p class="lede">{_e(st["lede"])}</p>')
+        body_parts.append(f'<p>{_e(st["lede"])}</p>')
     arc_html = _today_arc_html(con, slot, st, date, arc_seen)
     if arc_html:
-        parts.append(arc_html)
-    for mv in st.get("movements") or []:
-        em = ' my-read' if mv.get("em") else ""
-        parts.append(
-            f'<div class="movement"><span class="movement-label">'
-            f'{_e(mv["label"])}</span><p class="{em.strip()}">{_e(mv["text"])}</p></div>')
+        body_parts.append(arc_html)
+    if role != "snippet":
+        for mv in st.get("movements") or []:
+            em = " my-read" if mv.get("em") else ""
+            body_parts.append(
+                f'<p class="move-label">{_e(mv["label"])}</p>'
+                f'<p class="{em.strip()}">{_e(mv["text"])}</p>')
+    parts.append(f'<div class="body">{"".join(body_parts)}</div>')
 
-    # Meta footnote — CODE-OWNED, from the slot (never prose)
+    # NL-65: the deep-view entry moves to the story BOTTOM, before the furniture.
+    entry_link = _deep_entry_link(has_file, tier, slug, deep_return)
+    if entry_link:
+        parts.append(f'<p class="story-more">{entry_link}</p>')
+
+    # Corroboration furniture — CODE-OWNED, from the slot (never prose).
     here_for = _here_for(slot)
     outlets = slot.get("outlets") or []
     meta = slot.get("corroboration_label", "")
     if outlets:
         meta += f' — {", ".join(outlets)}'
     parts.append(
-        f'<p class="meta-footnote">{_e(meta)}. Here for: {_e(here_for)}.</p>')
+        f'<p class="furniture">{_e(meta)}. Here for: {_e(here_for)}.</p>')
 
     parts.append("</article>")
     return "".join(parts)
+
+
+def _still_tracking_line(slot: Dict) -> str:
+    """The compact still-tracking register on Today (INHERITED slot-contract
+    requirement; the render that never landed). Composed per the retro-mock
+    idiom — state + the dated 'no movement since' note + the next fixed point —
+    with A8 no-fabrication teeth: a MISSING note yields NO date clause (never an
+    invented date), and the fixed point has no data source in the model yet so it
+    degrades to the honest '<STILL_TRACKING_NO_DATE>'. Empty thread name → no
+    line (nothing honest to say)."""
+    thread = (slot.get("story_title") or "").strip()
+    if not thread:
+        return ""
+    note = (slot.get("still_tracking_note") or "").strip()
+    body = (f'{_e(labels.STILL_TRACKING_PREFIX)} '
+            f'<span class="st-thread">{_e(thread)}</span>')
+    if note:
+        body += f' — {_e(note)}'
+    body += f'. {_e(labels.STILL_TRACKING_NO_DATE)}'
+    return f'<p class="st-line">{body}</p>'
 
 
 def _here_for(slot: Dict) -> str:
@@ -737,67 +886,54 @@ def _here_for(slot: Dict) -> str:
     return "world-impact selection (no tag or thread match)"
 
 
-def _story_affordances(st: Dict, slot: Dict, marks: List[str],
-                       active_topics: set, has_file: bool, slug: str,
-                       date: str, deep_return: str, tier: str = "") -> str:
-    """The single story-affordance row under the title (NL-58 ruling 4): the
-    merged tracked-marker/follow control plus the deep-view entry (analyst 'The
-    full picture', or — NL-66(b) — the In-Brief '$0 Sources & context'), grouped
-    and aligned so nothing floats or mis-indents.
-
+def _follow_control(st: Dict, slot: Dict, marks: List[str],
+                    active_topics: set, date: str) -> str:
+    """The under-title follow control (NL-65: it STAYS under the title, alone).
     Recognition (NL-58 P3a, both directions): a story reads as followed when
     EITHER its thread is active (matched_memory `marks`) OR its story-follow
-    title is active — checked against both story_title and headline, so a
-    follow created under one edition's phrasing survives title drift into the
-    next. Thread-tracked stories show the marker STATE (the thread is managed
-    under Following); story-follows are a toggle button (the M7 contract)."""
-    bits: List[str] = []
+    title is active — checked against both story_title and headline, so a follow
+    created under one edition's phrasing survives title drift into the next.
+    Thread-tracked stories show the marker STATE; story-follows are a toggle."""
     if marks:
-        # Thread-tracked: the marker state of the merged control.
-        bits.append(
-            f'<span class="tracked-marker">Tracked ongoing story — '
-            f'{_e(", ".join(marks))}</span>')
-    else:
-        topic = slot.get("story_title") or st.get("headline") or ""
-        headline = st.get("headline") or ""
-        t_in = topic.lower() in active_topics
-        h_in = headline.lower() in active_topics
-        followed = t_in or h_in
-        if followed and not t_in:
-            # NL-60 gate F1: unfollow must target the STORED thread phrasing —
-            # dismiss_thread is an exact match, so a drift-recognized follow
-            # sending the unmatched title would be visible but unfollowable.
-            topic = headline
-        pressed = "true" if followed else "false"
-        label = "Following this story" if followed else "＋ Follow this story"
-        cls = " followed" if followed else ""
-        date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
-        bits.append(
-            f'<button class="follow-story-btn{cls}" data-topic={_e_attr(topic)}'
+        return (f'<span class="tracked-marker">Tracked ongoing story — '
+                f'{_e(", ".join(marks))}</span>')
+    topic = slot.get("story_title") or st.get("headline") or ""
+    headline = st.get("headline") or ""
+    t_in = topic.lower() in active_topics
+    h_in = headline.lower() in active_topics
+    followed = t_in or h_in
+    if followed and not t_in:
+        # NL-60 gate F1: unfollow must target the STORED thread phrasing —
+        # dismiss_thread is an exact match, so a drift-recognized follow sending
+        # the unmatched title would be visible but unfollowable.
+        topic = headline
+    pressed = "true" if followed else "false"
+    label = "Following this story" if followed else "＋ Follow this story"
+    cls = " followed" if followed else ""
+    date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
+    return (f'<button class="follow-story-btn{cls}" data-topic={_e_attr(topic)}'
             f'{date_attr} aria-pressed="{pressed}" onclick="toggleFollow(this)">'
             f'{_e(label)}</button>')
-    # M9-M3 analyst entry affordance — three binding states (v4 addendum):
-    # present (valid brief), degraded-hidden (failed full/medium brief — renders
-    # IDENTICALLY to absent; total absence is the signal), and — NL-66(b) — the
-    # In-Brief quick tier, which now carries its OWN honestly-labeled $0 entry
-    # ('Sources & context', NOT the analyst 'full picture'). has_file wins: a
-    # briefed slot is never demoted to the sources-&-context label.
+
+
+def _deep_entry_link(has_file: bool, tier: str, slug: str,
+                     deep_return: str) -> str:
+    """The deep-view entry (NL-65: moved to the story BOTTOM). Three binding
+    states (v4 addendum): 'The full picture' for a briefed slot; the In-Brief
+    quick tier's own $0 'Sources & context' entry (NL-66b); and degraded-hidden
+    (a failed full/medium brief renders NOTHING — absence is the signal).
+    has_file wins: a briefed slot is never demoted to the sources-&-context
+    label."""
     ret = "" if deep_return == "view-today" else f", '{_e(deep_return)}'"
     if has_file:
-        # 2-arg form for the Today path (the deep view returns there by
-        # default); archive-in-place editions pass their own return view.
-        bits.append(
-            f'<a class="deep-view-entry-link" href="#" '
-            f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">→ The full '
-            f'picture</a>')
-    elif tier == "quick":
-        bits.append(
-            f'<a class="deep-view-entry-link sources-context-link" href="#" '
-            f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">→ Sources '
-            f'&amp; context</a>')
-    if not bits:
-        return ""
-    return '<div class="story-affordances">' + "".join(bits) + "</div>"
+        return (f'<a class="deep-view-entry-link" href="#" '
+                f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">'
+                f'→ {_e(labels.FULL_PICTURE)}</a>')
+    if tier == "quick":
+        return (f'<a class="deep-view-entry-link sources-context-link" href="#" '
+                f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">'
+                f'→ {_e(labels.SOURCES_CONTEXT)}</a>')
+    return ""
 
 
 def _e_attr(v: str) -> str:
@@ -807,8 +943,18 @@ def _e_attr(v: str) -> str:
 def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
                   gen_state: Dict[str, str],
                   briefs: Optional[Dict[int, Dict]] = None) -> str:
+    """The Today view: the v7 masthead ceremony + section line, then the edition
+    grid (or an honest empty/loading/error state). On the non-edition states the
+    masthead shows the dateline only (no dispatch strip / edition bar — nothing
+    to receipt)."""
+    mast_date = row["date"] if row is not None \
+        else datetime.now().strftime("%Y-%m-%d")
+    running_or_error = gen_state["state"] in ("running", "error")
+    head = (_masthead(None if running_or_error else row, mast_date)
+            + _section_line("today"))
+
     if gen_state["state"] == "running":
-        return """
+        body = """
 <div class="state-panel" id="gen-running">
   <h3>Generating today’s edition…</h3>
   <p>Fetching your sources, ranking, writing, and recording the episode.
@@ -822,8 +968,8 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
     <li class="pending">voice — recording the episode</li>
   </ul>
 </div>"""
-    if gen_state["state"] == "error":
-        return f"""
+    elif gen_state["state"] == "error":
+        body = f"""
 <div class="state-panel">
   <h3>Today’s edition failed</h3>
   <p class="error-text">{_e(gen_state["error"])}</p>
@@ -832,15 +978,13 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
      saved edition intact.</p>
   <button class="cta-quiet" onclick="generateAgain()">Try again</button>
 </div>"""
-    if row is None:
-        # NL-11: no edition for TODAY -> the empty state, never an older
-        # edition dressed as current. If the archive has earlier editions,
-        # point there; the copy still carries "No edition has been generated"
-        # so the drift-guard and the no-briefings case read the same.
+    elif row is None:
+        # NL-11: no edition for TODAY -> the empty state, never an older edition
+        # dressed as current. If the archive has earlier editions, point there.
         has_archive = con.execute(
             "SELECT 1 FROM briefings LIMIT 1").fetchone() is not None
         if has_archive:
-            return """
+            body = """
 <div class="state-panel">
   <h3>Nothing for today yet</h3>
   <p>No edition has been generated for today. A new one takes a couple of
@@ -850,7 +994,8 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
   <p class="empty-note" style="margin-top:1rem;">Earlier editions are in your
      <a href="#" onclick="showView('archive'); return false;">Archive</a>.</p>
 </div>"""
-        return """
+        else:
+            body = """
 <div class="state-panel">
   <h3>Nothing yet</h3>
   <p>No edition has been generated. The first one takes a couple of minutes:
@@ -858,10 +1003,12 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
      records the episode.</p>
   <button class="cta-quiet" onclick="generateAgain()">Generate today’s edition</button>
 </div>"""
+    else:
+        # NL-11: the glance ("In today’s briefing") section is REMOVED. The lead
+        # story opens the reading surface.
+        body = _render_briefing_body(con, row, entry, briefs, "", "view-today")
 
-    # NL-11: the glance ("In today’s briefing") section is REMOVED (rework
-    # backlogged, NL-20). The lead story now opens the reading surface.
-    return _render_briefing_body(con, row, entry, briefs, "", "view-today")
+    return head + f'<div class="page">{body}</div>'
 
 
 def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
@@ -877,18 +1024,52 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     tiers = (entry or {}).get("tiers") or []
     active = _active_topics_lower(con)
 
-    html = []
     # BUG-35: one dedup set per EDITION — a same-thread arc line renders under
     # its most prominent (earliest) slot only; a split-day sibling suppresses
     # the identical continuity paragraph.
     arc_seen: set = set()
+    lead_html = ""
+    right_stories: List[str] = []      # col-right full/medium "full picture" stories
+    brief_snips: List[str] = []        # In Brief (quick tier)
+    still_lines: List[str] = []        # still-tracking register
+    # §12.3 slot routing. Ids/tiers use the ORIGINAL enumerate index so
+    # _collect_deep_views stays aligned (a still-tracking slot consumes its
+    # index but gets no deep view — it is a status line, not a story).
     for i, st in enumerate(stories):
         slot = slots[i] if i < len(slots) else {}
-        tier = tiers[i] if i < len(tiers) else ("full" if i == 0 else "medium" if i <= 2 else "quick")
-        html.append(_render_story(
+        tier = tiers[i] if i < len(tiers) else (
+            "full" if i == 0 else "medium" if i <= 2 else "quick")
+        if slot.get("still_tracking"):
+            line = _still_tracking_line(slot)
+            if line:
+                still_lines.append(line)
+            continue
+        role = "lead" if i == 0 else ("snippet" if tier == "quick" else "story")
+        rendered = _render_story(
             i, st, slot, tier, active, has_file=(i + 1) in (briefs or {}),
             slug=f"{slug_prefix}story-{i}", date=row["date"],
-            deep_return=deep_return, con=con, arc_seen=arc_seen))
+            deep_return=deep_return, con=con, arc_seen=arc_seen, role=role)
+        if role == "lead":
+            lead_html = rendered
+        elif role == "snippet":
+            brief_snips.append(rendered)
+        else:
+            right_stories.append(rendered)
+
+    col_parts: List[str] = list(right_stories)
+    if brief_snips:
+        col_parts.append(
+            f'<div class="in-brief" role="region" aria-label={_e_attr(labels.IN_BRIEF)}>'
+            f'<p class="brief-label">{_e(labels.IN_BRIEF)}</p>'
+            + "".join(brief_snips) + "</div>")
+    if still_lines:
+        col_parts.append(
+            f'<div class="still-tracking" role="region" '
+            f'aria-label={_e_attr(labels.STILL_TRACKING_PREFIX)}>'
+            + "".join(still_lines) + "</div>")
+    col_right = (f'<div class="col-right">{"".join(col_parts)}</div>'
+                 if col_parts else "")
+    grid = f'<div class="today-grid">{lead_html}{col_right}</div>'
 
     # Footer disclosure (addendum #3): quiet line; window/caveat/cost a tap
     # away. Ids are slug_prefix-scoped so Today's footer and an open archive
@@ -907,15 +1088,15 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     window_line = _coverage_window_line(footer_lines)
     window_html = (f'\n  <p class="coverage-window">{_e(window_line)}</p>'
                    if window_line else "")
-    html.append(f"""
-<div class="footer-tag">
+    footer = f"""
+<footer class="edition-footer footer-tag">
   <button class="disclosure-trigger" id="{btn_id}" aria-expanded="false"
           aria-controls="{dtl_id}" onclick="toggleFooterDisclosure(this)">
     <span class="caret">▸</span> Generated {_e(gen_local)}
   </button>{window_html}
   <div class="footer-detail" id="{dtl_id}">{"".join(detail_ps)}</div>
-</div>""")
-    return "".join(html)
+</footer>"""
+    return grid + footer
 
 
 def _run_cost(entry: Optional[Dict]) -> str:
@@ -1147,8 +1328,12 @@ def _render_following(con: sqlite3.Connection) -> str:
         writers.append('<p class="empty-note">Nothing yet</p>')
     writers.append("</div></div>")
 
-    return f"""
-<h1 class="view-title">Following</h1>
+    # v7 shell: the mini-masthead + section line open the view (§4). The Following
+    # STRUCTURE (switcher/dossiers) is unchanged — its Spine/fold rebuild is M2
+    # (its rows target the M2 thread page); here it inherits the v7 frame/tokens.
+    head = _mini_head(datetime.now().strftime("%Y-%m-%d")) + _section_line("following")
+    return head + f"""<div class="page">
+<h1 class="view-title">{_e(labels.NAV_FOLLOWING)}</h1>
 <div class="following-switcher" role="tablist">
   <button class="current" onclick="showSub('ongoing', this)">Ongoing stories</button>
   <button onclick="showSub('topics', this)">Topics</button>
@@ -1156,7 +1341,7 @@ def _render_following(con: sqlite3.Connection) -> str:
 </div>
 <div id="sub-ongoing" class="sub-view active">{"".join(ongoing)}</div>
 <div id="sub-topics" class="sub-view">{"".join(topics)}</div>
-<div id="sub-writers" class="sub-view">{"".join(writers)}</div>"""
+<div id="sub-writers" class="sub-view">{"".join(writers)}</div></div>"""
 
 
 def _human_short(date_str: str) -> str:
@@ -1168,11 +1353,15 @@ def _human_short(date_str: str) -> str:
 
 
 def _render_archive(con: sqlite3.Connection) -> str:
+    # v7 shell: mini-masthead + section line (§4). The archive INDEX structure
+    # (rows) is unchanged — the Study/Wire CALENDAR rebuild is M2; here it
+    # inherits the v7 frame/tokens.
+    head = _mini_head(datetime.now().strftime("%Y-%m-%d")) + _section_line("archive")
     rows = _archive_rows(con)
     if not rows:
-        return ('<h1 class="view-title">Archive</h1>'
-                '<p class="empty-note">Nothing yet</p>')
-    html = ['<h1 class="view-title">Archive</h1>']
+        return head + (f'<div class="page"><h1 class="view-title">{_e(labels.NAV_ARCHIVE)}</h1>'
+                       '<p class="empty-note">Nothing yet</p></div>')
+    html = [f'<div class="page"><h1 class="view-title">{_e(labels.NAV_ARCHIVE)}</h1>']
     for r in rows:
         kw = '<span class="sep">·</span>'.join(_e(k) for k in r["keywords"])
         # NL-11: JS opens the edition IN-PLACE (Today never replaced); the
@@ -1184,7 +1373,8 @@ def _render_archive(con: sqlite3.Connection) -> str:
     <p class="archive-keywords">{kw}</p>
   </a>
 </div>""")
-    return "".join(html)
+    html.append("</div>")
+    return head + "".join(html)
 
 
 def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict]) -> str:
@@ -1356,7 +1546,7 @@ def _deep_timeline_html(con, slot: Optional[Dict], date: str,
                 f'<li class="tl-entry">{date_html} — '
                 f'{_e(e["what_happened"])}{signif}</li>')
         return (f'<div class="deep-section deep-timeline" id="{anchor}-timeline">'
-                '<p class="deep-section-label">The story so far</p>'
+                f'<p class="deep-section-label">{_e(labels.THE_STORY_SO_FAR)}</p>'
                 f'<ul class="deep-timeline-list">{"".join(items)}</ul></div>')
     return ""
 
@@ -1397,7 +1587,7 @@ def _deep_numbers_html(brief: Dict, story_anchor: str,
     if not items:
         return ""
     return (f'<div class="deep-section" id="{story_anchor}-numbers">'
-            '<p class="deep-section-label">The numbers</p>'
+            f'<p class="deep-section-label">{_e(labels.DEEP_NUMBERS)}</p>'
             f'<ul class="deep-facts-list deep-numbers-list">'
             f'{"".join(items)}</ul></div>')
 
@@ -1440,7 +1630,7 @@ def _deep_unresolved_html(brief: Dict, story_anchor: str,
         return ""
     return (f'<div class="deep-section deep-unresolved" '
             f'id="{story_anchor}-unresolved">'
-            '<p class="deep-section-label">Unresolved</p>'
+            f'<p class="deep-section-label">{_e(labels.DEEP_UNRESOLVED)}</p>'
             + "".join(rows) + "</div>")
 
 
@@ -1470,9 +1660,9 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     arc = brief.get("arc")
     arc_line = ""
     if arc:
-        verdict = {"advances": "Advances the thread",
-                   "reverses": "Reverses the thread",
-                   "merely-matches": "Merely matches the thread"}.get(
+        verdict = {"advances": labels.ARC_ADVANCES,
+                   "reverses": labels.ARC_REVERSES,
+                   "merely-matches": labels.ARC_MATCHES}.get(
                        arc.get("delta", ""), _e(str(arc.get("delta", ""))))
         prior_date = None
         for c in _cites_list(arc):
@@ -1497,8 +1687,9 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
         arc_line = (f'<p class="deep-arc-line">'
                     f'<span class="deep-arc-verdict">{_e(verdict)}</span> — '
                     f'{_e(arc_body)}{cite_html}</p>')
-    out.append(f'<div class="deep-title-block"><p class="deep-eyebrow">The full '
-               f'picture</p><h1 class="deep-title">{_e(headline)}</h1>'
+    out.append(f'<div class="deep-title-block"><p class="deep-eyebrow">'
+               f'{_e(labels.DEEP_EYEBROW)}</p>'
+               f'<h1 class="deep-title">{_e(headline)}</h1>'
                f'{arc_line}</div>')
 
     # NL-63 item 5: the "story so far" timeline — the deep view's flagship
@@ -1531,17 +1722,17 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     numbers_html = _deep_numbers_html(brief, story_anchor, src_by_key)
     unresolved_html = _deep_unresolved_html(brief, story_anchor, src_by_key)
 
-    jump_items = [("facts", "Facts")]
+    jump_items = [("facts", labels.JUMP_FACTS)]
     if numbers_html:
-        jump_items.append(("numbers", "The numbers"))
+        jump_items.append(("numbers", labels.DEEP_NUMBERS))
     if unresolved_html:
-        jump_items.append(("unresolved", "Unresolved"))
-    jump_items.append(("mechanism", "Mechanism"))
+        jump_items.append(("unresolved", labels.DEEP_UNRESOLVED))
+    jump_items.append(("mechanism", labels.DEEP_MECHANISM))
     if brief.get("effects"):
-        jump_items.append(("effects", "What could follow"))
+        jump_items.append(("effects", labels.DEEP_EFFECTS))
     if open_paras:
-        jump_items.append(("open", "Still open"))
-    jump_items.append(("sources", "Sources"))
+        jump_items.append(("open", labels.JUMP_OPEN))
+    jump_items.append(("sources", labels.DEEP_SOURCES))
     out.append('<p class="deep-jumplist">'
                + '<span class="sep">·</span>'.join(
                    f'<a href="#{story_anchor}-{sid}">{label}</a>'
@@ -1563,7 +1754,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
             f'<li>{_e(f.get("fact", ""))} '
             + _cite_fold(q, "Show sources for this fact") + '</li>')
     out.append(f'<div class="deep-section" id="{story_anchor}-facts">'
-               '<p class="deep-section-label">The facts</p>'
+               f'<p class="deep-section-label">{_e(labels.DEEP_FACTS)}</p>'
                f'<ul class="deep-facts-list">{"".join(lis)}</ul></div>')
 
     # NL-63 M3 (Decision B): the receipts-forward cluster — 'The numbers'
@@ -1587,7 +1778,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
             "Show sources for this claim"),
         _e(mech))
     out.append(f'<div class="deep-section" id="{story_anchor}-mechanism">'
-               '<p class="deep-section-label">Mechanism</p>'
+               f'<p class="deep-section-label">{_e(labels.DEEP_MECHANISM)}</p>'
                f'<p>{mech_display}</p></div>')
 
     # 3. effects — the citation IS the basis marker (Thread D)
@@ -1607,7 +1798,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                     f'<span class="cite">{_e(via)}</span></p>')
     if effs:
         out.append(f'<div class="deep-section" id="{story_anchor}-effects">'
-                   '<p class="deep-section-label">What could follow</p>'
+                   f'<p class="deep-section-label">{_e(labels.DEEP_EFFECTS)}</p>'
                    + "".join(effs) + "</div>")
 
     # 4. What's still open — Honest Unknowns + Watch For fused at section level
@@ -1619,7 +1810,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     # rendered content survives (the anchor gates on the same list).
     if open_paras:
         out.append(f'<div class="deep-section" id="{story_anchor}-open">'
-                   '<p class="deep-section-label">What’s still open</p>'
+                   f'<p class="deep-section-label">{_e(labels.DEEP_OPEN)}</p>'
                    + "".join(open_paras) + "</div>")
 
     # 5. source table — rows, real accessible names (Axel)
@@ -1655,7 +1846,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                     f'<p class="source-title">{link}</p>'
                     f'<p class="source-meta">Retrieved {when} · {_e(kind_label)}</p></div>')
     out.append(f'<div class="deep-section" id="{story_anchor}-sources">'
-               '<p class="deep-section-label">Sources</p>'
+               f'<p class="deep-section-label">{_e(labels.DEEP_SOURCES)}</p>'
                + "".join(rows) + "</div>")
 
     # deterministic footer — cited, never verified (Sten's law, binding copy)
@@ -1760,13 +1951,13 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
     out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
                f'{_e(back_label)}</a>')
     out.append('<div class="deep-title-block">'
-               '<p class="deep-eyebrow">Sources &amp; context</p>'
+               f'<p class="deep-eyebrow">{_e(labels.SOURCES_CONTEXT)}</p>'
                f'<h1 class="deep-title">{_e(headline)}</h1></div>')
 
     summary = (slot.get("summary") or st.get("lede") or "").strip()
     if summary:
         out.append(f'<div class="deep-section" id="{story_anchor}-summary">'
-                   '<p class="deep-section-label">In brief</p>'
+                   f'<p class="deep-section-label">{_e(labels.IN_BRIEF)}</p>'
                    f'<p>{_e(summary)}</p></div>')
 
     # why-you're-seeing-this — matched topics, tracked threads, and the shared
@@ -1783,7 +1974,7 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                    f'{_e(", ".join(threads))}</p>')
     ctx.append(f'<p class="sc-herefor">Here for: {_e(_here_for(slot))}.</p>')
     out.append(f'<div class="deep-section" id="{story_anchor}-context">'
-               '<p class="deep-section-label">Why you’re seeing this</p>'
+               f'<p class="deep-section-label">{_e(labels.DEEP_WHY_SEEING)}</p>'
                + "".join(ctx) + "</div>")
 
     # sources — outlets/corroboration label; honest empty when none resolve
@@ -1794,7 +1985,8 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                           '<p class="empty-note">No sources are recorded for '
                           'this In-Brief item.</p>')
     out.append(f'<div class="deep-section" id="{story_anchor}-sources">'
-               '<p class="deep-section-label">Sources</p>' + body + "</div>")
+               f'<p class="deep-section-label">{_e(labels.DEEP_SOURCES)}</p>'
+               + body + "</div>")
 
     # honest footer — this is context, NOT the analyst report (no trust-line
     # borrowing; the two-lane distinction is the whole point of NL-66(b))
@@ -1821,6 +2013,11 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
     tiers = (entry or {}).get("tiers") or []
     for i, st in enumerate(stories_probe):
         slot = slots[i] if i < len(slots) else None
+        # A still-tracking slot renders as a status strip on Today, not a story,
+        # so it gets NO deep view — skip it here to match _render_briefing_body
+        # (index preserved so every other slot keeps its story-{i} anchor).
+        if slot and slot.get("still_tracking"):
+            continue
         # tier derivation MATCHES _render_briefing_body's so the entry link and
         # the collected view agree for every slot (no link without a view).
         tier = tiers[i] if i < len(tiers) else (
@@ -1892,21 +2089,9 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
         row = _briefing_row(con, datetime.now().strftime("%Y-%m-%d"))
     entry = _log_entry_for(row["date"]) if row is not None else None
 
-    date_label = _human_date(row["date"]) if row is not None \
-        else _human_date(datetime.now().strftime("%Y-%m-%d"))
-
-    episode_html = ""
-    if row is not None and gen_state["state"] != "running":
-        dur = _wav_duration(row["audio_file_path"])
-        if dur:
-            episode_html = f"""
-<div class="episode-affordance">
-  <button onclick="toggleEpisode()" aria-label="Play full episode, {_e(dur)}">▷ Play full episode
-    <span class="episode-meta"> · {_e(dur)}</span></button>
-  <audio id="episode-player" style="display:none" controls preload="none"
-         src="/audio/{_e(row["date"])}.wav"></audio>
-  {_player_extra_controls("episode-player")}
-</div>"""
+    # v7: the masthead (dateline + dispatch strip + edition-bar player) is
+    # rendered INTO the Today view by _render_today/_masthead — no shared top-bar
+    # date label or top-level episode player anymore (DIRECTION-v5 §4).
 
     # M9-M3: newest-valid-wins brief reads; the view renders FROM the
     # persisted row (never regenerates); date-addressed like briefings.
@@ -1918,8 +2103,6 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
 
     page = webui.PAGE.format(
         css=webui.CSS,
-        date_label=_e(date_label),
-        episode_html=episode_html,
         today_html=_render_today(con, row, entry, gen_state, briefs=briefs),
         following_html=_render_following(con),
         archive_html=_render_archive(con),

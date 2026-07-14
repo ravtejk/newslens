@@ -179,35 +179,33 @@ def test_recency_is_display_only_lifecycle_untouched(tmp_paths):
 
 # --- 3. splash logo -------------------------------------------------------------------------
 
-def test_splash_css_contract():
-    assert "body.splash .logo-placeholder" in webui.CSS
-    # The dashed placeholder border lives in the BASE rule — both states
-    # share it (it leaves only with the real logo, P4).
-    base = webui.CSS.split(".logo-placeholder {")[1].split("}")[0]
-    assert "1px dashed var(--rule)" in base
-    splash_rule = webui.CSS.split("body.splash .logo-placeholder {")[1].split("}")[0]
-    assert "border" not in splash_rule  # never overridden away in splash
-    # NL-11: the splash opens ~40% larger than the previous 2.1rem.
-    assert "font-size: 2.95rem" in splash_rule
-    assert ("@media (prefers-reduced-motion: reduce) { .logo-placeholder "
-            "{ transition: none; } }") in webui.CSS
+def test_splash_and_top_bar_logo_retired():
+    """v7 flip (DIRECTION-v5 §4, no chrome): the top-bar logo placeholder and its
+    splash-on-scroll animation are RETIRED — the masthead's dateline ceremony is
+    the arrival moment now. WAS: `body.splash` grew `.logo-placeholder`; NOW:
+    neither exists in the CSS, and the masthead carries the .wordmark + .dateline."""
+    assert "logo-placeholder" not in webui.CSS
+    assert "body.splash" not in webui.CSS
+    assert ".wordmark {" in webui.CSS and ".dateline {" in webui.CSS
 
 
-def test_lead_story_has_room_below_the_episode_divider():
-    """NL-11: with the glance gone, the lead story keeps breathing room below
-    the Play-episode divider (principal 2026-07-09)."""
-    assert "#view-today > article.story:first-child { margin-top:" in webui.CSS
+def test_lead_story_has_room_below_the_masthead():
+    """v7 flip: the lead story keeps breathing room below the masthead. WAS:
+    `#view-today > article.story:first-child { margin-top: … }` (the lead was the
+    view's first child, under the episode divider). NOW: the lead is the left
+    cell of `.today-grid`, whose top padding is the breathing room."""
+    assert ".today-grid {" in webui.CSS
+    assert "padding: 2.2rem 0 1rem" in webui.CSS
 
 
-def test_splash_js_is_idempotent_passive_and_two_way():
+def test_splash_js_retired():
+    """v7: the splash scroll listener retires with the logo it drove — no
+    `THRESH`, no `syncSplash`, no `body.splash` toggle, no scroll listener."""
     js = webui.JS
-    assert "var THRESH = 24;" in js
-    assert "classList.toggle('splash', window.scrollY <= THRESH)" in js
-    assert "{ passive: true }" in js
-    # Exactly ONE scroll listener registration — no duplicate-listener risk,
-    # and toggle(cls, bool) is idempotent under rapid scroll events.
-    assert js.count("addEventListener('scroll'") == 1
-    assert "syncSplash();" in js  # initial sync: opens large at the top
+    assert "THRESH" not in js
+    assert "syncSplash" not in js
+    assert "'splash'" not in js
+    assert "addEventListener('scroll'" not in js
 
 
 def test_server_never_pre_applies_splash(page3):

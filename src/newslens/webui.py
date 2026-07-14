@@ -19,118 +19,164 @@ they reach these templates.
 
 CSS = """
 :root {
-  --bg: #FBF8F2; --surface: #FFFFFF; --ink: #2B2621; --ink-soft: #6B6258;
-  --ink-faint: #8B8175; --accent: #A85D3E; --accent-deep: #7A4029;
-  --tracked: #5C7A5E; --danger: #7A3B37; --rule: #E5DCCC;
-  --overlay-scrim: rgba(43,38,33,0.35); --popup-scrim: rgba(43,38,33,0.28);
-  --font-serif: Charter, "Iowan Old Style", Georgia, "Palatino Linotype", serif;
+  /* v7 palette — DIRECTION-v5 §1 (the committed Front-Page tokens) */
+  --paper: #FCFAF5; --ink: #1A1713; --ink-soft: #575046; --ink-faint: #79705F;
+  --terra: #8F4A2E; --terra-deep: #6E3722; --moved: #4D6B50; --danger: #7A3B37;
+  --rule: #E7DFD2; --cal-bare: #C9C0AF;
+  --font-display: Charter, "Iowan Old Style", Georgia, "Palatino Linotype", serif;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  /* Legacy aliases — the M2-rebuild surfaces (Following dossiers, settings,
+     popups, suggest, archive INDEX) still name these; they resolve to v7
+     values so nothing renders off-palette while their STRUCTURE waits for M2. */
+  --bg: var(--paper); --surface: #FFFFFF; --accent: var(--terra);
+  --accent-deep: var(--terra-deep); --tracked: var(--moved);
+  --font-serif: var(--font-display);
+  --overlay-scrim: rgba(26,23,19,0.35); --popup-scrim: rgba(26,23,19,0.28);
   --radius: 10px; --max-w: 34rem;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-sans);
-  font-size: 1.02rem; line-height: 1.65; -webkit-font-smoothing: antialiased; padding-bottom: 4.75rem; }
-body.dark { --bg: #201C18; --surface: #2B2621; --ink: #EFE9DF; --ink-soft: #B5AB9E;
-  --ink-faint: #8B8175; --rule: #453D34; --overlay-scrim: rgba(0,0,0,0.5); }
-a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
-a:hover { color: var(--accent-deep); }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-sans);
+  font-size: 1rem; line-height: 1.62; -webkit-font-smoothing: antialiased; }
+/* Dark mode — CARRIED functionality (settings toggle). The v7 dark palette is
+   NOT design-specified (the mockup is paper-only); this is a mechanical
+   inversion holding the AA floor (§11) — FLAGGED for the design team, M2. */
+body.dark { --paper: #1A1713; --ink: #FCFAF5; --ink-soft: #C9C0AF; --ink-faint: #9A9082;
+  --terra: #D08A63; --terra-deep: #E0A882; --moved: #86B08C; --danger: #C9857B; --rule: #372F27;
+  --surface: #241F1A; --overlay-scrim: rgba(0,0,0,0.6); --popup-scrim: rgba(0,0,0,0.5); }
+a { color: var(--terra); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { color: var(--terra-deep); }
 button { font-family: var(--font-sans); }
-a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
-  outline: 3px solid var(--accent-deep); outline-offset: 2px; border-radius: 4px; }
-main { max-width: var(--max-w); margin: 0 auto; padding: 0 1.25rem; }
-section.view { display: none; } section.view.active { display: block; }
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid var(--terra-deep); outline-offset: 2px; border-radius: 2px; }
+.skip-link { position: absolute; left: -9999px; top: 0; background: var(--ink); color: var(--paper);
+  padding: 0.5rem 1rem; z-index: 50; }
+.skip-link:focus { left: 0.5rem; top: 0.5rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
-/* TOP BAR — TWEAK 3 (basic date) + TWEAK 4 (centered logo placeholder) */
-.top-bar { max-width: var(--max-w); margin: 0 auto; padding: 1.5rem 1.25rem 0.25rem;
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.edition-date { font-size: 0.85rem; color: var(--ink-soft); flex: 1; }
-.logo-placeholder { flex: 1; text-align: center; font-family: var(--font-serif);
-  font-weight: 700; font-size: 1.02rem; letter-spacing: 0.01em; color: var(--ink);
-  border: 1px dashed var(--rule); border-radius: 6px; padding: 0.15rem 0.5rem;
-  align-self: center; max-width: 9rem; margin: 0 auto;
-  transition: font-size 220ms ease-out, padding 220ms ease-out, max-width 220ms ease-out; }
-/* P1 polish: splash state — the logo opens large and shrinks to the masthead
-   size on scroll. JS adds/removes body.splash; with no JS the class never
-   appears and the logo stays at the static masthead size above (graceful
-   degradation by construction). Dashed border stays in BOTH states: it is
-   the placeholder marker and leaves only with the real logo (P4). */
-/* NL-11: the splash logo opens ~40% larger than before (2.1rem -> 2.95rem);
-   the scroll behavior still shrinks it to the masthead size. Border stays in
-   the BASE rule (never overridden here) — the placeholder marker. */
-body.splash .logo-placeholder { font-size: 2.95rem; padding: 0.98rem 1.55rem; max-width: 22rem; }
-@media (prefers-reduced-motion: reduce) { .logo-placeholder { transition: none; } }
-.top-bar-right { flex: 1; display: flex; justify-content: flex-end; }
+/* Layout: full-bleed views, centered .page reading column (DIRECTION-v5 §4) */
+section.view { display: none; } section.view.active { display: block; }
+.page { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
+article.story { scroll-margin-top: 0.75rem; }
+.snippet { scroll-margin-top: 0.75rem; }
+
+/* ---- Masthead / the dateline ceremony (DIRECTION-v5 §4) ---- */
+.masthead { padding-top: 2.25rem; }
+.mast-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.wordmark { font-family: var(--font-display); font-size: 0.9rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 1.4rem; }
 .settings-corner { background: transparent; border: 1px solid var(--rule); border-radius: 50%;
-  width: 2.1rem; height: 2.1rem; display: flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; display: inline-flex; align-items: center; justify-content: center;
   color: var(--ink-faint); cursor: pointer; flex-shrink: 0; }
 .settings-corner:hover { border-color: var(--ink-soft); color: var(--ink); }
 .settings-corner svg { display: block; stroke: currentColor; }
+.dateline { font-family: var(--font-display); font-weight: 700; font-size: 4rem;
+  line-height: 1.02; letter-spacing: -0.015em; margin: 0; }
+.dateline .dl-num { color: var(--terra); }
+.dateline .dl-year { font-size: 1.4rem; font-weight: 400; color: var(--ink-faint); letter-spacing: 0; }
+.signature { font-family: var(--font-display); font-size: 1.3rem; line-height: 1.45;
+  color: var(--ink-soft); margin: 0.9rem 0 0; max-width: 44rem; }
+.dispatch-strip { font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6;
+  color: var(--ink-soft); margin: 0.8rem 0 0; }
+.dispatch-strip a { color: var(--moved); font-weight: 700; }
+.dispatch-strip a:hover { color: var(--terra-deep); }
 
-.episode-affordance { max-width: var(--max-w); margin: 0.5rem auto 0; padding: 0 1.25rem 1.1rem;
-  border-bottom: 1px solid var(--rule); }
-.episode-affordance button { background: transparent; border: none; padding: 0;
-  font-size: 0.85rem; color: var(--accent); cursor: pointer; }
-.episode-affordance button:hover { color: var(--accent-deep); }
-.episode-affordance .episode-meta { color: var(--ink-faint); font-size: 0.85rem; }
+/* ---- Edition bar: the podcast player (restyled .episode-affordance, §6) ---- */
+.episode-affordance { margin: 0.9rem 0 1.4rem; font-size: 0.88rem; color: var(--ink-soft); }
+.episode-affordance button { background: none; border: 1px solid var(--terra); border-radius: 2px;
+  padding: 0.15rem 0.55rem; font-size: 0.85rem; color: var(--terra); font-weight: 700; cursor: pointer; }
+.episode-affordance button:hover { color: var(--terra-deep); border-color: var(--terra-deep); }
+.episode-affordance .episode-meta { color: var(--ink-faint); font-size: 0.85rem; font-weight: 400; }
 .episode-affordance audio { display: block; width: 100%; margin-top: 0.6rem; }
-/* NL-58 ruling 7: skip/speed row under the native player. */
+.edition-episode { border-bottom: 1px solid var(--rule); padding-bottom: 1.1rem; margin-bottom: 0.5rem; }
 .player-extra { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
-.player-extra .player-btn { background: transparent; border: 1px solid var(--rule);
-  border-radius: 999px; padding: 0.2rem 0.7rem; font-size: 0.78rem; font-family: inherit;
+.player-extra .player-btn { background: none; border: 1px solid var(--rule); border-radius: 2px;
+  padding: 0.15rem 0.55rem; font-size: 0.8rem; font-family: var(--font-sans);
   color: var(--ink-soft); cursor: pointer; }
-.player-extra .player-btn:hover { border-color: var(--ink); color: var(--ink); }
+.player-extra .player-btn:hover { border-color: var(--ink-soft); color: var(--ink); }
 .player-extra .speed-btn { min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
 
-/* NL-11: the glance section is removed (rework backlogged, NL-20). The lead
-   story now opens the reading surface and gets room to breathe below the
-   Play-episode divider (principal 2026-07-09). */
-#view-today > article.story:first-child { margin-top: 1.75rem; }
-.edition-episode { border-bottom: 1px solid var(--rule); padding-bottom: 1.1rem; margin-bottom: 0.5rem; }
-#view-edition article.story:first-of-type { margin-top: 1.5rem; }
-html { scroll-behavior: smooth; }
-article.story { scroll-margin-top: 0.75rem; }
-@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+/* ---- Section line: nav, sticky, ONE line, the three destinations (§4) ---- */
+.section-line { position: sticky; top: 0; z-index: 10; background: var(--paper);
+  border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); padding: 0.55rem 0; }
+.section-line .page { font-size: 0.9rem; }
+.section-line a { text-decoration: none; color: var(--ink-soft); margin-right: 1.6rem; }
+.section-line a:hover { color: var(--ink); text-decoration: underline; }
+.section-line a[aria-current="page"] { color: var(--ink); font-weight: 700; }
 
-article.story { padding: 0 0 3rem; }
-article.story:last-of-type { padding-bottom: 1rem; }
-.tracked-marker { display: inline-block; font-size: 0.74rem; font-weight: 600;
-  color: var(--tracked); margin-bottom: 0.6rem; }
-.tracked-marker::before { content: "\\25CF "; }
-.override-note { font-size: 0.82rem; font-weight: 700; color: var(--accent-deep);
-  background: rgba(168,93,62,0.08); padding: 0.65rem 0.9rem; border-radius: var(--radius); margin: 0 0 1rem; }
-.override-note .reason { display: block; font-weight: 400; margin-top: 0.2rem; color: var(--ink); }
-h2.headline, h3.headline, h4.headline { font-family: var(--font-serif); font-weight: 700;
-  margin: 0 0 0.85rem; line-height: 1.28; }
-h2.headline { font-size: 1.5rem; } h3.headline { font-size: 1.2rem; }
-h4.headline { font-size: 1.03rem; margin-bottom: 0.4rem; }
-p.lede { margin: 0 0 1rem; }
-.movement { margin: 0 0 0.85rem; }
-.movement-label { display: block; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--ink-faint); margin: 0 0 0.3rem; }
-.movement p { margin: 0; }
+/* ---- Mini-masthead (Following / Archive open with this + the section line) ---- */
+.mini-head { padding-top: 2rem; }
+.mini-head .mast-top { align-items: baseline; }
+.mini-head .wordmark { margin: 0 0 0.3rem; }
+.mini-head .mh-date { font-family: var(--font-mono); font-size: 0.75rem; color: var(--ink-faint); }
+
+/* ============================ TODAY — asymmetric grid (§12.3) ============================ */
+.today-grid { display: grid; grid-template-columns: 7fr 5fr; gap: 0 4rem; padding: 2.2rem 0 1rem; }
+.kicker { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--terra); margin: 0 0 0.6rem; }
+.lead h1.headline { font-family: var(--font-display); font-weight: 700; font-size: 3.5rem;
+  line-height: 1.06; letter-spacing: -0.015em; margin: 0 0 0.7rem; }
+.lead .body { font-size: 1.05rem; max-width: 38rem; }
+.lead .body > p { margin: 0 0 1rem; }
+.move-label { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin: 1.4rem 0 0.3rem; }
+.col-right .move-label { font-size: 0.72rem; margin: 1rem 0 0.25rem; }
 .my-read { font-style: italic; }
-.quick-hit p { margin: 0 0 0.5rem; font-size: 0.95rem; }
-.meta-footnote { font-size: 0.74rem; color: var(--ink-faint); margin-top: 1rem; line-height: 1.5; }
-/* NL-58 ruling 4: the merged control (tracked marker OR follow toggle) and
-   "The full picture" share ONE aligned row directly under the title. Baseline
-   alignment + a single gap keep them consistently indented (ruling 5). */
-.story-affordances { display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: 0.35rem 1.1rem; margin: 0 0 1rem; }
-.story-affordances .tracked-marker { margin: 0; }
-.follow-story-btn { background: transparent; border: none; padding: 0; font-size: 0.8rem;
-  font-family: inherit; color: var(--ink-soft); cursor: pointer; }
-.follow-story-btn:hover { color: var(--accent); }
-.follow-story-btn.confirming { color: var(--tracked); font-weight: 600; }
-.follow-story-btn.followed { color: var(--tracked); }
-.deep-view-entry-link { font-size: 0.8rem; color: var(--ink-soft); text-decoration: none; }
-.deep-view-entry-link:hover { color: var(--accent); text-decoration: underline; }
-/* The Following view's "Follow a new story" add button keeps its own block. */
-.follow-story { margin-top: 0.5rem; }
-.follow-story button { background: transparent; border: none; padding: 0; font-size: 0.8rem;
-  color: var(--ink-soft); cursor: pointer; }
-.follow-story button:hover { color: var(--accent); }
+/* the deck (under-title): NL-65 leaves ONLY the follow control here */
+.deck { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1.1rem;
+  margin: 0 0 1.15rem; padding: 0.45rem 0; border-bottom: 1px solid var(--rule); font-size: 0.88rem; }
+.deck > * { min-width: 0; }
+.tracked-marker, .follow-story-btn { background: none; border: none; padding: 0; cursor: pointer;
+  text-align: left; font-family: var(--font-sans); font-size: 0.88rem; font-weight: 700; color: var(--terra); }
+.follow-story-btn:hover { color: var(--terra-deep); text-decoration: underline; }
+.follow-story-btn:not(.followed):not(.confirming) { font-weight: 400; color: var(--ink-soft); }
+.follow-story-btn.followed, .follow-story-btn.confirming { color: var(--moved); }
+.tracked-marker { color: var(--moved); cursor: default; }
+.tracked-marker::before { content: "\\25CF "; }
+/* NL-65: the deep-view entry moves to the story BOTTOM, before the furniture */
+.story-more { margin: 1.1rem 0 0; font-size: 0.88rem; }
+.deep-view-entry-link { color: var(--terra); font-weight: 700; text-decoration: none; }
+.deep-view-entry-link:hover { color: var(--terra-deep); text-decoration: underline; }
+.furniture, .meta-footnote { font-size: 0.8rem; font-style: italic; color: var(--ink-faint);
+  margin: 1.1rem 0 0; max-width: 38rem; line-height: 1.5; }
+.override-note { font-size: 0.82rem; font-weight: 700; color: var(--terra-deep); margin: 0 0 0.8rem; }
+.override-note .reason { display: block; font-weight: 400; margin-top: 0.2rem; color: var(--ink); }
+h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-weight: 700;
+  margin: 0 0 0.4rem; line-height: 1.22; }
+
+/* Right column: quiet register */
+.col-right article.story { padding: 0 0 1.6rem; margin-bottom: 1.6rem; border-bottom: 1px solid var(--rule); }
+.col-right h2.headline { font-size: 1.4rem; }
+.col-right .body { font-size: 0.95rem; }
+.col-right .body > p { margin: 0 0 0.8rem; }
+.col-right .deck { font-size: 0.82rem; margin-bottom: 0.7rem; padding: 0.35rem 0; }
+.col-right .furniture, .col-right .meta-footnote { font-size: 0.76rem; margin-top: 0.6rem; }
+
+/* In brief */
+.in-brief { margin-top: 0.5rem; }
+.brief-label { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 0.8rem; }
+.snippet { margin: 0 0 1.3rem; }
+.snippet h3.headline, .snippet h4.headline { font-family: var(--font-display); font-weight: 700;
+  font-size: 1.02rem; line-height: 1.3; margin: 0 0 0.15rem; }
+.snippet .body > p, .quick-hit p { font-size: 0.88rem; line-height: 1.5; margin: 0; color: var(--ink-soft); }
+.snippet .deck { font-size: 0.78rem; margin: 0.2rem 0 0.35rem; padding: 0; border: none; }
+.snippet .story-more { margin: 0.25rem 0 0; font-size: 0.78rem; }
+.snippet .furniture, .snippet .meta-footnote { font-size: 0.74rem; margin-top: 0.25rem; }
+
+/* Still-tracking strip (retro-mock idiom; A8 no-fabrication teeth in the composer) */
+.still-tracking { margin: 1.6rem 0 0; padding-top: 1rem; border-top: 1px solid var(--rule); }
+.still-tracking .st-line { font-size: 0.82rem; color: var(--ink-soft); margin: 0 0 0.5rem; line-height: 1.5; }
+.still-tracking .st-thread { font-family: var(--font-display); font-weight: 700; color: var(--ink); }
+
+/* Today arc continuity line (deterministic then→now line under a story). */
+.today-arc-line { font-size: 0.9rem; color: var(--ink-soft); margin: 0.6rem 0 0; line-height: 1.5; }
+.today-arc-line.reverted { color: var(--danger); }
+.today-arc-link { color: var(--moved); font-weight: 700; text-decoration: none; white-space: nowrap; }
+.today-arc-link:hover { color: var(--terra-deep); }
+.today-arc-disclosure { color: var(--ink-faint); font-style: italic; }
 
 .footer-tag { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); }
 .footer-tag button.disclosure-trigger { background: transparent; border: none; padding: 0;
@@ -274,71 +320,68 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .popup-status.found { color: var(--tracked); }
 .popup-status.err { color: var(--danger); }
 
-/* ===== M9-M3: the deep view ("the file") — v6-as-edited is the spec ===== */
+/* ===== The full picture (deep view) — v7 Front-Page type (DIRECTION-v5 §9).
+   Same class names as before (the structure already matches the mockup); only
+   the visual tokens/scale change, so the NL-12/M3 render pins stay green. ===== */
 .deep-view-entry { margin-top: 0.5rem; }
-.deep-view-entry a { font-size: 0.8rem; color: var(--ink-soft); text-decoration: none; }
-.deep-view-entry a:hover { color: var(--accent); text-decoration: underline; }
-.deep-back { font-size: 0.85rem; color: var(--ink-soft); text-decoration: none;
-  display: inline-block; margin: 1.1rem 0 0.5rem; }
-.deep-back:hover { color: var(--accent); }
-.deep-title-block { margin: 0.5rem 0 1.5rem; }
-.deep-eyebrow { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--ink-faint); margin: 0 0 0.4rem; }
-.deep-title { font-family: var(--font-serif); font-size: 1.3rem; font-weight: 700;
-  margin: 0; line-height: 1.3; }
-.deep-jumplist { font-size: 0.85rem; color: var(--ink-soft); margin: 0 0 2rem;
-  padding-bottom: 1.25rem; border-bottom: 1px solid var(--rule); line-height: 1.9; }
+.deep-view-entry a { font-size: 0.88rem; color: var(--terra); font-weight: 700; text-decoration: none; }
+.deep-view-entry a:hover { color: var(--terra-deep); text-decoration: underline; }
+.deep-back { font-size: 0.88rem; color: var(--ink-soft); text-decoration: none;
+  display: inline-block; margin: 2rem 0 0; }
+.deep-back:hover { color: var(--terra); }
+.deep-title-block { margin: 0 0 0; }
+.deep-eyebrow { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--terra); margin: 1.6rem 0 0.5rem; }
+.deep-title { font-family: var(--font-display); font-weight: 700; font-size: 2.4rem;
+  line-height: 1.1; letter-spacing: -0.01em; margin: 0 0 0.7rem; max-width: 44rem; }
+/* Arc continuity line — a cited context line in the title block. */
+.deep-arc-line { font-size: 0.95rem; color: var(--ink-soft); max-width: 44rem;
+  margin: 0 0 1rem; line-height: 1.5; }
+.deep-arc-verdict { font-weight: 700; color: var(--moved); }
+.deep-arc-link { color: var(--ink-faint); text-decoration: none; white-space: nowrap; }
+.deep-arc-link:hover { color: var(--terra); }
+.deep-jumplist { font-size: 0.85rem; color: var(--ink-faint); margin: 0 0 2rem;
+  padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule); max-width: 44rem; line-height: 1.9; }
 .deep-jumplist a { color: var(--ink-soft); text-decoration: none; }
-.deep-jumplist a:hover { color: var(--accent); }
-.deep-jumplist .sep { color: var(--ink-faint); margin: 0 0.4em; }
-.deep-section { margin: 0 0 2.25rem; scroll-margin-top: 1rem; }
-.deep-section-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--accent); margin: 0 0 0.85rem; }
-.deep-section p { margin: 0 0 0.75rem; }
+.deep-jumplist a:hover { color: var(--ink); text-decoration: underline; }
+.deep-jumplist .sep { color: var(--rule); margin: 0 0.45rem; }
+.deep-section { max-width: 44rem; margin: 0 0 2rem; scroll-margin-top: 1rem; }
+.deep-section-label { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 0.7rem; }
+.deep-section p { margin: 0 0 0.8rem; }
 .deep-section p:last-child { margin-bottom: 0; }
-.deep-facts-list { list-style: none; margin: 0; padding: 0; }
-.deep-facts-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--rule); }
-.deep-facts-list li:last-child { border-bottom: none; }
+.deep-facts-list { margin: 0; padding-left: 1.1rem; }
+.deep-facts-list li { margin: 0 0 0.55rem; }
+.cite { font-size: 0.8rem; color: var(--ink-faint); }
+/* "The story so far" timeline — machine-register dates + quiet significance. */
+.deep-timeline-list { list-style: none; margin: 0; padding: 0; }
+.tl-entry { margin: 0 0 0.9rem; }
+.tl-date { font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.04em;
+  color: var(--ink-faint); display: block; }
+.tl-signif { color: var(--ink-soft); }
+.tl-gap { font-size: 0.85rem; color: var(--ink-faint); font-style: italic; margin: 0 0 0.9rem; }
 /* NL-58 parity: the citation fold reads the same in the facts list AND in the
-   mechanism prose (was scoped to the list only). */
+   mechanism prose. <details open> => no-JS shows it expanded; JS collapses it. */
 .fact-cite { color: var(--ink-faint); font-size: 0.85em; }
-/* NL-12 citation fold-away: a quiet typographic marker (no chip/pill) that
-   reveals the outlet names + count on tap. <details open> => no-JS shows the
-   citation expanded (degrade = more information); JS collapses it on load.
-   Native <summary> is keyboard-operable (Enter/Space, focusable). */
 .cite-fold { display: inline; }
-/* Explicit collapse — a display:inline <details> defeats the UA's native
-   content-hiding in Chrome, so hide the body ourselves off the open state.
-   No-JS keeps [open] -> body shown (degrade = more information). */
 .cite-fold:not([open]) .cite-fold-body { display: none; }
-.cite-fold summary { display: inline; cursor: pointer; list-style: none;
-  color: var(--ink-faint); }
+.cite-fold summary { display: inline; cursor: pointer; list-style: none; color: var(--ink-faint); }
 .cite-fold summary::-webkit-details-marker { display: none; }
-.cite-fold summary:focus-visible { outline: 2px solid var(--accent);
-  outline-offset: 2px; border-radius: 2px; }
-.cite-fold summary .caret { display: inline-block; font-size: 0.85em;
-  transition: transform 0.12s ease; }
+.cite-fold summary:focus-visible { outline: 2px solid var(--terra); outline-offset: 2px; border-radius: 2px; }
+.cite-fold summary .caret { display: inline-block; font-size: 0.85em; transition: transform 0.12s ease; }
 .cite-fold[open] summary .caret { transform: rotate(90deg); }
 .cite-fold .cite-fold-body { color: var(--ink-faint); }
-/* NL-12 arc continuity line — a cited context line in the title block. */
-.deep-arc-line { font-size: 0.9rem; color: var(--ink-soft); margin: 0.65rem 0 0;
-  line-height: 1.5; }
-.deep-arc-verdict { font-weight: 600; color: var(--ink); }
-.deep-arc-link { color: var(--ink-faint); text-decoration: none;
-  white-space: nowrap; }
-.deep-arc-link:hover { color: var(--accent); }
 .deep-effect { margin: 0 0 0.85rem; }
 .deep-effect .cite { color: var(--ink-faint); font-size: 0.9em; }
-.deep-source-row { background: var(--surface); border-radius: var(--radius);
-  padding: 0.85rem 1rem; margin-bottom: 0.6rem; }
-.deep-source-row .source-outlet { font-weight: 700; margin: 0 0 0.2rem; }
-.deep-source-row a { color: var(--ink); text-decoration: none; }
-.deep-source-row a:hover { color: var(--accent); text-decoration: underline; }
-.deep-source-row .source-title { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.3rem; }
+.deep-source-row { border-top: 1px solid var(--rule); padding: 0.55rem 0; font-size: 0.88rem; }
+.deep-source-row:first-of-type { border-top: none; }
+.deep-source-row .source-outlet { font-weight: 700; margin: 0 0 0.1rem; }
+.deep-source-row a { color: var(--terra); text-decoration: none; }
+.deep-source-row a:hover { color: var(--terra-deep); text-decoration: underline; }
+.deep-source-row .source-title { color: var(--ink-soft); font-size: 0.88rem; margin: 0 0 0.15rem; }
 .deep-source-row .source-meta { color: var(--ink-faint); font-size: 0.78rem; margin: 0; }
 /* NL-63 M3 (Decision B): 'The numbers' reuses the facts list; 'Unresolved'
-   renders each cross-source discrepancy as two attributed sides + the note.
-   Structural only — v7 visual refinement rides after sight-approval. */
+   renders each cross-source discrepancy as two attributed sides + the note. */
 .deep-numbers-list li { font-variant-numeric: tabular-nums; }
 .deep-unresolved-row { padding: 0.5rem 0; border-bottom: 1px solid var(--rule); }
 .deep-unresolved-row:last-child { border-bottom: none; }
@@ -348,30 +391,37 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
   text-transform: uppercase; letter-spacing: 0.06em; margin: 0.1rem 0; }
 .deep-unresolved-note { color: var(--ink-soft); font-size: 0.85rem;
   font-style: italic; margin: 0.2rem 0 0; }
-/* NL-66(b): the In-Brief sources-&-context view — matched topics/threads,
-   corroboration label, and the shared 'Here for' rationale. */
-.sc-tags, .sc-threads, .sc-herefor { color: var(--ink-soft); font-size: 0.9rem;
-  margin: 0 0 0.35rem; }
+/* NL-66(b): the In-Brief sources-&-context view. */
+.sc-tags, .sc-threads, .sc-herefor { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.35rem; }
 .sc-corrob { color: var(--ink-faint); font-size: 0.85rem; margin: 0 0 0.6rem; }
-.deep-footer { font-size: 0.74rem; color: var(--ink-faint); padding-top: 1.25rem;
+.deep-footer { font-size: 0.78rem; color: var(--ink-faint); padding-top: 1.25rem;
   margin-top: 0.5rem; border-top: 1px solid var(--rule); line-height: 1.6; }
 .deep-footer p { margin: 0 0 0.4rem; }
 .deep-footer p:last-child { margin-bottom: 0; }
 
-nav.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg);
-  border-top: 1px solid var(--rule); display: flex; justify-content: space-around;
-  padding: 0.5rem 0 max(0.5rem, env(safe-area-inset-bottom)); z-index: 15; }
-nav.bottom-nav button { background: transparent; border: none; display: flex; flex-direction: column;
-  align-items: center; gap: 0.25rem; font-size: 0.7rem; color: var(--ink-faint); cursor: pointer;
-  padding: 0.25rem 0.85rem; }
-nav.bottom-nav button .icon svg { display: block; stroke: currentColor; }
-nav.bottom-nav button.current { color: var(--accent); font-weight: 600; }
+/* Deep + archive-edition views carry no section line, so they center as a page. */
+#view-edition, section[id^="view-deep-"] { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
+#view-edition .view-title, #view-edition .today-grid, #view-edition .footer-tag { max-width: none; }
 
-@media (min-width: 640px) { main, .top-bar, .episode-affordance { max-width: 38rem; } }
+/* ============================ MOBILE PASS (~390px) ============================ */
+@media (max-width: 900px) {
+  .page { padding: 0 1.15rem; }
+  #view-edition, section[id^="view-deep-"] { padding: 0 1.15rem; }
+  .today-grid { grid-template-columns: 1fr; gap: 0; }
+  .dateline { font-size: 2.6rem; }
+  .signature { font-size: 1.1rem; }
+  .dispatch-strip { font-size: 0.74rem; }
+  .lead h1.headline { font-size: 2.5rem; line-height: 1.08; }
+  .col-right { border-top: 1px solid var(--ink); padding-top: 1.6rem; margin-top: 0.6rem; }
+  .section-line a { margin-right: 1.1rem; }
+  .deep-title { font-size: 1.8rem; }
+}
 """
 
-# The full page shell. Placeholders: {css} {date_label} {episode_html}
-# {today_html} {following_html} {archive_html} {settings_html} {popups_html} {js}
+# The full page shell (v7 — DIRECTION-v5 §4: no chrome). The masthead ceremony,
+# section line, and edition bar are rendered INTO each view by server.py (the
+# dateline is per-edition, not shared chrome). Placeholders: {css} {today_html}
+# {following_html} {archive_html} {settings_html} {popups_html} {deep_views_html} {js}
 PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -381,22 +431,7 @@ PAGE = """<!DOCTYPE html>
 <style>{css}</style>
 </head>
 <body>
-<div class="top-bar">
-  <span class="edition-date">{date_label}</span>
-  <!-- TWEAK 4: logo placeholder, centered — the principal designs the real
-       logo later; this dashes-outlined wordmark holds the slot honestly. -->
-  <span class="logo-placeholder" aria-label="NewsLens logo placeholder">NewsLens</span>
-  <span class="top-bar-right">
-    <button class="settings-corner" aria-label="Settings" onclick="openSettings()">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7">
-        <line x1="4" y1="7" x2="20" y2="7"/><circle cx="14" cy="7" r="2" fill="var(--bg)"/>
-        <line x1="4" y1="12" x2="20" y2="12"/><circle cx="9" cy="12" r="2" fill="var(--bg)"/>
-        <line x1="4" y1="17" x2="20" y2="17"/><circle cx="16" cy="17" r="2" fill="var(--bg)"/>
-      </svg>
-    </button>
-  </span>
-</div>
-{episode_html}
+<a class="skip-link" href="#view-today">Skip to today’s edition</a>
 <main>
 <section id="view-today" class="view active">{today_html}</section>
 <section id="view-following" class="view">{following_html}</section>
@@ -411,20 +446,6 @@ PAGE = """<!DOCTYPE html>
 {settings_html}
 </div>
 {popups_html}
-<nav class="bottom-nav">
-  <button class="current" data-nav="today" onclick="showView('today', this)">
-    <span class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M4 4h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3V4Z"/><path d="M18 7h2v13h-2"/><path d="M8 9h6M8 12h6M8 15h4"/></svg></span>
-    Today
-  </button>
-  <button data-nav="following" onclick="showView('following', this)">
-    <span class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M6 3h12v18l-6-4-6 4V3Z"/></svg></span>
-    Following
-  </button>
-  <button data-nav="archive" onclick="showView('archive', this)">
-    <span class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="1.6"><rect x="3.5" y="5" width="17" height="16" rx="1.5"/><path d="M3.5 9.5h17" stroke-width="2.2"/><path d="M8 3v4M16 3v4"/></svg></span>
-    Archive
-  </button>
-</nav>
 <script>{js}</script>
 </body>
 </html>"""
@@ -496,12 +517,14 @@ var CURRENT_DATE = document.body.getAttribute('data-briefing-date') || '';
 /* NL-11: own the scroll position across verb reloads (below) rather than
    letting the browser auto-restore/reset it. */
 try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (e) {}
-function showView(name, navEl) {
+function showView(name) {
+  /* v7 (DIRECTION-v5 §4): the section line lives INSIDE each view, server-
+     rendered with the correct aria-current, so switching the active view shows
+     the right nav state — there are no bottom tabs to sync. The old navEl arg is
+     dropped; every call site passes the name only. */
   document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
-  document.getElementById('view-' + name).classList.add('active');
-  document.querySelectorAll('.bottom-nav button').forEach(function (b) { b.classList.remove('current'); });
-  var target = navEl && navEl.tagName === 'BUTTON' ? navEl : document.querySelector('[data-nav="' + name + '"]');
-  if (target) target.classList.add('current');
+  var v = document.getElementById('view-' + name);
+  if (v) v.classList.add('active');
   window.scrollTo(0, 0);
 }
 function showSub(name, btnEl) {
@@ -522,8 +545,9 @@ function api(path, body, cb) {
    in (never bounce to Today). Verbs replace location.reload() with this. */
 function reloadPreservingView() {
   try {
-    var navBtn = document.querySelector('.bottom-nav button.current');
-    var view = navBtn ? navBtn.getAttribute('data-nav') : 'today';
+    var av = document.querySelector('.view.active');
+    var view = (av && (av.id === 'view-following' || av.id === 'view-archive'))
+      ? av.id.replace('view-', '') : 'today';
     var activeSub = document.querySelector('.sub-view.active');
     var sub = activeSub ? activeSub.id.replace('sub-', '') : null;
     var y = window.scrollY || window.pageYOffset ||
@@ -545,9 +569,7 @@ function restoreViewAfterReload() {
     if (sec) {
       document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
       sec.classList.add('active');
-      document.querySelectorAll('.bottom-nav button').forEach(function (b) { b.classList.remove('current'); });
-      var nb = document.querySelector('[data-nav="' + st.view + '"]');
-      if (nb) nb.classList.add('current');
+      /* v7: no bottom tabs to sync — each view carries its own section line. */
     }
   }
   if (st.sub) {
@@ -694,16 +716,8 @@ function toggleDark(el) {
   document.body.classList.toggle('dark', !on);
   try { localStorage.setItem('newslens-dark', String(!on)); } catch (e) {}
 }
-/* P1 polish: splash-to-masthead logo. Idempotent class sync on scroll;
-   passive listener; both directions (scrolling back to top re-opens large). */
-(function () {
-  var THRESH = 24;
-  function syncSplash() {
-    document.body.classList.toggle('splash', window.scrollY <= THRESH);
-  }
-  window.addEventListener('scroll', syncSplash, { passive: true });
-  syncSplash();
-})();
+/* v7: the splash-logo scroll animation is retired — the top-bar logo it drove
+   is gone (DIRECTION-v5 §4 no-chrome); the dateline ceremony is the arrival. */
 try { if (localStorage.getItem('newslens-dark') === 'true') {
   document.body.classList.add('dark');
   var t = document.getElementById('dark-toggle'); if (t) t.setAttribute('aria-checked', 'true');
@@ -946,7 +960,6 @@ function openEdition(date, e) {
       document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
       var ed = document.getElementById('view-edition');
       if (ed) ed.classList.add('active');
-      document.querySelectorAll('.bottom-nav button').forEach(function (b) { b.classList.remove('current'); });
       window.scrollTo(0, 0);
     })
     .catch(function () { location.href = '/?date=' + encodeURIComponent(date); });

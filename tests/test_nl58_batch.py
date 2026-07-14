@@ -131,10 +131,11 @@ def test_arc_prior_date_link_requires_a_real_calendar_date():
 # --- P3a / P4b: the merged control lives in one row under the title ----------
 
 def test_thread_tracked_story_shows_marker_in_the_affordances_row(tmp_paths):
-    """Ruling 4: the tracked-ongoing marker moved OUT of the above-title eyebrow
-    into the single .story-affordances row under the title, merged with the
-    follow control. A thread-tracked story shows the marker STATE there and no
-    separate follow button."""
+    """Ruling 4 (v7/NL-65 flip): the tracked-ongoing marker sits in the
+    under-title control row and a thread-tracked story shows the marker STATE
+    there with no separate follow button. WAS: that row was .story-affordances
+    (marker + "full picture" merged); NOW: it is the .deck (follow control
+    only — NL-65 moved "full picture" to the story bottom)."""
     db.migrate()
     con = db.connect()
     con.execute("INSERT INTO memory (topic, status, created_at, updated_at)"
@@ -143,12 +144,12 @@ def test_thread_tracked_story_shows_marker_in_the_affordances_row(tmp_paths):
     page, _ = server.build_page(con)
     con.close()
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
-    row = today[today.index('class="story-affordances"'):]
-    row = row[:row.index('</div>')]
-    assert 'class="tracked-marker"' in row      # marker in the merged row
+    row = today[today.index('class="deck"'):]
+    row = row[:row.index('</p>')]               # the deck is a <p class="deck">…</p>
+    assert 'class="tracked-marker"' in row      # marker in the under-title deck
     assert 'follow-story-btn' not in row         # no separate follow button
     # ...and the marker no longer floats above the title as its own eyebrow:
-    head = today[:today.index('class="story-affordances"')]
+    head = today[:today.index('class="deck"')]
     assert 'class="tracked-marker"' not in head
 
 

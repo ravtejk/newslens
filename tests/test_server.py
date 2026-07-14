@@ -1174,12 +1174,14 @@ def test_item27_furniture_contract_through_build_page(ui):
     assert "aria-pressed" in page
     # 6. Coexistence (NL-11 rule, NL-58 merged control): the tracked story
     # shows only its marker STATE; the override story (no thread match) keeps a
-    # follow toggle. Both now live in the single .story-affordances row under
-    # the title (NL-58 ruling 4).
+    # follow toggle. v7/NL-65 flip — WAS: the follow control + "full picture"
+    # shared one .story-affordances row under the title; NOW: the follow control
+    # sits alone in the under-title .deck (full picture moved to the story
+    # bottom). One .deck per story; the marker/button split is unchanged.
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
     assert today.count('class="tracked-marker"') == 1     # the tracked story
     assert today.count('class="follow-story-btn') == 1    # only the override story
-    assert today.count('class="story-affordances"') == 2  # merged row per story
+    assert today.count('class="deck"') == 2               # under-title control row per story
     assert 'class="glance"' not in page                   # glance removed (NL-11)
 
 
