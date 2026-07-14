@@ -23,8 +23,10 @@ then writes. `--no-refresh` consumes the existing briefing row instead
 Script pass (§5.8): input is the assembled narrative text + structured label
 data ONLY — never raw sources. The fact-subset rule and hedge preservation
 are validated heuristically (§5.9 items 7-8: warn-grade, flagged for review);
-mandatory disclosures (override spoken elements, revival dates, the frozen
-spoken caveat and sign-off) are presence-checked hard.
+mandatory disclosures (override spoken elements, revival dates) are
+presence-checked hard; the sign-off is frozen furniture, appended if missing.
+The spoken caveat was retired from the episode by NL-58 ruling 2 (the app
+carries it) — no longer prompted, appended, or checked.
 
 Instrumentation (§5.10) is a state file, not a migration:
 data/generation_log.jsonl — one append-only JSON line per generate attempt
@@ -102,6 +104,10 @@ VARIANT_B_STAMP = (
     'labeled "My read."'
 )
 VARIANT_A_STAMP = "Voice: A."
+# RETIRED from the podcast pipeline (NL-58 ruling 2, DECISIONS 2026-07-10): the
+# spoken caveat is deliberately OUT of the episode — the app carries the caveat,
+# the podcast does not. The constant is kept only so tests can assert its
+# ABSENCE from generated scripts; it is no longer prompted for or appended.
 SPOKEN_CAVEAT = (
     "The usual reminder: outlet counts measure independent pickup across "
     "your sources, not truth — one strong single-source report can beat five "
@@ -877,6 +883,10 @@ def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -
         else '; epistemic first person is allowed only when voicing the '
         'briefing\'s labeled "My read" judgments'
     )
+    # NL-58 ruling 2: the spoken caveat is OUT of the podcast (the app carries
+    # the caveat; the spoken furniture is a deliberate, principal-ruled
+    # contract change). The prompt no longer asks for it — {spoken_caveat} is
+    # gone from the template — and validate_script no longer appends it.
     return template.format(
         date_line=f"{weekday}, {human}",
         time_of_day=_time_of_day(),
@@ -887,7 +897,6 @@ def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -
         budget_outro=SCRIPT_OUTRO_WORDS,
         weekday=weekday,
         spoken_date=human,
-        spoken_caveat=SPOKEN_CAVEAT,
         epistemic_rule=epistemic,
         labels_block=build_labels_block(inputs),
         narrative_text=narrative,
@@ -1030,10 +1039,12 @@ def validate_script(
 ) -> Tuple[str, List[str], List[str]]:
     """Returns (possibly-repaired text, hard_problems, warnings).
     Hard problems: missing mandatory spoken disclosures (override elements,
-    revival dates) — retry material. Frozen furniture (spoken caveat,
-    sign-off) is deterministically appended if absent (verbatim strings, not
-    facts) with a disclosure warning. Fact-subset + hedge checks warn (§5.9
-    #7-8: flag for review, never auto-fix)."""
+    revival dates) — retry material. The sign-off is frozen furniture,
+    deterministically appended if absent (verbatim string, not facts) with a
+    disclosure warning. The spoken caveat was retired from the podcast by NL-58
+    ruling 2 (the app carries it) — no longer appended or checked here.
+    Fact-subset + hedge checks warn (§5.9 #7-8: flag for review, never
+    auto-fix)."""
     hard: List[str] = []
     warnings: List[str] = []
     body = text.strip()
@@ -1059,35 +1070,13 @@ def validate_script(
         # A5: per-story spoken attribution (incl. single-source phrasing) is
         # editorial judgment now — no presence check. Accuracy checks stay.
 
-    if SPOKEN_CAVEAT.lower() not in low:
-        body = body.rstrip()
-        # NOTES 28c: a PARAPHRASED caveat plus the verbatim append used to
-        # voice two caveats back to back. Detect a paraphrase in the outro
-        # region (a sentence carrying >=3 of the caveat's distinctive
-        # stems) and remove it before appending the frozen text.
-        tail_start = max(0, len(body) - 700)
-        tail = body[tail_start:]
-        # BUG19: stems match on WORD BOUNDARIES (plural-tolerant) — the
-        # substring version ate legitimate prose (country->count,
-        # wired->wire, outsourced->source).
-        stem_res = (re.compile(r"\boutlets?\b"), re.compile(r"\bwires?\b"),
-                    re.compile(r"\bsources?\b"), re.compile(r"\bcounts?\b"),
-                    re.compile(r"\btruth\b"))
-        for sent in re.split(r"(?<=[.!?])\s+", tail):
-            s_low = sent.lower()
-            if sum(1 for rx in stem_res if rx.search(s_low)) >= 3 and len(sent) > 40:
-                body = (body[:tail_start] + tail.replace(sent, "").strip())
-                warnings.append(
-                    "spoken caveat PARAPHRASE removed — replaced with the "
-                    "frozen text (NOTES 28c; paraphrase: "
-                    f"\"{sent[:60]}...\")")
-                low = body.lower()
-                break
-        if SIGNOFF.lower() in low:
-            body = re.sub(re.escape(SIGNOFF), "", body, flags=re.I).rstrip()
-        body += "\n\n" + SPOKEN_CAVEAT + "\n\n" + SIGNOFF
-        warnings.append("spoken caveat was missing — appended verbatim (frozen furniture)")
-    elif SIGNOFF.lower() not in low:
+    # NL-58 ruling 2: the spoken caveat is OUT of the podcast (DECISIONS
+    # 2026-07-10). The append machinery and the NOTES 28c paraphrase-removal
+    # (which existed only to keep the model's paraphrase from doubling the
+    # verbatim append) are both gone — nothing appends, so nothing can double.
+    # The app-side caveat footer is untouched. Only the sign-off remains frozen
+    # furniture: appended verbatim if the model dropped it.
+    if SIGNOFF.lower() not in low:
         body = body.rstrip() + "\n\n" + SIGNOFF
         warnings.append("sign-off was missing — appended verbatim")
 

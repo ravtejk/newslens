@@ -75,6 +75,13 @@ body.splash .logo-placeholder { font-size: 2.95rem; padding: 0.98rem 1.55rem; ma
 .episode-affordance button:hover { color: var(--accent-deep); }
 .episode-affordance .episode-meta { color: var(--ink-faint); font-size: 0.85rem; }
 .episode-affordance audio { display: block; width: 100%; margin-top: 0.6rem; }
+/* NL-58 ruling 7: skip/speed row under the native player. */
+.player-extra { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.player-extra .player-btn { background: transparent; border: 1px solid var(--rule);
+  border-radius: 999px; padding: 0.2rem 0.7rem; font-size: 0.78rem; font-family: inherit;
+  color: var(--ink-soft); cursor: pointer; }
+.player-extra .player-btn:hover { border-color: var(--ink); color: var(--ink); }
+.player-extra .speed-btn { min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* NL-11: the glance section is removed (rework backlogged, NL-20). The lead
    story now opens the reading surface and gets room to breathe below the
@@ -106,12 +113,24 @@ p.lede { margin: 0 0 1rem; }
 .my-read { font-style: italic; }
 .quick-hit p { margin: 0 0 0.5rem; font-size: 0.95rem; }
 .meta-footnote { font-size: 0.74rem; color: var(--ink-faint); margin-top: 1rem; line-height: 1.5; }
+/* NL-58 ruling 4: the merged control (tracked marker OR follow toggle) and
+   "The full picture" share ONE aligned row directly under the title. Baseline
+   alignment + a single gap keep them consistently indented (ruling 5). */
+.story-affordances { display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 0.35rem 1.1rem; margin: 0 0 1rem; }
+.story-affordances .tracked-marker { margin: 0; }
+.follow-story-btn { background: transparent; border: none; padding: 0; font-size: 0.8rem;
+  font-family: inherit; color: var(--ink-soft); cursor: pointer; }
+.follow-story-btn:hover { color: var(--accent); }
+.follow-story-btn.confirming { color: var(--tracked); font-weight: 600; }
+.follow-story-btn.followed { color: var(--tracked); }
+.deep-view-entry-link { font-size: 0.8rem; color: var(--ink-soft); text-decoration: none; }
+.deep-view-entry-link:hover { color: var(--accent); text-decoration: underline; }
+/* The Following view's "Follow a new story" add button keeps its own block. */
 .follow-story { margin-top: 0.5rem; }
 .follow-story button { background: transparent; border: none; padding: 0; font-size: 0.8rem;
   color: var(--ink-soft); cursor: pointer; }
 .follow-story button:hover { color: var(--accent); }
-.follow-story button.confirming { color: var(--tracked); font-weight: 600; }
-.follow-story button.followed { color: var(--tracked); }
 
 .footer-tag { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); }
 .footer-tag button.disclosure-trigger { background: transparent; border: none; padding: 0;
@@ -120,6 +139,8 @@ p.lede { margin: 0 0 1rem; }
 .footer-tag button.disclosure-trigger:hover { color: var(--ink-soft); }
 .footer-tag button.disclosure-trigger .caret { font-size: 0.65rem; transition: transform 150ms ease-out; display: inline-block; }
 .footer-tag button.disclosure-trigger[aria-expanded="true"] .caret { transform: rotate(90deg); }
+/* NL-58 ruling 6: the collection window, quiet but always visible on Today. */
+.coverage-window { font-size: 0.74rem; color: var(--ink-faint); margin: 0.5rem 0 0; }
 .footer-detail { font-size: 0.74rem; color: var(--ink-faint); line-height: 1.6; margin-top: 0.75rem; display: none; }
 .footer-detail.open { display: block; }
 .footer-detail p { margin: 0 0 0.5rem; } .footer-detail p:last-child { margin-bottom: 0; }
@@ -162,11 +183,14 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
   margin-bottom: 0.7rem; display: flex; align-items: flex-start; gap: 0.85rem; }
 .dossier .dot-slot { width: 0.6rem; flex-shrink: 0; text-align: center; color: var(--tracked);
   font-size: 0.66rem; line-height: 1; align-self: flex-start; margin-top: 0.36rem; }
-.dossier-row-body { flex: 1; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
-.dossier-main { flex: 1; min-width: 12rem; }
-.dossier-topic { font-family: var(--font-serif); font-size: 1.08rem; font-weight: 700; margin: 0 0 0.3rem; }
-.dossier-meta { font-size: 0.78rem; color: var(--ink-faint); margin: 0; }
-.dossier-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+.dossier-row-body { flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 0.6rem 1rem; flex-wrap: wrap; }
+/* NL-58 P3d: min-width:0 lets main shrink instead of forcing the actions past
+   the card edge on narrow cards; the actions wrap as a unit and each button may
+   also wrap — belt-and-suspenders so buttons never break the card edge. */
+.dossier-main { flex: 1 1 8rem; min-width: 0; }
+.dossier-topic { font-family: var(--font-serif); font-size: 1.08rem; font-weight: 700; margin: 0 0 0.3rem; overflow-wrap: anywhere; }
+.dossier-meta { font-size: 0.78rem; color: var(--ink-faint); margin: 0; overflow-wrap: anywhere; }
+.dossier-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
 .dossier-actions button { font-size: 0.74rem; background: transparent; border: 1px solid var(--rule);
   color: var(--ink-soft); padding: 0.3rem 0.65rem; border-radius: 7px; cursor: pointer; }
 .dossier-actions button:hover { border-color: var(--ink); color: var(--ink); }
@@ -275,7 +299,9 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .deep-facts-list { list-style: none; margin: 0; padding: 0; }
 .deep-facts-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--rule); }
 .deep-facts-list li:last-child { border-bottom: none; }
-.deep-facts-list .fact-cite { color: var(--ink-faint); font-size: 0.85em; }
+/* NL-58 parity: the citation fold reads the same in the facts list AND in the
+   mechanism prose (was scoped to the list only). */
+.fact-cite { color: var(--ink-faint); font-size: 0.85em; }
 /* NL-12 citation fold-away: a quiet typographic marker (no chip/pill) that
    reveals the outlet names + count on tap. <details open> => no-JS shows the
    citation expanded (degrade = more information); JS collapses it on load.
@@ -557,7 +583,7 @@ function toggleFollow(btn) {
       btn.classList.add('followed');
       btn.setAttribute('aria-pressed', 'true');
       btn.textContent = 'Following this story';
-    }, 1400);
+    }, 2800);  // NL-58 ruling 5: confirm state holds 2x the old duration
   });
 }
 /* M9-M3: deep-view navigation — v6's lastStoryAnchor logic is the spec.
@@ -606,9 +632,33 @@ function toggleEpisode() { toggleEpisodeEl('episode-player'); }
 function toggleEpisodeEl(id) {
   var el = document.getElementById(id);
   if (!el) return;
+  var extra = document.getElementById(id + '-extra');
   if (el.style.display === 'none' || !el.style.display) {
-    el.style.display = 'block'; el.play();
+    el.style.display = 'block';
+    if (extra) extra.style.display = 'flex';  // NL-58: reveal speed/skip
+    el.play();
   } else { el.paused ? el.play() : el.pause(); }
+}
+/* NL-58 ruling 7: minimal player controls on top of the native <audio> — skip
+   +/-15s and a 1x/1.25x/1.5x/2x speed cycle. Clamp the skip to the media
+   bounds; the speed button relabels itself to the active rate. */
+function skipAudio(id, delta) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var t = (el.currentTime || 0) + delta;
+  if (t < 0) t = 0;
+  if (el.duration && t > el.duration) t = el.duration;
+  el.currentTime = t;
+}
+var AUDIO_SPEEDS = [1, 1.25, 1.5, 2];
+function cycleSpeed(id, btn) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var i = AUDIO_SPEEDS.indexOf(el.playbackRate);
+  var next = AUDIO_SPEEDS[(i + 1) % AUDIO_SPEEDS.length];
+  if (!next) next = 1;
+  el.playbackRate = next;
+  btn.textContent = next + '\\u00D7';
 }
 function openSettings() {
   document.getElementById('slide-scrim').classList.add('open');

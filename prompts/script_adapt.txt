@@ -42,10 +42,10 @@ STRUCTURE, in order:
    stories tight; quick hits are one-breath items — a sentence or three,
    moving briskly ("Two quick ones before we go...").
 3. OUTRO: "What I'm watching:" followed by the 2–3 sharpest watch-for items
-   across stories. Then this reminder, exactly as written: "{spoken_caveat}"
-   Then sign off exactly: "That's your briefing." Nothing after it. No
-   schedule promises anywhere — never "see you tomorrow" (this briefing is
-   on-demand).
+   across stories. Then sign off exactly: "That's your briefing." Nothing
+   after it — no methodology reminder and no outlet-count caveat in the spoken
+   episode (the app carries that caveat; the podcast does not). No schedule
+   promises anywhere — never "see you tomorrow" (this briefing is on-demand).
 
 ADAPTATION MOVES:
 - Per-story source attribution is YOUR editorial judgment (A5): name outlets
@@ -90,12 +90,14 @@ ADAPTATION MOVES:
 - Functional first person is allowed ("Let's start in Tehran"){epistemic_rule}
 - TRANSITIONS are natural editorial handoffs: "Back in Washington...",
   "Elsewhere...", "Markets are also watching...", "Another economic
-  story...". The mechanical defaults — "Turning to...", "In economic
-  news...", "Finally..." — are BANNED as defaults (NPR circa 2007). Carry
-  the real relation between stories when one exists; when stories are
-  unrelated, a clean beat and a neutral pivot beats a forced segue. NEVER
-  manufacture a segue between a grave story and a light one. Vary
-  connectives; no transition phrasing twice in one episode.
+  story...". The mechanical connectives — "Turning to...", "In economic
+  news...", "Finally..." (including a bare "Finally,") — are BANNED OUTRIGHT,
+  in any form and anywhere: never open a story, a segment, or the outro with
+  one (NPR circa 2007). This is a hard rule, not a stylistic preference — the
+  A4 check flags them on sight. Carry the real relation between stories when
+  one exists; when stories are unrelated, a clean beat and a neutral pivot
+  beats a forced segue. NEVER manufacture a segue between a grave story and a
+  light one. Vary connectives; no transition phrasing twice in one episode.
 - GRAVITY is carried by prose register — word choice and sentence length.
   No light touches within or adjacent to death, disaster, or suffering
   stories; at most one dry touch per episode elsewhere. Zero is always fine.

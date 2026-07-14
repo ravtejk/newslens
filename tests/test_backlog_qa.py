@@ -6,18 +6,16 @@ fact-subset EXEMPTION change). Dirty-guard behavior pins are structural
 source pins per the M7 precedent (the suite runs no browser JS); the
 recorded browser-pass item covers live interaction.
 
-KNOWN-RED:
-  BUG19  28c's stems match as SUBSTRINGS ("count" in "country"/"recounted",
-         "wire" in "wired", "source" in "outsourced"), so a legitimate
-         outro sentence with three artifact hits is REMOVED from the
-         script — destructive edit of legitimate prose inside the batch
-         that exists to stop silent text loss. Fix: word-boundary stem
-         matching (r"\\b" + stem), keeping the >=3-distinct threshold and
-         the green near-miss pins below.
-(BUG20 candidate WITHDRAWN during probing: the removal block is gated
-inside `if SPOKEN_CAVEAT not in low` — a verbatim caveat skips it
-entirely, so the frozen text can never be its own removal target. Pinned
-green as the gating contract instead.)
+HISTORICAL (machinery since DELETED — NL-58 ruling 2 / NL-60: the spoken
+caveat is retired from the podcast entirely; no removal block, no stem
+matching, no re-append exists in current code):
+  BUG19  was: substring stems ate legitimate prose in the 28c removal
+         block; fixed with word-boundary stems, then the whole block was
+         deleted with the caveat's retirement. The surviving test pins
+         that the retired machinery STAYS retired.
+  BUG20  was withdrawn during probing (the then-live gating contract);
+         its sibling pins were retired with the machinery — dated
+         tombstone below.
 
 Gate items: 28b does NOT only narrow — {1..slot_count} narrows 1-slot
 days but WIDENS typical 5-slot days (invented "4"/"5" now exempt where
@@ -222,7 +220,7 @@ def test_28b_widening_on_typical_days_pinned_as_actual_for_the_gate():
 # ---------------------------------------------------------------------------
 
 def test_BUG19_substring_stem_hits_must_not_eat_legitimate_prose():
-    """KNOWN-RED (BUG19). All three 'stem' hits here are substring
+    """GREEN — was KNOWN-RED (BUG19), resolved by deletion (NL-58 ruling 2, NL-60): the 28c removal block is gone; this now pins that the retired machinery stays retired — legitimate prose is never eaten and no PARAPHRASE disclosure fires. Original finding. All three 'stem' hits here are substring
     artifacts — country->count, wired->wire, outsourced->source — yet the
     sentence is removed from the persisted script. The removal block must
     match stems on word boundaries; this legitimate outro sentence
@@ -236,55 +234,33 @@ def test_BUG19_substring_stem_hits_must_not_eat_legitimate_prose():
     assert not any("PARAPHRASE removed" in w for w in warns)
 
 
-def test_verbatim_caveat_gates_the_removal_block_off():
-    """The dispatch's 'frozen text must never be the removal target' —
-    holds BY GATING: the 28c block lives inside `if SPOKEN_CAVEAT not in
-    low`, so a verbatim caveat (5/5 stems, the block's strongest possible
-    match) skips it entirely. Pinning the gate so a refactor that hoists
-    the removal above the presence check shows up red here."""
-    body, _, warns = generate.validate_script(
-        _script_with(""),  # helper places the verbatim caveat in the outro
-        "One story today.", _inputs_for([slot(1)]))
-    assert generate.SPOKEN_CAVEAT in body
-    assert not any("PARAPHRASE removed" in w for w in warns)
+# RETIRED 2026-07-13 (NL-60) — three 28c pins deleted as vacuous. They pinned the
+# caveat-removal machinery (the remove-then-reappend churn, its stem-threshold
+# boundaries, and the `if SPOKEN_CAVEAT not in low` gate), which NL-58 ruling 2
+# (DECISIONS 2026-07-10) deleted entirely: the spoken caveat is out of the podcast,
+# nothing appends it, so nothing removes it. With the machinery gone the three
+# assertions passed trivially. The surviving live contract — "a generated script
+# never carries the spoken caveat" — stays pinned by
+# test_28c_paraphrase_left_untouched_now_that_caveat_is_removed (below,
+# `assert generate.SPOKEN_CAVEAT not in body`) and, prompt-side, by
+# test_nl58_batch.test_script_prompt_does_not_request_the_spoken_caveat.
+#   was: test_verbatim_caveat_gates_the_removal_block_off
+#   was: test_28c_never_doubled_invariant_holds_even_while_BUG20_stands
+#   was: test_28c_two_real_stems_survive_and_short_three_stem_survives
 
 
-def test_28c_never_doubled_invariant_holds_even_while_BUG20_stands():
-    """Whatever the removal block does, the reader hears ONE caveat: the
-    remove-then-reappend churn still nets exactly one frozen caveat."""
-    body, _, _ = generate.validate_script(
-        _script_with(""), "One story today.", _inputs_for([slot(1)]))
-    assert body.count("outlet counts measure") == 1
-
-
-def test_28c_two_real_stems_survive_and_short_three_stem_survives():
-    """Near-miss pins both sides of the threshold: two genuine stems in a
-    long sentence pass; three stems under the 40-char floor pass."""
-    two_stems = ("The sources on this outlet story keep developing "
-                 "overnight and into tomorrow morning.")
-    body, _, warns = generate.validate_script(
-        _script_with(two_stems, caveat=False), "One story today. " + two_stems,
-        _inputs_for([slot(1)]))
-    assert two_stems in body
-    assert not any("PARAPHRASE removed" in w for w in warns)
-    short = "Outlet counts source truth."  # 3 stems, 27 chars: under the floor
-    body2, _, warns2 = generate.validate_script(
-        _script_with(short, caveat=False), "One story today. " + short,
-        _inputs_for([slot(1)]))
-    assert short in body2
-    assert not any("PARAPHRASE removed" in w for w in warns2)
-
-
-def test_28c_genuine_paraphrase_removed_with_the_quote_in_the_disclosure():
-    """The dispatch's disclosure requirement: the warning QUOTES the
-    removed paraphrase (first 60 chars), so the log shows exactly what
-    was cut."""
+def test_28c_paraphrase_left_untouched_now_that_caveat_is_removed():
+    """NL-58 ruling 2 (DECISIONS 2026-07-10): the spoken caveat is OUT of the
+    podcast, so the NOTES 28c paraphrase-removal — which existed only to stop a
+    model paraphrase from doubling the verbatim append — is retired. A model
+    paraphrase is now left in place and no verbatim caveat is inserted. (Was
+    test_28c_genuine_paraphrase_removed_with_the_quote_in_the_disclosure —
+    flipped.)"""
     paraphrase = ("Keep in mind that outlet and source counts are pickup "
                   "measures across the wire, never a guarantee of truth.")
     body, _, warns = generate.validate_script(
         _script_with(paraphrase, caveat=False), "One story today.",
         _inputs_for([slot(1)]))
-    assert paraphrase not in body
-    hit = next(w for w in warns if "PARAPHRASE removed" in w)
-    assert paraphrase[:40] in hit                 # the quote travels
-    assert body.count("outlet counts measure") == 1   # replaced, not doubled
+    assert paraphrase in body                     # model text untouched
+    assert generate.SPOKEN_CAVEAT not in body     # never appended
+    assert not any("PARAPHRASE removed" in w for w in warns)

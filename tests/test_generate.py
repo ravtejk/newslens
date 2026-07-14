@@ -617,19 +617,24 @@ def test_script_spoken_forms_accept_month_day():
     assert hard == []
 
 
-def test_frozen_caveat_and_signoff_appended_with_disclosure():
+def test_spoken_caveat_is_never_appended_signoff_still_is():
+    """NL-58 ruling 2 (DECISIONS 2026-07-10): the spoken caveat is OUT of the
+    podcast — a deliberate, principal-ruled contract change. validate_script no
+    longer appends it and no longer warns about it; only the sign-off remains
+    frozen furniture. (Was test_frozen_caveat_and_signoff_appended — flipped.)"""
     slots = [slot(1)]
     no_furniture = "A decent script body. " * 40 + generate.SIGNOFF
     body, hard, warns = generate.validate_script(
         no_furniture, "narrative", _inputs_for(slots)
     )
     assert hard == []
-    assert any("spoken caveat was missing — appended verbatim" in w for w in warns)
-    # Caveat lands BEFORE the sign-off; the stray sign-off was relocated.
-    assert body.index(generate.SPOKEN_CAVEAT) < body.index(generate.SIGNOFF)
-    assert body.count(generate.SIGNOFF) == 1
+    # The caveat is NOT force-appended, and its absence is NOT flagged.
+    assert generate.SPOKEN_CAVEAT not in body
+    assert not any("spoken caveat" in w.lower() for w in warns)
+    assert body.count(generate.SIGNOFF) == 1  # sign-off untouched
 
-    no_signoff = "Body. " * 40 + generate.SPOKEN_CAVEAT
+    # Sign-off is still frozen furniture — appended verbatim when missing.
+    no_signoff = "Body. " * 40
     body2, _, warns2 = generate.validate_script(
         no_signoff, "narrative", _inputs_for(slots)
     )
@@ -1106,7 +1111,8 @@ def test_A4_mechanical_transitions_and_early_dateline_warn():
 def test_A5_relaxations_did_not_leak_into_the_hard_set():
     """The A5 boundary: spoken single-source checking is GONE (no output at
     all), spoken revival warns — while override elements and the schedule ban
-    stay hard, and the frozen-furniture append still discloses."""
+    stay hard, and the sign-off is still appended. (NL-58 ruling 2: the spoken
+    caveat is no longer appended — assertion flipped below.)"""
     slots = [
         slot(1, override=True),
         slot(2, corroboration_count=1, outlets=("Solo",)),
@@ -1121,7 +1127,7 @@ def test_A5_relaxations_did_not_leak_into_the_hard_set():
     assert "schedule promise" in joined_hard                      # still hard
     assert "not voiced" in joined_warns                           # warn now
     assert "single-source" not in (joined_hard + joined_warns)    # check removed
-    assert "spoken caveat was missing — appended verbatim" in joined_warns
+    assert "spoken caveat" not in joined_warns.lower()            # NL-58: removed
     assert body.rstrip().endswith(generate.SIGNOFF)
 
 

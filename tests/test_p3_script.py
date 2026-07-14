@@ -153,7 +153,12 @@ def test_28a_keyless_refusal_lands_in_the_generation_log(tmp_paths):
         con.close()
 
 
-def test_28c_caveat_paraphrase_is_replaced_never_doubled():
+def test_28c_caveat_no_longer_appended_so_nothing_to_double():
+    """NL-58 ruling 2 (DECISIONS 2026-07-10): the spoken caveat is OUT of the
+    podcast. With no verbatim append, the NOTES 28c paraphrase-removal has
+    nothing to double against and is retired — a model paraphrase is simply
+    left untouched, and the frozen caveat is never inserted. (Was
+    test_28c_caveat_paraphrase_is_replaced_never_doubled — flipped.)"""
     from test_generate import _inputs_for, slot
     paraphrase = ("Remember that outlet counts just measure pickup across "
                   "sources and are no guarantee of truth or wire independence.")
@@ -163,7 +168,6 @@ def test_28c_caveat_paraphrase_is_replaced_never_doubled():
     body, _, warns = generate.validate_script(
         script, "Something happened. Details arrived. The vote.",
         _inputs_for([slot(1)]))
-    assert generate.SPOKEN_CAVEAT in body                 # frozen text present
-    assert "no guarantee of truth" not in body            # paraphrase gone
-    assert any("PARAPHRASE removed" in w for w in warns)  # disclosed
-    assert body.count("outlet counts measure") == 1       # never doubled
+    assert generate.SPOKEN_CAVEAT not in body             # never appended
+    assert paraphrase in body                             # model text untouched
+    assert not any("PARAPHRASE removed" in w for w in warns)  # logic retired

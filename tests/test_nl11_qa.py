@@ -171,8 +171,8 @@ def test_coexistence_title_equals_active_thread_without_matched_memory(tmp_paths
     button, and because the title matches an active thread — matched
     case-insensitively (active_topics is lowercased) — the button reads the
     PRESSED 'Following this story' state and un-follows on tap. Fix contract if
-    this bites: the `not marks` branch in _render_story sets pressed from
-    `topic.lower() in active_topics`."""
+    this bites: the `not marks` branch in _story_affordances sets pressed from
+    `topic.lower() in active_topics or headline.lower() in active_topics`."""
     db.migrate()
     con = db.connect()
     # stored thread casing DIFFERS from the story title -> proves the match is
@@ -185,7 +185,8 @@ def test_coexistence_title_equals_active_thread_without_matched_memory(tmp_paths
     assert rendered == TODAY
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
     assert 'class="tracked-marker"' not in today       # no matched_memory -> no marker
-    assert 'class="follow-story"' in today             # the follow button instead
+    assert 'class="follow-story-btn' in today           # the merged follow control
+    assert 'class="story-affordances"' in today         # NL-58: single row per story
     assert 'aria-pressed="true"' in today              # ...in the followed state
     assert "Following this story" in today
     assert 'data-topic="Iran War"' in today            # the story's own casing travels
@@ -214,14 +215,14 @@ def test_coexistence_empty_story_title_falls_back_to_headline(tmp_paths):
     follow button: topic falls back to the headline (`story_title or headline
     or ""`). No crash, no data-topic="" affordance for a story that has a
     headline. Fix contract if this bites: the fallback chain in the
-    _render_story `not marks` branch."""
+    _story_affordances `not marks` branch."""
     db.migrate()
     con = db.connect()
     seed(con, [slot(1, "", mem=())], [story(1, "Fallback Headline")])
     page, _ = server.build_page(con)
     con.close()
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
-    assert 'class="follow-story"' in today
+    assert 'class="follow-story-btn' in today
     assert 'data-topic="Fallback Headline"' in today   # headline, never a blank topic
     assert 'data-topic=""' not in today
 

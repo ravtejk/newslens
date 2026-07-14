@@ -364,8 +364,10 @@ Deterministic §5.9 invariants (contract text: workspace/debates/
    M6+ wires the flag.
 5. Single-source: N==1 -> outlet named in lede prose (warn-grade) + spoken
    acknowledgment (warn-grade).
-6. Caveat: text footer verbatim; SPOKEN_CAVEAT sentence in script (appended
-   deterministically if the model omits it — a warning discloses the append).
+6. Caveat: text footer verbatim (app-side, ranking.CORROBORATION_CAVEAT —
+   untouched). The SPOKEN caveat is RETIRED (NL-58 ruling 2, 2026-07-10):
+   never prompted, never appended, never checked; absence pinned in four
+   suites; the constant survives for absence-assertions only.
 7. Fact-subset proxy: script numerals ⊆ narrative numerals (warn list,
    "2"/"3" exempt for enumeration speech).
 8. Hedge preservation: coarse — script "will" requires narrative "will"
@@ -664,10 +666,10 @@ the-paraphrase, never-doubled invariant, and the verbatim-caveat GATING
 pin (BUG20 candidate withdrawn: the block is gated on caveat-absence,
 so the frozen text can't be its own removal target).
 
-**KNOWN-RED — BUG19:** 28c stems match as substrings (country->count,
-wired->wire, outsourced->source): a legitimate outro sentence with three
-artifact hits is REMOVED from the persisted script. Word-boundary fix
-contract in the docstring; near-miss greens are the keep-green set.
+**BUG19 — resolved by deletion (was KNOWN-RED):** the substring-stem class
+died when the 28c removal machinery was deleted with the spoken caveat's
+retirement (NL-58 ruling 2 / NL-60 gate). The surviving test pins that the
+retired machinery stays retired; this dated entry records the original finding.
 
 ## NL-11 (UI/UX v2) pass (QA, 2026-07-09)
 

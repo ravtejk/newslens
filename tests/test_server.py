@@ -1172,11 +1172,14 @@ def test_item27_furniture_contract_through_build_page(ui):
     # 5. Follow affordance with pressed state (on the NON-tracked story — the
     # tracked story drops the redundant button per the NL-11 coexistence rule):
     assert "aria-pressed" in page
-    # 6. NL-11 coexistence: the tracked story shows only its marker (no follow
-    # button); the override story (no thread match) keeps a follow button.
+    # 6. Coexistence (NL-11 rule, NL-58 merged control): the tracked story
+    # shows only its marker STATE; the override story (no thread match) keeps a
+    # follow toggle. Both now live in the single .story-affordances row under
+    # the title (NL-58 ruling 4).
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
     assert today.count('class="tracked-marker"') == 1     # the tracked story
-    assert today.count('class="follow-story"') == 1       # only the override story
+    assert today.count('class="follow-story-btn') == 1    # only the override story
+    assert today.count('class="story-affordances"') == 2  # merged row per story
     assert 'class="glance"' not in page                   # glance removed (NL-11)
 
 

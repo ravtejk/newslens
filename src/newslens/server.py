@@ -246,6 +246,18 @@ def _human_date(date_str: str) -> str:
         return date_str
 
 
+def _is_calendar_date(date_str: str) -> bool:
+    """True only for a zero-padded YYYY-MM-DD that is a REAL calendar date.
+    The ISO-shape regex alone (the old guard) accepts calendar-impossible tokens
+    like '2026-13-45', which then render as live dead-end edition links; strptime
+    rejects the impossible month/day, and the strftime round-trip also rejects
+    non-zero-padded shapes the /?date= route would 404 on."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d") == date_str
+    except ValueError:
+        return False
+
+
 def _short_date(iso: Optional[str]) -> str:
     if not iso:
         return "—"
@@ -254,6 +266,29 @@ def _short_date(iso: Optional[str]) -> str:
         return f"{d.strftime('%b')} {d.day}"
     except ValueError:
         return iso[:10]
+
+
+_WINDOW_RE = re.compile(r"overs items fetched\s+(\S+)\s*(?:→|->)\s*(\S+)")
+
+
+def _coverage_window_line(footer_lines: List[str]) -> str:
+    """NL-58 ruling 6: the collection window is surfaced as a quiet VISIBLE
+    line on Today, not buried in the tap-away footer. Reads the same
+    'Covers items fetched X → Y' phrase the detail carries and renders it in
+    the plain 'from X to Y' register (DIRECTION quiet)."""
+    for ln in footer_lines:
+        m = _WINDOW_RE.search(ln)
+        if m:
+            # NL-60 gate F3: both tokens must be real calendar dates —
+            # _human_short returns its INPUT on parse failure, so a garbage
+            # token would otherwise render as a fake value on a trust line.
+            if not (_is_calendar_date(m.group(1)[:10])
+                    and _is_calendar_date(m.group(2)[:10])):
+                return ""
+            a, b = _human_short(m.group(1)[:10]), _human_short(m.group(2)[:10])
+            if a and b:
+                return f"Covers items from {a} to {b}"
+    return ""
 
 
 def _wav_duration(path_str: Optional[str]) -> Optional[str]:
@@ -270,6 +305,26 @@ def _wav_duration(path_str: Optional[str]) -> Optional[str]:
         return None
 
 
+def _player_extra_controls(player_id: str) -> str:
+    """NL-58 ruling 7: playback speed (1x/1.25x/1.5x/2x) + skip ±15s on top of
+    the native audio controls (which keep scrubbing and volume). Minimal
+    buttons wired to the shared skipAudio/cycleSpeed JS; revealed with the
+    player. player_id is a code-owned literal (never user input)."""
+    pid = _e(player_id)
+    return (
+        f'<div class="player-extra" id="{pid}-extra" style="display:none">'
+        f'<button type="button" class="player-btn" '
+        f'onclick="skipAudio(\'{pid}\', -15)" aria-label="Back 15 seconds">'
+        '« 15s</button>'
+        f'<button type="button" class="player-btn speed-btn" '
+        f'onclick="cycleSpeed(\'{pid}\', this)" aria-label="Change playback '
+        'speed">1×</button>'
+        f'<button type="button" class="player-btn" '
+        f'onclick="skipAudio(\'{pid}\', 15)" aria-label="Forward 15 seconds">'
+        '15s »</button>'
+        '</div>')
+
+
 def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
     rows = con.execute(
         "SELECT m.*, b.date AS ref_date FROM memory m LEFT JOIN briefings b"
@@ -277,16 +332,24 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
     ).fetchall()
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=DEVELOPING_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
     grouped: Dict[str, List[Dict]] = {"active": [], "dormant": [],
                                       "dismissed_user": []}
     for r in rows:
+        # NL-58 future-date guard: "last picked up" is the DATE of the joined
+        # last-referenced briefing; a value later than today is data corruption
+        # (a briefing dated in the future) and must never render as a real
+        # pickup — it degrades to "not yet picked up", the honest state. Guards
+        # the reported "Last picked up Jul 13" (a future date) at the source.
+        ref_date = r["ref_date"] or ""
+        last = ref_date if (ref_date and ref_date <= today) else ""
         grouped.setdefault(r["status"], []).append({
             "topic": r["topic"],
             "note": r["principal_note"] or "",
             "since": _short_date(r["created_at"]),
-            "last": r["ref_date"] or "",
+            "last": last,
             "quiet_since": _short_date(r["status_changed_at"]),
-            "developing": bool(r["ref_date"] and r["ref_date"] >= cutoff),
+            "developing": bool(last and last >= cutoff),
         })
     # P1 polish (2026-07-06): Ongoing sorts by recency of last pickup, most
     # recent first; never-picked-up threads sink to the end, original (id)
@@ -539,10 +602,9 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     parts = [f'<article class="story{" quick-hit" if tier == "quick" else ""}" id="{_e(slug)}">']
 
     marks = list(slot.get("matched_memory") or [])
-    if marks:
-        parts.append(
-            f'<span class="tracked-marker">Tracked ongoing story — '
-            f'{_e(", ".join(marks))}</span>')
+    # The override callout stays ABOVE the title (it explains why an off-beat
+    # story is here); the tracked-ongoing marker moved DOWN into the merged
+    # control under the title (NL-58 ruling 4).
     if slot.get("override"):
         label = slot.get("override_label") or "Editor's override"
         reason = slot.get("world_impact_reason") or ""
@@ -552,6 +614,17 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
             + "</p>")
 
     parts.append(f'<{h} class="headline">{_e(st.get("headline", ""))}</{h}>')
+
+    # NL-58 ruling 4: the tracked-ongoing marker and the follow button are ONE
+    # control, and it sits with "The full picture" in a single row directly
+    # under the title (layout only; DIRECTION tokens binding). Recognition
+    # spans both signals so a follow is never shown as "＋ Follow this story"
+    # when either its thread is active (marks) or its title is followed.
+    affordances = _story_affordances(st, slot, marks, active_topics,
+                                     has_file, slug, date, deep_return)
+    if affordances:
+        parts.append(affordances)
+
     if st.get("lede"):
         parts.append(f'<p class="lede">{_e(st["lede"])}</p>')
     for mv in st.get("movements") or []:
@@ -577,6 +650,48 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     parts.append(
         f'<p class="meta-footnote">{_e(meta)}. Here for: {_e(here_for)}.</p>')
 
+    parts.append("</article>")
+    return "".join(parts)
+
+
+def _story_affordances(st: Dict, slot: Dict, marks: List[str],
+                       active_topics: set, has_file: bool, slug: str,
+                       date: str, deep_return: str) -> str:
+    """The single story-affordance row under the title (NL-58 ruling 4): the
+    merged tracked-marker/follow control plus "The full picture" entry, grouped
+    and aligned so nothing floats or mis-indents.
+
+    Recognition (NL-58 P3a, both directions): a story reads as followed when
+    EITHER its thread is active (matched_memory `marks`) OR its story-follow
+    title is active — checked against both story_title and headline, so a
+    follow created under one edition's phrasing survives title drift into the
+    next. Thread-tracked stories show the marker STATE (the thread is managed
+    under Following); story-follows are a toggle button (the M7 contract)."""
+    bits: List[str] = []
+    if marks:
+        # Thread-tracked: the marker state of the merged control.
+        bits.append(
+            f'<span class="tracked-marker">Tracked ongoing story — '
+            f'{_e(", ".join(marks))}</span>')
+    else:
+        topic = slot.get("story_title") or st.get("headline") or ""
+        headline = st.get("headline") or ""
+        t_in = topic.lower() in active_topics
+        h_in = headline.lower() in active_topics
+        followed = t_in or h_in
+        if followed and not t_in:
+            # NL-60 gate F1: unfollow must target the STORED thread phrasing —
+            # dismiss_thread is an exact match, so a drift-recognized follow
+            # sending the unmatched title would be visible but unfollowable.
+            topic = headline
+        pressed = "true" if followed else "false"
+        label = "Following this story" if followed else "＋ Follow this story"
+        cls = " followed" if followed else ""
+        date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
+        bits.append(
+            f'<button class="follow-story-btn{cls}" data-topic={_e_attr(topic)}'
+            f'{date_attr} aria-pressed="{pressed}" onclick="toggleFollow(this)">'
+            f'{_e(label)}</button>')
     # M9-M3 entry affordance — three binding states (v4 addendum): present
     # (valid brief), absent (quick tier), degraded-hidden (failed brief —
     # renders IDENTICALLY to absent; total absence is the signal).
@@ -584,32 +699,13 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
         # 2-arg form for the Today path (the deep view returns there by
         # default); archive-in-place editions pass their own return view.
         ret = "" if deep_return == "view-today" else f", '{_e(deep_return)}'"
-        parts.append(
-            f'<p class="deep-view-entry"><a href="#" '
+        bits.append(
+            f'<a class="deep-view-entry-link" href="#" '
             f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">→ The full '
-            f'picture</a></p>')
-
-    # Follow affordance — coexistence resolution (NL-11): a story already
-    # tracked by an ongoing thread (matched_memory) shows only the "Tracked
-    # ongoing story" marker above and DROPS the redundant follow button — the
-    # follow it would offer is the very thread it already lives in (this is
-    # the no-op that read as "Follow doesn't work"). Following a *story* is a
-    # distinct concept, offered only when there is NO thread match; if that
-    # per-story follow already exists the affordance reads "Following this
-    # story" and un-follows on tap (the M7 contract).
-    if not marks:
-        topic = slot.get("story_title") or st.get("headline") or ""
-        followed = topic.lower() in active_topics
-        pressed = "true" if followed else "false"
-        label = "Following this story" if followed else "＋ Follow this story"
-        cls = ' class="followed"' if followed else ""
-        date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
-        parts.append(
-            f'<div class="follow-story"><button{cls} data-topic={_e_attr(topic)}'
-            f'{date_attr} aria-pressed="{pressed}" onclick="toggleFollow(this)">'
-            f'{_e(label)}</button></div>')
-    parts.append("</article>")
-    return "".join(parts)
+            f'picture</a>')
+    if not bits:
+        return ""
+    return '<div class="story-affordances">' + "".join(bits) + "</div>"
 
 
 def _e_attr(v: str) -> str:
@@ -712,12 +808,15 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     detail_ps.append(f'<p>This edition: {_e(" · ".join(edition_bits))}</p>')
     btn_id = f"{slug_prefix}footer-disclosure-btn"
     dtl_id = f"{slug_prefix}footer-disclosure-detail"
+    window_line = _coverage_window_line(footer_lines)
+    window_html = (f'\n  <p class="coverage-window">{_e(window_line)}</p>'
+                   if window_line else "")
     html.append(f"""
 <div class="footer-tag">
   <button class="disclosure-trigger" id="{btn_id}" aria-expanded="false"
           aria-controls="{dtl_id}" onclick="toggleFooterDisclosure(this)">
     <span class="caret">▸</span> Generated {_e(gen_local)}
-  </button>
+  </button>{window_html}
   <div class="footer-detail" id="{dtl_id}">{"".join(detail_ps)}</div>
 </div>""")
     return "".join(html)
@@ -845,8 +944,13 @@ def _render_following(con: sqlite3.Connection) -> str:
     ongoing.append('<p class="section-h">Following</p>')
     if g["active"]:
         for t in g["active"]:
-            last = _human_short(t["last"]) if t["last"] else "not picked up yet"
-            meta = f"Following since {_e(t['since'])} · Last picked up {_e(last)}"
+            # NL-58: never-picked-up renders as its own honest phrase, not the
+            # broken "Last picked up not picked up yet" concatenation.
+            if t["last"]:
+                meta = (f"Following since {_e(t['since'])} · "
+                        f"Last picked up {_e(_human_short(t['last']))}")
+            else:
+                meta = f"Following since {_e(t['since'])} · Not yet picked up"
             acts = note_btn(t) + (
                 f'<button onclick="threadAction(\'dismiss\', {_e(_js_str(t["topic"]))})">Stop</button>')
             ongoing.append(_dossier(t, acts, meta))
@@ -1119,7 +1223,10 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
             s = src_by_key.get(c)
             if s and s.get("kind") == "prior-briefing":
                 rd = str(s.get("retrieved_at", ""))[:10]
-                if rd:
+                # NL-60: only a real calendar date becomes a navigable edition
+                # (the arc line had no guard at all); a bad date renders the
+                # continuity line with no link rather than a dead one.
+                if _is_calendar_date(rd):
                     prior_date = rd
                 break
         cite_html = ""
@@ -1177,20 +1284,20 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                             compute_prov_display(cites, src_by_key))
         lis.append(
             f'<li>{_e(f.get("fact", ""))} '
-            '<span class="fact-cite"><details class="cite-fold" open>'
-            '<summary aria-label="Show sources for this fact">'
-            '<span class="caret" aria-hidden="true">▸</span></summary>'
-            f'<span class="cite-fold-body">{_e(q)}</span></details></span></li>')
+            + _cite_fold(q, "Show sources for this fact") + '</li>')
     out.append(f'<div class="deep-section" id="{story_anchor}-facts">'
                '<p class="deep-section-label">The facts</p>'
                f'<ul class="deep-facts-list">{"".join(lis)}</ul></div>')
 
-    # 2. mechanism (inline [S#] keys become outlet-named qualifiers)
+    # 2. mechanism — inline [S#] keys become the SAME quiet citation fold the
+    # facts use (NL-58 parity ruling): the qualifier reveals on tap behind a
+    # caret, not inline as plain text.
     mech = brief.get("mechanism", "")
     mech_display = re.sub(
         r"\s*\[([SCRP]\d+(?:,\s*[SCRP]\d+)*)\]",
-        lambda m: " " + _e(_cite_qualifier(
-            [k.strip() for k in m.group(1).split(",")], src_by_key)),
+        lambda m: " " + _cite_fold(_cite_qualifier(
+            [k.strip() for k in m.group(1).split(",")], src_by_key),
+            "Show sources for this claim"),
         _e(mech))
     out.append(f'<div class="deep-section" id="{story_anchor}-mechanism">'
                '<p class="deep-section-label">Mechanism</p>'
@@ -1231,16 +1338,31 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     # 5. source table — rows, real accessible names (Axel)
     rows = []
     for s in brief.get("sources", []):
+        kind = s.get("kind", "")
         when = _fmt_local(s.get("retrieved_at")) if "T" in str(s.get("retrieved_at", "")) \
             else _e(str(s.get("retrieved_at", "")))
         kind_label = {"cluster-full-text": "cluster, full text",
                       "cluster-excerpt": "cluster excerpt",
                       "retrieved": "retrieved, via Sonar",
                       "prior-briefing": "prior NewsLens edition"}.get(
-                          s.get("kind", ""), s.get("kind", ""))
-        title = _e(s.get("title", "") or "(untitled)")
-        link = (f'<a href={_e_attr(s["url"])}>{title}</a>' if s.get("url")
-                else title)
+                          kind, kind)
+        # NL-58: a prior-edition source says WHICH edition and links to it
+        # (openEdition — the same in-place open as the arc line; the href is
+        # the no-JS fallback). Real prior-briefing rows carry an empty url and
+        # a machine title ("briefing 2026-07-06"); both are replaced here.
+        ed_date = str(s.get("retrieved_at", ""))[:10]
+        # NL-60: guard by real calendar date, not ISO shape alone — a shaped-but-
+        # impossible '2026-13-45' must fall through to the plain unlinked title,
+        # never a live dead-end edition link.
+        if kind == "prior-briefing" and _is_calendar_date(ed_date):
+            title = f"NewsLens — {_e(_human_date(ed_date))} edition"
+            link = (f'<a href={_e_attr("/?date=" + ed_date)} '
+                    f'onclick="return openEdition(\'{_e(ed_date)}\', event)">'
+                    f'{title}</a>')
+        else:
+            title = _e(s.get("title", "") or "(untitled)")
+            link = (f'<a href={_e_attr(s["url"])}>{title}</a>' if s.get("url")
+                    else title)
         rows.append('<div class="deep-source-row">'
                     f'<p class="source-outlet">{_e(s.get("outlet", ""))}</p>'
                     f'<p class="source-title">{link}</p>'
@@ -1263,6 +1385,23 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                'as receipts, not proof.</p></div>')
     out.append("</section>")
     return "".join(out)
+
+
+def _cite_fold(qualifier: str, aria: str) -> str:
+    """The quiet citation fold (NL-12), shared by the facts list AND the
+    mechanism prose so both citation surfaces read identically (NL-58 parity
+    ruling, DECISIONS 2026-07-10: mechanism citations previously rendered
+    inline and unfolded, unlike facts'). Ships as <details open> so a no-JS
+    reader sees the qualifier expanded (degrade = more information); the shared
+    collapseCiteFolds() JS closes it to the caret marker. Empty qualifier folds
+    to nothing rather than an empty caret."""
+    q = (qualifier or "").strip()
+    if not q:
+        return ""
+    return ('<span class="fact-cite"><details class="cite-fold" open>'
+            f'<summary aria-label="{_e(aria)}">'
+            '<span class="caret" aria-hidden="true">▸</span></summary>'
+            f'<span class="cite-fold-body">{_e(q)}</span></details></span>')
 
 
 def _cites_list(d: Dict) -> List[str]:
@@ -1334,7 +1473,8 @@ def build_edition_fragment(con: sqlite3.Connection,
                    f'aria-label="Play full episode, {_e(dur)}">▷ Play full episode'
                    f'<span class="episode-meta"> · {_e(dur)}</span></button>'
                    f'<audio id="ep-{_e(date)}" style="display:none" controls '
-                   f'preload="none" src="/audio/{_e(date)}.wav"></audio></div>')
+                   f'preload="none" src="/audio/{_e(date)}.wav"></audio>'
+                   f'{_player_extra_controls(f"ep-{date}")}</div>')
     body = _render_briefing_body(con, row, entry, briefs, slug_prefix,
                                  "view-edition")
     head = (f'<section class="view active" id="view-edition">'
@@ -1370,6 +1510,7 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
     <span class="episode-meta"> · {_e(dur)}</span></button>
   <audio id="episode-player" style="display:none" controls preload="none"
          src="/audio/{_e(row["date"])}.wav"></audio>
+  {_player_extra_controls("episode-player")}
 </div>"""
 
     # M9-M3: newest-valid-wins brief reads; the view renders FROM the
