@@ -287,7 +287,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"rank failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
 
-        print(f"story budget for {report.date} — {len(report.slots)} of 5 slots filled")
+        print(
+            f"story budget for {report.date} — {len(report.slots)} of "
+            f"{ranking.MAX_SLOTS} slots filled"
+        )
         print(
             f"  (from {report.item_count} items -> {report.cluster_count} clusters; "
             f"override pool {report.override_pool_size}, "

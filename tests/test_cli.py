@@ -416,7 +416,9 @@ def test_rank_happy_path_prints_window_caveat_override_and_cost(
     rc = cli.main(["rank", "--date", "2026-07-04"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "story budget for 2026-07-04 — 1 of 5 slots filled" in out
+    assert (
+        f"story budget for 2026-07-04 — 1 of {ranking.MAX_SLOTS} slots filled" in out
+    )  # M2 contract constant, not a hardcoded 5 (stale-display fix, 2026-07-14)
     assert "candidate window:" in out and "ingested history:" in out  # honesty line
     assert "Note: Corroboration counts distinct outlets" in out       # standing caveat
     assert "[Reported by 1 named outlet]" in out
