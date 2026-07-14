@@ -29,13 +29,16 @@ expectation — a conscious flip, not drift.
 
 from __future__ import annotations
 
+import json
 import time
 import urllib.error
 
 import pytest
 
 from newslens import ranking
-from test_ranking_validation import KNOWN_IDS, MEMORY, TAGS, _resp, cluster
+from test_ranking_validation import (
+    DATE, KNOWN_IDS, MEMORY, TAGS, _resp, cluster, rank_cfg, seed_items,
+)
 
 BASE = "BASE-PROMPT"
 CORRECTED = BASE + "\n\n" + ranking.RETRY_CORRECTION
@@ -185,3 +188,179 @@ def test_correction_text_only_tightens_compliance():
     # and it must end by demanding the same closed task, not a new one
     assert "SAME INPUT ITEMS" in text
     assert "one JSON object" in text
+
+
+# --- attempt ledger (gate F1-F4, 2026-07-14): every billed attempt on record -----
+#
+# The property under pin: token_usage shows only the RETURNING attempt, so
+# without the ledger a corrected-retry recovery is indistinguishable from a
+# clean first draw after the money is spent — and a double failure logs NULL
+# over real spend (run 28 did exactly that). One entry per billed attempt,
+# recorded BEFORE the truncation check; carried on the error across the raise;
+# surfaced at run level as meta.llm_attempts + one warning, only when a retry
+# actually fired.
+
+def _resp_u(payload, pt, ct, finish_reason=None):
+    """_resp with distinguishable per-attempt token counts."""
+    r = _resp(payload, finish_reason)
+    r["usage"] = {"prompt_tokens": pt, "completion_tokens": ct}
+    return r
+
+
+def _usd(pt, ct):
+    return round(ranking.usage_to_usd(
+        {"prompt_tokens": pt, "completion_tokens": ct}
+    ), 6)
+
+
+def test_P1_recovered_retry_lands_both_attempts_on_the_run_record(
+    migrated_con, monkeypatch
+):
+    """Malformed -> corrected recovery at the RUN level: both billed attempts
+    in ranking_runs.meta.llm_attempts with tokens+usd, the true-spend warning
+    fires, and token_usage still holds the returning attempt only."""
+    seed_items(migrated_con)
+    script = [
+        _resp_u({"clusters": [cluster([9999])]}, 700, 90),   # billed, rejected
+        _resp_u({"clusters": [cluster(
+            [1, 2], title="Keeper",
+            tags=[{"name": "AI regulation", "level": "topic"}],
+        )]}, 730, 120),                                      # billed, recovers
+    ]
+    monkeypatch.setattr(ranking, "_post_chat",
+                        lambda key, prompt: script.pop(0))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    report = ranking.run_rank(
+        date=DATE, con=migrated_con, cfg=rank_cfg(), env={"OPENAI_API_KEY": "sk-x"}
+    )
+    run = migrated_con.execute(
+        "SELECT meta, token_usage FROM ranking_runs WHERE date = ?", (DATE,)
+    ).fetchone()
+    meta = json.loads(run["meta"])
+    assert meta["status"] == "ok"
+    ledger = meta["llm_attempts"]
+    assert [e["attempt"] for e in ledger] == [1, 2]
+    assert all(e["step"] == "rank_select" for e in ledger)
+    assert [(e["prompt_tokens"], e["completion_tokens"]) for e in ledger] == [
+        (700, 90), (730, 120)
+    ]
+    assert [e["usd"] for e in ledger] == [_usd(700, 90), _usd(730, 120)]
+    assert all(e["usd"] > 0 for e in ledger)
+    # token_usage column semantics unchanged: the returning attempt only.
+    assert json.loads(run["token_usage"])["prompt_tokens"] == 730
+    # The disclosure names the retry and the TRUE total spend.
+    retry_warnings = [w for w in report.warnings if "rank retry" in w]
+    assert len(retry_warnings) == 1
+    total = round(_usd(700, 90) + _usd(730, 120), 6)
+    assert f"${total:.4f}" in retry_warnings[0]
+    assert "ranking_runs.meta.llm_attempts" in retry_warnings[0]
+
+
+def test_P2_double_failure_carries_the_ledger_onto_the_failed_row(
+    migrated_con, monkeypatch
+):
+    """Two billed malformed attempts -> RankingError carries .llm_attempts,
+    and the failed ranking_runs row's meta records both entries while
+    token_usage stays NULL (run 28's money hole, closed)."""
+    seed_items(migrated_con)
+    script = [
+        _resp_u({"clusters": [cluster([9999])]}, 700, 90),
+        _resp_u({"clusters": [cluster([8888])]}, 730, 95),
+    ]
+    monkeypatch.setattr(ranking, "_post_chat",
+                        lambda key, prompt: script.pop(0))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    with pytest.raises(ranking.RankingError) as excinfo:
+        ranking.run_rank(
+            date=DATE, con=migrated_con, cfg=rank_cfg(),
+            env={"OPENAI_API_KEY": "sk-x"},
+        )
+    assert [e["attempt"] for e in excinfo.value.llm_attempts] == [1, 2]
+    run = migrated_con.execute(
+        "SELECT meta, token_usage FROM ranking_runs WHERE date = ?", (DATE,)
+    ).fetchone()
+    meta = json.loads(run["meta"])
+    assert meta["status"] == "failed"
+    ledger = meta["llm_attempts"]
+    assert len(ledger) == 2
+    assert all(e["usd"] > 0 for e in ledger)
+    assert run["token_usage"] is None
+
+
+def test_P3_transport_retry_records_exactly_one_billed_attempt(monkeypatch):
+    """A timeout never returns usage — nothing to bill, nothing on the ledger.
+    The recovery entry carries attempt=2 (the true attempt number, not a
+    renumbering): exactly one entry, no phantom cost."""
+    sink: list = []
+    _wire(monkeypatch, [
+        TimeoutError("timed out"),
+        _resp_u({"clusters": [cluster([1])]}, 500, 40),
+    ])
+    ranking.call_llm_validated(
+        "sk-x", BASE, KNOWN_IDS, TAGS, MEMORY, cost_sink=sink,
+    )
+    assert len(sink) == 1
+    assert sink[0]["attempt"] == 2
+    assert sink[0]["usd"] == _usd(500, 40)
+
+
+def test_P3b_single_clean_draw_stays_silent_at_run_level(
+    migrated_con, monkeypatch
+):
+    """No retry -> no meta.llm_attempts, no rank-retry warning: the ledger
+    surfaces only when there is something to disclose (a one-entry ledger is
+    the token_usage column, restated)."""
+    seed_items(migrated_con)
+    script = [
+        _resp_u({"clusters": [cluster(
+            [1, 2], title="Keeper",
+            tags=[{"name": "AI regulation", "level": "topic"}],
+        )]}, 730, 120),
+    ]
+    monkeypatch.setattr(ranking, "_post_chat",
+                        lambda key, prompt: script.pop(0))
+    report = ranking.run_rank(
+        date=DATE, con=migrated_con, cfg=rank_cfg(), env={"OPENAI_API_KEY": "sk-x"}
+    )
+    meta = json.loads(migrated_con.execute(
+        "SELECT meta FROM ranking_runs WHERE date = ?", (DATE,)
+    ).fetchone()["meta"])
+    assert "llm_attempts" not in meta
+    assert not [w for w in report.warnings if "rank retry" in w]
+
+
+def test_P4_no_sink_is_the_default_and_the_error_still_has_the_attribute(
+    monkeypatch
+):
+    """cost_sink defaults to None: the recovery path works sink-less, and a
+    double failure's error carries llm_attempts == [] (attribute always
+    present, so run_rank's getattr never feeds garbage to log_failed_run)."""
+    _wire(monkeypatch, [
+        _resp({"clusters": [cluster([9999])]}),
+        _resp({"clusters": [cluster([1])]}),
+    ])
+    clusters, _ = _call()
+    assert [c["item_ids"] for c in clusters] == [[1]]
+    _wire(monkeypatch, [
+        _resp({"clusters": [cluster([9999])]}),
+        _resp({"clusters": [cluster([8888])]}),
+    ])
+    with pytest.raises(ranking.RankingError) as excinfo:
+        _call()
+    assert excinfo.value.llm_attempts == []
+
+
+def test_P5_truncated_attempt_is_billed_and_on_the_ledger(monkeypatch):
+    """The ledger append sits BEFORE the finish_reason check (gate F1's exact
+    property, generate.py precedent): a truncated draw billed real tokens and
+    must be entry 1, not invisible."""
+    sink: list = []
+    _wire(monkeypatch, [
+        _resp_u({"clusters": [cluster([1])]}, 800, 3000, finish_reason="length"),
+        _resp_u({"clusters": [cluster([1])]}, 830, 150),
+    ])
+    ranking.call_llm_validated(
+        "sk-x", BASE, KNOWN_IDS, TAGS, MEMORY, cost_sink=sink,
+    )
+    assert [e["attempt"] for e in sink] == [1, 2]
+    assert sink[0]["completion_tokens"] == 3000  # the truncated spend, recorded

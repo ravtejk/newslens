@@ -600,6 +600,7 @@ def call_llm_validated(
     memory_topics: List[str],
     repairs: Optional[Dict] = None,
     dormant_topics: Optional[List[str]] = None,
+    cost_sink: Optional[List[Dict]] = None,
 ) -> Tuple[List[Dict], Dict]:
     """One call + ONE retry total, then a visible RankingError.
 
@@ -607,6 +608,13 @@ def call_llm_validated(
     one repairable violation class; pass a dict as `repairs` to receive the
     returning attempt's repair info (an out-param so the (clusters, usage)
     return shape stays stable).
+
+    Pass a list as `cost_sink` to receive one entry per BILLED attempt —
+    including attempts that fail validation or truncate after billing. The
+    (clusters, usage) return shape shows only the returning attempt; without
+    the ledger a corrected-retry recovery is invisible after the money is
+    spent (rank-side twin of generate.py's cost_sink). On total failure the
+    raised RankingError carries the ledger as `.llm_attempts`.
 
     Retryable: 5xx, timeouts/connection failures, transient 429 rate limits,
     malformed/failed-validation output (the spec'd path). NOT retryable:
@@ -625,6 +633,19 @@ def call_llm_validated(
         try:
             response = _post_chat(key, next_prompt)
             usage = response.get("usage") or {}
+            if cost_sink is not None:
+                # Ledger BEFORE the truncation check: a truncated draw is a
+                # billed draw (generate.py cost_sink precedent — the property
+                # that made BUG-32's abort-path fold necessary there).
+                cost_sink.append(
+                    {
+                        "step": "rank_select",
+                        "attempt": attempt,
+                        "prompt_tokens": usage.get("prompt_tokens"),
+                        "completion_tokens": usage.get("completion_tokens"),
+                        "usd": round(usage_to_usd(usage), 6),
+                    }
+                )
             choice = response["choices"][0]
             if choice.get("finish_reason") == "length":
                 # Name truncation precisely — "malformed JSON" hides the real
@@ -682,10 +703,15 @@ def call_llm_validated(
             last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
         if attempt == 1:
             time.sleep(backoff)
-    raise RankingError(
+    err = RankingError(
         f"ranking call failed after one retry: {last_error} — no briefing row "
         "was written; re-run `newslens rank` (this failure is logged)"
     )
+    # The ledger must survive the raise: a double failure still billed for
+    # every attempt that returned usage (run 28 spent real money and logged
+    # token_usage NULL — this is that hole's rank-side close).
+    err.llm_attempts = cost_sink or []
+    raise err
 
 
 # ---------------------------------------------------------------------------
@@ -1234,12 +1260,25 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
     return revived
 
 
-def log_failed_run(con: sqlite3.Connection, date: str, error: str) -> None:
-    """Failures are instrumentation too — the day-14 readout must see them."""
+def log_failed_run(
+    con: sqlite3.Connection,
+    date: str,
+    error: str,
+    attempts: Optional[List[Dict]] = None,
+) -> None:
+    """Failures are instrumentation too — the day-14 readout must see them.
+
+    `attempts`: billed-attempt ledger off the raised error, when it carried
+    one — a total failure can still have spent real money (run 28 did, and
+    its row said token_usage NULL; the ledger in meta is the honest record).
+    """
+    failure_meta: Dict = {"status": "failed", "error": error[:500]}
+    if attempts:
+        failure_meta["llm_attempts"] = attempts
     with con:
         con.execute(
             "INSERT INTO ranking_runs (date, meta, token_usage) VALUES (?, ?, NULL)",
-            (date, json.dumps({"status": "failed", "error": error[:500]})),
+            (date, json.dumps(failure_meta)),
         )
 
 
@@ -1287,7 +1326,10 @@ def run_rank(
         try:
             return _run_rank_body(con, date, cfg, src_env, key)
         except RankingError as exc:
-            log_failed_run(con, date, str(exc))
+            log_failed_run(
+                con, date, str(exc),
+                attempts=getattr(exc, "llm_attempts", None),
+            )
             raise
     finally:
         if own_con:
@@ -1365,9 +1407,10 @@ def _run_rank_body(
     known_ids = {r["id"] for r in items}
 
     repair_sink: Dict = {}
+    attempt_ledger: List[Dict] = []
     clusters, usage = call_llm_validated(
         key, prompt, known_ids, tag_levels, memory_topics,
-        repairs=repair_sink, dormant_topics=dormant,
+        repairs=repair_sink, dormant_topics=dormant, cost_sink=attempt_ledger,
     )
 
     items_by_id = {r["id"]: r for r in items}
@@ -1386,6 +1429,12 @@ def _run_rank_body(
         # ranking_runs.meta.repairs — BUG-7: a tag-shape-only run (the common
         # case) must feed the day-30 tolerance-frequency readout too.
         meta["repairs"] = repair_sink
+    if len(attempt_ledger) > 1:
+        # A recovered corrected-retry must never be silent: token_usage holds
+        # only the returning attempt, so the meta ledger + this warning are
+        # the sole record that attempt 1 billed and failed — and the sole
+        # evidence the run-28 fix fired in the wild.
+        meta["llm_attempts"] = attempt_ledger
 
     report = RankReport(
         date=date,
@@ -1402,6 +1451,15 @@ def _run_rank_body(
     # Memory surfacing (spec §B: staleness is SURFACED, never silent; sync
     # edits are acknowledged so the principal knows the file was honored).
     report.warnings.extend(mem_sync.summary_lines())
+    if len(attempt_ledger) > 1:
+        true_usd = round(sum(a.get("usd") or 0.0 for a in attempt_ledger), 6)
+        report.warnings.append(
+            f"rank retry: attempt 1 billed then failed validation — the "
+            f"corrected retry recovered; true LLM spend ${true_usd:.4f} "
+            f"across {len(attempt_ledger)} attempts (full ledger in "
+            "ranking_runs.meta.llm_attempts; token_usage shows the returning "
+            "attempt only)"
+        )
     if meta["dedup"]["dropped"]:
         names = "; ".join(
             f"{d['dropped']!r} (same story as {d['kept']!r})"
