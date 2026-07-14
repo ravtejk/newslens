@@ -196,6 +196,35 @@ def test_repetition_reports_cap_at_three():
     assert len([v for v in out if "retell" in v]) == 3  # MAX_STRUCTURAL_REPORTS
 
 
+def test_repetition_bites_between_distant_sections_at_digest_scale():
+    """QA (NL-63 M2 fix loop, flips audit): never-repeat at the DIGEST's
+    section count. A k=5-shaped script — opener plus five 15+-word sections —
+    where ONLY the first and last sections share material draws exactly ONE
+    retell report naming that distant pair; the four distinct story sections
+    stay silent. Pairwise over all sections: the 5-story digest gets the same
+    never-repeat law the 2-section pin established."""
+    run8 = "alpha bravo charlie delta echo foxtrot golf hotel"
+    opener = (f"The morning menu frames the day here, {run8}, before the "
+              "stories begin in order.")
+    stories = [
+        "The first story walks through an energy decision made overnight and "
+        "what it changes for prices tomorrow.",
+        "A second segment turns to housing policy where a council vote "
+        "shifted the permitting timeline again.",
+        "Then a courtroom development in the chip dispute moved the schedule "
+        "and sharpened the remedies question.",
+        "Next a research group published findings on grid storage that "
+        "utilities had been waiting to see.",
+    ]
+    closer = (f"The final story returns to the same ground, {run8}, closing "
+              "the loop on the open.")
+    out = generate.script_structural_check(
+        "\n\n".join([opener] + stories + [closer]))
+    retells = [v for v in out if "retell the same material" in v]
+    assert len(retells) == 1
+    assert "sections 1 and 6" in retells[0]
+
+
 # --- liveness: the structural gate reaches the persisted script ---------------
 
 def test_LIVENESS_structural_gate_retries_and_persists_the_clean_retry(
@@ -300,6 +329,39 @@ def test_LIVENESS_tier_floor_retry_lifts_a_briefed_lead(
         assert any("lead tier floor: retry brought the lead" in w
                    for w in rep.warnings)
         assert sentinel in rep.narrative_text
+    finally:
+        con.close()
+
+
+def test_tier_floor_retry_message_carries_amended_steering_and_bills(
+        tmp_paths, fake_seq, monkeypatch):
+    """QA (NL-63 M2 fix loop): the REWRITTEN floor-retry message reaches the
+    model carrying the amended steering — TARGET ~640, LONGEST-story primacy,
+    rewrite-the-lead-ALONE — while keeping both long-pinned substrings (the
+    TIER-EXPRESSION header and the 'story 1 (the lead) ran' opener) intact.
+    And money honesty holds on a retry-bearing OK run: the attempt ledger
+    bills all four API-reaching attempts exactly once each."""
+    db.migrate()
+    con = db.connect()
+    try:
+        slots = _stage_fakes(monkeypatch)
+        persist_valid(con)  # slot-1 analysis brief exists -> the floor binds
+        sentinel = "The lead now carries its full analytical weight."
+        fake_seq.narratives = [stories_payload(slots),
+                               payload_with_lead_words(slots, sentinel)]
+        fake_seq.scripts = [compliant_script(slots)]
+        rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
+                                    refresh=True)
+        retry_prompt = [c for c in fake_seq.calls if c["json_mode"]][1]["prompt"]
+        assert "TIER-EXPRESSION VIOLATION" in retry_prompt   # pinned header kept
+        assert "story 1 (the lead) ran" in retry_prompt      # pinned opener kept
+        assert "TARGET ~640 words" in retry_prompt           # amended steering
+        assert "LONGEST story of the day" in retry_prompt
+        assert "Rewrite the lead ALONE" in retry_prompt
+        assert "Keep every other story's tier and length" in retry_prompt
+        assert [(e["step"], e["attempt"]) for e in rep.attempt_ledger] == [
+            ("narrative", 1), ("narrative_retry", 1),
+            ("editor", 1), ("script", 1)]
     finally:
         con.close()
 

@@ -684,29 +684,450 @@ def test_numeral_exemption_is_slot_bounded_not_blanket():
     assert any("'3'" in w for w in warns)
 
 
-# --- script scaling (M5 fix) -----------------------------------------------------------
+# --- script digest contract (principal 2026-07-14: shorter, lead-focused) --------------
 
-def test_script_budget_scales_with_narrative_not_slot_count():
-    full, _ = generate._script_budgets(5, 1100)
-    assert full == 1650  # min(1840 slot budget, 1100*1.5)
-    thin, _ = generate._script_budgets(3, 667)
-    assert thin == 1000  # the live finding: 667 words can't fill 1440
-    tiny, _ = generate._script_budgets(1, 100)
-    assert tiny == 400   # floor
-    _, desc = generate._script_budgets(3, 667)
-    assert "slot 1: ~347" in desc  # per-segment guidance scaled (500 * 1000/1440)
+def test_script_budgets_are_digest_ceilings_over_covered_stories_only():
+    """THE PODCAST CONTRACT REWRITTEN: length is EMERGENT — _script_budgets
+    returns per-k QUALITY CEILINGS over the COVERED stories (lead 400 + 200 each
+    for up to 4 more, + open 90 + outro 70), no longer a narrative-scaled
+    fullness target. A 6-7 story edition still covers only 5 (never every
+    story)."""
+    c2, _, k2 = generate._script_budgets(2)
+    c3, _, k3 = generate._script_budgets(3)
+    c5, _, k5 = generate._script_budgets(5)
+    assert (k2, c2) == (2, 760)      # 90 + 70 + 400 + 200
+    assert (k3, c3) == (3, 960)
+    assert (k5, c5) == (5, 1360)     # 90 + 70 + 400 + 200*4
+    c6, _, k6 = generate._script_budgets(6)
+    c7, _, k7 = generate._script_budgets(7)
+    assert (k6, c6) == (5, 1360) and (k7, c7) == (5, 1360)   # capped at 5 covered
+    _, _, k1 = generate._script_budgets(1)
+    assert k1 == 1                    # thin day: cover what exists
+    # the per-story figures are the per-slot guides (lead the largest)
+    _, desc, _ = generate._script_budgets(5)
+    assert "slot 1: up to ~400" in desc and "slot 2: up to ~200" in desc
+    # every guide ceiling sits inside the hard 4-11 min band
+    assert generate.SCRIPT_MIN_VIABLE_WORDS == 600
+    assert generate.SCRIPT_CEILING_WORDS == 1650
+    assert c2 >= generate.SCRIPT_MIN_VIABLE_WORDS and c5 < generate.SCRIPT_CEILING_WORDS
 
 
-def test_severely_short_script_retries_then_fails(migrated_con, fake_model):
+def test_script_covers_top_slots_by_rank_never_every_story():
+    """Deterministic selection (principal 2026-07-14): the episode airs the
+    lead + up to 4 more — the top slots by the edition's own rank order — never
+    the whole edition."""
+    six = [slot(i) for i in range(1, 7)]
+    assert generate.script_covered_slots(_inputs_for(six)) == {1, 2, 3, 4, 5}
+    two = [slot(1), slot(2)]
+    assert generate.script_covered_slots(_inputs_for(two)) == {1, 2}
+    one = [slot(1)]
+    assert generate.script_covered_slots(_inputs_for(one)) == {1}
+
+
+def test_script_prompt_states_coverage_and_emergent_band():
+    """Wiring: the digest contract reaches the model — the covered-story
+    instruction, the emergent 4-11 min band, and 'up to' ceilings (not
+    floors)."""
+    slots = [slot(i) for i in range(1, 7)]
+    prompt = generate.build_script_prompt(A_DAY, "A", "The narrative body text.",
+                                          _inputs_for(slots))
+    assert "covers 5 stories" in prompt              # 6-story edition -> 5 covered
+    assert "Cover stories 1 through 5 ONLY" in prompt
+    assert "4-11 minutes" in prompt
+    assert "up to ~400" in prompt and "up to ~200" in prompt   # ceilings, lead deepest
+
+
+def test_uncovered_story_disclosure_is_scoped_out_of_the_episode():
+    """Coverage scoping (principal 2026-07-14): a mandatory spoken disclosure is
+    owed only for a story the digest AIRS. An override on an uncovered lower-rank
+    story is the text briefing's job, not the episode's — so it is neither fed to
+    the script nor hard-flagged against a script that (correctly) never voices
+    it. Without the covered scoping it WOULD hard-flag (legacy whole-edition)."""
+    slots = [slot(i) for i in range(1, 6)] + [slot(6, override=True, tags=())]
+    inputs = _inputs_for(slots)
+    covered = generate.script_covered_slots(inputs)
+    assert 6 not in covered
+    labels = generate.build_labels_block(inputs, covered=covered)
+    assert "story 6" not in labels                   # uncovered -> not fed to the ear
+    script = ("It's Sunday, July 5. Here's what matters today. "
+              + "The covered stories carry real substance today. " * 90
+              + " That's your briefing.")
+    _, hard, _ = generate.validate_script(script, "narrative", inputs, covered=covered)
+    assert not any("story 6" in h for h in hard)     # not the episode's obligation
+    _, hard_all, _ = generate.validate_script(script, "narrative", inputs)
+    assert any("story 6" in h for h in hard_all)     # legacy whole-edition behavior
+
+
+def test_slot_budget_lines_state_hard_targets_with_lead_primacy():
+    """NL-63 M2 fix (writer under-delivered the doubled bands ~20%, lead at a
+    third of target): the per-story budget lines the writer sees state HARD word
+    targets — ~640 lead / ~440 full-picture / ~220 In-Brief — with the lead's
+    primacy spelled out, not the old soft '~550-750' the model treated as
+    optional. Steering, not a new gate."""
+    lead = generate._slot_budget_line(1)
+    med = generate._slot_budget_line(2)
+    quick = generate._slot_budget_line(4)
+    assert "640" in lead and "550" in lead      # explicit lead target + floor
+    assert "LONGEST" in lead                     # primacy stated hard
+    assert "440" in med and "350" in med
+    assert "220" in quick and "180" in quick
+
+
+def test_hard_per_story_targets_reach_the_narrative_prompt():
+    """Wiring proof (steering reaches the model): the strengthened per-story
+    targets are injected into the built narrative prompt, per tier."""
+    slots = [slot(1), slot(2), slot(3), slot(4)]
+    prompt = generate.build_narrative_prompt(A_DAY, "A", _inputs_for(slots))
+    assert "TARGET ~640 words" in prompt         # lead, in its STORY 1 block
+    assert "single LONGEST story" in prompt
+    assert "TARGET ~440 words" in prompt          # full-picture
+    assert "TARGET ~220 words" in prompt          # In Brief
+
+
+def test_broken_short_script_retries_then_fails_viability(migrated_con, fake_model):
+    """The guard's FLIPPED job (principal 2026-07-14): it no longer measures
+    fullness — it catches genuinely BROKEN output. A near-empty body (disclosures
+    and truncation clear) fails the coverage-aware viability floor: one retry,
+    then a visible, logged failure."""
     slots = [slot(1), slot(2), slot(3)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
-    fake_model.script = "Way too short. " + generate.SPOKEN_CAVEAT + " " + generate.SIGNOFF
+    fake_model.script = "Way too short. " + generate.SIGNOFF   # ~5 words -> broken
     with pytest.raises(generate.GenerateError) as excinfo:
         run(migrated_con, date=A_DAY)
-    assert "script severely short" in str(excinfo.value)
+    assert "script not viable" in str(excinfo.value)
     script_calls = [c for c in fake_model.calls if not c["json_mode"]]
     assert len(script_calls) == 2  # one retry, then visible failure
+
+
+def test_naturally_short_digest_ships_no_false_shortfall(migrated_con, fake_model):
+    """Emergent length (principal 2026-07-14): a legitimately short but viable
+    digest ships — the dead fullness guard raised no lower-bound 'short' warn or
+    failure. compliant_script clears the coverage-aware floor without filling."""
+    slots = [slot(1), slot(2), slot(3)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY)
+    assert rep.script_text and rep.script_words >= generate.SCRIPT_MIN_VIABLE_WORDS
+    assert not any("not viable" in w or "severely short" in w
+                   or ("vs ~" in w and "target" in w) for w in rep.warnings)
+
+
+# --- QA extensions — NL-63 M2 live-contact fix loop (QA pass 2026-07-14) ----------------
+# Adversarial pins on the rewritten podcast contract (DECISIONS 2026-07-14
+# "THE PODCAST CONTRACT REWRITTEN" + "podcast contract refined"), the writer
+# steering fixes, and the money-honesty fold. QA-authored; extends, never
+# replaces, the implementer's contract tests above.
+
+def test_covered_slots_rank_order_non_contiguous_ids_and_edges():
+    """QA (coverage selection): the covered set is the k LOWEST slot ids
+    PRESENT, so rank order survives non-contiguous ids, k=1 is legal on a
+    one-story edition, and an empty edition yields an empty set — the
+    max(1, ...) inside _script_coverage never invents a phantom slot
+    (load_briefing_inputs refuses zero-slot editions upstream anyway).
+    The 'Cover stories 1 through {last}' prompt arithmetic stays exact on
+    ragged ids BECAUSE covered = the k smallest present ids: every present
+    id <= last is covered, every id > last is not."""
+    ragged = [slot(i) for i in (1, 3, 7, 9, 12, 15, 20)]
+    covered = generate.script_covered_slots(_inputs_for(ragged))
+    assert covered == {1, 3, 7, 9, 12}                       # 7 present -> top 5
+    assert generate.script_covered_slots(_inputs_for([slot(3)])) == {3}
+    assert generate.script_covered_slots(_inputs_for([])) == set()
+    prompt = generate.build_script_prompt(A_DAY, "A", "Narrative body.",
+                                          _inputs_for(ragged))
+    assert "Cover stories 1 through 12 ONLY" in prompt
+    assert "the remaining 2 stories are NOT" in prompt
+    for n in (1, 3, 7, 9, 12):
+        assert f"story {n}: corroboration for the ear" in prompt
+    assert "story 15" not in prompt and "story 20" not in prompt
+
+
+def test_script_prompt_feeds_exactly_the_covered_set_both_directions():
+    """QA (coverage wiring, both directions): every COVERED story's ear-label
+    material reaches the script prompt; NO uncovered story's does. An override
+    or revival on uncovered slots 6/7 leaking into the prompt would steer the
+    model toward voicing a story the episode must never mention — a contract
+    break, not a nuance ('a listener never hears about a story the episode
+    skips')."""
+    slots = [slot(1, override=True, tags=()),
+             slot(2, revived=({"topic": "T", "last_covered": "2026-07-01"},)),
+             slot(3), slot(4),
+             slot(5, corroboration_count=1, outlets=("Solo Outlet",)),
+             slot(6, override=True, tags=()),
+             slot(7, revived=({"topic": "U", "last_covered": "2026-06-20"},))]
+    prompt = generate.build_script_prompt(A_DAY, "A", "Narrative body.",
+                                          _inputs_for(slots))
+    # direction 1: covered disclosure material arrives
+    assert "story 1: OVERRIDE" in prompt
+    assert "story 2: REVIVAL — say the date: last covered 2026-07-01" in prompt
+    assert "story 5: SINGLE-SOURCE — outlet: Solo Outlet" in prompt
+    for n in (1, 2, 3, 4, 5):
+        assert f"story {n}: corroboration for the ear" in prompt
+    # direction 2: uncovered stories are absent from the prompt's label/coverage
+    # surfaces entirely (their text lives only inside the narrative being adapted)
+    assert "story 6" not in prompt and "story 7" not in prompt
+    assert "covers 5 stories" in prompt and "never cover every story" in prompt
+
+
+def test_disclosure_grades_covered_bites_uncovered_silent():
+    """QA (disclosure scoping, grade-accurate): with covered scoping ACTIVE, a
+    COVERED story's missing override acknowledgment still HARD-flags — the
+    scoping must never blanket-disable the episode's own obligations. An
+    uncovered story's revival date draws neither the hard list nor even its
+    warn-grade flag (the `continue` skips the whole per-slot body — the text
+    briefing owns that disclosure). covered=None keeps the legacy whole-edition
+    behavior for direct callers."""
+    slots = [slot(1, override=True, tags=()), slot(2), slot(3), slot(4), slot(5),
+             slot(6, revived=({"topic": "T", "last_covered": "2026-07-01"},))]
+    inputs = _inputs_for(slots)
+    covered = generate.script_covered_slots(inputs)
+    assert covered == {1, 2, 3, 4, 5}
+    script = ("Markets moved early and the day starts with a clear pattern "
+              "worth attention. It's Sunday, July 5. Here's what matters today. "
+              + "The stories carry substance in measured spoken prose. " * 80
+              + generate.SIGNOFF)
+    _, hard, warns = generate.validate_script(script, "narrative", inputs,
+                                              covered=covered)
+    assert any("story 1" in h and "override" in h for h in hard)   # covered bites
+    assert not any("story 6" in h for h in hard)
+    assert not any("story 6" in w for w in warns)                  # not even warn-grade
+    _, hard_all, warns_all = generate.validate_script(script, "narrative", inputs)
+    assert any("story 1" in h for h in hard_all)                   # legacy unchanged
+    assert any("story 6" in w for w in warns_all)                  # revival = warn grade
+
+
+def test_viability_floor_derivation_table_pinned_AS_BUILT():
+    """QA pin of the implementer's JUDGMENT CALL — FLAGGED for the principal,
+    who rules if he wants flat (dispatch item 7). The ruling's floor is
+    'definitely >4 min' ~= 600 words; AS BUILT the run-time floor is
+    min(SCRIPT_MIN_VIABLE_WORDS, int(guide_ceiling * 0.66)), which relaxes on
+    thin editions:
+        k=1 -> 369  (ceiling 560: the per-story guides themselves sum BELOW
+                     600 — a 1-story edition cannot reach the flat floor
+                     without filling; never-fill outranks the bookend)
+        k=2 -> 501  (ceiling 760: the softer half of the call — a 2-story
+                     digest COULD honestly reach 600, yet as built a 510-word
+                     one ships)
+        k>=3 -> 600 (the flat ruling floor, exactly — no relaxation)
+    If the principal rules FLAT 600 at every k, this table and
+    test_k1_relaxed_floor_bites_and_ships_as_derived flip consciously."""
+    ceilings = {k: generate._script_budgets(k)[0] for k in (1, 2, 3, 4, 5)}
+    assert ceilings == {1: 560, 2: 760, 3: 960, 4: 1160, 5: 1360}
+    floors = {k: min(generate.SCRIPT_MIN_VIABLE_WORDS, int(c * 0.66))
+              for k, c in ceilings.items()}
+    assert floors == {1: 369, 2: 501, 3: 600, 4: 600, 5: 600}
+
+
+def _digest_script(slots, total_words):
+    """A structurally clean covered-digest script sized to EXACTLY total_words
+    as wc() counts them: one-line hook (>60 chars, so the A4 dateline-position
+    warn stays out) -> dateline -> one short segment per story (each <15 words:
+    exempt from the cross-section repeat detector) -> a single unpunctuated
+    filler paragraph (only one 15+-word paragraph in the body, so no pair can
+    retell; one giant sentence never trips the 3-consecutive rhythm warn) ->
+    verbatim sign-off."""
+    parts = ["Markets moved early and the day starts with a clear pattern "
+             "worth your full attention. It's Sunday, July 5. "
+             "Here's what matters today."]
+    for s in slots:
+        parts.append(f"Story {s['slot']}. The development moved today in ways "
+                     "that matter.")
+    parts.append(generate.SIGNOFF)
+    # Size by generate.wc — the pipeline's own counter (contractions like
+    # "It's" tokenize as TWO words there, unlike str.split); "substance" is
+    # exactly one wc token, so the fill is word-exact.
+    need = total_words - generate.wc("\n\n".join(parts))
+    assert need > 0, "fixture asked for fewer words than its own furniture"
+    parts.insert(2, " ".join(["substance"] * need))
+    text = "\n\n".join(parts)
+    assert generate.wc(text) == total_words
+    return text
+
+
+def test_naturally_short_k3_digest_at_620_words_ships_clean(migrated_con, fake_model):
+    """QA (the flipped guard, near the floor): a whole, disclosure-complete
+    k=3 digest at 620 words — 20 over the exact 600 floor, miles under the old
+    fullness targets — SHIPS with no viability failure, no shortfall warn, and
+    no over-run warn. Emergent length: 620 is a CORRECT episode, not a defect
+    ('however long the episode is will be how long it will be')."""
+    slots = [slot(1), slot(2), slot(3)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = _digest_script(slots, 620)
+    rep = run(migrated_con, date=A_DAY)
+    assert rep.script_words == 620
+    assert not any("not viable" in w or "severely short" in w
+                   or "over the ~" in w or ("vs ~" in w and "target" in w)
+                   for w in rep.warnings)
+
+
+def test_overrun_warn_is_one_directional_only(migrated_con, fake_model):
+    """QA (never fill — the ONLY warned direction): a k=3 digest at 1150 words
+    (over the int(960*1.15)=1104 margin, still under the 1650 hard ceiling)
+    SHIPS — over-run is warn-grade, never a failure — carrying exactly one
+    over-run warn that names the guide, the hard ceiling, and the
+    tighten-never-fill instruction. The short direction draws no warn at all
+    (sibling test at 620)."""
+    slots = [slot(1), slot(2), slot(3)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = _digest_script(slots, 1150)
+    rep = run(migrated_con, date=A_DAY)
+    assert rep.script_words == 1150
+    over = [w for w in rep.warnings if "over the ~960-word guide" in w]
+    assert len(over) == 1
+    assert "tighten, never fill" in over[0] and "1650" in over[0]
+
+
+def test_k1_relaxed_floor_bites_and_ships_as_derived(migrated_con, fake_model):
+    """QA (the judgment call, live in the pipeline — see the AS-BUILT table
+    pin): on a 1-story edition the run-time viability floor is the relaxed 369,
+    and the failure message names it. A 300-word stub ABORTS (one retry, then
+    visible failure); a 400-word single-story digest — under the flat 600 —
+    then ships. Both flip consciously if the principal rules flat."""
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = _digest_script(slots, 300)
+    with pytest.raises(generate.GenerateError) as excinfo:
+        run(migrated_con, date=A_DAY)
+    msg = str(excinfo.value)
+    assert "script not viable" in msg
+    assert "369-word floor for a 1-story digest" in msg
+    fake_model.script = _digest_script(slots, 400)
+    rep = run(migrated_con, date=A_DAY)
+    assert rep.script_words == 400
+    assert not any("not viable" in w for w in rep.warnings)
+
+
+def test_script_prompt_emergent_language_and_single_story_branch():
+    """QA (steering arrival, template side): the rewritten script template's
+    emergent-length and digest-discipline lines survive formatting into the
+    built prompt, the dead fullness ask is gone, and the k<=1 coverage branch
+    renders its single-story instruction."""
+    p3 = generate.build_script_prompt(A_DAY, "A", "Narrative body.",
+                                      _inputs_for([slot(1), slot(2), slot(3)]))
+    assert "LENGTH is EMERGENT, never filled" in p3
+    assert "CEILINGS and guides, NOT floors" in p3
+    assert "one breath per COVERED story only" in p3
+    # whitespace-normalized: the template wraps this sentence mid-phrase
+    assert ("Do not tease, preview, or mention the stories this episode "
+            "does not cover") in " ".join(p3.split())
+    assert "never hears about a story the episode skips" in p3
+    assert "up to ~90" in p3 and "up to ~70" in p3      # open/outro ceilings wired
+    assert "aim for the FULL target" not in p3           # the dead fullness ask
+    assert "covers all 3 stories" in p3                  # k == n branch
+    p1 = generate.build_script_prompt(A_DAY, "A", "Narrative body.",
+                                      _inputs_for([slot(1)]))
+    assert "cover the LEAD only" in p1                   # k <= 1 branch
+
+
+def test_amended_steering_reaches_the_sent_prompts(migrated_con, fake_model):
+    """QA (prompt-REACHING at the _chat boundary, one run, all three sent
+    prompts): the narrative call carries BOTH steering surfaces (the template's
+    rewritten TIERED STRUCTURE — lowercase 'single longest' — and the injected
+    per-slot budget lines — uppercase 'single LONGEST'), the editor call
+    carries the amended 450 tier floor with the stale ~300 gone, and the script
+    call carries the coverage + emergent-band contract. Offline proves ARRIVAL;
+    only the live re-run proves obedience."""
+    slots = [slot(i) for i in range(1, 7)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    run(migrated_con, date=A_DAY)
+    json_calls = [c for c in fake_model.calls if c["json_mode"]]
+    n_prompt = json_calls[0]["prompt"]
+    assert "single longest story of the day" in n_prompt          # template
+    assert "the lead alone carries the largest single share" in n_prompt
+    assert "and never under 550" in n_prompt                      # template floor
+    assert "single LONGEST story of the day" in n_prompt          # budget line
+    e_prompt = json_calls[1]["prompt"]
+    assert "never cuts the LEAD below ~450 words" in e_prompt
+    assert "target ~640 words" in e_prompt                        # editor knows the lead target
+    assert "~300" not in e_prompt                                 # stale floor gone
+    s_prompt = [c for c in fake_model.calls if not c["json_mode"]][0]["prompt"]
+    assert "THIS EPISODE COVERS (binding): This episode covers 5 stories" in s_prompt
+    assert "(~600-1650 words)" in s_prompt and "4-11 minutes" in s_prompt
+
+
+def test_pipeline_scopes_disclosures_to_covered_stories_LIVENESS(
+        migrated_con, fake_model):
+    """QA LIVENESS (BUG17 rule — the wiring, not the helpers): every other
+    scoping test passes `covered` explicitly, so ONLY this test fails if
+    run_generate stops passing covered_slots at either call site. A 6-story
+    edition carries an override AND a revival on uncovered slot 6; the script
+    voices covered stories 1-5 only and never mentions slot 6's disclosures:
+    - if _validate_script loses covered=..., story 6's unvoiced override
+      hard-flags on both attempts and the run ABORTS (this test goes red);
+    - if the labels feed loses covered, story 6's OVERRIDE/REVIVAL labels leak
+      into the sent script prompt (the prompt asserts go red).
+    Bite proven by the comment-out procedure in the QA pass of 2026-07-14."""
+    slots = [slot(i) for i in range(1, 6)] + [
+        slot(6, override=True, tags=(),
+             revived=({"topic": "T", "last_covered": "2026-07-01"},))]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = _digest_script(slots[:5], 700)   # covered stories only
+    rep = run(migrated_con, date=A_DAY)                  # ships — no abort
+    assert rep.script_words == 700
+    s_prompt = [c for c in fake_model.calls if not c["json_mode"]][0]["prompt"]
+    assert "story 5: corroboration for the ear" in s_prompt   # covered fed
+    assert "story 6" not in s_prompt                          # uncovered not fed
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1])
+    assert entry["status"] == "ok"
+
+
+def test_cost_sink_records_every_api_reaching_attempt(monkeypatch):
+    """QA (money honesty at the unit): the sink row lands BEFORE validation can
+    reject — two API-reaching attempts that both fail validation leave exactly
+    two billed rows behind the GenerateError, priced by _step_cost from the
+    usage the API actually returned."""
+    def chat(key, prompt, max_tokens, temperature, json_mode):
+        return {"choices": [{"finish_reason": "stop",
+                             "message": {"content": "body"}}],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 500}}
+    monkeypatch.setattr(generate, "_chat", chat)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    sink = []
+
+    def reject(content):
+        raise ValueError("always rejected")
+
+    with pytest.raises(generate.GenerateError):
+        generate.call_llm("k", "p", "script", 100, 0.4, False,
+                          validate=reject, cost_sink=sink)
+    assert [(e["step"], e["attempt"]) for e in sink] == [("script", 1),
+                                                         ("script", 2)]
+    per = round(generate._step_cost(
+        {"prompt_tokens": 1000, "completion_tokens": 500}), 6)
+    assert all(e["usd"] == per and e["usd"] > 0 for e in sink)
+
+
+def test_ok_run_ledger_and_log_arithmetic_no_double_count(migrated_con, fake_model):
+    """QA (money honesty, the OK path — dispatch item 5's arithmetic probe): a
+    clean run bills each LLM step ONCE. The attempt ledger holds exactly one
+    attempt per step; the OK log entry's steps are report.steps (the display
+    breakdown — no raw 'attempt' rows); total_usd is the sum of those steps;
+    and the ledger's total equals the LLM steps' total to the microdollar —
+    two records, one spend, zero double-counting."""
+    slots = [slot(1), slot(2), slot(3)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, date=A_DAY)
+    assert [(e["step"], e["attempt"]) for e in rep.attempt_ledger] == [
+        ("narrative", 1), ("editor", 1), ("script", 1)]
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1])
+    assert entry["status"] == "ok"
+    assert all("attempt" not in s for s in entry["steps"])
+    assert entry["total_usd"] == pytest.approx(
+        round(sum(s.get("usd") or 0 for s in entry["steps"]), 6))
+    llm_usd = sum(s["usd"] for s in entry["steps"]
+                  if s["step"] in ("narrative_A", "editor_pass", "script_adapt"))
+    assert sum(e["usd"] for e in rep.attempt_ledger) == pytest.approx(llm_usd)
 
 
 # --- chain semantics (ADR-0007 §2) ------------------------------------------------------
@@ -901,6 +1322,32 @@ def test_per_step_costs_merge_into_token_cost(migrated_con, fake_model):
     ]  # M6: the editor step merges between writer and script
     expected_total = round(sum(s.get("usd") or 0 for s in tc["steps"]), 6)
     assert tc["total_usd"] == expected_total
+
+
+def test_failed_run_folds_accumulated_spend_into_log(migrated_con, fake_model):
+    """BUG-6/32 family (NL-63 M2 obs): a run that aborts at the script step
+    still spent real money — narrative, editor, and BOTH severe-short script
+    attempts all billed before the raise. The failed generation_log entry must
+    carry that spend (total_usd + a per-attempt ledger), never a null."""
+    slots = [slot(1), slot(2), slot(3)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = "Way too short. " + generate.SIGNOFF  # severe-short -> abort
+    with pytest.raises(generate.GenerateError):
+        run(migrated_con, date=A_DAY)
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
+    )
+    assert entry["status"] == "failed"
+    assert entry.get("total_usd") is not None and entry["total_usd"] > 0
+    steps = entry.get("steps") or []
+    names = [s.get("step") for s in steps]
+    assert "narrative" in names and "editor" in names
+    # BOTH failed script attempts billed and are on the record (not just one)
+    assert sum(1 for s in steps if s.get("step") == "script") == 2
+    # the logged total is the honest sum of the per-attempt costs
+    assert entry["total_usd"] == pytest.approx(
+        round(sum(s.get("usd") or 0 for s in steps), 6))
 
 
 def test_generation_log_records_ok_runs_fully(migrated_con, fake_model):

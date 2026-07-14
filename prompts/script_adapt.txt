@@ -9,12 +9,17 @@ reordering, transitions, emphasis, rhythm — never factual. Hedges and
 uncertainty markers transfer with their claims: a "could" never becomes a
 "will" in adaptation.
 
-LENGTH: target {word_target} words total (about {minutes_target} minutes
-spoken) — aim for the FULL target: each story's spoken treatment should be
-as substantial as its written version; a script far under target
-under-serves the listener. Segment budgets: cold open + date + menu ~{budget_open} · then per
-story: {budget_stories} · outro ~{budget_outro}. Fewer or thinner stories =
-a shorter episode; NEVER pad.
+THIS EPISODE COVERS (binding): {coverage_line}
+
+LENGTH is EMERGENT, never filled. This episode is a SHORTER digest of the
+briefing, not a reading of it. It runs {minutes_low}-{minutes_high} minutes
+(~{band_low}-{band_high} words) — and inside that band the length is however
+long it NEEDS to be: write to quality and stop. Never pad to reach a number,
+and never give up accuracy or depth to fill time; a naturally short episode is
+correct. The per-story word figures below are CEILINGS and guides, NOT floors
+to fill: cold open + date + menu up to ~{budget_open} · then per covered story:
+{budget_stories} · outro up to ~{budget_outro}. The lead is the episode's
+center of gravity — its deepest segment; every other covered story is tight.
 
 STRUCTURE, in order:
 1. THE INTRO (formula is binding): what happened + why the listener cares +
@@ -26,7 +31,7 @@ STRUCTURE, in order:
    Sunday, July 5. Here's what matters today."
    Yours must be built from TODAY's lead story and end exactly:
    "It's {weekday}, {spoken_date}. Here's what matters today." Then the
-   MENU: one breath per story, 15 seconds total at most.
+   MENU: one breath per COVERED story only, 15 seconds total at most.
    COLD-OPEN DISCIPLINE (P3 #1): the open ORIENTS in 2-3 sentences and
    never pre-plays the lead — a minute of story before the dateline is
    backwards, and an open that spends the lead's best material leaves the
@@ -37,13 +42,15 @@ STRUCTURE, in order:
    sentence; the story body adds immediately ("Also today..." then
    straight to what's new). Listeners notice repetition far more than
    readers do.
-2. STORIES in the given order, at their written tiers: the lead gets the
-   dominant share (mirror its three movements without labels); the two
-   full-picture (medium) stories tight; the "In Brief" (quick) stories are
-   real but brisk — a few sentences each carrying the what-and-why, not
-   one-breath snippets, moving quickly ("A few more before we go...").
+2. THE COVERED STORIES in rank order (see THIS EPISODE COVERS above — never
+   every story): the LEAD gets the dominant share, its own deep segment
+   (mirror its three movements without labels); each other covered story is
+   tight — a few sentences carrying the what-and-why, not a one-breath snippet,
+   moving quickly ("A few more before we go..."). Do not tease, preview, or
+   mention the stories this episode does not cover; they live in the text
+   briefing, and a listener never hears about a story the episode skips.
 3. OUTRO: "What I'm watching:" followed by the 2–3 sharpest watch-for items
-   across stories. Then sign off exactly: "That's your briefing." Nothing
+   across covered stories. Then sign off exactly: "That's your briefing." Nothing
    after it — no methodology reminder and no outlet-count caveat in the spoken
    episode (the app carries that caveat; the podcast does not). No schedule
    promises anywhere — never "see you tomorrow" (this briefing is on-demand).

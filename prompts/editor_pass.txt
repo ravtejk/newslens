@@ -57,9 +57,12 @@ same fields per tier. Edited text in the fields.
 === LABEL DATA (context; a source of ALREADY-PRESENT specifics) ===
 {labels_block}
 
-TIER FLOOR (P3.1, principal ruling): tightening never cuts the LEAD
-below ~300 words when its analysis brief exists — cut mush, keep material;
-a lead compressed to medium shape is a tier violation, not an edit.
+TIER FLOOR (P3.1, principal ruling; NL-63 M2 amended contract): tightening
+never cuts the LEAD below ~450 words when its analysis brief exists — cut mush,
+keep material. The lead is the day's DOMINANT story (target ~640 words) and must
+stay the single longest one; a lead compressed toward full-picture (~440) or
+below its 450 floor is a tier violation, not an edit — an edit that does it is
+discarded. Tighten the lead's rambling, never its substance.
 
 ANALYSIS FACT UNIVERSE (briefed stories only — M9): for a story listed
 below, this block IS its fact universe. A specific in the draft that is

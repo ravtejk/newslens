@@ -67,7 +67,14 @@ LLM_TIMEOUT_S = 120
 # costs). 4,600 fits the largest edition with margin; the per-step cap pre-check
 # still keeps the run under $0.25 (est output at 4,600 tok = $0.046).
 NARRATIVE_MAX_TOKENS = 4600
-SCRIPT_MAX_TOKENS = 3200
+# THE PODCAST CONTRACT REWRITTEN + REFINED (principal 2026-07-14): the episode is a
+# SHORTER digest inside a hard 4-11 min band. Size the cap to the "definitely
+# <11 min" ≈ 1,650-word ceiling: ~2,230 prose tokens, ~1.35x headroom (the gate's
+# minor-#2 lesson — never length-finish into a failed run + paid retry) -> 3,000.
+# Honest to the shorter contract (down from the dead listening-band; the per-story
+# guides sit well under this). Per-step cap pre-check holds the run under $0.25
+# (est out at 3,000 tok = $0.030).
+SCRIPT_MAX_TOKENS = 3000
 NARRATIVE_TEMPERATURE = 0.3
 SCRIPT_TEMPERATURE = 0.4
 
@@ -101,19 +108,48 @@ GENERATION_LOG_NAME = "generation_log.jsonl"
 #   = 640 + 2*440 + 3*220 = 2,180; a 7-story day = 2,400 — both inside the new
 #   ~1,800-2,500 edition band the ruling names. The old 900-1,300 target is dead.
 NARRATIVE_BAND = (1800, 2500)              # amended contract; 6-7 story edition
-# (SCRIPT_BAND removed — dead constant; the script word target is computed from
-#  total_target at the script step, never from this band. Obs 5.)
+# (This is the TODAY-PAGE band only. The PODCAST is a separate, shorter digest
+#  with its own emergent 4-11 min contract — see the script constants below;
+#  the script never derives its length from this narrative band.)
 # Per-slot Today-page targets — a function so it is unbounded over 6-7 slots and
 # the three registers stay explicit (documentation for the prompt/warn bands).
 def per_slot_words(n: int) -> int:
     return 640 if n == 1 else 440 if n in (2, 3) else 220
-# Podcast segment guidance stays at the pre-amendment per-slot values (the spoken
-# episode keeps its ~10-13 min listening-time contract; the amendment is a
-# Today-PAGE depth change, not a longer podcast). A function so 6-7 slots resolve.
+# THE PODCAST CONTRACT REWRITTEN + REFINED (principal 2026-07-14, DECISIONS;
+# supersedes the 07-02 10-13 min ruling — "way too long"). The episode is a
+# SHORTER, lead-focused DIGEST, NOT a reading of the edition. Binding shifts:
+#   (1) length is EMERGENT inside a hard band — never fill toward either bound:
+#       "it will be how long it needs to be." The band is definitely >4 min and
+#       definitely <11 min ≈ 600-1,650 words at ~150 wpm (SCRIPT_MIN_VIABLE_WORDS
+#       / SCRIPT_CEILING_WORDS below).
+#   (2) the LEAD is the center of gravity — the deepest single segment.
+#   (3) 2-5 stories: the lead + 1-4 more (never every story) — see
+#       SCRIPT_MAX_STORIES / _script_coverage: the top slots by rank.
+# Per-story quality GUIDES (ceilings, never floors to fill): lead ~400 · each
+# supporting story ~200. Cold open+menu ~90, outro ~70.
+# DERIVED per-k guide ceilings (open+outro + lead + 200*(k-1)): k=2 -> 760,
+# k=3 -> 960, k=4 -> 1,160, k=5 -> 1,360 words (~5-9 min) — all inside the band,
+# a comfortable margin above the 600 floor even at the k=2 minimum.
 def script_segment(n: int) -> int:
-    return 500 if n == 1 else 350 if n in (2, 3) else 200
-SCRIPT_OPEN_WORDS = 120
-SCRIPT_OUTRO_WORDS = 120
+    return 400 if n == 1 else 200
+SCRIPT_OPEN_WORDS = 90
+SCRIPT_OUTRO_WORDS = 70
+# Lead-focused selection: the episode covers the lead + up to 4 more, deterministic
+# by the edition's own rank order (story_slots is rank-ordered; the lead is slot 1).
+# No new LLM judgment — code names the covered slots; the writer covers exactly them.
+SCRIPT_MAX_STORIES = 5
+# Broken-output floor (the severe-short guard's FLIPPED job — principal 2026-07-14):
+# NOT a fullness target. The episode is "definitely >4 minutes" ≈ 600 words: below
+# that, on a normal covered edition, output is broken (empty / degenerate / stub
+# stories). Length is the LAST signal — call_llm's length-finish check (truncation)
+# and validate_script's mandatory-disclosure `hard` list are checked FIRST; this
+# floor only catches a non-truncated, disclosure-complete body that still didn't
+# deliver a real lead + supporting story.
+SCRIPT_MIN_VIABLE_WORDS = 600
+# Hard upper bound (the "definitely <11 minutes" ≈ 1,650 words): the prompt states
+# it and the post-ship warn fires above the per-k guide ceiling (running long /
+# filling toward the bound). Never fill toward it — emergent length lives beneath.
+SCRIPT_CEILING_WORDS = 1650
 
 # A1 (principal editorial review 2026-07-05): variant A is THE voice; B is
 # retired and the alternation window ended early (alternation_end logged).
@@ -207,6 +243,12 @@ class GenReport:
     deep_views: Dict[str, str] = field(default_factory=dict)  # slot -> availability (Axel instrumentation)
     memory_usd: float = 0.0            # NL-63: state-rewrite spend (the only new LLM cost)
     memory: Dict = field(default_factory=dict)  # NL-63: ledger/state instrumentation for diagnose
+    # BUG-6/32 family (NL-63 M2 obs): call_llm's raw per-ATTEMPT cost record —
+    # every writer attempt that reached the API, including ones that failed
+    # validation (a severe-short script, a truncation) and paid retries. The
+    # OK path bills from report.steps (the display breakdown); this ledger is
+    # what a FAILED-abort entry folds so its money record is never a null.
+    attempt_ledger: List[Dict] = field(default_factory=list)
 
 
 def wc(text: str) -> int:
@@ -262,16 +304,31 @@ def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
 
 def call_llm(key: str, prompt: str, step: str, max_tokens: int,
              temperature: float, json_mode: bool,
-             validate=None) -> Tuple[str, Dict]:
+             validate=None, cost_sink: Optional[List[Dict]] = None
+             ) -> Tuple[str, Dict]:
     """One call + ONE retry total (network-shaped, truncation, or validation
     failure), then GenerateError. Returns (content, usage). `validate`
-    raises ValueError to trigger the retry path."""
+    raises ValueError to trigger the retry path.
+
+    `cost_sink` (money honesty, BUG-6/32 family): if given, EVERY attempt that
+    reaches the API and returns usage records its real cost here BEFORE
+    validation can reject it — so an attempt that truncated or failed
+    validation (and still billed) is never lost from a failed run's money
+    record. The OK-path caller keeps billing report.steps from the returned
+    usage; this sink is a separate, complete per-attempt ledger."""
     last_error = "unknown"
     backoff = 1.0
     for attempt in (1, 2):
         try:
             response = _chat(key, prompt, max_tokens, temperature, json_mode)
             usage = response.get("usage") or {}
+            if cost_sink is not None:
+                cost_sink.append({
+                    "step": step, "attempt": attempt,
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                    "usd": round(_step_cost(usage), 6),
+                })
             choice = response["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise ValueError(
@@ -428,16 +485,28 @@ def _slot_budget_line(slot_n: int) -> str:
     # the lead and both full-picture stories DOUBLE their Today-page depth, and
     # "In Brief" (slot 4+) is the OLD medium register (structured — NOT the dead
     # <=60-word snippet). Slots 1-3 are EXACTLY the three full-picture stories.
+    # Fix (obs: the writer under-delivered the doubled bands by ~20% and the
+    # lead came in at a third of its target): word targets are stated HARD, as
+    # floors not decoration, and the lead's primacy is spelled out — the model
+    # treated the old soft "~550-750" as optional and wrote a full-picture-
+    # length lead. Steering, not a gate: only the 450-word briefed-lead floor
+    # is enforced (with retry); these targets steer the whole edition up to band.
     if slot_n == 1:
-        return ("FULL tier (the lead) — lede 3-6 sentences; why_it_matters 8-12 "
-                "sentences; watch_for 2-3 sentences; ~550-750 words total")
+        return ("FULL tier (the lead) — TARGET ~640 words, and NEVER under 550. "
+                "This is THE LEAD: it must be the single LONGEST story of the "
+                "day, visibly longer than any full-picture story below — a lead "
+                "that reads as short as a slot-2 story is a failure. Spend the "
+                "budget: lede 3-6 sentences; why_it_matters a full 8-12 "
+                "sentences built from source specifics; watch_for 2-3 sentences")
     if slot_n in (2, 3):
-        return ("MEDIUM tier (a full-picture story, DOUBLED depth) — lede 3-5 "
-                "sentences; why_it_matters 5-8 sentences; watch_for 1-2 "
-                "sentences; ~350-500 words total")
+        return ("MEDIUM tier (a full-picture story, DOUBLED depth) — TARGET ~440 "
+                "words, floor 350, shorter than the lead but a real full "
+                "picture: lede 3-5 sentences; why_it_matters 5-8 sentences; "
+                "watch_for 1-2 sentences")
     return ("QUICK tier (the 'In Brief' register — a compact STRUCTURED mini-"
-            "story, NOT a headline snippet) — lede 2-3 sentences; why_it_matters "
-            "3-5 sentences; watch_for 1-2 sentences; ~180-260 words total")
+            "story, NOT a headline snippet) — TARGET ~220 words, floor 180: "
+            "lede 2-3 sentences; why_it_matters 3-5 sentences; watch_for 1-2 "
+            "sentences")
 
 
 def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
@@ -780,24 +849,32 @@ def assemble_narrative(
 # Script pass
 # ---------------------------------------------------------------------------
 
-def _script_budgets(n_slots: int, narrative_words: int) -> Tuple[int, str]:
-    """Script target scales with the NARRATIVE, capped at the slot budget: the
-    podcast keeps its 1,600-2,000 spoken listening-time contract even though the
-    amended Today page doubled (NL-63 M2) — the min() below caps the episode at
-    slot_budget so a ~2,400-word narrative does NOT demand a 3,600-word script.
-    The 1.5x floor still binds thin days ("fewer or thinner stories = shorter
-    episode; never pad" — M5 live finding: a 667-word narrative can't honestly
-    fill 1,440 spoken words). Segment guidance scales proportionally."""
-    slot_budget = SCRIPT_OPEN_WORDS + SCRIPT_OUTRO_WORDS + sum(
-        script_segment(i) for i in range(1, n_slots + 1)
+def _script_coverage(n_slots: int) -> int:
+    """How many stories the episode covers (principal 2026-07-14): the lead +
+    up to SCRIPT_MAX_STORIES-1 more, deterministic by the edition's own rank
+    order — the top slots. Never every story; a thin day covers what exists.
+    No new LLM judgment: code names the count; the covered slots are 1..k."""
+    return max(1, min(n_slots, SCRIPT_MAX_STORIES))
+
+
+def _script_budgets(n_slots: int) -> Tuple[int, str, int]:
+    """Per-story QUALITY CEILINGS for the covered stories + a soft episode-word
+    ceiling. THE PODCAST CONTRACT REWRITTEN (principal 2026-07-14): the episode
+    is a SHORTER, lead-focused digest; length is EMERGENT. These are ceilings and
+    guides, NEVER floors to fill — a naturally short episode on a thin day is
+    correct output. The episode covers only k = _script_coverage(n_slots) stories
+    (the lead + the next-most-consequential), so the ceiling and the per-segment
+    guidance run over the COVERED slots only, not the whole edition. The
+    broken-output floor at the script step is the fixed SCRIPT_MIN_VIABLE_WORDS,
+    NOT a fraction of this ceiling. Returns (ceiling_words, per_desc, k)."""
+    k = _script_coverage(n_slots)
+    ceiling = SCRIPT_OPEN_WORDS + SCRIPT_OUTRO_WORDS + sum(
+        script_segment(i) for i in range(1, k + 1)
     )
-    total = min(slot_budget, max(400, int(narrative_words * 1.5)))
-    scale = total / slot_budget if slot_budget else 1.0
     desc = " · ".join(
-        f"slot {i}: ~{int(script_segment(i) * scale)}"
-        for i in range(1, n_slots + 1)
+        f"slot {i}: up to ~{script_segment(i)}" for i in range(1, k + 1)
     )
-    return total, desc
+    return ceiling, desc, k
 
 
 def _norm_nums(text: str) -> set:
@@ -883,10 +960,16 @@ def build_analysis_facts_block(inputs: Dict) -> str:
     return "\n".join(lines)
 
 
-def build_labels_block(inputs: Dict) -> str:
+def build_labels_block(inputs: Dict, covered: Optional[set] = None) -> str:
+    # covered (script path, principal 2026-07-14): the digest covers only the top
+    # slots, so it is fed labels for the COVERED stories only — a mandatory spoken
+    # disclosure (override, revival) belongs to a story the episode actually
+    # airs. covered=None (editor path) = every slot, unchanged.
     lines = []
     for s in inputs["slots"]:
         n = s["slot"]
+        if covered is not None and int(n) not in covered:
+            continue
         if s.get("override"):
             lines.append(f"story {n}: OVERRIDE — reason: {_override_reason(s)}")
         if s.get("corroboration_count") == 1 and s.get("outlets"):
@@ -903,10 +986,39 @@ def build_labels_block(inputs: Dict) -> str:
     return "\n".join(lines)
 
 
+def script_covered_slots(inputs: Dict) -> set:
+    """The slot numbers the digest airs (principal 2026-07-14): the top
+    k = _script_coverage(n) by the edition's rank order. story_slots is
+    rank-ordered (the lead is slot 1), so the covered set is the k lowest slot
+    numbers actually present — robust to non-contiguous slot ids."""
+    ordered = sorted(int(s["slot"]) for s in inputs["slots"])
+    k = _script_coverage(len(ordered))
+    return set(ordered[:k])
+
+
 def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -> str:
     template = (paths.PROMPTS_DIR / PROMPT_SCRIPT).read_text(encoding="utf-8")
     n_slots = len(inputs["slots"])
-    total, per_desc = _script_budgets(n_slots, wc(narrative))
+    guide_ceiling, per_desc, k = _script_budgets(n_slots)
+    covered = script_covered_slots(inputs)
+    others = k - 1
+    if k <= 1:
+        coverage_line = (
+            "This edition has a single story — cover the LEAD only; there is no "
+            "second story to air.")
+    elif k >= n_slots:
+        coverage_line = (
+            f"This episode covers all {k} stories in the edition — the LEAD "
+            f"(story 1, the deepest segment) plus the other {others}, in rank "
+            "order. The lead is the episode's center of gravity.")
+    else:
+        last = max(covered)
+        coverage_line = (
+            f"This episode covers {k} stories — the LEAD (story 1, the deepest "
+            f"segment) plus the {others} next-most-consequential. Cover stories "
+            f"1 through {last} ONLY; the remaining {n_slots - k} stories are NOT "
+            "in this episode — they live in the text briefing. The lead is the "
+            "episode's center of gravity; never cover every story.")
     weekday, human = _spoken_date(date)
     epistemic = (
         '; epistemic first person ("I think") is banned in this voice'
@@ -921,15 +1033,19 @@ def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -
     return template.format(
         date_line=f"{weekday}, {human}",
         time_of_day=_time_of_day(),
-        word_target=f"{int(total * 0.9)}-{int(total * 1.1)}",
-        minutes_target=f"{max(4, round(total / 160))}",
+        coverage_line=coverage_line,
+        guide_ceiling=guide_ceiling,
+        band_low=SCRIPT_MIN_VIABLE_WORDS,
+        band_high=SCRIPT_CEILING_WORDS,
+        minutes_low=max(1, round(SCRIPT_MIN_VIABLE_WORDS / 150)),
+        minutes_high=round(SCRIPT_CEILING_WORDS / 150),
         budget_open=SCRIPT_OPEN_WORDS,
         budget_stories=per_desc,
         budget_outro=SCRIPT_OUTRO_WORDS,
         weekday=weekday,
         spoken_date=human,
         epistemic_rule=epistemic,
-        labels_block=build_labels_block(inputs),
+        labels_block=build_labels_block(inputs, covered),
         narrative_text=narrative,
     )
 
@@ -1066,7 +1182,7 @@ def script_structural_check(body: str) -> List[str]:
 
 
 def validate_script(
-    text: str, narrative: str, inputs: Dict
+    text: str, narrative: str, inputs: Dict, covered: Optional[set] = None
 ) -> Tuple[str, List[str], List[str]]:
     """Returns (possibly-repaired text, hard_problems, warnings).
     Hard problems: missing mandatory spoken disclosures (override elements,
@@ -1075,7 +1191,13 @@ def validate_script(
     disclosure warning. The spoken caveat was retired from the podcast by NL-58
     ruling 2 (the app carries it) — no longer appended or checked here.
     Fact-subset + hedge checks warn (§5.9 #7-8: flag for review, never
-    auto-fix)."""
+    auto-fix).
+
+    `covered` (principal 2026-07-14, digest contract): the slot numbers the
+    episode actually airs. A mandatory spoken disclosure is only owed for a
+    story the digest COVERS — an override or revival on an uncovered lower-rank
+    story is disclosed by the text briefing, not the episode. covered=None =
+    every slot (backward-compatible for direct callers / whole-edition scripts)."""
     hard: List[str] = []
     warnings: List[str] = []
     body = text.strip()
@@ -1083,6 +1205,8 @@ def validate_script(
 
     for s in inputs["slots"]:
         n = s["slot"]
+        if covered is not None and int(n) not in covered:
+            continue
         if s.get("override"):
             reason = _override_reason(s)
             reason_head = " ".join(reason.split()[:4]).rstrip(".,").lower()
@@ -1396,8 +1520,24 @@ def run_generate(
                 con, date, src_env, key, report, refresh, no_threads
             )
         except GenerateError as exc:
+            # BUG-6/32 family (NL-63 M2 obs): a run that aborts mid-pipeline
+            # still spent real money — narrative, its floor retry, the editor,
+            # and BOTH script attempts on a severe-short abort all bill before
+            # the raise. Fold that accumulated spend into the failed entry so
+            # the money record is never a silent null. attempt_ledger is
+            # call_llm's raw per-attempt cost record; the analysis stage runs
+            # in its own module, so its spend is folded from report.analysis_usd
+            # (and any pre-abort memory spend from report.memory_usd).
+            ledger = list(report.attempt_ledger)
+            for late_step, usd in (("analysis", report.analysis_usd),
+                                   ("memory", report.memory_usd)):
+                if usd:
+                    ledger.append({"step": late_step, "usd": round(usd, 6)})
             log_generation({"date": date, "variant": variant, "sample": sample,
                             "status": "failed", "error": str(exc)[:500],
+                            "steps": ledger,
+                            "total_usd": round(
+                                sum(s.get("usd") or 0 for s in ledger), 6),
                             "warnings": report.warnings})
             raise
     finally:
@@ -1533,6 +1673,7 @@ def _run_generate_body(
     _, usage_n = call_llm(
         key, n_prompt, "narrative", NARRATIVE_MAX_TOKENS,
         NARRATIVE_TEMPERATURE, True, validate=_shape_check,
+        cost_sink=report.attempt_ledger,
     )
     draft_payload = draft_holder[0]
     step_n = {"step": f"narrative_{report.variant}", "model": WRITER_MODEL,
@@ -1549,11 +1690,16 @@ def _run_generate_body(
     lead_w = _lead_words(draft_payload)
     if (inputs.get("briefs_by_slot") or {}).get(1) and lead_w < LEAD_FLOOR_WORDS:
         floor_msg = (
-            f"story 1 (the lead) ran {lead_w} words — its floor is "
-            f"{LEAD_FLOOR_WORDS} when its analysis brief exists. The brief "
-            "gives you a cited ledger, mechanism, effects, unknowns: write "
-            "the FULL lead (A2 band 450-900, lead-weighted edition total "
-            "1,800-2,500); slots 2+ keep their tiers.")
+            f"story 1 (the lead) ran {lead_w} words — FAR under its floor of "
+            f"{LEAD_FLOOR_WORDS} (it has a full analysis brief, so the material "
+            "excuse is gone). Rewrite the lead ALONE, much longer: TARGET ~640 "
+            f"words, an absolute floor of {LEAD_FLOOR_WORDS}. The brief gives "
+            "you a cited ledger, mechanism, effects, and unknowns — spend them: "
+            "a full 8-12-sentence why_it_matters built from those source "
+            "specifics is the bulk of the lift. The lead is THE LEAD: it must "
+            "end up the LONGEST story of the day, clearly longer than any "
+            "full-picture story. Keep every other story's tier and length "
+            "exactly as they are.")
         retry_n_prompt = (n_prompt + "\n\n=== YOUR PREVIOUS DRAFT WAS "
                           "REJECTED — TIER-EXPRESSION VIOLATION (fix exactly "
                           "this; everything above still binds) ===\n- "
@@ -1569,7 +1715,7 @@ def _run_generate_body(
                 _, usage_rn = call_llm(
                     key, retry_n_prompt, "narrative_retry",
                     NARRATIVE_MAX_TOKENS, NARRATIVE_TEMPERATURE, True,
-                    validate=_shape_check,
+                    validate=_shape_check, cost_sink=report.attempt_ledger,
                 )
                 retry_payload = draft_holder[0]
                 step_rn = {"step": "narrative_retry", "model": WRITER_MODEL,
@@ -1638,6 +1784,7 @@ def _run_generate_body(
         _, usage_e = call_llm(
             key, e_prompt, "editor", EDITOR_MAX_TOKENS,
             EDITOR_TEMPERATURE, True, validate=_editor_shape,
+            cost_sink=report.attempt_ledger,
         )
         edited_payload = edited_holder[0]
         step_e = {"step": "editor_pass", "model": WRITER_MODEL,
@@ -1763,18 +1910,38 @@ def _run_generate_body(
     script_holder: List[str] = []
     script_warnings: List[str] = []
 
-    total_target, _ = _script_budgets(len(inputs["slots"]), report.narrative_words)
+    guide_ceiling, _, n_covered = _script_budgets(len(inputs["slots"]))
+    covered_slots = script_covered_slots(inputs)
+    # Brokenness floor (principal 2026-07-14 "definitely >4 min" ≈ 600 words) —
+    # coverage-aware so a genuinely thin edition isn't failed as broken: on a
+    # NORMAL edition (k>=3, guide ceiling >=960) it lands at the full 600; on a
+    # thin 1-2 story edition, whose own guide ceiling approaches 600 (k=1 -> 560,
+    # k=2 -> 760), it relaxes to two-thirds of that ceiling so a legitimately
+    # short lead-focused digest still passes ("a naturally short episode is
+    # correct"). Length is the LAST broken signal; disclosures + truncation
+    # (below / upstream) are checked first.
+    viability_floor = min(SCRIPT_MIN_VIABLE_WORDS, int(guide_ceiling * 0.66))
 
     def _validate_script(content: str) -> None:
-        body, hard, warns = validate_script(content, narrative, inputs)
+        body, hard, warns = validate_script(content, narrative, inputs,
+                                            covered=covered_slots)
         if hard:
+            # Missing mandatory spoken disclosures — the FIRST broken signal,
+            # checked before length (principal 2026-07-14). Retry material.
             raise ValueError("; ".join(hard))
-        if wc(body) < total_target * 0.55:
-            # Severe under-delivery is not a band nuance: a 3-minute "10-13
-            # minute" episode under-serves the listener (implementer call,
-            # ADR-0007; ordinary band misses still warn-only per §5.9 #9).
+        # THE PODCAST CONTRACT REWRITTEN (principal 2026-07-14): length is
+        # EMERGENT — a naturally short digest is CORRECT, so this guard no longer
+        # measures against a fullness target. It catches genuinely BROKEN output:
+        # truncation is already caught upstream (call_llm's length-finish check),
+        # missing disclosures are the `hard` list above; a non-truncated,
+        # disclosure-complete body still under the viability floor delivered no
+        # real lead + supporting story — empty/degenerate, not a short episode.
+        if wc(body) < viability_floor:
             raise ValueError(
-                f"script severely short: {wc(body)} words vs ~{total_target} target"
+                f"script not viable: {wc(body)} words — under the "
+                f"{viability_floor}-word floor for a {n_covered}-story digest "
+                "(disclosures and truncation checked and clear; this is empty/"
+                "degenerate output, not a legitimately short episode)"
             )
         script_holder[:] = [body]
         script_warnings[:] = warns
@@ -1782,6 +1949,7 @@ def _run_generate_body(
     _, usage_s = call_llm(
         key, s_prompt, "script", SCRIPT_MAX_TOKENS,
         SCRIPT_TEMPERATURE, False, validate=_validate_script,
+        cost_sink=report.attempt_ledger,
     )
     script = script_holder[0]
     # Provenance: validate warns travel with the attempt that SHIPS — the
@@ -1826,6 +1994,7 @@ def _run_generate_body(
                 _, usage_r = call_llm(
                     key, retry_prompt, "script_retry", SCRIPT_MAX_TOKENS,
                     SCRIPT_TEMPERATURE, False, validate=_validate_script,
+                    cost_sink=report.attempt_ledger,
                 )
                 retry_script = script_holder[0]
                 retry_script_warns = script_warnings[:]
@@ -1879,10 +2048,16 @@ def _run_generate_body(
     report.steps.append(step_s)
     report.script_text = script
     report.script_words = wc(script)
-    if not (total_target * 0.7 <= report.script_words <= total_target * 1.25):
+    # Emergent-length enforcement (principal 2026-07-14): NO lower-bound warn — a
+    # naturally short digest is correct. Only the "never fill toward the bound"
+    # direction warns: an episode over its k-story guide ceiling (or the hard
+    # 11-min bound) is running long / padding.
+    if report.script_words > int(guide_ceiling * 1.15):
         report.warnings.append(
-            f"script {report.script_words} words vs ~{total_target} target "
-            f"for {len(inputs['slots'])} slot(s) [KNOB; warn-only]"
+            f"script {report.script_words} words — over the ~{guide_ceiling}-word "
+            f"guide for a {n_covered}-story digest (hard ceiling "
+            f"{SCRIPT_CEILING_WORDS}); the episode is a digest, not a reading — "
+            "tighten, never fill toward the bound [KNOB; warn-only]"
         )
 
     # --- Audio step (M6 mandate 1): the last stage; a synth failure

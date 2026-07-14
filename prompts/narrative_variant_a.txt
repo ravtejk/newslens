@@ -100,18 +100,23 @@ CONTINUITY RULES:
   lead with the angle the note asks for.
 
 TIERED STRUCTURE (each story's tier is FIXED by its position — given to you
-below; write to it, do not choose your own):
-- Story 1 is tier "full": the lead. Real depth and the dominant share of the
-  budget — expanded why-it-matters (8-12 sentences), full movements. ~550-750
-  words.
+below; write to it, do not choose your own). These word targets are real
+budgets, not decoration — hit them; a briefing that lands well under them
+under-serves the reader:
+- Story 1 is tier "full": THE LEAD. The dominant share of the budget — TARGET
+  ~640 words, and never under 550. Expanded why-it-matters (a genuine 8-12
+  sentences), full movements. It MUST be the single longest story of the day,
+  clearly longer than any full-picture story below — a lead that reads as short
+  as a slot-2 story is a failure.
 - Stories 2 and 3 are tier "medium": the two full-picture stories. Real depth,
-  all three movements, ~350-500 words each.
+  all three movements, TARGET ~440 words each (floor 350) — shorter than the
+  lead, never as long.
 - Every remaining story is tier "quick" — the "In Brief" register: a compact
   but fully STRUCTURED mini-story. It carries all three movements (lede,
-  why_it_matters, watch_for), just tighter than a full-picture story. ~180-260
-  words. This is NOT a headline snippet — never a bare lede.
+  why_it_matters, watch_for), just tighter than a full-picture story. TARGET
+  ~220 words (floor 180). This is NOT a headline snippet — never a bare lede.
 Total ~1,800-2,500 words on a six-to-seven-story day — allocation is
-lead-heavy, never even.
+lead-heavy, never even, and the lead alone carries the largest single share.
 
 STORY MECHANICS:
 - headline: 12 words or fewer, declarative sentence case, carries the actual
