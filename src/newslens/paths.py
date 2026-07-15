@@ -38,11 +38,30 @@ _GUARDED = {
     "DB_PATH": PROJECT_ROOT / "data" / "newslens.db",
 }
 
+_ENV_OVERRIDE = {"DATA_DIR": "NEWSLENS_DATA_DIR", "DB_PATH": "NEWSLENS_DB_PATH"}
+
 
 def __getattr__(name: str):
     if name in _GUARDED:
+        # Redirection outranks sanction (v7-M1 pinhole fix, 2026-07-14): an
+        # explicitly overridden location is not real state, and env vars are
+        # the only sandbox that survives a process boundary — the QA suite's
+        # children (doctor, CLI) resolve these instead of the live data/.
+        # DB_PATH derives from a DATA_DIR-only override so one variable
+        # sandboxes both.
+        override = os.environ.get(_ENV_OVERRIDE[name])
+        if override:
+            return Path(override)
+        if name == "DB_PATH":
+            data_override = os.environ.get(_ENV_OVERRIDE["DATA_DIR"])
+            if data_override:
+                return Path(data_override) / "newslens.db"
+        # No pytest arm: children spawned by tests inherit PYTEST_CURRENT_TEST,
+        # so sanctioning on it blessed every such child against real data/
+        # (the v7-M1 pinhole). Under pytest the conftest sandbox provides the
+        # module-dict shadow and the env overrides above; nothing legitimate
+        # resolves real paths from inside the suite.
         if (_REAL_PATHS_ALLOWED
-                or "PYTEST_CURRENT_TEST" in os.environ
                 or os.environ.get("NEWSLENS_REAL_DATA") == "1"):
             return _GUARDED[name]
         # RuntimeError, not AttributeError — hasattr/getattr(default=) must
@@ -50,8 +69,10 @@ def __getattr__(name: str):
         raise RuntimeError(
             f"newslens.paths.{name} refused: unsanctioned process (incident "
             "guard, 2026-07-14 — an ad-hoc render-proof script clobbered the "
-            "real generation_log). Run via `newslens ...`/scripts/doctor, "
-            "under pytest, or set NEWSLENS_REAL_DATA=1. Ad-hoc probes must "
+            "real generation_log). Run via `newslens ...`/scripts/doctor, or "
+            "set NEWSLENS_REAL_DATA=1 for a conscious one-off. Sandboxed and "
+            "child processes set NEWSLENS_DATA_DIR (and optionally "
+            "NEWSLENS_DB_PATH) to redirect instead. Ad-hoc probes must "
             "sandbox. LIMIT: hardcoded 'data/...' strings bypass this guard.")
     raise AttributeError(f"module 'newslens.paths' has no attribute {name!r}")
 

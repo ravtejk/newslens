@@ -66,6 +66,12 @@ def _scrubbed_env(tmp_path):
         "OPENAI_API_KEY": "",
         "PERPLEXITY_API_KEY": "",
         "GNEWS_API_KEY": "",
+        # v7-M1 pinhole fix (2026-07-14): doctor.main() self-sanctions via
+        # allow_real_paths(), so this child used to run its data-directory
+        # writability probe against the REAL data/ (the full-suite mtime
+        # bump caught at the gate). A hand-built env inherits nothing from
+        # the conftest sandbox, so it opts into the redirection explicitly.
+        "NEWSLENS_DATA_DIR": str(tmp_path / "doctor-data"),
     }
 
 

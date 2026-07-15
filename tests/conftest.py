@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import socket
 import threading
 from pathlib import Path
@@ -25,10 +26,72 @@ from newslens import db, paths
 
 PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
 
+# The actual on-disk locations, captured through the guard's backing table
+# (plain dict read — no sanction check, no PEP 562) before any sandboxing.
+_REAL_DATA_DIR = paths._GUARDED["DATA_DIR"]
+# v7-M2 QA widening (2026-07-14): the db and the generation log are stat'd
+# INDIVIDUALLY — the dir mtime/listing snapshot below only moves on
+# create/delete/rename, so an IN-PLACE rewrite (append/clobber, the exact
+# 2026-07-14 generation_log incident shape) is invisible to it. Proven by
+# probe: an append to a pre-existing watched-dir file passed the pre-widening
+# tripwire. test_v7_m2_qa.py::test_tripwire_snapshot_sees_inplace_db_and_log_rewrites
+# is the red test only this widening flips.
+_REAL_STATE_FILES = (paths.SOURCES_FILE, paths.MEMORY_FILE, paths.ENV_FILE,
+                     paths._GUARDED["DB_PATH"],
+                     _REAL_DATA_DIR / "generation_log.jsonl")
+
+
+def _real_state_snapshot():
+    snap = {}
+    for d in (_REAL_DATA_DIR, _REAL_DATA_DIR / "briefings"):
+        try:
+            st = os.stat(d)
+            snap[str(d)] = (st.st_mtime_ns, tuple(sorted(os.listdir(d))))
+        except FileNotFoundError:
+            snap[str(d)] = None
+    for f in _REAL_STATE_FILES:
+        try:
+            st = os.stat(f)
+            snap[str(f)] = (st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            snap[str(f)] = None
+    return snap
+
+
+@pytest.fixture(autouse=True)
+def real_state_tripwire():
+    """AUTOUSE, defined first so it wraps every other fixture's teardown.
+
+    v7-M1 QA observation (2026-07-14): a full-suite run bumped the REAL
+    data/ mtime — test_preinstall_doctor's doctor child ran the data-dir
+    writability probe against the real checkout, because monkeypatch
+    sandboxing cannot cross a process boundary. ENGINEERING.md says the
+    committed suite is safe by construction; this fixture makes that a
+    mechanism instead of a hope — any test whose run (including its
+    children) creates, deletes, or rewrites real state fails BY NAME,
+    read-only stat/listdir being the only inspection it performs.
+    """
+    before = _real_state_snapshot()
+    yield
+    after = _real_state_snapshot()
+    if after != before:
+        diff = {
+            k: {"before": before.get(k), "after": after.get(k)}
+            for k in set(before) | set(after)
+            if before.get(k) != after.get(k)
+        }
+        pytest.fail(
+            "REAL state touched during this test (ENGINEERING.md 'no "
+            f"real-state writes' — sandbox pinhole): {diff}",
+            pytrace=False,
+        )
+
 # Every env var the milestone-1 code reads, plus proxy vars that could
 # redirect urllib away from our local fake server.
 SCRUBBED_ENV_VARS = [
     "NEWSLENS_REAL_DATA",  # the paths-guard opt-in must never leak into tests
+    "NEWSLENS_DATA_DIR",   # ambient redirections scrubbed; sandbox_paths sets
+    "NEWSLENS_DB_PATH",    # its own per-test values after this scrub
     "OPENAI_API_KEY",
     "PERPLEXITY_API_KEY",
     "GNEWS_API_KEY",
@@ -65,7 +128,7 @@ SYNTHETIC_TEMPLATE = (
 
 
 @pytest.fixture(autouse=True)
-def sandbox_paths(tmp_path, monkeypatch):
+def sandbox_paths(tmp_path, monkeypatch, scrub_env):
     """AUTOUSE (M5 escape postmortem): redirect all *stateful* newslens.paths
     locations into a sandbox for EVERY test, requested or not.
 
@@ -76,14 +139,32 @@ def sandbox_paths(tmp_path, monkeypatch):
     Sandboxing must not be opt-in: no future newly-real verb may ever see
     real state from inside this suite.
 
+    v7-M1 pinhole fix (2026-07-14): the module-attribute shadow is process-
+    local, but tests legitimately spawn real entrypoints (scripts/doctor,
+    the venv CLI) whose main() self-sanctions via allow_real_paths() — the
+    doctor child ran its data-dir writability probe against the REAL data/.
+    So the sandbox now also exports NEWSLENS_DATA_DIR/NEWSLENS_DB_PATH,
+    which paths.__getattr__ resolves ahead of any sanction: every child that
+    inherits the test environment lands in the sandbox too. (Depends on
+    scrub_env so the ambient-value scrub happens before these are set.)
+
     MIGRATIONS_DIR, PROMPTS_DIR, PROJECT_ROOT stay real — they are the code
     under test. sources.yaml starts in the synthetic TEMPLATE state (zero
     active sources); tests write their own content over it as needed.
     """
     data_dir = tmp_path / "data"
-    monkeypatch.setattr(paths, "DATA_DIR", data_dir, raising=False)
-    monkeypatch.setattr(paths, "DB_PATH", data_dir / "newslens.db",
-                        raising=False)
+    db_path = data_dir / "newslens.db"
+    monkeypatch.setenv("NEWSLENS_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("NEWSLENS_DB_PATH", str(db_path))
+    # setitem on the module dict, not setattr: reading the guarded names back
+    # through getattr would consult the PEP 562 guard (and record whatever it
+    # returned as the value to "restore", materializing a stale global).
+    monkeypatch.setitem(vars(paths), "DATA_DIR", data_dir)
+    monkeypatch.setitem(vars(paths), "DB_PATH", db_path)
+    # In-process cli.main()/doctor.main() calls flip the process-wide
+    # sanction and nothing unflips it; reset per test so a gap after a CLI
+    # test never inherits the sanction of the test that ran before.
+    monkeypatch.setattr(paths, "_REAL_PATHS_ALLOWED", False)
 
     sources = tmp_path / "sources.yaml"
     sources.write_text(SYNTHETIC_TEMPLATE, encoding="utf-8")
