@@ -207,10 +207,13 @@ def test_future_last_picked_up_is_guarded(tmp_paths):
 
 # --- P3c: never-picked-up renders as its own honest phrase -------------------
 
-def test_never_picked_up_copy_is_not_a_broken_concatenation(tmp_paths):
-    """P3c: a thread with no pickup must read 'Not yet picked up', never the
-    broken 'Last picked up not picked up yet'. Fix contract: the if/else in
-    _render_following's active loop."""
+def test_never_picked_up_renders_bare_no_broken_concatenation(tmp_paths):
+    """v7-M2 spine: a thread with no pickup and no this-edition delta is a QUIET
+    thread — it renders in the counted fold as a bare name link with NO date
+    stamp (honest absence), never a fabricated 'picked up' phrase and never the
+    old broken 'Last picked up not picked up yet' concatenation.
+    WAS test_never_picked_up_copy_is_not_a_broken_concatenation (the dossier
+    'Not yet picked up' copy retired with the Spine rebuild)."""
     db.migrate()
     con = db.connect()
     con.execute("INSERT INTO memory (topic, status, created_at, updated_at)"
@@ -218,8 +221,11 @@ def test_never_picked_up_copy_is_not_a_broken_concatenation(tmp_paths):
     con.commit()
     html = server._render_following(con)
     con.close()
-    assert "Not yet picked up" in html
-    assert "Last picked up not picked up yet" not in html
+    assert "Last picked up not picked up yet" not in html   # the broken form stays gone
+    assert "Not yet picked up" not in html                  # the retired dossier copy
+    assert ">Never</a>" in html                             # name-as-action link
+    fold = html.split('class="quiet-fold"')[1].split("</details>")[0]
+    assert "Never" in fold and "LAST UPDATED" not in fold   # no stamp, honest absence
 
 
 # --- P4c: the collection window is a quiet VISIBLE line -----------------------

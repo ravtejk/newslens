@@ -344,9 +344,13 @@ def test_no_edition_today_with_archive_renders_v7_frame():
 
 
 def test_skip_link_present_and_focusable():
-    """A11y floor: the skip link targets the Today view and un-hides on focus.
-    (No prior test pinned this — the v7 rebuild could have dropped it silently.)"""
+    """A11y floor: the skip link targets the MAIN landmark and un-hides on focus.
+    v7-M2 heading-semantics fix: WAS href="#view-today", a no-op after a JS view
+    switch (Today is display:none). It now targets #main — the landmark that
+    holds every view — which is focusable (tabindex="-1"), so the skip works on
+    any active view (dispatch item 4: 'make it target the live view or the main
+    landmark')."""
     assert 'class="skip-link"' in webui.PAGE
-    assert 'href="#view-today"' in webui.PAGE.split('class="skip-link"')[0][-200:] \
-        or 'class="skip-link" href="#view-today"' in webui.PAGE
+    assert 'class="skip-link" href="#main"' in webui.PAGE
+    assert '<main id="main" tabindex="-1">' in webui.PAGE   # focusable skip target
     assert ".skip-link:focus" in webui.CSS

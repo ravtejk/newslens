@@ -26,14 +26,14 @@ CSS = """
   --font-display: Charter, "Iowan Old Style", Georgia, "Palatino Linotype", serif;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
-  /* Legacy aliases — the M2-rebuild surfaces (Following dossiers, settings,
-     popups, suggest, archive INDEX) still name these; they resolve to v7
-     values so nothing renders off-palette while their STRUCTURE waits for M2. */
+  /* Legacy aliases — RETIRED as the Following/Archive surfaces landed (v7-M2,
+     gate watch-for 9): --tracked -> --moved, --font-serif -> --font-display,
+     --accent-deep and --max-w dropped (unused). The remainder still name the
+     NOT-yet-rebuilt settings/popups/suggest surfaces; they retire when those
+     land (tracked for the follow-up milestone). */
   --bg: var(--paper); --surface: #FFFFFF; --accent: var(--terra);
-  --accent-deep: var(--terra-deep); --tracked: var(--moved);
-  --font-serif: var(--font-display);
   --overlay-scrim: rgba(26,23,19,0.35); --popup-scrim: rgba(26,23,19,0.28);
-  --radius: 10px; --max-w: 34rem;
+  --radius: 10px;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html { -webkit-text-size-adjust: 100%; }
@@ -116,7 +116,7 @@ article.story { scroll-margin-top: 0.75rem; }
 .today-grid { display: grid; grid-template-columns: 7fr 5fr; gap: 0 4rem; padding: 2.2rem 0 1rem; }
 .kicker { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
   letter-spacing: 0.14em; text-transform: uppercase; color: var(--terra); margin: 0 0 0.6rem; }
-.lead h1.headline { font-family: var(--font-display); font-weight: 700; font-size: 3.5rem;
+.lead h2.headline { font-family: var(--font-display); font-weight: 700; font-size: 3.5rem;
   line-height: 1.06; letter-spacing: -0.015em; margin: 0 0 0.7rem; }
 .lead .body { font-size: 1.05rem; max-width: 38rem; }
 .lead .body > p { margin: 0 0 1rem; }
@@ -192,11 +192,11 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
 .footer-detail p { margin: 0 0 0.5rem; } .footer-detail p:last-child { margin-bottom: 0; }
 
 .state-panel { background: var(--surface); border-radius: var(--radius); padding: 1.75rem 1.5rem; margin-top: 1.5rem; }
-.state-panel h3 { font-family: var(--font-serif); font-size: 1.15rem; margin: 0 0 0.6rem; }
+.state-panel h2 { font-family: var(--font-display); font-size: 1.15rem; margin: 0 0 0.6rem; }
 .state-panel p { font-size: 0.9rem; color: var(--ink-soft); margin: 0 0 1rem; }
 .steps { list-style: none; margin: 0 0 1rem; padding: 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-faint); }
 .steps li { padding: 0.2rem 0; }
-.steps li.done { color: var(--ink); } .steps li.done::before { content: "\\2713 "; color: var(--tracked); }
+.steps li.done { color: var(--ink); } .steps li.done::before { content: "\\2713 "; color: var(--moved); }
 .steps li.active::before { content: "\\2026 "; } .steps li.pending::before { content: "\\00B7 "; }
 .error-text { font-size: 0.85rem; color: var(--danger); margin: 0 0 1rem; }
 .cta-quiet { display: inline-block; background: var(--ink); color: var(--bg); font-size: 0.85rem;
@@ -205,46 +205,100 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
   border: 1px solid var(--rule); padding: 0.55rem 1.05rem; border-radius: var(--radius); cursor: pointer; }
 .cta-outline:hover { border-color: var(--ink-soft); color: var(--ink); }
 
-h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5rem 0 1.25rem; }
-.archive-row { background: var(--surface); border-radius: var(--radius); padding: 1rem 1.15rem; margin-bottom: 0.65rem; }
-.archive-row a { color: var(--ink); text-decoration: none; display: block; }
-.archive-date { font-family: var(--font-serif); font-size: 1.03rem; font-weight: 700; margin: 0 0 0.25rem; }
-.archive-keywords { font-size: 0.82rem; color: var(--ink-soft); margin: 0; }
-.archive-keywords .sep { color: var(--ink-faint); margin: 0 0.3em; }
-
-.following-switcher { display: flex; gap: 1.5rem; margin: 1.5rem 0 1.5rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--rule); }
-.following-switcher button { background: transparent; border: none; padding: 0 0 0.5rem;
-  font-size: 0.92rem; font-weight: 600; color: var(--ink-faint); cursor: pointer;
-  margin-bottom: -0.8rem; border-bottom: 2px solid transparent; }
-.following-switcher button.current { color: var(--ink); border-bottom-color: var(--accent); }
+/* h1.view-title: still the archive-in-place EDITION date title (NL-11). */
+h1.view-title { font-family: var(--font-display); font-size: 1.5rem; margin: 1.5rem 0 1.25rem; }
 .sub-view { display: none; } .sub-view.active { display: block; }
-
-.indicator-note { font-size: 0.8rem; color: var(--ink-faint); margin: 0 0 1.25rem; }
-.indicator-note .dot { color: var(--tracked); }
-/* TWEAK 1+2: dot ~5% smaller than v5's 0.7rem, and aligned with the story
-   TITLE line — flex-start plus an optical offset matching .dossier-topic's
-   first line box (1.08rem * 1.28lh ≈ 1.38rem box; dot 0.66rem -> ~0.36rem
-   top offset centers the dot on the title's line). */
-.dossier { background: var(--surface); border-radius: var(--radius); padding: 1.1rem 1.25rem;
-  margin-bottom: 0.7rem; display: flex; align-items: flex-start; gap: 0.85rem; }
-.dossier .dot-slot { width: 0.6rem; flex-shrink: 0; text-align: center; color: var(--tracked);
-  font-size: 0.66rem; line-height: 1; align-self: flex-start; margin-top: 0.36rem; }
-.dossier-row-body { flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 0.6rem 1rem; flex-wrap: wrap; }
-/* NL-58 P3d: min-width:0 lets main shrink instead of forcing the actions past
-   the card edge on narrow cards; the actions wrap as a unit and each button may
-   also wrap — belt-and-suspenders so buttons never break the card edge. */
-.dossier-main { flex: 1 1 8rem; min-width: 0; }
-.dossier-topic { font-family: var(--font-serif); font-size: 1.08rem; font-weight: 700; margin: 0 0 0.3rem; overflow-wrap: anywhere; }
-.dossier-meta { font-size: 0.78rem; color: var(--ink-faint); margin: 0; overflow-wrap: anywhere; }
-.dossier-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-shrink: 0; }
-.dossier-actions button { font-size: 0.74rem; background: transparent; border: 1px solid var(--rule);
-  color: var(--ink-soft); padding: 0.3rem 0.65rem; border-radius: 7px; cursor: pointer; }
-.dossier-actions button:hover { border-color: var(--ink); color: var(--ink); }
-.dossier-actions button.delete-action:hover { border-color: var(--danger); color: var(--danger); }
-.section-h { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--ink-faint); margin: 1.75rem 0 0.75rem; }
+/* section-h: a real h2 now (v7-M2 heading semantics) — the class carries the
+   quiet furniture look so the heading level and the appearance are decoupled. */
+.section-h { font-family: var(--font-sans); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-faint); margin: 1.75rem 0 0.75rem; }
 .section-h:first-child { margin-top: 0; }
 .empty-note { font-size: 0.85rem; color: var(--ink-faint); font-style: italic; padding: 0.5rem 0; }
+
+/* ==================== FOLLOWING — the Spine on paper (§7/§12.2/§12.4/§12.5) ==================== */
+.page-title { font-family: var(--font-display); font-weight: 700; font-size: 2.6rem;
+  line-height: 1.05; margin: 2rem 0 0.4rem; }
+.view-line { font-size: 0.9rem; max-width: 44rem; margin: 0 0 2rem;
+  padding-bottom: 0.55rem; border-bottom: 1px solid var(--rule); }
+.view-line a { text-decoration: none; color: var(--ink-soft); margin-right: 1.6rem; }
+.view-line a:hover { color: var(--ink); text-decoration: underline; }
+.view-line a[aria-current="true"], .view-line a.current { color: var(--ink); font-weight: 700; }
+.follow-story { margin: 0 0 1.5rem; }
+.follow-story .follow-new { background: none; border: none; padding: 0; cursor: pointer;
+  font-family: var(--font-sans); font-size: 0.9rem; font-weight: 700; color: var(--terra); }
+.follow-story .follow-new:hover { color: var(--terra-deep); text-decoration: underline; }
+/* Updated rows: full anatomy, loud and few (no cards — hairline separation). */
+.thread { border-top: 1px solid var(--rule); padding: 1.4rem 0; max-width: 44rem; }
+.t-stamp { display: block; font-family: var(--font-mono); font-size: 0.72rem;
+  letter-spacing: 0.06em; color: var(--ink-faint); margin: 0 0 0.25rem; }
+.t-stamp .t-moved { color: var(--moved); font-weight: 700; }
+.thread-name { font-family: var(--font-display); font-weight: 700; font-size: 1.45rem;
+  line-height: 1.2; margin: 0 0 0.3rem; min-width: 0; overflow-wrap: break-word; }
+.thread-name a { color: var(--ink); text-decoration: none; }
+.thread-name a:hover { color: var(--terra-deep); text-decoration: underline; }
+.thread-delta { font-size: 0.95rem; color: var(--ink); margin: 0 0 0.45rem; max-width: 40rem; }
+.thread-note { font-size: 0.88rem; color: var(--ink-soft); font-style: italic; margin: 0 0 0.2rem;
+  max-width: 40rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* The counted quiet fold (§12.5): native details/summary, keyboard-operable. */
+.quiet-fold { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  max-width: 44rem; margin: 0 0 2rem; }
+.quiet-fold summary { cursor: pointer; padding: 1rem 0; font-size: 0.92rem; color: var(--ink-soft); }
+.quiet-fold summary:hover { color: var(--ink); }
+.quiet-fold summary .qf-count { font-weight: 700; color: var(--ink); }
+.q-list { list-style: none; margin: 0; padding: 0 0 0.6rem; }
+.q-row { border-top: 1px solid var(--rule); padding: 0.5rem 0;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.9rem; }
+.q-row > * { min-width: 0; }
+.q-row a { font-family: var(--font-display); font-size: 1.05rem; color: var(--ink-soft);
+  text-decoration: none; overflow-wrap: break-word; }
+.q-row a:hover { color: var(--ink); text-decoration: underline; }
+.q-stamp { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em; color: var(--ink-faint); }
+.lifecycle-row { border-top: none; padding: 0.4rem 0; }
+
+/* ==================== ARCHIVE — the Study/Wire calendar (§8) ==================== */
+.month-title { font-family: var(--font-display); font-weight: 700; font-size: 3rem;
+  line-height: 1; margin: 2rem 0 0.2rem; }
+.month-title .yr { font-size: 1.3rem; font-weight: 400; color: var(--ink-faint); }
+.cal-note { font-size: 0.8rem; color: var(--ink-faint); margin: 0.2rem 0 1.6rem; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4rem;
+  max-width: 42rem; margin-bottom: 0.6rem; }
+.cal-dow { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-faint); padding-bottom: 0.3rem; }
+.cal-cell { min-height: 3.6rem; padding: 0.3rem 0.35rem; font-family: var(--font-display); }
+.cal-num { font-size: 1.2rem; line-height: 1.3; display: inline-block; }
+.cal-void .cal-num { color: var(--cal-bare); }           /* pre-history + future: barest */
+.cal-gap .cal-num { color: var(--ink-faint); }            /* gap within history: faint, no shame */
+.cal-edition a { text-decoration: none; color: var(--ink); display: block; }
+.cal-edition .cal-num { font-weight: 700; border-bottom: 2px solid var(--moved); }
+.cal-edition a:hover .cal-num { color: var(--terra-deep); }
+.cal-stamp { display: block; font-family: var(--font-mono); font-size: 0.64rem;
+  color: var(--ink-faint); margin-top: 0.2rem; }
+.cal-today .cal-num { color: var(--terra); border: 2px solid var(--terra);
+  border-radius: 50%; width: 2rem; height: 2rem; display: inline-flex;
+  align-items: center; justify-content: center; }
+.archive-list { list-style: none; padding: 0; margin: 1.6rem 0 4rem; max-width: 46rem;
+  border-top: 1px solid var(--ink); }
+.archive-list li { border-bottom: 1px solid var(--rule); padding: 0.8rem 0; }
+.archive-list .al-date { font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-faint); display: block; }
+.archive-list a { font-family: var(--font-display); font-weight: 700; font-size: 1.1rem;
+  color: var(--ink); text-decoration: none; }
+.archive-list a:hover { color: var(--terra-deep); text-decoration: underline; }
+
+/* ==================== THREAD PAGE — the Open thread destination ==================== */
+.dossier-state { font-size: 1rem; color: var(--ink); margin: 0 0 0.6rem; max-width: 44rem; line-height: 1.6; }
+.dossier-delta { font-size: 0.9rem; color: var(--ink-soft); margin: 0 0 0.4rem; }
+.dossier-delta .delta-label { color: var(--ink-faint); }
+.state-asof { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-faint); }
+.thread-editions { font-size: 0.9rem; color: var(--ink-soft); margin: 0; }
+.thread-editions a { color: var(--moved); font-weight: 700; text-decoration: none; }
+.thread-editions a:hover { color: var(--terra-deep); }
+.thread-editions .sep { color: var(--rule); }
+.thread-verbs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.5rem 0 3rem;
+  padding-top: 1.25rem; border-top: 1px solid var(--rule); max-width: 44rem; }
+.thread-verbs button { font-size: 0.8rem; background: transparent; border: 1px solid var(--rule);
+  color: var(--ink-soft); padding: 0.35rem 0.75rem; border-radius: 7px; cursor: pointer; }
+.thread-verbs button:hover { border-color: var(--ink); color: var(--ink); }
+.thread-verbs button.delete-action:hover { border-color: var(--danger); color: var(--danger); }
 
 .token-search { width: 100%; font-size: 0.92rem; font-family: var(--font-sans); color: var(--ink);
   background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
@@ -282,7 +336,7 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
   background: var(--bg); z-index: 31; transform: translateX(100%); transition: transform 220ms ease-out;
   padding: 1.5rem 1.25rem; overflow-y: auto; box-shadow: -2px 0 12px rgba(43,38,33,0.12); }
 .slide-panel.open { transform: translateX(0); }
-.slide-panel h2 { font-family: var(--font-serif); font-size: 1.3rem; margin: 0 0 1.25rem; }
+.slide-panel h2 { font-family: var(--font-display); font-size: 1.3rem; margin: 0 0 1.25rem; }
 .slide-close { background: transparent; border: 1px solid var(--rule); border-radius: 50%;
   width: 2rem; height: 2rem; float: right; cursor: pointer; color: var(--ink-faint); }
 .slide-close:hover { border-color: var(--ink-soft); color: var(--ink); }
@@ -308,7 +362,7 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .popup-scrim.open { display: flex; }
 .popup-card { background: var(--surface); border-radius: var(--radius); padding: 1.5rem 1.35rem;
   max-width: 26rem; width: 100%; box-shadow: 0 8px 28px rgba(43,38,33,0.18); }
-.popup-card h3 { font-family: var(--font-serif); font-size: 1.15rem; margin: 0 0 1rem; }
+.popup-card h3 { font-family: var(--font-display); font-size: 1.15rem; margin: 0 0 1rem; }
 .popup-card label { display: block; font-size: 0.78rem; color: var(--ink-faint); margin: 0 0 0.35rem; }
 .popup-card textarea, .popup-card input[type="text"] { width: 100%; font-family: var(--font-sans);
   font-size: 0.92rem; color: var(--ink); background: var(--bg); border: 1px solid var(--rule);
@@ -317,7 +371,7 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .popup-note { font-size: 0.8rem; color: var(--ink-faint); margin: -0.5rem 0 1rem; }
 .popup-status { font-size: 0.82rem; color: var(--ink-faint); margin: 0.5rem 0 1rem; display: none; }
 .popup-status.showing { display: block; }
-.popup-status.found { color: var(--tracked); }
+.popup-status.found { color: var(--moved); }
 .popup-status.err { color: var(--danger); }
 
 /* ===== The full picture (deep view) — v7 Front-Page type (DIRECTION-v5 §9).
@@ -400,21 +454,27 @@ h1.view-title { font-family: var(--font-serif); font-size: 1.5rem; margin: 1.5re
 .deep-footer p:last-child { margin-bottom: 0; }
 
 /* Deep + archive-edition views carry no section line, so they center as a page. */
-#view-edition, section[id^="view-deep-"] { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
+#view-edition, section[id^="view-deep-"], section[id^="view-thread-"] { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
 #view-edition .view-title, #view-edition .today-grid, #view-edition .footer-tag { max-width: none; }
 
 /* ============================ MOBILE PASS (~390px) ============================ */
 @media (max-width: 900px) {
   .page { padding: 0 1.15rem; }
-  #view-edition, section[id^="view-deep-"] { padding: 0 1.15rem; }
+  #view-edition, section[id^="view-deep-"], section[id^="view-thread-"] { padding: 0 1.15rem; }
   .today-grid { grid-template-columns: 1fr; gap: 0; }
   .dateline { font-size: 2.6rem; }
   .signature { font-size: 1.1rem; }
   .dispatch-strip { font-size: 0.74rem; }
-  .lead h1.headline { font-size: 2.5rem; line-height: 1.08; }
+  .lead h2.headline { font-size: 2.5rem; line-height: 1.08; }
   .col-right { border-top: 1px solid var(--ink); padding-top: 1.6rem; margin-top: 0.6rem; }
   .section-line a { margin-right: 1.1rem; }
   .deep-title { font-size: 1.8rem; }
+  /* v7-M2 surfaces */
+  .page-title { font-size: 2.1rem; }
+  .view-line a { margin-right: 1.1rem; }
+  .month-title { font-size: 2.2rem; }
+  .cal-cell { min-height: 2.8rem; padding: 0.25rem; }
+  .cal-stamp { display: none; }   /* stamps are the desktop spread's luxury */
 }
 """
 
@@ -431,12 +491,13 @@ PAGE = """<!DOCTYPE html>
 <style>{css}</style>
 </head>
 <body>
-<a class="skip-link" href="#view-today">Skip to today’s edition</a>
-<main>
+<a class="skip-link" href="#main">Skip to today’s edition</a>
+<main id="main" tabindex="-1">
 <section id="view-today" class="view active">{today_html}</section>
 <section id="view-following" class="view">{following_html}</section>
 <section id="view-archive" class="view">{archive_html}</section>
 {deep_views_html}
+{thread_pages_html}
 <!-- NL-11: archive editions inject here as sibling .view sections so opening
      one never replaces Today; empty until an archive row is opened. -->
 <div id="edition-mount"></div>
@@ -446,6 +507,7 @@ PAGE = """<!DOCTYPE html>
 {settings_html}
 </div>
 {popups_html}
+<script>{nl_labels_js}</script>
 <script>{js}</script>
 </body>
 </html>"""
@@ -527,11 +589,16 @@ function showView(name) {
   if (v) v.classList.add('active');
   window.scrollTo(0, 0);
 }
-function showSub(name, btnEl) {
+function showSub(name, el) {
+  /* v7-M2 (§12.4): the Following triad is a quiet text line of real links, not
+     pills — showSub toggles the sub-view and marks the current link (700 ink +
+     aria-current), no fake-disabled state. */
   document.querySelectorAll('.sub-view').forEach(function (v) { v.classList.remove('active'); });
-  document.getElementById('sub-' + name).classList.add('active');
-  document.querySelectorAll('.following-switcher button').forEach(function (b) { b.classList.remove('current'); });
-  btnEl.classList.add('current');
+  var sv = document.getElementById('sub-' + name);
+  if (sv) sv.classList.add('active');
+  document.querySelectorAll('.view-line a').forEach(function (a) {
+    a.classList.remove('current'); a.removeAttribute('aria-current'); });
+  if (el) { el.classList.add('current'); el.setAttribute('aria-current', 'true'); }
 }
 function api(path, body, cb) {
   fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -577,9 +644,10 @@ function restoreViewAfterReload() {
     if (sv) {
       document.querySelectorAll('.sub-view').forEach(function (v) { v.classList.remove('active'); });
       sv.classList.add('active');
-      document.querySelectorAll('.following-switcher button').forEach(function (b) {
-        b.classList.remove('current');
-        if ((b.getAttribute('onclick') || '').indexOf("'" + st.sub + "'") >= 0) b.classList.add('current');
+      document.querySelectorAll('.view-line a').forEach(function (a) {
+        a.classList.remove('current'); a.removeAttribute('aria-current');
+        if ((a.getAttribute('onclick') || '').indexOf("'" + st.sub + "'") >= 0) {
+          a.classList.add('current'); a.setAttribute('aria-current', 'true'); }
       });
     }
   }
@@ -599,29 +667,29 @@ function toggleFollow(btn) {
   if (pressed) {
     btn.setAttribute('aria-pressed', 'false');
     btn.classList.remove('followed');
-    btn.textContent = '\\uFF0B Follow this story';
+    btn.textContent = NL_LABELS.followInactive;
     api('/api/unfollow', {topic: topic}, function (d) {
       if (d && d.ok === false) {  // server refused: don't lie about the state
         btn.setAttribute('aria-pressed', 'true');
         btn.classList.add('followed');
-        btn.textContent = 'Following this story';
+        btn.textContent = NL_LABELS.followActive;
       }
     });
     return;
   }
   btn.classList.add('confirming');
-  btn.textContent = '\\u2713 Following \\u2014 see it under Following \\u2192 Ongoing stories';
+  btn.textContent = NL_LABELS.followConfirm;
   api('/api/follow', {topic: topic, briefing_date: when}, function (d) {
     if (d && d.ok === false) {  // no silent lie — revert on refusal
       btn.classList.remove('confirming');
-      btn.textContent = '\\uFF0B Follow this story';
+      btn.textContent = NL_LABELS.followInactive;
       return;
     }
     setTimeout(function () {
       btn.classList.remove('confirming');
       btn.classList.add('followed');
       btn.setAttribute('aria-pressed', 'true');
-      btn.textContent = 'Following this story';
+      btn.textContent = NL_LABELS.followActive;
     }, 2800);  // NL-58 ruling 5: confirm state holds 2x the old duration
   });
 }
@@ -651,6 +719,26 @@ function closeDeepView(e, returnId) {
     }
   }
   lastStoryAnchor = null;
+}
+/* v7-M2: the thread page (the "Open thread" destination) — a sibling .view like
+   the deep views. openThread is fired by a Following row's name (its single
+   action); closeThread returns to Following. Scroll resets to top; Following is
+   restored on close. */
+function openThread(tid, e) {
+  if (e) e.preventDefault();
+  var target = document.getElementById('view-thread-' + tid);
+  if (!target) return false;
+  document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+  target.classList.add('active');
+  window.scrollTo(0, 0);
+  return false;
+}
+function closeThread(e) {
+  if (e) e.preventDefault();
+  document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+  document.getElementById('view-following').classList.add('active');
+  window.scrollTo(0, 0);
+  return false;
 }
 function collapseCiteFolds(root) {
   /* NL-12: per-fact citations ship as <details open> so a no-JS reader sees

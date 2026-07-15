@@ -353,9 +353,12 @@ def test_label_table_liveness_why_seeing(monkeypatch):
 
 
 def test_label_table_liveness_view_title_h1s(monkeypatch):
-    """Gate FIX-3: the Following/Archive view-title h1s render from the table
-    (a NAV_* re-pin must move the view's own title, not just the section
-    line). Covers both archive branches: rows and day-one empty."""
+    """The Following/Archive view titles render from the table. v7-M2 (§8/§12.4)
+    re-pins the classes: WAS h1.view-title for both; NOW the Following title is
+    the LOUD h1.page-title (still reads NAV_FOLLOWING), and the Archive-with-
+    editions title is the MONTH title (the §8 calendar law) — NAV_ARCHIVE's
+    liveness moves to the section-line nav. The day-one empty archive still
+    titles from the table (h1.page-title)."""
     con = _con()
     monkeypatch.setattr(labels, "NAV_FOLLOWING", "ZZ-FOLLOWING")
     monkeypatch.setattr(labels, "NAV_ARCHIVE", "ZZ-ARCHIVE")
@@ -363,13 +366,16 @@ def test_label_table_liveness_view_title_h1s(monkeypatch):
     seed(con, slots, [story(1, "S1")])
     page, _ = server.build_page(con)
     con.close()
-    assert '<h1 class="view-title">ZZ-FOLLOWING</h1>' in page
-    assert '<h1 class="view-title">Following</h1>' not in page
-    assert '<h1 class="view-title">ZZ-ARCHIVE</h1>' in page
+    assert '<h1 class="page-title">ZZ-FOLLOWING</h1>' in page
+    assert '<h1 class="page-title">Following</h1>' not in page
+    # NAV_ARCHIVE liveness rides the section-line nav (the archive h1 is the month)
+    assert 'aria-current="page">ZZ-ARCHIVE' in page
     assert '<h1 class="view-title">Archive</h1>' not in page
-    # the day-one empty branch renders the routed title too
+    # a NAV_ARCHIVE re-pin still moves the archive's own nav mark (the same DB is
+    # sandbox-shared with `con`, so this archive renders the calendar month, and
+    # NAV_ARCHIVE's liveness lives in the section line — not an h1).
     con2 = _con()
     monkeypatch.setattr(labels, "NAV_ARCHIVE", "ZZ-ARC2")
     page2, _ = server.build_page(con2)
     con2.close()
-    assert '<h1 class="view-title">ZZ-ARC2</h1>' in page2
+    assert 'aria-current="page">ZZ-ARC2' in page2

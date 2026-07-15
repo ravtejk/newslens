@@ -40,17 +40,19 @@ def _section(html, anchor_id):
 # 1. Five reader sections — 'The facts' is pinned facts ONLY
 # ---------------------------------------------------------------------------
 
-def test_the_facts_is_pinned_only_and_unresolved_returns_as_its_own_section():
+def test_the_facts_is_pinned_only_and_discrepancies_fold_into_open():
     """'The facts' stays pinned facts ONLY (07-09 ruling, the surviving half).
-    Decision B (2026-07-10) SUPERSEDES the register-removal half: the Unresolved/
-    discrepancy register RETURNS deep-view-only, IN NEW FORM — as its OWN
-    section, never folded into 'The facts' and never the old raw ledger dump.
-    (Was test_the_facts_section_is_pinned_only_no_ledger_no_unresolved; updated
-    by the M3 implementer to the superseding contract.)"""
+    NL-29 consolidation slate (DECISIONS 2026-07-14 'NL-29 RULED: the
+    consolidation slate', Merge 1) folds the discrepancy register INTO 'What's
+    still open' as a visually distinct attributed sub-group — no longer its own
+    'Unresolved' section. Heading semantics (v7-M2): the label is an <h2>.
+    WAS test_the_facts_is_pinned_only_and_unresolved_returns_as_its_own_section
+    (M3's own-section contract, itself superseding the 07-09 removal); this is
+    the 07-14 fold."""
     brief = m3_brief(with_discrepancy=True)
     html = _deep(brief)
     facts = _section(html, "story-0-facts")
-    assert '<p class="deep-section-label">The facts</p>' in facts
+    assert '<h2 class="deep-section-label">The facts</h2>' in facts
     assert "A cited fact." in facts                     # the pinned fact leads
     assert "Pinned facts" not in html                   # old label retired
     # 'The facts' stays pinned-only: the discrepancy does NOT leak into it
@@ -60,9 +62,15 @@ def test_the_facts_is_pinned_only_and_unresolved_returns_as_its_own_section():
     for gone in ('id="story-0-ledger"', "The ledger", "A ledger claim.",
                  'class="deep-discrepancy"'):
         assert gone not in html
-    # the register RETURNS as its own section (Decision B, new form)
-    assert 'id="story-0-unresolved"' in html
-    assert '<p class="deep-section-label">Unresolved</p>' in html
+    # the discrepancy register FOLDS INTO 'What's still open' (Merge 1): no own
+    # section/anchor, the attributed sub-group renders under story-0-open
+    assert 'id="story-0-unresolved"' not in html
+    assert ">Unresolved<" not in html
+    assert 'class="deep-open-discrepancies"' in html
+    i_open = html.index('id="story-0-open"')
+    i_disc = html.index('class="deep-open-discrepancies"')
+    i_sources = html.index('id="story-0-sources"')
+    assert i_open < i_disc < i_sources                  # sub-group inside the open section
     assert "Meeting July 8" in html and "Meeting Wednesday" in html
     # the brief object still carries the ledger data (writer-side untouched)
     assert brief["ledger"] and any(e.get("discrepancy") for e in brief["ledger"])

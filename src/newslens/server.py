@@ -28,6 +28,7 @@ Architecture (ADR-0010):
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import re
@@ -358,7 +359,7 @@ def _edition_bar(row) -> str:
         return ""
     return (f'<div class="episode-affordance">'
             f'<button onclick="toggleEpisode()" '
-            f'aria-label="Play full episode, {_e(dur)}">▶ Listen to the edition'
+            f'aria-label="Play full episode, {_e(dur)}">▶ {_e(labels.LISTEN_TO_EDITION)}'
             f'<span class="episode-meta"> · {_e(dur)}</span></button>'
             f'<audio id="episode-player" style="display:none" controls '
             f'preload="none" src="/audio/{_e(row["date"])}.wav"></audio>'
@@ -440,6 +441,13 @@ def _player_extra_controls(player_id: str) -> str:
         '</div>')
 
 
+def _latest_edition_date(con: sqlite3.Connection) -> str:
+    """The most recent edition date — 'this edition' for the Following spine's
+    updated/quiet split and the archive's today-class. '' when no editions."""
+    row = con.execute("SELECT MAX(date) AS d FROM briefings").fetchone()
+    return (row["d"] or "") if row else ""
+
+
 def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
     rows = con.execute(
         "SELECT m.*, b.date AS ref_date FROM memory m LEFT JOIN briefings b"
@@ -452,8 +460,14 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
     cutoff = (datetime.now()
               - timedelta(days=DEVELOPING_WINDOW_DAYS)).strftime("%Y-%m-%d")
     today = datetime.now().strftime("%Y-%m-%d")
+    # §7/§12.2: "updated THIS EDITION" is a delta dated the latest edition; the
+    # split drives loud-updated rows vs the counted quiet fold (§12.5). Real DB
+    # rows (thread_deltas), NOT a log-derived field — the empty run-log can't
+    # supply this, and it doesn't need to (the ledger does).
+    latest_ed = _latest_edition_date(con)
     grouped: Dict[str, List[Dict]] = {"active": [], "dormant": [],
                                       "dismissed_user": []}
+    from . import memory_core
     for r in rows:
         # NL-58 future-date guard: "last picked up" is the DATE of the joined
         # last-referenced briefing; a value later than today is data corruption
@@ -462,13 +476,22 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
         # the reported "Last picked up Jul 13" (a future date) at the source.
         ref_date = r["ref_date"] or ""
         last = ref_date if (ref_date and ref_date <= today) else ""
-        # NL-63 item 6: the thread's standing state + last-delta line for the
-        # dossier state card (the v7 [mock] Spine lines become REAL here).
-        from . import memory_core
         state = memory_core.latest_state(con, r["id"])
         ledger = memory_core.ledger_for_thread(con, r["id"])
         last_delta = ledger[-1] if ledger else None
+        # this-edition delta: the (latest) ledger entry dated the current edition
+        this_delta = None
+        if latest_ed:
+            for e in reversed(ledger):
+                if e["edition_date"] == latest_ed:
+                    this_delta = e
+                    break
+        # the quiet-row "LAST UPDATED" stamp: newest ledger date, else the joined
+        # last-referenced briefing date; future dates degrade to '' (no stamp).
+        lu = (ledger[-1]["edition_date"] if ledger else last)
+        last_updated = lu if (lu and lu <= today) else ""
         grouped.setdefault(r["status"], []).append({
+            "id": r["id"],
             "topic": r["topic"],
             "note": r["principal_note"] or "",
             "since": _short_date(r["created_at"]),
@@ -477,6 +500,12 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
             "developing": bool(last and last >= cutoff),
             "state_text": (state or {}).get("state_text", ""),
             "state_as_of": (state or {}).get("as_of_date", ""),
+            "updated": this_delta is not None,
+            "this_delta": ({"date": this_delta["edition_date"],
+                            "what_happened": this_delta["what_happened"],
+                            "significance": this_delta.get("significance", "")}
+                           if this_delta else None),
+            "last_updated": last_updated,
             "last_delta": ({"date": last_delta["edition_date"],
                             "what_happened": last_delta["what_happened"],
                             "significance": last_delta.get("significance", "")}
@@ -791,7 +820,10 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     NL-65: the DECK under the title carries ONLY the follow control; the deep-view
     entry moves to the story BOTTOM (`.story-more`), just before the furniture."""
     slug = slug or f"story-{i}"
-    wrap_cls, h = {"lead": ("lead", "h1"), "snippet": ("snippet", "h3")}.get(
+    # Heading semantics (v7-M2): ONE h1 per document view — the dateline (Today)
+    # / view-title (edition) is the h1, so the lead story demotes to h2 (WAS h1;
+    # the M1 multiple-h1 leftover). Stories are h2, In-Brief snippets h3.
+    wrap_cls, h = {"lead": ("lead", "h2"), "snippet": ("snippet", "h3")}.get(
         role, ("story", "h2"))
     parts = [f'<article class="{wrap_cls}" id="{_e(slug)}">']
 
@@ -895,7 +927,7 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
     created under one edition's phrasing survives title drift into the next.
     Thread-tracked stories show the marker STATE; story-follows are a toggle."""
     if marks:
-        return (f'<span class="tracked-marker">Tracked ongoing story — '
+        return (f'<span class="tracked-marker">{_e(labels.TRACKED_ONGOING_PREFIX)} '
                 f'{_e(", ".join(marks))}</span>')
     topic = slot.get("story_title") or st.get("headline") or ""
     headline = st.get("headline") or ""
@@ -908,7 +940,8 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
         # the unmatched title would be visible but unfollowable.
         topic = headline
     pressed = "true" if followed else "false"
-    label = "Following this story" if followed else "＋ Follow this story"
+    label = (labels.FOLLOW_STORY_ACTIVE if followed
+             else labels.FOLLOW_STORY_INACTIVE)
     cls = " followed" if followed else ""
     date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
     return (f'<button class="follow-story-btn{cls}" data-topic={_e_attr(topic)}'
@@ -956,7 +989,7 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
     if gen_state["state"] == "running":
         body = """
 <div class="state-panel" id="gen-running">
-  <h3>Generating today’s edition…</h3>
+  <h2>Generating today’s edition…</h2>
   <p>Fetching your sources, ranking, writing, and recording the episode.
      This usually takes a couple of minutes; the page refreshes itself
      when it’s ready.</p>
@@ -971,7 +1004,7 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
     elif gen_state["state"] == "error":
         body = f"""
 <div class="state-panel">
-  <h3>Today’s edition failed</h3>
+  <h2>Today’s edition failed</h2>
   <p class="error-text">{_e(gen_state["error"])}</p>
   <p>No half-written edition ever goes out: a failure before the save
      publishes nothing; one during file export after the save leaves the
@@ -986,7 +1019,7 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         if has_archive:
             body = """
 <div class="state-panel">
-  <h3>Nothing for today yet</h3>
+  <h2>Nothing for today yet</h2>
   <p>No edition has been generated for today. A new one takes a couple of
      minutes: it fetches your sources, picks the stories, writes the briefing,
      and records the episode.</p>
@@ -997,7 +1030,7 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         else:
             body = """
 <div class="state-panel">
-  <h3>Nothing yet</h3>
+  <h2>Nothing yet</h2>
   <p>No edition has been generated. The first one takes a couple of minutes:
      it fetches your sources, picks the stories, writes the briefing, and
      records the episode.</p>
@@ -1060,7 +1093,7 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     if brief_snips:
         col_parts.append(
             f'<div class="in-brief" role="region" aria-label={_e_attr(labels.IN_BRIEF)}>'
-            f'<p class="brief-label">{_e(labels.IN_BRIEF)}</p>'
+            f'<h2 class="brief-label">{_e(labels.IN_BRIEF)}</h2>'
             + "".join(brief_snips) + "</div>")
     if still_lines:
         col_parts.append(
@@ -1108,22 +1141,6 @@ def _run_cost(entry: Optional[Dict]) -> str:
             else "generated locally at $0 marginal"
     except (TypeError, ValueError):
         return "cost not recorded for this edition"
-
-
-def _dossier(t: Dict, actions: str, meta: str, spine: str = "") -> str:
-    dot = "●" if t.get("developing") else ""
-    return f"""
-<div class="dossier">
-  <span class="dot-slot" aria-hidden="true">{dot}</span>
-  <div class="dossier-row-body">
-    <div class="dossier-main">
-      <p class="dossier-topic">{_e(t["topic"])}</p>
-      <p class="dossier-meta">{meta}</p>
-      {spine}
-    </div>
-    <div class="dossier-actions">{actions}</div>
-  </div>
-</div>"""
 
 
 def _topic_vocabulary(con: sqlite3.Connection, cfg) -> List[str]:
@@ -1240,50 +1257,115 @@ def _thread_state_card(t: Dict) -> str:
     return "".join(bits)
 
 
+def _thread_name_link(tid: int, topic: str, tag: str = "h2") -> str:
+    """The thread NAME as a Following row's single action (Design's ruling —
+    extends the §12.5 fold grammar to the loud updated rows too): a link to the
+    thread page (openThread). Accessible name = the topic (distinguishable across
+    19+ rows, §12.5 'label = accessible name'); the shared 'fallback control
+    label' labels.THREAD_WHOLE rides as the control's title so the row's single
+    action is named from the label table. The name is a real heading so AT can
+    navigate the thread list."""
+    return (f'<{tag} class="thread-name"><a href="#" '
+            f'onclick="openThread(\'{tid}\', event); return false;" '
+            f'title={_e_attr(labels.THREAD_WHOLE)}>{_e(topic)}</a></{tag}>')
+
+
+def _thread_row_link(tid: int, topic: str) -> str:
+    """The compressed-row variant (quiet fold + lifecycle rows): the name as a
+    plain link (not a heading — 17 quiet names as headings would flood the
+    heading list), same single-action grammar and label."""
+    return (f'<a href="#" onclick="openThread(\'{tid}\', event); return false;" '
+            f'title={_e_attr(labels.THREAD_WHOLE)}>{_e(topic)}</a>')
+
+
+def _spine_updated_row(t: Dict) -> str:
+    """§7 anatomy for an updated row: ●UPDATED stamp (machine register) → thread
+    name (single action) → one-line delta → optional note (2-line clamp). The
+    lifecycle verbs move to the thread page (§10: one inline action per row; all
+    other verbs live in the editor). Delta lines are real NL-63 ledger output."""
+    d = t.get("this_delta") or {}
+    date_h = _human_short(d.get("date", "")).upper() if d.get("date") else ""
+    stamp = (f'<span class="t-stamp"><span class="t-moved">{_e(labels.UPDATED_DOT)} '
+             f'{_e(labels.UPDATED_STAMP)}</span> · {_e(labels.UPDATED_THIS_EDITION)}'
+             + (f' · {_e(date_h)}' if date_h else "") + '</span>')
+    name = _thread_name_link(t["id"], t["topic"], tag="h2")
+    delta_html = (f'<p class="thread-delta">{_e(d.get("what_happened", ""))}</p>'
+                  if d.get("what_happened") else "")
+    note = (t.get("note") or "").strip()
+    note_html = f'<p class="thread-note">{_e(note)}</p>' if note else ""
+    return f'<article class="thread">{stamp}{name}{delta_html}{note_html}</article>'
+
+
+def _quiet_fold_html(quiet: List[Dict], zero_updated: bool) -> str:
+    """§12.5: ALL quiet active threads behind ONE counted, keyboard-operable
+    disclosure. Compressed rows = name-as-link (the single action) + LAST UPDATED
+    stamp where a date exists. Order: last-updated recency then A–Z. Defaults
+    OPEN on a zero-updated morning (a lone closed fold reads as an empty page).
+    Native <details>/<summary>; the count rides in the summary's accessible
+    name (color is never the sole channel)."""
+    n = len(quiet)
+    noun = labels.QUIET_FOLD_NOUN_ONE if n == 1 else labels.QUIET_FOLD_NOUN
+    rows = []
+    for t in quiet:
+        stamp = ""
+        if t.get("last_updated"):
+            stamp = (f' <span class="q-stamp">{_e(labels.LAST_UPDATED)} '
+                     f'{_e(_human_short(t["last_updated"]).upper())}</span>')
+        rows.append(f'<li class="q-row">{_thread_row_link(t["id"], t["topic"])}'
+                    f'{stamp}</li>')
+    open_attr = " open" if zero_updated else ""
+    return (f'<details class="quiet-fold"{open_attr}>'
+            f'<summary><span class="qf-count">{n} {_e(noun)}</span> · '
+            f'{_e(labels.QUIET_FOLD_SUFFIX)}</summary>'
+            f'<ul class="q-list">{"".join(rows)}</ul></details>')
+
+
+def _lifecycle_row(t: Dict, stamp: str) -> str:
+    """A dormant/dismissed row: name-as-action (single action → thread page) +
+    a quiet lifecycle stamp. The Resume/Delete verbs live on the thread page."""
+    return (f'<div class="q-row lifecycle-row">'
+            f'{_thread_row_link(t["id"], t["topic"])} '
+            f'<span class="q-stamp">{_e(stamp)}</span></div>')
+
+
+def _following_threads_subview(g: Dict[str, List[Dict]]) -> str:
+    """The Threads view — the Spine at real scale (§7/§12.2/§12.5): loud updated
+    rows (few), then the counted quiet fold; then the lifecycle sections (Quiet
+    for now / You stopped following) below, their headers real h2s."""
+    active = g["active"]
+    updated = sorted((t for t in active if t.get("updated")),
+                     key=lambda t: t["topic"].lower())
+    quiet = [t for t in active if not t.get("updated")]
+    quiet.sort(key=lambda t: t["topic"].lower())                    # A–Z tiebreak
+    quiet.sort(key=lambda t: t.get("last_updated") or "", reverse=True)  # recency
+
+    out = ['<div class="follow-story"><button class="follow-new" '
+           'onclick="openAddStory()">＋ Follow a new story</button></div>']
+    if not active:
+        out.append(f'<p class="empty-note">{_e(labels.FOLLOWING_EMPTY)}</p>')
+    for t in updated:
+        out.append(_spine_updated_row(t))
+    if quiet:
+        out.append(_quiet_fold_html(quiet, zero_updated=(not updated)))
+    if g["dormant"]:
+        out.append(f'<h2 class="section-h">{_e(labels.FOLLOWING_DORMANT_H)}</h2>')
+        for t in g["dormant"]:
+            out.append(_lifecycle_row(
+                t, f"Quiet since {_human_short(t['quiet_since'])}"
+                if t.get("quiet_since") else "Quiet"))
+    if g["dismissed_user"]:
+        out.append(f'<h2 class="section-h">{_e(labels.FOLLOWING_DISMISSED_H)}</h2>')
+        for t in g["dismissed_user"]:
+            out.append(_lifecycle_row(
+                t, f"Stopped {_human_short(t['quiet_since'])}"
+                if t.get("quiet_since") else "Stopped"))
+    return "".join(out)
+
+
 def _render_following(con: sqlite3.Connection) -> str:
     g = _following_rows(con)
     cfg = config.load_sources()
-
-    def note_btn(t):
-        return (f'<button onclick="openEditNote({_e(_js_str(t["topic"]))}, '
-                f'{_e(_js_str(t["note"]))})">Edit note</button>')
-
-    ongoing = ['<p class="indicator-note"><span class="dot">●</span> marks a '
-               'story still developing — picked up within the last week.</p>']
-    ongoing.append('<div class="follow-story" style="margin:0 0 1.25rem;">'
-                   '<button onclick="openAddStory()">＋ Follow a new story</button></div>')
-    ongoing.append('<p class="section-h">Following</p>')
-    if g["active"]:
-        for t in g["active"]:
-            # NL-58: never-picked-up renders as its own honest phrase, not the
-            # broken "Last picked up not picked up yet" concatenation.
-            if t["last"]:
-                meta = (f"Following since {_e(t['since'])} · "
-                        f"Last picked up {_e(_human_short(t['last']))}")
-            else:
-                meta = f"Following since {_e(t['since'])} · Not yet picked up"
-            acts = note_btn(t) + (
-                f'<button onclick="threadAction(\'dismiss\', {_e(_js_str(t["topic"]))})">Stop</button>')
-            ongoing.append(_dossier(t, acts, meta, spine=_thread_state_card(t)))
-    else:
-        ongoing.append('<p class="empty-note">Nothing yet</p>')
-
-    if g["dormant"]:
-        ongoing.append('<p class="section-h">Quiet for now</p>')
-        for t in g["dormant"]:
-            meta = f"Quiet since {_e(t['quiet_since'])} · revives on its own if the story returns"
-            acts = note_btn(t) + (
-                f'<button onclick="threadAction(\'revive\', {_e(_js_str(t["topic"]))})">Resume</button>')
-            ongoing.append(_dossier(t, acts, meta, spine=_thread_state_card(t)))
-
-    if g["dismissed_user"]:
-        ongoing.append('<p class="section-h">You stopped following</p>')
-        for t in g["dismissed_user"]:
-            meta = f"Stopped {_e(t['quiet_since'])} · never revives on its own"
-            acts = (
-                f'<button onclick="threadAction(\'revive\', {_e(_js_str(t["topic"]))})">Resume</button>'
-                f'<button class="delete-action" onclick="openDeleteConfirm({_e(_js_str(t["topic"]))})">Delete</button>')
-            ongoing.append(_dossier(t, acts, meta))
+    threads_html = _following_threads_subview(g)
 
     def token(name: str, kind: str, label: Optional[str] = None) -> str:
         return (f'<span class="token">{_e(label or name)}'
@@ -1328,18 +1410,25 @@ def _render_following(con: sqlite3.Connection) -> str:
         writers.append('<p class="empty-note">Nothing yet</p>')
     writers.append("</div></div>")
 
-    # v7 shell: the mini-masthead + section line open the view (§4). The Following
-    # STRUCTURE (switcher/dossiers) is unchanged — its Spine/fold rebuild is M2
-    # (its rows target the M2 thread page); here it inherits the v7 frame/tokens.
+    # v7-M2 (§4 + §12.4): mini-masthead + section line, the LOUD page-title, then
+    # the triad view-line (Threads · Topics · Writers) as a quiet text line — real
+    # links, current at 700 ink, no pills; INTERIM pending NL-18. The Threads view
+    # is the Spine; its rows target the M2 thread page.
     head = _mini_head(datetime.now().strftime("%Y-%m-%d")) + _section_line("following")
+
+    def triad(sub: str, label: str, current: bool) -> str:
+        cur = ' aria-current="true" class="current"' if current else ''
+        return (f'<a href="#"{cur} onclick="showSub(\'{sub}\', this); '
+                f'return false;">{_e(label)}</a>')
+
     return head + f"""<div class="page">
-<h1 class="view-title">{_e(labels.NAV_FOLLOWING)}</h1>
-<div class="following-switcher" role="tablist">
-  <button class="current" onclick="showSub('ongoing', this)">Ongoing stories</button>
-  <button onclick="showSub('topics', this)">Topics</button>
-  <button onclick="showSub('writers', this)">Writers</button>
-</div>
-<div id="sub-ongoing" class="sub-view active">{"".join(ongoing)}</div>
+<h1 class="page-title">{_e(labels.NAV_FOLLOWING)}</h1>
+<nav class="view-line" aria-label="Following views">
+  {triad("threads", labels.FOLLOWING_TRIAD_THREADS, True)}
+  {triad("topics", labels.FOLLOWING_TRIAD_TOPICS, False)}
+  {triad("writers", labels.FOLLOWING_TRIAD_WRITERS, False)}
+</nav>
+<div id="sub-threads" class="sub-view active">{threads_html}</div>
 <div id="sub-topics" class="sub-view">{"".join(topics)}</div>
 <div id="sub-writers" class="sub-view">{"".join(writers)}</div></div>"""
 
@@ -1352,29 +1441,227 @@ def _human_short(date_str: str) -> str:
         return date_str
 
 
+def _cal_accessible_name(dstr: str, is_today: bool) -> str:
+    """Full accessible name for an edition cell (§8): 'Friday, July 10, 2026 —
+    edition' (or '— today’s edition')."""
+    d = datetime.strptime(dstr, "%Y-%m-%d")
+    human = f"{d.strftime('%A, %B')} {d.day}, {d.year}"
+    return human + (" — today’s edition" if is_today else " — edition")
+
+
+def _calendar_html(latest_ed: str, ed_dates: set, utc_by_date: Dict[str, str],
+                   today: str) -> str:
+    """The §8 calendar for the month of the latest edition. Three exhaustive day
+    classes: edition (ink 700, moved-green underline, whole cell a link with a
+    full accessible name, real assembly stamp) · gap-in-history (ink-faint, no
+    shame copy) · pre-history + future (--cal-bare, barest). Today's edition adds
+    the terracotta ring. Sunday-start grid; decorative cells are aria-hidden; the
+    list below it is the primary accessible rendering. No streaks, no topic
+    words. The grid is an index."""
+    y, m = int(latest_ed[:4]), int(latest_ed[5:7])
+    ndays = calendar.monthrange(y, m)[1]
+    first_ed = min(ed_dates) if ed_dates else ""
+    lead_blanks = (datetime(y, m, 1).weekday() + 1) % 7   # Sunday-start offset
+    dow = "".join(f'<span class="cal-dow" aria-hidden="true">{d}</span>'
+                  for d in ("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"))
+    cells = ['<span class="cal-cell" aria-hidden="true"></span>'] * lead_blanks
+    for day in range(1, ndays + 1):
+        dstr = f"{y:04d}-{m:02d}-{day:02d}"
+        if dstr in ed_dates:
+            is_today = dstr == today
+            cls = "cal-cell cal-edition" + (" cal-today" if is_today else "")
+            stamp = (f'<span class="cal-stamp">{_e(utc_by_date.get(dstr, ""))} UTC</span>'
+                     if utc_by_date.get(dstr) else "")
+            cells.append(
+                f'<span class="{cls}"><a href={_e_attr("/?date=" + dstr)} '
+                f'onclick="return openEdition(\'{_e(dstr)}\', event)" '
+                f'aria-label={_e_attr(_cal_accessible_name(dstr, is_today))}>'
+                f'<span class="cal-num">{day}</span>{stamp}</a></span>')
+        elif first_ed and first_ed <= dstr <= today:
+            cells.append('<span class="cal-cell cal-gap" aria-hidden="true">'
+                         f'<span class="cal-num">{day}</span></span>')
+        else:
+            cells.append('<span class="cal-cell cal-void" aria-hidden="true">'
+                         f'<span class="cal-num">{day}</span></span>')
+    return f'<div class="cal-grid">{dow}{"".join(cells)}</div>'
+
+
 def _render_archive(con: sqlite3.Connection) -> str:
-    # v7 shell: mini-masthead + section line (§4). The archive INDEX structure
-    # (rows) is unchanged — the Study/Wire CALENDAR rebuild is M2; here it
-    # inherits the v7 frame/tokens.
+    """§8 rebuild: the Study/Wire calendar in Front Page type + the list-below as
+    the PRIMARY accessible rendering. mini-masthead + section line open the view
+    (§4). The month shown is the latest edition's; a month with zero editions
+    renders the honest empty state (paging across months is a follow-up)."""
     head = _mini_head(datetime.now().strftime("%Y-%m-%d")) + _section_line("archive")
-    rows = _archive_rows(con)
+    today = datetime.now().strftime("%Y-%m-%d")
+    editions: List[Dict] = []
+    for row in con.execute("SELECT * FROM briefings ORDER BY date DESC"):
+        entry = _log_entry_for(row["date"])
+        stories, _ = _stories_for(row, entry)
+        lead = stories[0].get("headline", "") if stories else ""
+        editions.append({"date": row["date"], "utc": _utc_hm(row["generated_at"]),
+                         "lead": lead})
+    if not editions:
+        return head + (f'<div class="page">'
+                       f'<h1 class="page-title">{_e(labels.NAV_ARCHIVE)}</h1>'
+                       f'<p class="empty-note">{_e(labels.ARCHIVE_EMPTY)}</p></div>')
+    ed_dates = {e["date"] for e in editions}
+    latest_ed = max(ed_dates)
+    utc_by_date = {e["date"]: e["utc"] for e in editions}
+    y, m = int(latest_ed[:4]), int(latest_ed[5:7])
+    month_name = datetime(y, m, 1).strftime("%B")
+    n_ed = sum(1 for d in ed_dates if d[:7] == latest_ed[:7])
+    cal = _calendar_html(latest_ed, ed_dates, utc_by_date, today)
+    list_items = []
+    for e in editions:
+        tag = f' · {labels.ARCHIVE_TODAY_TAG}' if e["date"] == today else ""
+        stamp = (f'{e["date"]} · {e["utc"]} UTC{tag}' if e["utc"]
+                 else f'{e["date"]}{tag}')
+        # NL-11: JS opens the edition IN-PLACE; the href is the no-JS fallback.
+        list_items.append(
+            f'<li><span class="al-date">{_e(stamp)}</span>'
+            f'<a href={_e_attr("/?date=" + e["date"])} '
+            f'onclick="return openEdition(\'{_e(e["date"])}\', event)">'
+            f'{_e(e["lead"] or "(untitled edition)")}</a></li>')
+    return head + (
+        f'<div class="page">'
+        f'<h1 class="month-title">{_e(month_name)} <span class="yr">{y}</span></h1>'
+        f'<p class="cal-note">{n_ed} edition{"s" if n_ed != 1 else ""} this month. '
+        f'{_e(labels.ARCHIVE_CAL_INDEX_NOTE)}</p>'
+        f'{cal}'
+        f'<ul class="archive-list">{"".join(list_items)}</ul></div>')
+
+
+# ---------------------------------------------------------------------------
+# The thread page (the "Open thread" destination — DECISIONS 2026-07-14: "the
+# thread page ... standing state + full timeline + open question/next fixed
+# point + verbs, composed from M1's components"). Renders from thread_state +
+# thread_deltas + memory ONLY — persisted, honest empty states, no invented
+# fields (the kill-test law: a day-one thread gets no arc/story-so-far, ever).
+# Reached from a Following row (the name is the single action, openThread); a
+# sibling .view like the deep views, switched client-side.
+# ---------------------------------------------------------------------------
+
+def _thread_timeline_html(con: sqlite3.Connection, tid: int, anchor: str) -> str:
+    """The story so far — the FULL dated ledger (the thread page is edition-
+    independent, so no never-re-lede bound; it shows every entry incl. today's).
+    Deterministic from thread_deltas; gaps are named by absence, never
+    backfilled (Sten's law). '' when the thread has no ledger (day-one)."""
+    from . import memory_core
+    rows = memory_core.timeline_rows(con, tid)          # oldest first, full ledger
     if not rows:
-        return head + (f'<div class="page"><h1 class="view-title">{_e(labels.NAV_ARCHIVE)}</h1>'
-                       '<p class="empty-note">Nothing yet</p></div>')
-    html = [f'<div class="page"><h1 class="view-title">{_e(labels.NAV_ARCHIVE)}</h1>']
-    for r in rows:
-        kw = '<span class="sep">·</span>'.join(_e(k) for k in r["keywords"])
-        # NL-11: JS opens the edition IN-PLACE (Today never replaced); the
-        # href is the no-JS graceful fallback (full navigation to ?date=).
-        html.append(f"""
-<div class="archive-row">
-  <a href="/?date={_e(r["date"])}" onclick="return openEdition('{_e(r["date"])}', event)">
-    <p class="archive-date">{_e(r["human"])}</p>
-    <p class="archive-keywords">{kw}</p>
-  </a>
-</div>""")
-    html.append("</div>")
-    return head + "".join(html)
+        return ""
+    items = []
+    for e in rows:
+        hd = memory_core.human_date(e["date"]).upper()
+        signif = (f' <span class="tl-signif">— {_e(e["significance"])}</span>'
+                  if e.get("significance") else "")
+        items.append(f'<li class="tl-entry"><span class="tl-date">{_e(hd)}</span> — '
+                     f'{_e(e["what_happened"])}{signif}</li>')
+    return (f'<div class="deep-section" id="{anchor}-timeline">'
+            f'<h2 class="deep-section-label">{_e(labels.THE_STORY_SO_FAR)}</h2>'
+            f'<ul class="deep-timeline-list">{"".join(items)}</ul></div>')
+
+
+def _thread_editions_html(con: sqlite3.Connection, ledger: List[Dict],
+                          anchor: str) -> str:
+    """The edition back-links: the distinct dated editions that moved this
+    thread, each linking to that edition in place (openEdition; the href is the
+    no-JS fallback). Never-a-dead-link (NL-60): only editions that exist as
+    briefing rows are linked, the rest render as plain dates."""
+    have = {r["date"] for r in con.execute("SELECT date FROM briefings")}
+    seen: List[str] = []
+    for e in ledger:
+        if e["edition_date"] not in seen:
+            seen.append(e["edition_date"])
+    links = []
+    for d in seen:
+        hd = _human_short(d)
+        if d in have and _is_calendar_date(d):
+            links.append(f'<a href={_e_attr("/?date=" + d)} '
+                         f'onclick="return openEdition(\'{_e(d)}\', event)">'
+                         f'{_e(hd)}</a>')
+        else:
+            links.append(f'<span>{_e(hd)}</span>')
+    return (f'<div class="deep-section" id="{anchor}-editions">'
+            f'<h2 class="deep-section-label">{_e(labels.THREAD_EDITIONS_LABEL)}</h2>'
+            f'<p class="thread-editions">'
+            + ' <span class="sep">·</span> '.join(links) + '</p></div>')
+
+
+def _thread_verbs_html(topic: str, note: str, status: str) -> str:
+    """The lifecycle verbs (§10: one inline action per Following ROW — the name;
+    every OTHER verb lives in the editor, and the thread page IS the editor).
+    Status-scoped: active → Edit note + Stop; dormant → Edit note + Resume;
+    dismissed → Resume + Delete. Shared JS with the CLI-equivalent verbs."""
+    js = _js_str(topic)
+    b: List[str] = []
+    edit = (f'<button onclick="openEditNote({_e(js)}, {_e(_js_str(note))})">'
+            f'{_e(labels.VERB_EDIT_NOTE)}</button>')
+    if status == "active":
+        b.append(edit)
+        b.append(f'<button onclick="threadAction(\'dismiss\', {_e(js)})">'
+                 f'{_e(labels.VERB_STOP)}</button>')
+    elif status == "dormant":
+        b.append(edit)
+        b.append(f'<button onclick="threadAction(\'revive\', {_e(js)})">'
+                 f'{_e(labels.VERB_RESUME)}</button>')
+    elif status == "dismissed_user":
+        b.append(f'<button onclick="threadAction(\'revive\', {_e(js)})">'
+                 f'{_e(labels.VERB_RESUME)}</button>')
+        b.append(f'<button class="delete-action" onclick="openDeleteConfirm({_e(js)})">'
+                 f'{_e(labels.VERB_DELETE)}</button>')
+    return f'<div class="thread-verbs">{"".join(b)}</div>'
+
+
+def _render_thread_page(con: sqlite3.Connection, mrow) -> str:
+    """One thread page. Standing state ("Where this stands", as-of + staleness)
+    then the story-so-far (full ledger) then the edition back-links then the
+    verbs. Honest empty states throughout; a day-one thread (no state, no ledger)
+    renders the honest 'new thread' notes, never a fabricated arc."""
+    from . import memory_core
+    tid, topic, status = mrow["id"], mrow["topic"], mrow["status"]
+    anchor = f"thread-{tid}"
+    out = [f'<section id="view-{anchor}" class="view">']
+    out.append('<a class="deep-back" href="#" '
+               f'onclick="closeThread(event); return false;">{_e(labels.THREAD_BACK)}</a>')
+    out.append('<div class="deep-title-block">'
+               f'<p class="deep-eyebrow">{_e(labels.NAV_FOLLOWING)}</p>'
+               f'<h1 class="deep-title">{_e(topic)}</h1></div>')
+
+    # Where this stands — the standing state (no last-delta; the timeline carries
+    # deltas). _thread_state_card(t) is the wired call (grep-proof, ENGINEERING).
+    state = memory_core.latest_state(con, tid)
+    t = {"topic": topic,
+         "state_text": (state or {}).get("state_text", ""),
+         "state_as_of": (state or {}).get("as_of_date", ""),
+         "last_delta": None}
+    card = _thread_state_card(t)
+    state_body = card or f'<p class="empty-note">{_e(labels.THREAD_NO_STATE)}</p>'
+    out.append(f'<div class="deep-section" id="{anchor}-state">'
+               f'<h2 class="deep-section-label">{_e(labels.WHERE_THIS_STANDS)}</h2>'
+               f'{state_body}</div>')
+
+    # The story so far — full ledger; day-one (no ledger) is an honest empty
+    # state, never a fabricated arc (the kill-test law).
+    ledger = memory_core.ledger_for_thread(con, tid)
+    if ledger:
+        out.append(_thread_timeline_html(con, tid, anchor))
+        out.append(_thread_editions_html(con, ledger, anchor))
+    else:
+        out.append(f'<div class="deep-section" id="{anchor}-timeline">'
+                   f'<h2 class="deep-section-label">{_e(labels.THE_STORY_SO_FAR)}</h2>'
+                   f'<p class="empty-note">{_e(labels.THREAD_NO_ARC)}</p></div>')
+
+    out.append(_thread_verbs_html(topic, mrow["principal_note"] or "", status))
+    out.append("</section>")
+    return "".join(out)
+
+
+def _collect_thread_pages(con: sqlite3.Connection) -> str:
+    """A thread page per memory row (every status) — the Following rows' name-as-
+    action targets one of these sibling views by id (view-thread-<id>)."""
+    rows = con.execute("SELECT * FROM memory ORDER BY id").fetchall()
+    return "".join(_render_thread_page(con, r) for r in rows)
 
 
 def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict]) -> str:
@@ -1546,7 +1833,7 @@ def _deep_timeline_html(con, slot: Optional[Dict], date: str,
                 f'<li class="tl-entry">{date_html} — '
                 f'{_e(e["what_happened"])}{signif}</li>')
         return (f'<div class="deep-section deep-timeline" id="{anchor}-timeline">'
-                f'<p class="deep-section-label">{_e(labels.THE_STORY_SO_FAR)}</p>'
+                f'<h2 class="deep-section-label">{_e(labels.THE_STORY_SO_FAR)}</h2>'
                 f'<ul class="deep-timeline-list">{"".join(items)}</ul></div>')
     return ""
 
@@ -1554,56 +1841,53 @@ def _deep_timeline_html(con, slot: Optional[Dict], date: str,
 _NUMBER_RE = re.compile(r"\d")
 
 
-def _deep_numbers_html(brief: Dict, story_anchor: str,
-                       src_by_key: Dict[str, Dict]) -> str:
-    """NL-63 M3 item 1 (principal ruling 2026-07-10, Decision B): 'The numbers'
-    — the story's verified specifics, a display-only recombination of ALREADY-
-    VERIFIED material. Surfaces every pinned fact AND every non-discrepancy
-    ledger claim that carries a figure, each as its FULL statement (never a
-    decontextualized bare number — extracting a figure out of its sentence would
-    be a new claim, which the two-lane source rule forbids) with the same quiet
-    cite-fold attribution the facts use. Zero LLM, zero schema change. Gated on
-    content: no numeric receipts -> no section, no dead anchor (D4, the
-    effects/'still open' idiom). Digit-presence is the MVP figure test; a finer
-    count-vs-calendar-date heuristic is NL-29/polish, flagged for the gate."""
+def _deep_numbers_subgroup(brief: Dict, story_anchor: str,
+                           src_by_key: Dict[str, Dict]) -> str:
+    """NL-29 consolidation slate (DECISIONS 2026-07-14 'NL-29 RULED: the
+    consolidation slate', Merge 2 — CoS interpretation, flagged for the
+    principal's veto at NL-68): the verified-specifics run FOLDS INTO 'The
+    facts' as a sub-group rather than standing as its own 'The numbers'
+    section. It carries the numeric LEDGER claims the facts slice didn't
+    previously show (Decision B's specifics — non-discrepancy ledger claims
+    that carry a figure), each as its FULL statement (never a decontextualized
+    bare number — extracting a figure out of its sentence would be a new claim,
+    which the two-lane source rule forbids) with the same quiet cite-fold
+    attribution the facts use. Pinned facts already render in the facts list
+    above, so they are NOT duplicated here (the de-dup that the fold makes
+    visible; the old standalone section double-showed them — flagged in the
+    report). Zero LLM, zero schema change. Gated on content: no numeric ledger
+    claims -> no sub-group, no dead anchor. Returns the bare <ul> (byte-for-byte
+    the same rows the retired 'The numbers' section rendered), for placement
+    INSIDE the facts .deep-section."""
     items = []
-
-    def _row(text: str, cites: List[str], provenance: str = "") -> str:
-        q = _cite_qualifier(cites, src_by_key,
-                            provenance or compute_prov_display(cites, src_by_key))
-        return (f'<li>{_e(text)} '
-                + _cite_fold(q, "Show sources for this figure") + '</li>')
-
-    for f in brief.get("pinned_facts", []):
-        text = f.get("fact", "")
-        if _NUMBER_RE.search(text or ""):
-            items.append(_row(text, f.get("cites", [])))
     for e in brief.get("ledger", []):
         if e.get("discrepancy"):
-            continue                      # contested figures live in Unresolved
+            continue                      # contested figures live in What's still open
         text = e.get("claim", "")
         if _NUMBER_RE.search(text or ""):
-            items.append(_row(text, e.get("cites", []), e.get("provenance", "")))
+            q = _cite_qualifier(e.get("cites", []), src_by_key,
+                                e.get("provenance", "")
+                                or compute_prov_display(e.get("cites", []), src_by_key))
+            items.append(f'<li>{_e(text)} '
+                         + _cite_fold(q, "Show sources for this figure") + '</li>')
     if not items:
         return ""
-    return (f'<div class="deep-section" id="{story_anchor}-numbers">'
-            f'<p class="deep-section-label">{_e(labels.DEEP_NUMBERS)}</p>'
-            f'<ul class="deep-facts-list deep-numbers-list">'
-            f'{"".join(items)}</ul></div>')
+    return (f'<ul class="deep-facts-list deep-numbers-list">'
+            f'{"".join(items)}</ul>')
 
 
-def _deep_unresolved_html(brief: Dict, story_anchor: str,
-                          src_by_key: Dict[str, Dict]) -> str:
-    """NL-63 M3 item 2 (principal ruling 2026-07-10, Decision B): the Unresolved
-    register RETURNS, DEEP-VIEW ONLY, IN NEW FORM. The 07-09 ruling pulled the
-    ledger's cross-source `discrepancy` entries out of the reader view (they
-    stayed in brief_json + the writer view); this restores them as their OWN
-    section — the two sides the record actually reports, EACH attributed, plus
-    the record's own note. This is NOT 'What's still open' (that is forward-
-    looking unknowns/watch — what we don't know YET); this is where the receipts
-    themselves disagree RIGHT NOW. Display-only recombination, no LLM; gated on
-    content (no discrepancies -> no section, no dead anchor). Section label
-    'Unresolved' is provisional — final naming is NL-29's business."""
+def _deep_discrepancy_subgroup(brief: Dict, src_by_key: Dict[str, Dict]) -> str:
+    """NL-29 consolidation slate (DECISIONS 2026-07-14, Merge 1): the
+    discrepancy register FOLDS INTO 'What's still open' as a visually distinct
+    ATTRIBUTED sub-group (two not-settled sections become one). Each entry is
+    the two sides the record actually reports, EACH attributed, plus the
+    record's own note — this is where the receipts themselves disagree RIGHT NOW
+    (it sits with the forward-looking unknowns/watch under one not-settled
+    heading, per the principal's 'if they mean the same thing, why not just
+    combine those'). Display-only recombination, no LLM; gated on content (no
+    discrepancies -> no sub-group). Returns the rows wrapped in a visually
+    distinct container (byte-for-byte the same attributed rows the retired
+    'Unresolved' section rendered), for placement INSIDE the open .deep-section."""
     rows = []
     for e in brief.get("ledger", []):
         if not e.get("discrepancy"):
@@ -1628,14 +1912,11 @@ def _deep_unresolved_html(brief: Dict, story_anchor: str,
             f'{note_html}</div>')
     if not rows:
         return ""
-    return (f'<div class="deep-section deep-unresolved" '
-            f'id="{story_anchor}-unresolved">'
-            f'<p class="deep-section-label">{_e(labels.DEEP_UNRESOLVED)}</p>'
-            + "".join(rows) + "</div>")
+    return ('<div class="deep-open-discrepancies">' + "".join(rows) + "</div>")
 
 
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
-                      date: str, back_label: str = "← Back to today’s edition",
+                      date: str, back_label: Optional[str] = None,
                       return_view: str = "view-today", con=None,
                       slot: Optional[Dict] = None) -> str:
     """The reader rendering — v6-as-edited is the spec. One artifact, two
@@ -1644,6 +1925,9 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     returns to `return_view` (Today by default; an archive-in-place edition
     passes its own view) and `story_anchor` may be slug-prefixed so archive
     editions never collide with Today's deep-view ids."""
+    # Gate FIX-2 (v7-M2): the label resolves at CALL time — a def-time default
+    # captures the import-time value and breaks the table's re-pin contract.
+    back_label = labels.BACK_TO_TODAY if back_label is None else back_label
     brief = doc.get("brief") or {}
     header = doc.get("header") or {}
     src_by_key = {s["key"]: s for s in brief.get("sources", [])}
@@ -1712,25 +1996,26 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     if open_watch_para:
         open_paras.append(f'<p>{_e(open_watch_para)}</p>')
 
-    # NL-12: five reader sections. Facts and Sources always render; Mechanism is
-    # validator-required; "What could follow" and "What's still open" emit only
-    # with content, and no dead jumplist anchor otherwise (M7 precedent).
-    # NL-63 M3 (Decision B): 'The numbers' and 'Unresolved' are computed here —
-    # before the jumplist — so the anchor and the section gate on the SAME
-    # rendered content (the facts/effects/open precedent): an empty well emits
-    # neither a live jumplist anchor nor a header-only section.
-    numbers_html = _deep_numbers_html(brief, story_anchor, src_by_key)
-    unresolved_html = _deep_unresolved_html(brief, story_anchor, src_by_key)
+    # NL-29 consolidation slate (DECISIONS 2026-07-14): FIVE reader sections —
+    # The facts (specifics fold in) · How this works · What could follow ·
+    # What's still open (discrepancies fold in) · Sources. Facts / How this
+    # works / Sources always render; "What could follow" and "What's still open"
+    # emit only with content, and no dead jumplist anchor otherwise (M7
+    # precedent). The specifics sub-group and the discrepancy sub-group are
+    # computed here — before the jumplist — so the "What's still open" anchor
+    # gates on the SAME rendered content (open prose OR a discrepancy sub-group):
+    # a bare open well with only discrepancies still earns its section+anchor,
+    # and an empty one emits neither. The retired 'The numbers'/'Unresolved'
+    # sections and their story-*-numbers/-unresolved anchors are GONE.
+    numbers_sub = _deep_numbers_subgroup(brief, story_anchor, src_by_key)
+    disc_sub = _deep_discrepancy_subgroup(brief, src_by_key)
+    open_has_content = bool(open_paras or disc_sub)
 
     jump_items = [("facts", labels.JUMP_FACTS)]
-    if numbers_html:
-        jump_items.append(("numbers", labels.DEEP_NUMBERS))
-    if unresolved_html:
-        jump_items.append(("unresolved", labels.DEEP_UNRESOLVED))
     jump_items.append(("mechanism", labels.DEEP_MECHANISM))
     if brief.get("effects"):
         jump_items.append(("effects", labels.DEEP_EFFECTS))
-    if open_paras:
+    if open_has_content:
         jump_items.append(("open", labels.JUMP_OPEN))
     jump_items.append(("sources", labels.DEEP_SOURCES))
     out.append('<p class="deep-jumplist">'
@@ -1753,23 +2038,19 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
         lis.append(
             f'<li>{_e(f.get("fact", ""))} '
             + _cite_fold(q, "Show sources for this fact") + '</li>')
+    # NL-29 consolidation (Merge 2, flagged): the verified-specifics run folds in
+    # here as a sub-group — the numeric ledger claims the facts slice didn't show
+    # (byte-for-byte the rows the retired 'The numbers' section rendered).
     out.append(f'<div class="deep-section" id="{story_anchor}-facts">'
-               f'<p class="deep-section-label">{_e(labels.DEEP_FACTS)}</p>'
-               f'<ul class="deep-facts-list">{"".join(lis)}</ul></div>')
+               f'<h2 class="deep-section-label">{_e(labels.DEEP_FACTS)}</h2>'
+               f'<ul class="deep-facts-list">{"".join(lis)}</ul>'
+               f'{numbers_sub}</div>')
 
-    # NL-63 M3 (Decision B): the receipts-forward cluster — 'The numbers'
-    # (verified specifics) then 'Unresolved' (where the receipts disagree) sit
-    # with the facts, the settled record before the interpretation (mechanism/
-    # effects). Both are ADDITIONS (NL-65/NL-29 own any relocation/rename, not
-    # M3); both gate on content and were precomputed above with the jumplist.
-    if numbers_html:
-        out.append(numbers_html)
-    if unresolved_html:
-        out.append(unresolved_html)
-
-    # 2. mechanism — inline [S#] keys become the SAME quiet citation fold the
+    # 2. How this works — inline [S#] keys become the SAME quiet citation fold the
     # facts use (NL-58 parity ruling): the qualifier reveals on tap behind a
-    # caret, not inline as plain text.
+    # caret, not inline as plain text. (NL-29: WAS 'Mechanism'; the label is the
+    # one-string re-pin, the anchor id story-*-mechanism is unchanged so the
+    # jumplist stays live.)
     mech = brief.get("mechanism", "")
     mech_display = re.sub(
         r"\s*\[([SCRP]\d+(?:,\s*[SCRP]\d+)*)\]",
@@ -1778,7 +2059,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
             "Show sources for this claim"),
         _e(mech))
     out.append(f'<div class="deep-section" id="{story_anchor}-mechanism">'
-               f'<p class="deep-section-label">{_e(labels.DEEP_MECHANISM)}</p>'
+               f'<h2 class="deep-section-label">{_e(labels.DEEP_MECHANISM)}</h2>'
                f'<p>{mech_display}</p></div>')
 
     # 3. effects — the citation IS the basis marker (Thread D)
@@ -1798,20 +2079,23 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                     f'<span class="cite">{_e(via)}</span></p>')
     if effs:
         out.append(f'<div class="deep-section" id="{story_anchor}-effects">'
-                   f'<p class="deep-section-label">{_e(labels.DEEP_EFFECTS)}</p>'
+                   f'<h2 class="deep-section-label">{_e(labels.DEEP_EFFECTS)}</h2>'
                    + "".join(effs) + "</div>")
 
     # 4. What's still open — Honest Unknowns + Watch For fused at section level
     # (register spec, 2026-07-09 addendum). One register end to end: editor's-
     # memo prose, body ink, body size. Unknowns lead as one paragraph each
     # (three sentence-roles, no beats/labels/tails); one closing paragraph
-    # carries the watch observables; `settles` never renders. Absent halves
-    # leave no residue (D4) — paragraphs precomputed above; emit only if any
-    # rendered content survives (the anchor gates on the same list).
-    if open_paras:
+    # carries the watch observables; `settles` never renders. NL-29 consolidation
+    # (Merge 1): the discrepancy register folds in below the prose as a visually
+    # distinct attributed sub-group (byte-for-byte the rows the retired
+    # 'Unresolved' section rendered). Absent halves leave no residue (D4) —
+    # both precomputed above; emit only if prose OR a discrepancy sub-group
+    # survives (the anchor gates on the same open_has_content signal).
+    if open_has_content:
         out.append(f'<div class="deep-section" id="{story_anchor}-open">'
-                   f'<p class="deep-section-label">{_e(labels.DEEP_OPEN)}</p>'
-                   + "".join(open_paras) + "</div>")
+                   f'<h2 class="deep-section-label">{_e(labels.DEEP_OPEN)}</h2>'
+                   + "".join(open_paras) + disc_sub + "</div>")
 
     # 5. source table — rows, real accessible names (Axel)
     rows = []
@@ -1846,7 +2130,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                     f'<p class="source-title">{link}</p>'
                     f'<p class="source-meta">Retrieved {when} · {_e(kind_label)}</p></div>')
     out.append(f'<div class="deep-section" id="{story_anchor}-sources">'
-               f'<p class="deep-section-label">{_e(labels.DEEP_SOURCES)}</p>'
+               f'<h2 class="deep-section-label">{_e(labels.DEEP_SOURCES)}</h2>'
                + "".join(rows) + "</div>")
 
     # deterministic footer — cited, never verified (Sten's law, binding copy)
@@ -1936,7 +2220,7 @@ def _sources_context_source_rows(con, slot: Dict) -> List[str]:
 
 def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                                  slot: Dict, con, date: str,
-                                 back_label: str = "← Back to today’s edition",
+                                 back_label: Optional[str] = None,
                                  return_view: str = "view-today") -> str:
     """NL-66(b) ruled option (b): the In-Brief (quick-tier) deep view — a $0
     sources-and-context surface built ENTIRELY from what already exists for the
@@ -1946,6 +2230,7 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
     slot summary, the source list (item_ids -> source_items), the matched
     tags/threads, and the 'Here for' rationale. Missing inputs render an honest
     empty state (the NL-11 missing-input class), never a fabricated source."""
+    back_label = labels.BACK_TO_TODAY if back_label is None else back_label
     out = [f'<section id="view-deep-{story_anchor}" class="view">']
     ret = "" if return_view == "view-today" else f", '{_e(return_view)}'"
     out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
@@ -1957,7 +2242,7 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
     summary = (slot.get("summary") or st.get("lede") or "").strip()
     if summary:
         out.append(f'<div class="deep-section" id="{story_anchor}-summary">'
-                   f'<p class="deep-section-label">{_e(labels.IN_BRIEF)}</p>'
+                   f'<h2 class="deep-section-label">{_e(labels.IN_BRIEF)}</h2>'
                    f'<p>{_e(summary)}</p></div>')
 
     # why-you're-seeing-this — matched topics, tracked threads, and the shared
@@ -1974,7 +2259,7 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                    f'{_e(", ".join(threads))}</p>')
     ctx.append(f'<p class="sc-herefor">Here for: {_e(_here_for(slot))}.</p>')
     out.append(f'<div class="deep-section" id="{story_anchor}-context">'
-               f'<p class="deep-section-label">{_e(labels.DEEP_WHY_SEEING)}</p>'
+               f'<h2 class="deep-section-label">{_e(labels.DEEP_WHY_SEEING)}</h2>'
                + "".join(ctx) + "</div>")
 
     # sources — outlets/corroboration label; honest empty when none resolve
@@ -1985,7 +2270,7 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                           '<p class="empty-note">No sources are recorded for '
                           'this In-Brief item.</p>')
     out.append(f'<div class="deep-section" id="{story_anchor}-sources">'
-               f'<p class="deep-section-label">{_e(labels.DEEP_SOURCES)}</p>'
+               f'<h2 class="deep-section-label">{_e(labels.DEEP_SOURCES)}</h2>'
                + body + "</div>")
 
     # honest footer — this is context, NOT the analyst report (no trust-line
@@ -2050,13 +2335,13 @@ def build_edition_fragment(con: sqlite3.Connection,
     if row is None:
         return ('<section class="view active" id="view-edition">'
                 '<a class="deep-back" href="#" onclick="backToArchive(event)">'
-                '← Back to Archive</a>'
+                f'{_e(labels.BACK_TO_ARCHIVE)}</a>'
                 '<p class="empty-note">That edition is unavailable.</p>'
                 '</section>', None)
     entry = _log_entry_for(row["date"])
     slug_prefix = f"ed{date}-"
     briefs, deep_sections = _collect_deep_views(
-        con, row, entry, slug_prefix, "← Back to this edition", "view-edition")
+        con, row, entry, slug_prefix, labels.BACK_TO_EDITION, "view-edition")
     episode = ""
     dur = _wav_duration(row["audio_file_path"])
     if dur:
@@ -2071,10 +2356,23 @@ def build_edition_fragment(con: sqlite3.Connection,
                                  "view-edition")
     head = (f'<section class="view active" id="view-edition">'
             f'<a class="deep-back" href="#" onclick="backToArchive(event)">'
-            f'← Back to Archive</a>'
+            f'{_e(labels.BACK_TO_ARCHIVE)}</a>'
             f'<h1 class="view-title">{_e(_human_date(row["date"]))}</h1>'
             f'{episode}{body}</section>')
     return head + "".join(deep_sections), row["date"]
+
+
+def _nl_labels_js() -> str:
+    """The client-facing label subset (item 5): the follow-control copy the JS
+    renders, injected as window.NL_LABELS so a labels.py re-pin lands in the
+    client too — the same one-place re-pin the server renders enjoy. <>&-escaped
+    so a re-pin can never break out of the <script> element."""
+    payload = {"followActive": labels.FOLLOW_STORY_ACTIVE,
+               "followInactive": labels.FOLLOW_STORY_INACTIVE,
+               "followConfirm": labels.FOLLOW_STORY_CONFIRM}
+    blob = (json.dumps(payload, ensure_ascii=False)
+            .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
+    return "window.NL_LABELS = " + blob + ";"
 
 
 def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str, Optional[str]]:
@@ -2099,7 +2397,7 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
     deep_sections: List[str] = []
     if row is not None and gen_state["state"] != "running":
         briefs, deep_sections = _collect_deep_views(
-            con, row, entry, "", "← Back to today’s edition", "view-today")
+            con, row, entry, "", labels.BACK_TO_TODAY, "view-today")
 
     page = webui.PAGE.format(
         css=webui.CSS,
@@ -2109,6 +2407,8 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
         settings_html=_render_settings(con, row, entry),
         popups_html=webui.POPUPS,
         deep_views_html="".join(deep_sections),
+        thread_pages_html=_collect_thread_pages(con),
+        nl_labels_js=_nl_labels_js(),
         js=webui.JS,
     )
     # M7 gate finding 4: a read event means the briefing BODY was actually

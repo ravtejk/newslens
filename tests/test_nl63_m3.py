@@ -72,112 +72,130 @@ def _numeric_brief():
 
 
 # ===========================================================================
-# 1. "The numbers" — verified specifics, receipts-forward
+# 1. Verified specifics — NL-29 consolidation slate (DECISIONS 2026-07-14
+#    "NL-29 RULED: the consolidation slate", Merge 2 — CoS interpretation,
+#    flagged for the principal's veto at NL-68): the numeric-specifics run
+#    FOLDS INTO "The facts" as a sub-group. WAS the standalone "The numbers"
+#    section (NL-63 M3, Decision B); the numeric-ledger-claim rows survive
+#    byte-for-byte, relocated under the facts .deep-section as deep-numbers-list.
 # ===========================================================================
 
-def test_the_numbers_renders_numeric_receipts_with_attribution():
-    """The numeric pinned facts AND the numeric ledger claim surface under a
-    dedicated 'The numbers' section, each full statement carried with its
-    source attribution (the same cite-fold the facts use). No LLM, no schema."""
+def test_numeric_ledger_claims_fold_into_the_facts_subgroup():
+    """The numeric LEDGER claim the facts slice didn't previously show surfaces
+    INSIDE 'The facts' as the specifics sub-group (deep-numbers-list), its full
+    statement carried with the same cite-fold the facts use. No standalone
+    'The numbers' section or anchor survives.
+    WAS test_the_numbers_renders_numeric_receipts_with_attribution."""
     html = _deep(_numeric_brief())
-    assert 'id="story-0-numbers"' in html
-    sec = _section(html, "story-0-numbers")
-    assert '<p class="deep-section-label">The numbers</p>' in sec
-    # full statements (display-only recombination — never a bare decontextualized
-    # number): the whole verified sentence rides, context intact
-    assert "killed at least 11 people" in sec
-    assert "68 missiles and 351 drones" in sec
-    # the numeric LEDGER claim (reader-invisible until now) is surfaced here
-    assert "injured at least 46 people" in sec
+    assert 'id="story-0-numbers"' not in html            # section retired
+    assert ">The numbers<" not in html                   # label retired
+    facts = _section(html, "story-0-facts")              # facts incl. the sub-group
+    assert 'class="deep-facts-list deep-numbers-list"' in facts
+    # the numeric LEDGER claim (reader-invisible until M3), now folded in here
+    assert "injured at least 46 people" in facts
+    # the numeric pinned facts stay in the facts list above (unchanged)
+    assert "killed at least 11 people" in facts
+    assert "68 missiles and 351 drones" in facts
     # attribution rides as the quiet cite-fold (same surface as the facts)
-    assert '<details class="cite-fold" open>' in sec
-    assert "The Hill" in sec                       # S1's outlet, resolved
+    assert '<details class="cite-fold" open>' in facts
+    assert "The Hill" in facts                            # S1's outlet, resolved
 
 
-def test_the_numbers_excludes_non_numeric_receipts():
-    """A verified statement with no figure is NOT a 'number' — it stays in 'The
-    facts'/ledger and never appears under 'The numbers' (the section is the
-    numeric subset, not a copy of the facts)."""
-    sec = _section(_deep(_numeric_brief()), "story-0-numbers")
-    assert "No casualties were confirmed at the port." not in sec  # no digit
-    assert "Rescue crews reached the site." not in sec             # no digit
+def test_facts_subgroup_excludes_non_numeric_ledger_claims():
+    """A ledger claim with no figure is not a 'specific' — it never enters the
+    numbers sub-group (the sub-group is the numeric ledger subset). A non-numeric
+    PINNED fact still shows in the main facts list, never the sub-group.
+    WAS test_the_numbers_excludes_non_numeric_receipts."""
+    facts = _section(_deep(_numeric_brief()), "story-0-facts")
+    sub = facts.split('deep-numbers-list')[1] if 'deep-numbers-list' in facts else ""
+    assert "Rescue crews reached the site." not in sub   # no digit -> excluded
+    assert "No casualties were confirmed at the port." in facts   # pinned, main list
+    assert "No casualties were confirmed at the port." not in sub
 
 
-def test_the_numbers_absent_when_no_numeric_receipts():
-    """m3_brief() carries no figures anywhere -> no section, no anchor, no dead
-    jumplist entry (D4: absent halves leave no residue). Honest empty = absent,
-    the effects/'still open' idiom."""
-    html = _deep(m3_brief())                        # 'A cited fact.' — no digit
+def test_facts_subgroup_absent_when_no_numeric_ledger_claims():
+    """m3_brief() carries no numeric ledger claim -> no sub-group, no 'The
+    numbers' residue anywhere (D4: absent halves leave no residue).
+    WAS test_the_numbers_absent_when_no_numeric_receipts."""
+    html = _deep(m3_brief())                             # 'A ledger claim.' — no digit
+    assert 'deep-numbers-list' not in html
     assert 'id="story-0-numbers"' not in html
     assert "The numbers" not in html
 
 
-def test_the_numbers_in_jumplist_only_when_present():
-    with_nums = _deep(_numeric_brief())
-    jl = with_nums.split('deep-jumplist')[1].split("</p>")[0]
-    assert 'href="#story-0-numbers"' in jl
-    # and gone from the jumplist when the section is absent
-    without = m3_brief()
-    jl2 = _deep(without).split('deep-jumplist')[1].split("</p>")[0]
-    assert 'href="#story-0-numbers"' not in jl2
+def test_no_numbers_jumplist_entry_after_the_fold():
+    """The fold retires the 'The numbers' jumplist entry entirely (it is no
+    longer a section); the facts anchor still leads.
+    WAS test_the_numbers_in_jumplist_only_when_present."""
+    jl = _deep(_numeric_brief()).split('deep-jumplist')[1].split("</p>")[0]
+    assert 'href="#story-0-numbers"' not in jl
+    assert 'href="#story-0-facts"' in jl
 
 
 def test_the_facts_still_render_the_numeric_facts_too():
-    """'The numbers' ADDS a section (Decision B: only ADD) — it does not remove
-    numeric facts from 'The facts'. The by-the-numbers index and the facts list
-    coexist; NL-65/NL-29 own any later relocation, not M3."""
+    """The pinned numeric facts still render in 'The facts' main list (the fold
+    ADDS the ledger specifics; it never removes pinned facts). Heading semantics
+    (v7-M2): the section label is an <h2>."""
     html = _deep(_numeric_brief())
     facts = _section(html, "story-0-facts")
-    assert "killed at least 11 people" in facts     # still in The facts
-    assert '<p class="deep-section-label">The facts</p>' in facts
+    assert "killed at least 11 people" in facts          # still in The facts
+    assert '<h2 class="deep-section-label">The facts</h2>' in facts
 
 
 # ===========================================================================
-# 2. The Unresolved register (new form) — the ledger's discrepancies return
+# 2. The discrepancy register — NL-29 consolidation slate (Merge 1): the
+#    register FOLDS INTO "What's still open" as a visually distinct attributed
+#    sub-group (two not-settled sections become one). WAS the standalone
+#    "Unresolved" section (NL-63 M3, Decision B); the attributed rows survive
+#    byte-for-byte, relocated under story-0-open as deep-open-discrepancies.
 # ===========================================================================
 
-def test_unresolved_register_renders_discrepancy_sides_and_note():
-    """Decision B restores the Unresolved/discrepancy register DEEP-VIEW ONLY,
-    IN NEW FORM: each cross-source `discrepancy` renders both attributed sides
-    and the note — the record's own disagreement, not a synthesized claim."""
+def test_discrepancies_fold_into_open_with_sides_and_note():
+    """Each cross-source discrepancy renders both attributed sides + the note,
+    now inside 'What's still open' as the deep-open-discrepancies sub-group.
+    WAS test_unresolved_register_renders_discrepancy_sides_and_note."""
     html = _deep(m3_brief(with_discrepancy=True))
-    assert 'id="story-0-unresolved"' in html
-    sec = _section(html, "story-0-unresolved")
-    assert '<p class="deep-section-label">Unresolved</p>' in sec
+    assert 'id="story-0-unresolved"' not in html          # section retired
+    assert ">Unresolved<" not in html                     # label retired
+    open_sec = _section(html, "story-0-open")
+    assert 'class="deep-open-discrepancies"' in open_sec
     # both sides of the live slot-2 shape, each with its source
-    assert "Meeting July 8" in sec and "Meeting Wednesday" in sec
-    assert "dates differ" in sec                    # the note
-    # each side is source-attributed (rferl.org / The Hill via the cites)
-    assert "rferl.org" in sec or "The Hill" in sec
+    assert "Meeting July 8" in open_sec and "Meeting Wednesday" in open_sec
+    assert "dates differ" in open_sec                     # the note
+    assert "rferl.org" in open_sec or "The Hill" in open_sec
 
 
-def test_unresolved_absent_when_no_discrepancy():
-    """A brief whose ledger carries only plain claims (no `discrepancy`) shows
-    no Unresolved section and no anchor (honest empty = absent)."""
-    html = _deep(m3_brief())                        # ledger has one plain claim
+def test_discrepancy_subgroup_absent_when_no_discrepancy():
+    """A ledger with only plain claims shows no discrepancy sub-group and no
+    retired-section residue. WAS test_unresolved_absent_when_no_discrepancy."""
+    html = _deep(m3_brief())
+    assert 'class="deep-open-discrepancies"' not in html
     assert 'id="story-0-unresolved"' not in html
-    assert '<p class="deep-section-label">Unresolved</p>' not in html
 
 
-def test_unresolved_is_a_separate_section_not_folded_into_facts_or_open():
-    """The register is its OWN section: 'The facts' stays pinned-only and the
-    forward-looking 'What's still open' is unchanged — the discrepancy does not
-    leak into either."""
+def test_discrepancies_do_not_leak_into_the_facts():
+    """'The facts' stays pinned-only — the discrepancy folds into 'What's still
+    open', never facts. WAS
+    test_unresolved_is_a_separate_section_not_folded_into_facts_or_open (which
+    pinned a SEPARATE section AND 'not in open'; the 07-14 consolidation folds it
+    INTO open, so the open half is inverted here)."""
     html = _deep(m3_brief(with_discrepancy=True))
     facts = _section(html, "story-0-facts")
-    assert "Meeting Wednesday" not in facts         # facts stays pinned-only
+    assert "Meeting Wednesday" not in facts               # facts stays pinned-only
     assert "A cited fact." in facts
-    # 'What's still open' carries the unknown, not the discrepancy
+    # the discrepancy now lives in 'What's still open' (Merge 1), with the unknown
     open_sec = _section(html, "story-0-open")
-    assert "Meeting Wednesday" not in open_sec
+    assert "Meeting Wednesday" in open_sec
 
 
-def test_unresolved_in_jumplist_only_when_present():
+def test_no_unresolved_jumplist_entry_after_the_fold():
+    """The fold retires the 'Unresolved' jumplist entry; 'What's still open'
+    carries its own single entry (present when it has prose OR discrepancies).
+    WAS test_unresolved_in_jumplist_only_when_present."""
     jl = _deep(m3_brief(with_discrepancy=True)).split(
         'deep-jumplist')[1].split("</p>")[0]
-    assert 'href="#story-0-unresolved"' in jl
-    jl2 = _deep(m3_brief()).split('deep-jumplist')[1].split("</p>")[0]
-    assert 'href="#story-0-unresolved"' not in jl2
+    assert 'href="#story-0-unresolved"' not in jl
+    assert 'href="#story-0-open"' in jl                   # open present (unknown + disc)
 
 
 # ===========================================================================

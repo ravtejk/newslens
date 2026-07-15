@@ -183,7 +183,12 @@ def test_today_only_default_hides_stale_edition(ui):
     _, _, body = get(ui, "/")
     text = body.decode("utf-8")
     assert "No edition has been generated" in text        # empty copy...
-    assert "Chip export controls pass" not in text        # ...not the stale edition
+    # ...and the stale edition is not shown AS today's. Scope to the Today view:
+    # the v7-M2 archive list DOES surface every edition's lead headline (§8, the
+    # list-below is the archive's primary rendering), which is not "today dressed
+    # as current" — the NL-11 guarantee is about the Today surface.
+    today_view = text.split('id="view-today"')[1].split('id="view-following"')[0]
+    assert "Chip export controls pass" not in today_view
     con = db.connect()
     try:
         assert event_rows(con) == []                       # empty state is not a read
@@ -1078,7 +1083,10 @@ def test_ride23_error_panel_wording_in_both_failure_positions(ui):
     _, _, body = get(ui, "/")
     page2 = body.decode("utf-8")
     assert ERROR_PANEL_SENTENCE in page2
-    assert "Chip export controls pass" not in page2  # the panel replaced it
+    # the panel replaced the Today edition body — scope the check to the Today
+    # view (the v7-M2 archive list surfaces every edition's lead headline, §8).
+    today_view = page2.split('id="view-today"')[1].split('id="view-following"')[0]
+    assert "Chip export controls pass" not in today_view
     # And neither render logged a read (read-honesty holds here too).
     con = db.connect()
     try:

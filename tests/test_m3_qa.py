@@ -592,30 +592,31 @@ def test_rejected_brief_page_is_byte_identical_to_never_had_one(
     assert page_a1.count("→ The full picture") == 1
 
 
-def test_deep_view_reader_restores_unresolved_register_new_form(tmp_paths):
-    """NL-63 M3 (principal ruling 2026-07-10, Decision B) SUPERSEDES the 07-09
-    register removal for the deep view: the Unresolved/discrepancy register
-    RETURNS, DEEP-VIEW ONLY, IN NEW FORM. 'The facts' stays pinned-only (the
-    surviving 07-09 half); the register renders as its OWN section — cross-source
-    discrepancies only, never the old raw ledger dump. Data still lives in
-    brief_json (writer-side untouched).
-
-    (Was test_deep_view_reader_drops_ledger_and_unresolved_register, which
-    encoded the now-superseded 07-09 removal; updated by the M3 implementer.)"""
+def test_deep_view_reader_folds_discrepancies_into_open(tmp_paths):
+    """NL-29 consolidation slate (DECISIONS 2026-07-14 'NL-29 RULED: the
+    consolidation slate', Merge 1): the discrepancy register FOLDS INTO 'What's
+    still open' as a visually distinct attributed sub-group — no longer its own
+    'Unresolved' section. 'The facts' stays pinned-only; the discrepancy rows
+    render (both attributed sides) under story-1-open, byte-for-byte the rows the
+    retired section rendered. Data still lives in brief_json (writer untouched).
+    WAS test_deep_view_reader_restores_unresolved_register_new_form (M3's
+    own-section contract); this is the 07-14 fold."""
     brief = m3_brief(with_discrepancy=True)
     doc = {"header": {"degraded": None}, "brief": brief}
     html = server._render_deep_view("story-1", "Headline", doc, DATE)
-    # the register RETURNS as its own section (new form): both attributed sides
-    assert 'id="story-1-unresolved"' in html
-    assert '<p class="deep-section-label">Unresolved</p>' in html
-    assert "Meeting July 8" in html and "Meeting Wednesday" in html
+    # the register FOLDS INTO 'What's still open' (Merge 1): no own section
+    assert 'id="story-1-unresolved"' not in html
+    assert ">Unresolved<" not in html
+    open_sec = html.split('id="story-1-open"')[1]
+    assert 'class="deep-open-discrepancies"' in open_sec
+    assert "Meeting July 8" in open_sec and "Meeting Wednesday" in open_sec
     # the OLD raw-ledger form stays gone (new form only, not a ledger dump):
     assert 'class="deep-discrepancy"' not in html
     assert "The ledger" not in html and "story-1-ledger" not in html
     assert "A ledger claim." not in html          # plain claims are NOT dumped
     # 'The facts' still leads with the pinned facts, discrepancy kept OUT of it
     facts = html.split('id="story-1-facts"')[1].split("</div>")[0]
-    assert '<p class="deep-section-label">The facts</p>' in facts
+    assert '<h2 class="deep-section-label">The facts</h2>' in facts
     assert "A cited fact." in facts and "Meeting Wednesday" not in facts
     # data preserved upstream: the brief dict still carries the ledger
     assert any(e.get("discrepancy") for e in brief["ledger"])
@@ -689,18 +690,20 @@ def test_effects_qualifier_copy_pinned_as_actual_v6_deviation():
 
 
 def test_deep_view_jumplist_is_five_sections_no_dead_anchors():
-    """NL-12 regroup: the jumplist reflects the five reader sections —
-    Facts · Mechanism · What could follow · Still open · Sources. Ledger,
-    Arc, Unknowns and Watch are gone as anchors (Arc is a title-block line;
-    Ledger is removed; Unknowns+Watch fuse to 'Still open'). No-content
-    sections emit no anchor (M7 no-dead-affordances precedent)."""
+    """The jumplist reflects the five reader sections. NL-29 consolidation slate
+    (DECISIONS 2026-07-14): 'Mechanism' re-pinned to 'How this works' (label
+    only; the story-*-mechanism anchor is unchanged). Ledger, Arc, Unknowns and
+    Watch stay gone as anchors; the retired 'The numbers'/'Unresolved' entries
+    never appear (they fold into Facts / Still open). No-content sections emit no
+    anchor (M7 no-dead-affordances precedent)."""
     doc = {"header": {}, "brief": m3_brief()}       # arc None, effects present
     html = server._render_deep_view("story-0", "H", doc, DATE)
     jump = html.split('class="deep-jumplist"')[1].split("</p>")[0]
-    for label in ("Facts", "Mechanism", "What could follow", "Still open",
+    for label in ("Facts", "How this works", "What could follow", "Still open",
                   "Sources"):
         assert f">{label}</a>" in jump
-    for gone in ("Ledger", "Arc", "Unknowns", "Watch for"):
+    for gone in ("Ledger", "Arc", "Unknowns", "Watch for", "The numbers",
+                 "Unresolved"):
         assert f">{gone}</a>" not in jump
     # arc-less brief: no arc line, no arc anchor, no arc section
     assert 'id="story-0-arc"' not in html and "deep-arc-line" not in html
@@ -1161,8 +1164,10 @@ def test_D1_validator_accepted_note_must_never_crash_the_render():
     persists `note` untyped — `e.get("note", "")` only defaults when the key is
     ABSENT (analysis.py, ledger_out discrepancy append). A model emitting
     {"note": {...}} or {"note": 7} therefore persists as a VALID brief, and
-    M3's _deep_unresolved_html calls (e.get("note") or "").strip()
-    (server.py:1422) — AttributeError. Blast radius is the WHOLE page:
+    M3's discrepancy render calls (e.get("note") or "").strip() — AttributeError
+    (now _deep_discrepancy_subgroup, the NL-29-folded successor of the retired
+    _deep_unresolved_html; the isinstance-note guard is preserved across the
+    fold). Blast radius is the WHOLE page:
     _collect_deep_views has no failure path, so build_page raises and Today AND
     the archive render for that edition 500 until the row is deleted. Pre-M3
     the reader never read `note`; Decision B's restoration created the
@@ -1194,14 +1199,16 @@ def test_D1_validator_accepted_note_must_never_crash_the_render():
     doc = {"header": {"degraded": None}, "brief": brief}
     html = server._render_deep_view("story-1", "Headline", doc, DATE)
     assert "gone rogue" not in html     # no dict-repr laundered into the page
-    assert 'id="story-1-unresolved"' in html   # register itself still renders
+    # NL-29 fold: the discrepancy renders inside 'What's still open' (Merge 1)
+    assert 'class="deep-open-discrepancies"' in html   # register itself still renders
 
 
-def test_numbers_excludes_contested_figures_they_live_in_unresolved():
+def test_contested_figures_fold_into_open_not_the_facts_specifics():
     """Full-statement discipline, the contested half: a numeric value inside a
-    cross-source discrepancy is a CONTESTED figure — it renders under
-    Unresolved (both sides, attributed) and never under 'The numbers' (which
-    would present one side as a verified specific)."""
+    cross-source discrepancy is a CONTESTED figure — after the NL-29 fold it
+    renders in 'What's still open' (both sides, attributed) and never in the
+    facts numbers sub-group (which would present one side as a verified
+    specific). WAS test_numbers_excludes_contested_figures_they_live_in_unresolved."""
     brief = m3_brief(with_discrepancy=True)
     brief["pinned_facts"].append(
         {"fact": "At least 11 people died.", "cites": ["S1"]})
@@ -1211,18 +1218,19 @@ def test_numbers_excludes_contested_figures_they_live_in_unresolved():
                             "note": "tolls differ"})
     html = server._render_deep_view(
         "story-1", "H", {"header": {}, "brief": brief}, DATE)
-    numbers = html.split('id="story-1-numbers"')[1].split("</div>")[0]
-    assert "At least 11 people died." in numbers
-    assert "9 dead" not in numbers and "12 dead" not in numbers
-    unresolved = html.split('id="story-1-unresolved"')[1]
-    assert "9 dead" in unresolved and "12 dead" in unresolved
+    facts = html.split('id="story-1-facts"')[1].split("</div>")[0]
+    assert "At least 11 people died." in facts        # verified specific, in facts
+    assert "9 dead" not in facts and "12 dead" not in facts   # contested -> not a specific
+    open_sec = html.split('id="story-1-open"')[1]
+    assert "9 dead" in open_sec and "12 dead" in open_sec     # contested figures, attributed
 
 
-def test_unresolved_side_with_unresolvable_cites_says_background():
+def test_discrepancy_side_with_unresolvable_cites_says_background():
     """Attribution honesty parity: a persisted discrepancy side whose cites
     resolve to no manifest source attributes as '(background)' — the same
     honest fallback the facts' qualifier uses — never a crash, never an
-    invented outlet."""
+    invented outlet. After the NL-29 fold the rows live in 'What's still open'.
+    WAS test_unresolved_side_with_unresolvable_cites_says_background."""
     brief = m3_brief()
     brief["ledger"].append({"discrepancy": True,
                             "a": {"value": "Nine dead", "cites": ["Z9"]},
@@ -1230,7 +1238,7 @@ def test_unresolved_side_with_unresolvable_cites_says_background():
                             "note": ""})
     html = server._render_deep_view(
         "story-1", "H", {"header": {}, "brief": brief}, DATE)
-    sec = html.split('id="story-1-unresolved"')[1]
+    sec = html.split('id="story-1-open"')[1]
     assert "Nine dead" in sec and "(background)" in sec
     assert "The Hill" in sec            # the resolvable side still attributes
 
