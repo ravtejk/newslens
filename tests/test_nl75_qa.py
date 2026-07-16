@@ -1063,11 +1063,12 @@ def test_new_tables_enforce_foreign_keys(migrated_con):
 
 
 def test_all_three_new_migrations_are_idempotent_together(tmp_path):
-    """Triple idempotency in one pass: migrate a fresh DB (13 applied), then
-    migrate again — zero pending, zero applied, tables/triggers unchanged."""
+    """Idempotency in one pass: migrate a fresh DB (0011-0014 on the same NL
+    train), then migrate again — zero pending, zero applied, tables/triggers
+    unchanged. (0014, the provenance bound, joined the tail — NL-69.)"""
     db_path = tmp_path / "idem.db"
     first = db.migrate(db_path=db_path)
-    assert [f[:4] for f in first][-3:] == ["0011", "0012", "0013"]
+    assert [f[:4] for f in first][-4:] == ["0011", "0012", "0013", "0014"]
     assert db.migrate(db_path=db_path) == []
     con = db.connect(db_path)
     try:

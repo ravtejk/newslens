@@ -48,6 +48,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import config, db, memory, paths, ranking
+# NL-69: the repetition-word machinery moved to its home beside
+# has_predating_antecedent (single source of truth; the write-side self-mark in
+# migration 0014 shares it). Imported here so generate._REPETITION_RE and the
+# read-site's _repetition_subject_units keep resolving unchanged.
+from .memory_core import _REPETITION_RE, _repetition_subject_units
 
 # Writer model (principal amendment 2026-07-05, DECISIONS.md): the writer
 # passes (narrative A/B + script) run on GPT-4o — 4o-mini failed the content
@@ -898,18 +903,11 @@ def validate_narrative_payload(
 # (Content rule i) is flagged for the gate as a severity decision.
 # ---------------------------------------------------------------------------
 
-# Continuity/repetition diction that PRESUPPOSES a prior state (Content rule
-# iii). Word-boundary matched so "again" never fires inside "against".
-# D3b (NL-75 QA): the spec lexicon reads 'reinstated, again, resumed, renewed,
-# re-imposed, once more, for the Nth time'. News copy hyphenates the re- stems
-# freely (HSR §5.1(4) found the unhyphenated sibling), so the re- forms accept
-# an optional hyphen; the for-the-Nth-time class is a bounded alternative.
-_REPETITION_RE = re.compile(
-    r"\b(re-?instat(?:e|es|ed|ing)|re-?impos(?:e|es|ed|ing)|re-?imposition|"
-    r"renew(?:s|ed|ing)?|resum(?:e|es|ed|ing)|re-?open(?:s|ed|ing)?|"
-    r"restor(?:e|es|ed|ing)|once more|back on|consecutive|again|"
-    r"for the (?:second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
-    r"\d+(?:st|nd|rd|th)) time)\b", re.I)
+# Continuity/repetition diction (Content rule iii) — _REPETITION_RE and the
+# subject-scoping _repetition_subject_units now live in memory_core beside
+# has_predating_antecedent (single source; the 0014 write-side self-mark shares
+# them) and are imported at the top of this module. generate._REPETITION_RE
+# still resolves via that import.
 
 # D3a (NL-75 QA): attribution is a FRAME (a verb/phrase that hands the word to a
 # source), NOT a bare quote byte. 32% of real edition prose carries a possessive
@@ -961,38 +959,10 @@ def _is_source_attributed(sentence: str, match: Optional[re.Match] = None) -> bo
 
 
 # D6 (NL-75 QA, the HIGH one — HSR §5.1(2)): the antecedent SUBJECT must
-# discriminate the repetition's OBJECT (the thing being re-X'd), not echo the
-# whole sentence. The live call site passed the full sentence's salient units;
-# on a thread with ANY real prior history a mundane shared word (the thread-topic
-# word 'strait' living in a genuine prior row) licensed the repetition word with
-# ZERO prior blockade on record — the exact §5.1(2) false hit, alive in the live
-# path. Scope the subject to a bounded window AFTER the match, minus the thread
+# discriminate the repetition's OBJECT, not echo the whole sentence.
+# _repetition_subject_units (imported from memory_core at the top of this
+# module) scopes it to a bounded window AFTER the match, minus the thread
 # topic's own words; a thread-topic word alone must never license.
-_SUBJECT_WINDOW_CHARS = 64
-
-
-def _repetition_subject_units(sentence: str, match: "re.Match",
-                              topics: List[str]) -> set:
-    """The salient units of the repetition's object: a bounded window AFTER the
-    match (the noun phrase being re-X'd), minus the thread topics' own salient
-    words. Falls back to the full sentence (still minus topic words) only when
-    the window yields no units, so a trailing repetition word ("prices rose
-    again.") still has a subject rather than licensing on nothing."""
-    from . import memory_core as mc
-    topic_words: set = set()
-    for t in topics:
-        topic_words.update(mc._salient_units(t))
-    window = sentence[match.end():match.end() + _SUBJECT_WINDOW_CHARS]
-    units = [u for u in mc._salient_units(window) if u not in topic_words]
-    if not units:
-        # Gate FIX-1 (milestone review): the full-sentence fallback excludes
-        # the match's OWN units — a sentence-final "again"/"resumed" must not
-        # become its own subject and license off any prior row carrying the
-        # word (or a superstring: "again" substring-matches "against").
-        match_units = set(mc._salient_units(match.group(0)))
-        units = [u for u in mc._salient_units(sentence)
-                 if u not in topic_words and u not in match_units]
-    return set(units)
 
 
 def repetition_antecedent_findings(con, stories: List[Dict], slots: List[Dict],

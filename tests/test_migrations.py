@@ -28,17 +28,18 @@ MIGRATION_0010 = "0010_thread_memory.sql"             # NL-63 M1: the memory cor
 MIGRATION_0011 = "0011_consumption_view_events.sql"   # NL-75: per-surface engagement (checkpoint C(i))
 MIGRATION_0012 = "0012_thread_delta_supersession.sql" # NL-75: machine-readable supersession (checkpoint C(ii))
 MIGRATION_0013 = "0013_watch_items.sql"               # NL-75: the expiry register (checkpoint — flagged)
+MIGRATION_0014 = "0014_thread_delta_provenance.sql"   # NL-69: the poisoned-antecedent bound (side table)
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
     MIGRATION_0008, MIGRATION_0009, MIGRATION_0010,
-    MIGRATION_0011, MIGRATION_0012, MIGRATION_0013,
+    MIGRATION_0011, MIGRATION_0012, MIGRATION_0013, MIGRATION_0014,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
     "consumption_events", "analysis_briefs", "analysis_retrieval",
     "thread_deltas", "thread_state",
-    "thread_delta_supersessions", "watch_items",
+    "thread_delta_supersessions", "watch_items", "thread_delta_provenance",
 }
 
 

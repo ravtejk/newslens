@@ -50,6 +50,38 @@ STATE_UA = "NewsLens/0.1 (single-user; thread-state rewrite)"
 
 VERDICTS_THAT_MOVE = ("advances", "reverses")   # merely-matches writes nothing
 
+# ---------------------------------------------------------------------------
+# Provenance grades — migration 0014, the poisoned-antecedent bound (HSR
+# baseline §5.1(2); engineering council 2026-07-17, Ruling 1; Content-council
+# addendum 2026-07-17). A delta's grade lives in the append-only side table
+# thread_delta_provenance; ABSENCE of a row = record-established (the honest
+# default for an organically-written delta). Two grades are NON-LICENSING: a
+# 'source-echo' or 'external-synthesis' row can never license a bare repetition
+# word through has_predating_antecedent, no matter how old it gets — that is the
+# whole bound. The grade is surfaced on every ledger dict (LEFT JOIN in
+# ledger_for_thread) but ONLY has_predating_antecedent acts on it; the row still
+# appears in state regen / timelines / writer context (Ruling 1: 0014 bounds
+# LICENSING, not the row's existence).
+PROVENANCE_SOURCE_ECHO = "source-echo"
+PROVENANCE_RECORD_ESTABLISHED = "record-established"
+PROVENANCE_READER_EXPLICIT = "reader-explicit"
+PROVENANCE_EXTERNAL_SYNTHESIS = "external-synthesis"
+PROVENANCE_VALUES = (
+    PROVENANCE_SOURCE_ECHO, PROVENANCE_RECORD_ESTABLISHED,
+    PROVENANCE_READER_EXPLICIT, PROVENANCE_EXTERNAL_SYNTHESIS,
+)
+# The grades that DO NOT license a repetition-word antecedent (the read-site
+# exclusion set). record-established and reader-explicit license as before.
+PROVENANCE_NON_LICENSING = frozenset(
+    {PROVENANCE_SOURCE_ECHO, PROVENANCE_EXTERNAL_SYNTHESIS})
+
+
+def effective_provenance(entry: Dict) -> str:
+    """The delta's provenance grade with the record-established default applied:
+    absence of a mark (NULL `provenance` on the ledger dict) = an organically-
+    written, record-grade delta. Callers get a real grade string, never None."""
+    return entry.get("provenance") or PROVENANCE_RECORD_ESTABLISHED
+
 _MONTHS = ("january", "february", "march", "april", "may", "june", "july",
            "august", "september", "october", "november", "december")
 _MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
@@ -278,13 +310,32 @@ def write_deltas_for_edition(
                 # now means "the ledger MOVED this pass" (newly-written only).
                 report.skipped.append(f"{topic}: delta for {date} already on file (idempotent)")
                 continue
+            # NL-69 self-mark (migration 0014): classify BEFORE the insert, so
+            # the antecedent search (strict before_date) reads only PRIOR rows
+            # and never the delta we are about to write. A delta echoing a
+            # continuity word the record cannot support is marked source-echo in
+            # the SAME transaction, so a future backfill of the deltas-5-6 shape
+            # self-marks and can never license the word it echoed. Deterministic,
+            # no LLM (Rook's law).
+            # Skip the classify entirely on a pre-0014 DB (separability): no
+            # provenance table = nothing to mark.
+            grade = (classify_delta_provenance(con, topic, happened, signif, date)
+                     if _table_exists(con, "thread_delta_provenance") else None)
             with con:
-                con.execute(
+                cur = con.execute(
                     "INSERT INTO thread_deltas (thread_id, briefing_id, brief_id,"
                     " edition_date, slot, verdict, what_happened, significance,"
                     " cites_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (tid, briefing_id, brief_id, date, int(n), verdict, happened,
                      signif, cites_json))
+                if grade is not None:
+                    con.execute(
+                        "INSERT INTO thread_delta_provenance"
+                        " (delta_id, provenance, reason) VALUES (?, ?, ?)",
+                        (cur.lastrowid, grade,
+                         "auto (0014 self-mark): carries a repetition word with "
+                         "no predating antecedent on this thread — edition-day "
+                         "source-echo diction"))
             report.written.append({"thread": topic, "thread_id": tid,
                                     "date": date, "verdict": verdict})
             if tid not in report.moved_thread_ids:
@@ -335,6 +386,16 @@ def _latest_valid_brief_id(con: sqlite3.Connection, date: str,
     return row["id"] if row else None
 
 
+def _table_exists(con: sqlite3.Connection, name: str) -> bool:
+    """Read-only existence check — lets 0014-aware read/write paths degrade
+    gracefully on a DB migrated only through 0012/0013 (the separability
+    contract): a missing thread_delta_provenance = nothing marked = every row
+    record-established, the same as the row-absence default."""
+    return con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (name,)).fetchone() is not None
+
+
 def ledger_for_thread(con: sqlite3.Connection, thread_id: int,
                       before_date: Optional[str] = None) -> List[Dict]:
     """The thread's dated ledger, oldest first. `before_date` (exclusive)
@@ -347,10 +408,26 @@ def ledger_for_thread(con: sqlite3.Connection, thread_id: int,
     unchanged; consumers decide what to do with a superseded row. State
     regeneration EXCLUDES superseded rows (a wrong delta must stop re-entering
     every future state — the whole point); the timeline SHOWS them struck. The
-    LEFT JOIN is idempotent w.r.t. the old behavior when nothing is superseded."""
+    LEFT JOIN is idempotent w.r.t. the old behavior when nothing is superseded.
+
+    NL-69 (migration 0014): each row ALSO carries a `provenance` field — the
+    grade from thread_delta_provenance, or None (= record-established default;
+    see effective_provenance). Surfacing only, mirroring superseded_by: the row
+    is unchanged and still returned. ONLY has_predating_antecedent acts on the
+    grade (source-echo / external-synthesis rows do not license repetition
+    words); every other consumer ignores it. Idempotent w.r.t. old behavior when
+    no row is marked. On a DB migrated only THROUGH 0012/0013 (0014 not yet
+    applied — the separability contract) the provenance JOIN degrades to a NULL
+    column so the ledger read never dies: table-absence = record-established for
+    every row, exactly the row-absence default."""
+    prov_join = (" LEFT JOIN thread_delta_provenance p ON p.delta_id = d.id"
+                 if _table_exists(con, "thread_delta_provenance") else "")
+    prov_col = "p.provenance AS provenance" if prov_join else "NULL AS provenance"
     sql = (
-        "SELECT d.*, s.superseded_by AS superseded_by FROM thread_deltas d"
+        f"SELECT d.*, s.superseded_by AS superseded_by, {prov_col}"
+        " FROM thread_deltas d"
         " LEFT JOIN thread_delta_supersessions s ON s.delta_id = d.id"
+        f"{prov_join}"
         " WHERE d.thread_id = ?")
     params: Tuple = (thread_id,)
     if before_date:
@@ -988,11 +1065,23 @@ def has_predating_antecedent(con: sqlite3.Connection, topic: str,
     validate a future "reinstated." `subject_units` are the salient content
     words of the repetition's subject (e.g. {'blockade'}); an antecedent must
     mention at least one, so an unrelated prior delta cannot license the word.
-    A superseded prior delta does not count (Rook's gate — excluded)."""
+    A superseded prior delta does not count (Rook's gate — excluded).
+
+    NL-69 (migration 0014, BINDING): a delta MARKED non-licensing
+    ('source-echo' or 'external-synthesis') is excluded from the search set even
+    when it predates the edition. From 2026-07-17 the 07-14 rows genuinely
+    predate, so strict before_date no longer protects; only the provenance mark
+    keeps deltas 5-6 from licensing the word they echoed. Unmarked rows default
+    to record-established and license as before."""
     tid = resolve_thread_id(con, topic)
     if tid is None:
         return False
     prior = _live_entries(ledger_for_thread(con, tid, before_date=edition_date))
+    # The provenance bound: drop non-licensing grades (source-echo /
+    # external-synthesis) before ANY licensing decision, including the
+    # no-discriminator branch below.
+    prior = [e for e in prior
+             if effective_provenance(e) not in PROVENANCE_NON_LICENSING]
     wanted = {u.lower() for u in subject_units if u}
     if not wanted:
         return bool(prior)   # no subject discriminator — any predating history counts
@@ -1001,6 +1090,145 @@ def has_predating_antecedent(con: sqlite3.Connection, topic: str,
         if any(u in hay for u in wanted):
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# The repetition-word machinery — Content rule iii, poisoned-antecedent
+# hardened. It lives HERE (with has_predating_antecedent) rather than in
+# generate.py because it is the antecedent-licensing surface the read-site
+# (generate.repetition_antecedent_findings) and the write-side self-mark
+# (migration 0014, below) both stand on; generate imports both names. A single
+# source of truth for "what is a repetition word" — no LLM anywhere in this
+# surface (Rook's determinism law).
+#
+# Continuity/repetition diction that PRESUPPOSES a prior state. Word-boundary
+# matched so "again" never fires inside "against". The spec lexicon reads
+# 'reinstated, again, resumed, renewed, re-imposed, once more, for the Nth
+# time'; news copy hyphenates the re- stems freely (HSR §5.1(4) found the
+# unhyphenated sibling), so the re- forms accept an optional hyphen; the
+# for-the-Nth-time class is a bounded alternative.
+_REPETITION_RE = re.compile(
+    r"\b(re-?instat(?:e|es|ed|ing)|re-?impos(?:e|es|ed|ing)|re-?imposition|"
+    r"renew(?:s|ed|ing)?|resum(?:e|es|ed|ing)|re-?open(?:s|ed|ing)?|"
+    r"restor(?:e|es|ed|ing)|once more|back on|consecutive|again|"
+    r"for the (?:second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+    r"\d+(?:st|nd|rd|th)) time)\b", re.I)
+
+# D6 (NL-75 QA, the HIGH one — HSR §5.1(2)): the antecedent SUBJECT must
+# discriminate the repetition's OBJECT (the thing being re-X'd), not echo the
+# whole sentence. On a thread with ANY real prior history a mundane shared word
+# (the thread-topic word 'strait' living in a genuine prior row) would license
+# the repetition word with ZERO prior blockade on record. Scope the subject to a
+# bounded window AFTER the match, minus the thread topic's own words.
+_SUBJECT_WINDOW_CHARS = 64
+
+
+def _repetition_subject_units(sentence: str, match: "re.Match",
+                              topics: List[str]) -> set:
+    """The salient units of the repetition's object: a bounded window AFTER the
+    match (the noun phrase being re-X'd), minus the thread topics' own salient
+    words. Falls back to the full sentence (still minus topic words) only when
+    the window yields no units, so a trailing repetition word ("prices rose
+    again.") still has a subject rather than licensing on nothing."""
+    topic_words: set = set()
+    for t in topics:
+        topic_words.update(_salient_units(t))
+    window = sentence[match.end():match.end() + _SUBJECT_WINDOW_CHARS]
+    units = [u for u in _salient_units(window) if u not in topic_words]
+    if not units:
+        # Gate FIX-1 (milestone review): the full-sentence fallback excludes the
+        # match's OWN units — a sentence-final "again"/"resumed" must not become
+        # its own subject and license off any prior row carrying the word (or a
+        # superstring: "again" substring-matches "against").
+        match_units = set(_salient_units(match.group(0)))
+        units = [u for u in _salient_units(sentence)
+                 if u not in topic_words and u not in match_units]
+    return set(units)
+
+
+# ===========================================================================
+# NL-69 (migration 0014): the self-marking write path + the supervised mark.
+# ===========================================================================
+
+def classify_delta_provenance(con: sqlite3.Connection, topic: str,
+                              what_happened: str, significance: str,
+                              edition_date: str) -> Optional[str]:
+    """The DETERMINISTIC self-mark decision for a freshly-written delta (no LLM
+    — Rook's law). Returns 'source-echo' when the delta merely echoed a
+    continuity word the record cannot yet support; None when it is
+    record-grade (the write path leaves it unmarked → record-established).
+
+    A delta is source-echo iff BOTH hold, checked on what_happened AND
+    significance:
+      (a) it carries a repetition/continuity word (_REPETITION_RE), AND
+      (b) that word's OBJECT has NO predating record-established antecedent on
+          this thread (has_predating_antecedent False as of edition_date).
+
+    This is exactly the read-site's own rule iii applied to the delta's OWN
+    text: a delta whose continuity diction would trip the poisoned-antecedent
+    flag if it appeared in prose is marked source-echo, so it can never itself
+    become the false antecedent for the SAME word later. It catches the HSR
+    deltas 5-6 shape ('reinstated a naval blockade' on a thread with no prior
+    blockade) even though those rows also carry a P1 cite — the honest signal
+    is the unsupported continuity word, not the cite set. A fresh-event delta
+    (no repetition word) or a record-backed continuity ('resumed' with a real
+    prior antecedent) is left unmarked. Conservative by construction: under-
+    marking is recoverable by the supervised command; over-marking would
+    silently refuse a legitimate future antecedent, so we mark only the clearest
+    poison shape.
+
+    Every _REPETITION_RE match in each clause is checked — a record-backed
+    first word must not shadow an unsupported second (gate FIX-1).
+
+    Absence of a repetition word is the common case and returns None fast."""
+    for text in (what_happened or "", significance or ""):
+        for m in _REPETITION_RE.finditer(text):
+            units = _repetition_subject_units(text, m, [topic])
+            # No discriminating object units → this match never decides either
+            # way (the read-site's conservative default for an empty subject);
+            # later matches in the same clause still get their own check.
+            if not units:
+                continue
+            if not has_predating_antecedent(con, topic, units, edition_date):
+                return PROVENANCE_SOURCE_ECHO
+    return None
+
+
+def mark_delta_provenance(con: sqlite3.Connection, delta_id: int,
+                          provenance: str, reason: str = ""):
+    """Supervised provenance mark (0014) — the tool behind
+    `newslens memory-mark-provenance`. Returns (ok, message, delta_row).
+
+    Refuses (ok=False, NO write) on: an unknown provenance value; a delta id
+    that does not exist; a delta already marked (append-only — a mark is a dated
+    fact, never rewritten; the PK is the DB-level backstop). On success writes
+    exactly one row inside a transaction and returns the delta row so the caller
+    can print the text it graded. The supervision is external: this asks
+    nothing — the CoS runs it only with the principal's word (decision B)."""
+    if provenance not in PROVENANCE_VALUES:
+        return (False,
+                f"unknown provenance {provenance!r} — one of "
+                f"{', '.join(PROVENANCE_VALUES)}", None)
+    row = con.execute(
+        "SELECT id, thread_id, edition_date, slot, what_happened, significance,"
+        " cites_json FROM thread_deltas WHERE id = ?", (delta_id,)).fetchone()
+    if row is None:
+        return (False,
+                f"no thread_delta with id {delta_id} — SELECT-verify the id "
+                "against the real DB first", None)
+    existing = con.execute(
+        "SELECT provenance, reason, marked_at FROM thread_delta_provenance"
+        " WHERE delta_id = ?", (delta_id,)).fetchone()
+    if existing is not None:
+        return (False,
+                f"delta {delta_id} is already marked {existing['provenance']!r} "
+                f"(marked_at {existing['marked_at']}) — append-only, a mark is "
+                "never rewritten", row)
+    with con:
+        con.execute(
+            "INSERT INTO thread_delta_provenance (delta_id, provenance, reason)"
+            " VALUES (?, ?, ?)", (delta_id, provenance, reason))
+    return (True, f"marked delta {delta_id} provenance={provenance}", row)
 
 
 # ===========================================================================

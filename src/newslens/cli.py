@@ -18,6 +18,7 @@ from . import __version__
 
 def main(argv: Optional[List[str]] = None) -> int:
     from . import paths
+    from .memory_core import PROVENANCE_VALUES  # stdlib-only import; cheap
     paths.allow_real_paths()  # the real entrypoint (incident guard, 2026-07-14)
     parser = argparse.ArgumentParser(
         prog="newslens",
@@ -146,6 +147,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     mb_p.add_argument(
         "--date", default=None, metavar="YYYY-MM-DD",
         help="edition date to backfill (default: today, local)",
+    )
+
+    mp_p = sub.add_parser(
+        "memory-mark-provenance",
+        help="SUPERVISED provenance mark on ONE ledger delta (migration 0014, "
+        "the poisoned-antecedent bound). Keyed by a SELECT-verified delta id; "
+        "prints the delta text it grades and asks nothing (run only with the "
+        "principal's word). Refuses on an unknown or already-marked id. A "
+        "source-echo / external-synthesis mark stops that delta from ever "
+        "licensing a repetition-word antecedent; it never touches the delta's "
+        "own text (append-only).",
+    )
+    mp_p.add_argument(
+        "--delta-id", type=int, required=True, metavar="N",
+        help="thread_deltas.id to mark (SELECT-verify against the real DB first)",
+    )
+    mp_p.add_argument(
+        "--provenance", required=True,
+        choices=list(PROVENANCE_VALUES),
+        help="the grade to record",
+    )
+    mp_p.add_argument(
+        "--reason", default="",
+        help="the human/basis note stored with the mark",
     )
 
     args = parser.parse_args(argv)
@@ -305,6 +330,47 @@ def main(argv: Optional[List[str]] = None) -> int:
         for w in bf.warnings:
             print(f"  ⚠ {w}")
         return 0
+
+    if args.command == "memory-mark-provenance":
+        from . import db as db_mod, memory_core, paths as paths_mod
+
+        # Does NOT auto-migrate: a data-touching migration on the real DB is a
+        # separate principal checkpoint (run `newslens migrate` first). This
+        # tool only writes ONE append-only mark row.
+        if not paths_mod.DB_PATH.exists():
+            print(f"no database at {paths_mod.DB_PATH} — run `newslens migrate` "
+                  "first", file=sys.stderr)
+            return 1
+        con = db_mod.connect()
+        try:
+            has_table = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND "
+                "name='thread_delta_provenance'").fetchone() is not None
+            if not has_table:
+                print("thread_delta_provenance is absent — migration 0014 has "
+                      "not been applied; run `newslens migrate` first",
+                      file=sys.stderr)
+                return 1
+            ok, msg, row = memory_core.mark_delta_provenance(
+                con, args.delta_id, args.provenance, args.reason)
+            if row is not None:
+                # Print the graded delta text so the operator SEES what was
+                # marked (dispatch: prints the delta text, asks nothing).
+                print(f"delta {row['id']} — thread {row['thread_id']}, edition "
+                      f"{row['edition_date']}, slot {row['slot']}:")
+                print(f"  what_happened: {row['what_happened']}")
+                if row['significance']:
+                    print(f"  significance : {row['significance']}")
+                print(f"  cites: {row['cites_json']}")
+            if not ok:
+                print(f"REFUSED: {msg}", file=sys.stderr)
+                return 1
+            print(msg)
+            if args.reason:
+                print(f"  reason: {args.reason}")
+            return 0
+        finally:
+            con.close()
 
     if args.command == "rank":
         import re as _re
