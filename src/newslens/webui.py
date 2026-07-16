@@ -194,6 +194,13 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
 .footer-detail.open { display: block; }
 .footer-detail p { margin: 0 0 0.5rem; } .footer-detail p:last-child { margin-bottom: 0; }
 
+/* Staleness banner (item 1): prominent, sticky at the top of every view; the
+   generate trigger refuses server-side, this only warns and names the fix. */
+.staleness-banner { position: sticky; top: 0; z-index: 60; background: var(--danger);
+  color: #FFF; padding: 0.7rem 1.1rem; font-size: 0.9rem; line-height: 1.45; text-align: center; }
+.staleness-banner strong { font-weight: 600; }
+.staleness-banner code { font-family: var(--font-mono); font-size: 0.85em;
+  background: rgba(255,255,255,0.2); padding: 0.05rem 0.4rem; border-radius: 4px; }
 .state-panel { background: var(--surface); border-radius: var(--radius); padding: 1.75rem 1.5rem; margin-top: 1.5rem; }
 .state-panel h2 { font-family: var(--font-display); font-size: 1.15rem; margin: 0 0 0.6rem; }
 .state-panel p { font-size: 0.9rem; color: var(--ink-soft); margin: 0 0 1rem; }
@@ -501,8 +508,8 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
 
 # The full page shell (v7 — DIRECTION-v5 §4: no chrome). The masthead ceremony,
 # section line, and edition bar are rendered INTO each view by server.py (the
-# dateline is per-edition, not shared chrome). Placeholders: {css} {today_html}
-# {following_html} {archive_html} {settings_html} {popups_html} {deep_views_html} {js}
+# dateline is per-edition, not shared chrome). Placeholders: {css} {staleness_banner}
+# {today_html} {following_html} {archive_html} {settings_html} {popups_html} {deep_views_html} {js}
 PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -513,6 +520,7 @@ PAGE = """<!DOCTYPE html>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to today’s edition</a>
+{staleness_banner}
 <main id="main" tabindex="-1">
 <section id="view-today" class="view active">{today_html}</section>
 <section id="view-following" class="view">{following_html}</section>

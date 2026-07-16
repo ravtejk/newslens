@@ -478,8 +478,12 @@ def test_expand_flag_is_one_shot_and_suggest_guard_precedes_routing():
 def test_story_combobox_no_js_degrade_cannot_submit_free_text():
     """With JS off the story combobox degrades to an inert input: no <form>
     anywhere in the document to hijack Enter into a GET, the listbox is
-    server-rendered hidden, and only the STORY combobox carries the
-    suggest-only marker (topics/writers keep type-to-add)."""
+    server-rendered hidden, and the suggest-only marker gates raw text.
+
+    CONSCIOUS FLIP (DECISIONS 2026-07-17 "standing orders"): free-text topic
+    entry died — the Topics combobox now carries the suggest-only marker too.
+    Only the WRITER surface keeps type-to-add (adding a writer takes a feed
+    link, not a topic/thread)."""
     con = _con()
     seed(con, [slot(1, "Lead")], [story(1, "Lead")])
     page, _ = server.build_page(con)
@@ -492,10 +496,13 @@ def test_story_combobox_no_js_degrade_cannot_submit_free_text():
     assert box in following
     story_region = following.split(box)[1].split("</div>")[0]
     assert 'role="listbox" hidden' in story_region
-    # topics and writers keep free-typing: NO suggest-only marker on them
-    for kind in ("topic", "writer"):
-        assert f'data-kind="{kind}" data-suggest-only' not in following
-        assert f'data-kind="{kind}"' in following
+    # topic is now suggestions-only too (free-text topic entry died)
+    topic_attrs = following.split('data-kind="topic"')[1].split(">")[0]
+    assert "data-suggest-only" in topic_attrs
+    # writers keep free-typing: NO suggest-only marker (a feed link, not a topic)
+    writer_attrs = following.split('data-kind="writer"')[1].split(">")[0]
+    assert "data-suggest-only" not in writer_attrs
+    assert 'data-kind="writer"' in following
 
 
 # ===========================================================================

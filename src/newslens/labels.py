@@ -114,6 +114,18 @@ FOLLOW_STORY_INACTIVE = "＋ Follow this story"
 FOLLOW_STORY_CONFIRM = "✓ Following — see it under Following → Threads"
 TRACKED_ONGOING_PREFIX = "Tracked ongoing story —"
 
+# --- Staleness guard (2026-07-16 stale-server incident -> a mechanism) --------
+# The server was running in-memory modules that predated two committed
+# milestones and generated a defective edition with zero disclosure. Reading a
+# stale-rendered page is tolerable; WRITING an edition with stale code is the
+# incident — so the banner warns and the generate trigger refuses.
+STALENESS_BANNER_TITLE = "This server’s running code no longer matches what’s on disk."
+STALENESS_BANNER_BODY = (
+    "Reading is fine, but new editions are paused until you restart it:")
+STALENESS_REFUSAL = (
+    "This server’s running code no longer matches what’s on disk — restart it "
+    "to generate a new edition: newslens serve")
+
 # --- Deep-back labels (the one-line back affordances) ------------------------
 BACK_TO_TODAY = "← Back to today’s edition"
 BACK_TO_EDITION = "← Back to this edition"

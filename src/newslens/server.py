@@ -33,6 +33,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import threading
 import wave
 from datetime import datetime, timedelta, timezone
@@ -100,6 +101,103 @@ class _GenJob:
 
 
 GEN_JOB = _GenJob()
+
+
+# ---------------------------------------------------------------------------
+# Code-identity staleness guard (NL-60 class, 2nd occurrence -> a mechanism)
+#
+# The incident (2026-07-16): a UI-triggered generate ran inside a server whose
+# in-memory modules predated two COMMITTED milestones — a defective edition
+# went out with zero disclosure. Reading a stale-rendered page is tolerable;
+# WRITING an edition with stale code is the incident. So this stamps the
+# process with its code identity at serve() boot and, per request, compares it
+# to disk: on divergence the UI shows a banner and — the teeth — the generate
+# trigger REFUSES (see _api_generate). Honest states: an unresolvable identity
+# disables the guard entirely (no banner, no refusal, one startup log line) —
+# the guard never blocks on a broken check.
+# ---------------------------------------------------------------------------
+
+# (kind, value): "git" -> a HEAD sha, "mtime" -> newest package *.py mtime_ns.
+# None until serve() stamps it, so in-process test harnesses that instantiate
+# Handler directly (without serve()) are un-guarded unless they set it.
+_STARTUP_IDENTITY: Optional[Tuple[str, str]] = None
+
+
+def _git_head() -> Optional[str]:
+    """The committed code identity: `git rev-parse HEAD`, read-only, run in the
+    project repo. Returns None when git is unavailable, this is not a checkout,
+    or the call errors — the caller falls back to source mtime. Never writes and
+    never touches the working tree (the no-real-state-writes rule covers git)."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(paths.PROJECT_ROOT),
+            capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    head = out.stdout.strip()
+    return head if out.returncode == 0 and head else None
+
+
+def _src_mtime() -> Optional[str]:
+    """The git-unavailable fallback identity: the newest mtime across the
+    package's own *.py — the very files whose in-memory copies go stale. Catches
+    the incident shape (a milestone's edits bump mtimes) with no subprocess."""
+    try:
+        pkg = Path(__file__).resolve().parent
+        newest = max((p.stat().st_mtime_ns for p in pkg.glob("*.py")),
+                     default=0)
+    except OSError:
+        return None
+    return str(newest) if newest else None
+
+
+def _code_identity() -> Optional[Tuple[str, str]]:
+    """(kind, value) for the code on disk right now. git HEAD is primary — it is
+    exactly 'which committed milestones exist', the incident's own axis; source
+    mtime is the git-unavailable fallback. None only when NEITHER resolves."""
+    head = _git_head()
+    if head:
+        return ("git", head)
+    mtime = _src_mtime()
+    if mtime:
+        return ("mtime", mtime)
+    return None
+
+
+def _identity_of_kind(kind: str) -> Optional[str]:
+    """Recompute the CURRENT identity via the same mechanism the process was
+    stamped with, so startup and now are always compared like-for-like."""
+    if kind == "git":
+        return _git_head()
+    if kind == "mtime":
+        return _src_mtime()
+    return None
+
+
+def _stamp_startup_identity() -> None:
+    """Called once at serve() boot: freeze the identity of the code this process
+    actually loaded. On an unresolvable identity the guard disables itself and
+    says so once — it must never block generation on a check it cannot make."""
+    global _STARTUP_IDENTITY
+    _STARTUP_IDENTITY = _code_identity()
+    if _STARTUP_IDENTITY is None:
+        print("newslens: code-identity unresolvable at startup (no git, no "
+              "readable package mtime) — staleness guard disabled", flush=True)
+
+
+def _server_is_stale() -> bool:
+    """True only when the startup identity resolved, the CURRENT identity
+    resolves via the SAME mechanism, and they diverge. Any unresolved side ->
+    False: the guard never blocks on a broken check (honest-states rule)."""
+    startup = _STARTUP_IDENTITY
+    if startup is None:
+        return False
+    kind, startup_val = startup
+    current = _identity_of_kind(kind)
+    if current is None:
+        return False
+    return current != startup_val
 
 
 # ---------------------------------------------------------------------------
@@ -950,11 +1048,25 @@ def _here_for(slot: Dict) -> str:
     """The 'Here for' rationale — CODE-OWNED, from the slot (never prose). One
     source of truth shared by Today's meta-footnote and NL-66(b)'s sources-&-
     context view: matched tags + tracked threads, else the editor's override,
-    else the world-impact fallback."""
-    marks = list(slot.get("matched_memory") or [])
-    matches = ", ".join(
-        [t.get("name", "") for t in slot.get("matched_tags") or []
-         if isinstance(t, dict)] + marks)
+    else the world-impact fallback.
+
+    NL-68 exhibit ('Strait of Hormuz, Strait of Hormuz'): a tag and a tracked
+    thread of the same name doubled the line. Dedupe case-insensitively and
+    order-preserving — tags first, then threads; a thread that only repeats a
+    tag name (any case) is dropped. Empty names are dropped too."""
+    ordered: List[str] = []
+    seen: set = set()
+    tag_names = [t.get("name", "") for t in slot.get("matched_tags") or []
+                 if isinstance(t, dict)]
+    for name in tag_names + list(slot.get("matched_memory") or []):
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(name)
+    matches = ", ".join(ordered)
     if matches:
         return matches
     if slot.get("override"):
@@ -1239,7 +1351,9 @@ def _topic_suggestions(con: sqlite3.Connection, cfg) -> List[Dict]:
     _topic_vocabulary (the ALL-TIME accumulation of every tag ever matched), so a
     topic you'd DELETED lingered as a suggestion forever ('returns only deleted
     topics'). Scoping to the latest edition keeps the recall live and stops old
-    deleted topics resurfacing; typing a genuinely new topic still adds it.
+    deleted topics resurfacing. DECISIONS 2026-07-17 "standing orders": the
+    Topics combobox is now suggestions-only (like story follows), so only a
+    name offered here can be added — free-typing a new topic no longer acts.
 
     Flagged (NL-17/18): matched_tags are structurally a subset of your followed
     vocabulary, so in steady state this is empty — a real 'topics to discover'
@@ -1517,9 +1631,14 @@ def _render_following(con: sqlite3.Connection) -> str:
     # NL-68 item 14: the "suggestions draw from everything coverage has
     # matched…" explainer DIES (interface narration; also stale after item 12).
     # The placeholder carries the affordance.
+    # Free-text topic entry DIES (DECISIONS 2026-07-17 "standing orders"): the
+    # type-to-add that survived v7.2 item 12 becomes suggestions-only, exactly
+    # like the story combobox — only a picked suggestion adds a topic; raw typed
+    # text no-ops. Suggestions-only is the product law for topic/thread surfaces.
     topics = [
-        _render_suggest("topic", "topic-suggest", "Search or add a topic…",
-                        "Search or add a topic", _topic_suggestions(con, cfg)),
+        _render_suggest("topic", "topic-suggest", "Search topics…",
+                        "Search topics", _topic_suggestions(con, cfg),
+                        suggest_only=True),
     ]
     for group, label in ((cfg.interests_broad, "Broad"),
                          (cfg.interests_granular, "Specific")):
@@ -2605,6 +2724,20 @@ def _nl_labels_js() -> str:
     return "window.NL_LABELS = " + blob + ";"
 
 
+def _staleness_banner_html() -> str:
+    """The prominent staleness banner (item 1): shown on every view when the
+    running code predates disk. Reading is fine — the enforcement (the refusal)
+    is in _api_generate; this only tells the reader why generation is paused and
+    how to fix it. Empty string when fresh or when the guard is disabled."""
+    if not _server_is_stale():
+        return ""
+    return (
+        '<div class="staleness-banner" role="alert">'
+        f'<strong>{_e(labels.STALENESS_BANNER_TITLE)}</strong> '
+        f'{_e(labels.STALENESS_BANNER_BODY)} '
+        '<code>newslens serve</code></div>')
+
+
 def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str, Optional[str]]:
     """Returns (html, briefing_date_rendered)."""
     gen_state = GEN_JOB.snapshot()
@@ -2631,6 +2764,7 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
 
     page = webui.PAGE.format(
         css=webui.CSS,
+        staleness_banner=_staleness_banner_html(),
         today_html=_render_today(con, row, entry, gen_state, briefs=briefs),
         following_html=_render_following(con),
         archive_html=_render_archive(con),
@@ -2950,6 +3084,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": ok, "detail" if ok else "error": msg})
 
     def _api_generate(self, body: Dict) -> None:
+        # The teeth of the staleness guard (2026-07-16 incident): writing an
+        # edition with stale code is the failure this batch exists to stop.
+        # Refuse the trigger when the running code predates disk — reading is
+        # still served, and the banner explains the one-line restart.
+        if _server_is_stale():
+            return self._send_json(
+                {"ok": False, "error": labels.STALENESS_REFUSAL}, 409)
         started = GEN_JOB.start()
         self._send_json({"ok": True,
                          "detail": "started" if started else "already running"})
@@ -2957,6 +3098,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(port: int = DEFAULT_PORT) -> int:
     db.migrate()
+    _stamp_startup_identity()  # freeze this process's code identity (item 1)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"NewsLens is reading the paper at http://127.0.0.1:{port}/  "
           "(Ctrl-C stops it; localhost only, by design)", flush=True)

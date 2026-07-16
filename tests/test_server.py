@@ -1207,7 +1207,11 @@ def test_following_uses_suggestion_component_not_datalist(ui):
     # NL-68 item 10 (DECISIONS 2026-07-16): 'Follow a new story' became a THIRD
     # suggest combobox (suggestions-only) — WAS 2 (topics + writers).
     assert following.count('class="suggest"') == 3    # topics + writers + story-follow
-    assert following.count('data-suggest-only="1"') == 1   # only the story follow is constrained
+    # CONSCIOUS FLIP (DECISIONS 2026-07-17 "standing orders"): free-text topic
+    # entry died — the Topics combobox is now suggestions-only too, so BOTH the
+    # topic and story-follow surfaces are constrained. WAS 1 (story only).
+    # Writers stay free (a writer is a feed link, not a topic/thread).
+    assert following.count('data-suggest-only="1"') == 2   # topic + story-follow
     assert 'role="combobox"' in following
     assert 'class="suggest-data"' in following         # JSON payload embedded
     assert 'role="listbox"' in following and "hidden></ul>" in following  # hidden until JS
