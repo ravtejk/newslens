@@ -209,6 +209,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="sweep and repair every stale thread",
     )
 
+    mbase_p = sub.add_parser(
+        "memory-baseline",
+        help="NL-77: write the cold-start BACKGROUNDER (entry-zero baseline) for "
+        "followed threads with an EMPTY ledger — the 'How we got here' founding "
+        "floor, one analyst-model call each (~$0.01-0.02, external-synthesis, "
+        "cite currency '(baseline, <date>)'). Cap pre-checked; SPENDS; refuses "
+        "when nothing awaits; a refusal is honest (never fabricated). NOTE: the "
+        "retroactive sweep is a principal checkpoint — thread renames/deletes "
+        "land first.",
+    )
+    mbase_group = mbase_p.add_mutually_exclusive_group(required=True)
+    mbase_group.add_argument(
+        "--thread-id", type=int, metavar="N",
+        help="write the baseline for exactly this thread (memory.id)",
+    )
+    mbase_group.add_argument(
+        "--all", action="store_true",
+        help="sweep every followed empty-ledger thread awaiting a baseline",
+    )
+    mbase_p.add_argument(
+        "--date", default=None, metavar="YYYY-MM-DD",
+        help="baseline as-of date (default: today, local; a pending intent's "
+        "own date wins when one exists)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "migrate":
@@ -431,6 +456,43 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  ⚠ {w}")
         return 0
 
+    if args.command == "memory-baseline":
+        import re as _re
+        from datetime import datetime as _dt
+
+        from . import config, generate
+
+        if args.date:
+            ok_shape = bool(_re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date))
+            if ok_shape:
+                try:
+                    _dt.strptime(args.date, "%Y-%m-%d")
+                except ValueError:
+                    ok_shape = False
+            if not ok_shape:
+                print(f"--date must be YYYY-MM-DD (a real calendar date), "
+                      f"got {args.date!r}", file=sys.stderr)
+                return 2
+        config.load_env()
+        try:
+            rep = generate.run_baseline_backfill(
+                thread_id=args.thread_id, all_threads=args.all, date=args.date)
+        except Exception as exc:  # CLI boundary: loud, human-readable, nonzero
+            print(f"memory-baseline failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1
+        if rep.refused:
+            print(f"memory-baseline — nothing to do: {rep.reason}")
+            return 0
+        print(f"memory-baseline — cap ${rep.cap:.2f} | "
+              f"backgrounder spend ${rep.spent_usd:.4f}")
+        for g in rep.generated:
+            print(f"  baseline[{g['thread']}]: {g['outcome']} (as of "
+                  f"{g['as_of']}) — {g['detail']}")
+        for w in rep.warnings:
+            print(f"  ⚠ {w}")
+        return 0
+
     if args.command == "rank":
         import re as _re
         from datetime import datetime as _dt
@@ -609,6 +671,22 @@ def _memory_command(args) -> int:
                         (topic, args.note.strip() or None, now, now, now),
                     )
                 print(f"now tracking {topic!r}")
+            # NL-77 the intent gate (§F explicit action: this IS a follow). Record
+            # that the thread WANTS a cold-start backgrounder — a 'pending'
+            # baseline row, $0, NO LLM call here. Materialize it with
+            # `newslens memory-baseline` (spend stays behind that explicit
+            # command). Only for a cold start: a thread that already carries a
+            # ledger record needs no founding floor.
+            from . import memory_core, ranking
+            tid = con.execute("SELECT id FROM memory WHERE lower(topic) = lower(?)",
+                              (topic,)).fetchone()
+            if tid is not None and not con.execute(
+                    "SELECT 1 FROM thread_deltas WHERE thread_id = ? LIMIT 1",
+                    (tid["id"],)).fetchone():
+                if memory_core.write_baseline_intent(
+                        con, tid["id"], ranking.local_today()) is not None:
+                    print("  cold-start backgrounder queued — run "
+                          "`newslens memory-baseline` to write it")
         elif args.memory_command == "dismiss":
             if row is None:
                 print(f"no thread named {topic!r} — `newslens memory list` shows them",

@@ -56,6 +56,14 @@ DISCREPANCY_FOLD_ONE = "point where the sources disagree"
 # --- Memory surfaces (thread page + deep-view memory sections) ---------------
 WHERE_THIS_STANDS = "Where this stands"
 THE_STORY_SO_FAR = "The story so far"
+# NL-77 the cold-start backgrounder (entry-zero baseline) — a permanent section
+# between "Where this stands" and "The story so far". Its content is external
+# synthesis (background NewsLens never itself covered), always disclosed as such.
+HOW_WE_GOT_HERE = "How we got here"
+BASELINE_DISCLOSURE = ("Founding background — researched context NewsLens did "
+                       "not itself cover, not part of our record.")
+BASELINE_PENDING = ("Preparing the background for this new thread — check back "
+                    "shortly.")
 
 # --- The thread page (the "Open thread" destination, v7-M2) -------------------
 # The thread NAME is the single action on a Following row (Design's ruling,

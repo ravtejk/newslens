@@ -548,6 +548,15 @@ def test_no_threads_sample_isolation_and_stripping(migrated_con, fake_model):
         " VALUES ('Zebra Futures Thread', 'active', ?, ?)", (iso_now(), iso_now()),
     )
     migrated_con.commit()
+    # Gate FIX-1: a ready baseline on the thread — the no-threads strip must
+    # also drop the BACKGROUNDER block, or the stripped cold-start sample
+    # leaks thread names through the baseline lane (ADR-0007).
+    from newslens import memory_core as mc
+    zebra_tid = migrated_con.execute(
+        "SELECT id FROM memory WHERE topic = 'Zebra Futures Thread'"
+    ).fetchone()[0]
+    mc.record_baseline(migrated_con, zebra_tid, "2026-07-01", "ready",
+                       backgrounder="Began in 2019.")
     fake_model.narrative = stories_payload([{**slots[0], "revived_threads": []}])
     fake_model.script = compliant_script([{**slots[0], "revived_threads": [],
                                            "matched_memory": []}])
@@ -564,8 +573,10 @@ def test_no_threads_sample_isolation_and_stripping(migrated_con, fake_model):
     assert "Zebra Futures Thread" not in n_prompt      # thread list stripped
     assert "Helium Shortage" not in n_prompt           # revival slot-line stripped
     assert "last covered 2026-07-01" not in n_prompt   # dated obligation stripped
+    assert "BACKGROUNDER" not in n_prompt              # gate FIX-1: baseline block stripped
     s_prompt = next(c for c in fake_model.calls if not c["json_mode"])["prompt"]
     assert "last covered 2026-07-01" not in s_prompt   # script labels thread-free
+    assert "BACKGROUNDER" not in s_prompt              # gate FIX-1: baseline block stripped
     assert "Helium Shortage" not in s_prompt
 
     artifact = paths.DATA_DIR / "briefings" / f"{A_DAY}-no-threads-SAMPLE.md"

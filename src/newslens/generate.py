@@ -563,6 +563,20 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str) -> Dict:
                 # INDEPENDENTLY; the ledger read above is unaffected.
                 pass
         s["thread_ledger"] = "\n".join(blocks)
+        # NL-77 writer-flow LAST: the cold-start BACKGROUNDER, as its OWN labeled
+        # section — context for the writer, never blended into edition prose as
+        # unattributed knowledge. Only a 'ready' baseline as-of this edition
+        # surfaces; the block carries its non-licensing law inline. Degrades to
+        # '' on a pre-0017 DB (the read is table-guarded).
+        bg_blocks: List[str] = []
+        for topic in topics:
+            try:
+                bg = _mc.writer_baseline_block(con, topic, before_date=date)
+                if bg:
+                    bg_blocks.append(bg)
+            except sqlite3.OperationalError:
+                pass
+        s["thread_baseline"] = "\n\n".join(bg_blocks)
         s["expired_watch"] = expired
 
     return {
@@ -663,6 +677,12 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
         # prose; the reader's own history is never referenced.
         if s.get("thread_ledger"):
             lines.append(s["thread_ledger"])
+        # NL-77 writer-flow LAST: the cold-start backgrounder rides AFTER the
+        # ledger as its own labeled section (never merged into it). It is context
+        # only; any continuity word drawn from it must carry the dated baseline
+        # cite (the block says so inline; the diction validator enforces it).
+        if s.get("thread_baseline"):
+            lines.append(s["thread_baseline"])
         # NL-75 the accountability loop: watch-fors this edition PROMISED whose
         # date has passed. Each MUST convert — never re-shipped, never dropped.
         for w in s.get("expired_watch", []):
@@ -994,13 +1014,89 @@ def repetition_antecedent_findings(con, stories: List[Dict], slots: List[Dict],
             licensed = bool(units) and any(
                 mc.has_predating_antecedent(con, t, units, edition_date)
                 for t in topics)
-            if licensed or _is_source_attributed(sent, m):
+            # NL-77 (D1/D2): a baseline-derived continuity word is licensed ONLY
+            # by a dated baseline cite backed by an ACTUAL ready baseline on a
+            # matched thread whose as_of the cited date matches — the cite is a
+            # currency, not a spelling. A counterfeit '(baseline, Jul 14)' (no
+            # issuing baseline, no matched thread, or a mismatched date) licenses
+            # nothing and stays flagged (never bare).
+            if (licensed or _is_source_attributed(sent, m)
+                    or mc.licensing_baseline_cite(con, topics, sent, edition_date)):
                 continue
             out.append(
                 f"story {slot.get('slot')}: repetition word {m.group(0)!r} has "
                 "no predating ledger antecedent and is not source-attributed — "
                 "the 'reinstated' class (Content rule iii). Ship the record's "
                 "date in the sentence, attribute the word to a source, or cut it.")
+    return out
+
+
+_BASELINE_REF_RE = re.compile(r"\bbaseline\b", re.I)
+
+
+def baseline_diction_findings(con, stories: List[Dict], slots: List[Dict],
+                              edition_date: str) -> List[str]:
+    """NL-77 the dated-anchored diction validator (the writer-side rule migration
+    0014 deferred; sequencing law item 2). It closes the ONE gap the generic
+    repetition net (repetition_antecedent_findings) leaves on a baselined thread:
+    a continuity word GESTURED at the baseline without dating it ('per the
+    baseline, reinstated ...') reads as source-attributed and slips the generic
+    net — but a baseline licenses continuity diction ONLY dated-anchored, so this
+    is exactly the poison to refuse. (A pure-bare word with no baseline reference
+    is already flagged by the generic net — not re-flagged here, to avoid
+    double-surfacing.) Fires only on threads carrying a ready baseline as-of the
+    edition; degrades to no findings on a pre-0017 DB."""
+    from . import memory_core as mc
+    out: List[str] = []
+    for story, slot in zip(stories, slots):
+        if not isinstance(story, dict):
+            continue
+        topics = [t for t in (slot.get("matched_memory") or []) if t]
+        baselined = []                          # (topic, as_of) — the issuing floors
+        for t in topics:
+            tid = mc.resolve_thread_id(con, t)
+            if tid is not None:
+                b = mc.ready_baseline(con, tid, before_date=edition_date)
+                if b:
+                    baselined.append((t, b["as_of_date"]))
+        if not baselined:
+            continue
+        blob = " ".join(story.get(f, "") for f in ("headline", "lede", "why_it_matters")
+                        if isinstance(story.get(f), str))
+        for sent in re.split(r"(?<=[.!?])\s+", blob):
+            m = _REPETITION_RE.search(sent)
+            if not m:
+                continue
+            # A VALID dated baseline cite (currency, not spelling) is the licensed
+            # form — no finding.
+            if mc.licensing_baseline_cite(con, topics, sent, edition_date):
+                continue
+            # Only the baseline-GESTURE case is this rule's gap.
+            if not _BASELINE_REF_RE.search(sent):
+                continue
+            # A word with a real predating ledger antecedent on ANY matched thread
+            # (D4: all topics, not just the baselined ones) is licensed the
+            # ordinary way — not a baseline claim.
+            units = _repetition_subject_units(sent, m, topics)
+            if bool(units) and any(
+                    mc.has_predating_antecedent(con, t, units, edition_date)
+                    for t in topics):
+                continue
+            # D4 no-double-surfacing: fire ONLY when the generic net is SILENT on
+            # this word — i.e. it is SOURCE-ATTRIBUTED (the evasion 'per the
+            # baseline, reinstated' the generic net lets through). A pure-bare
+            # word (incl. one in a sentence using 'baseline' in its ordinary
+            # sense) is the generic net's job and is flagged exactly once there.
+            if not _is_source_attributed(sent, m):
+                continue
+            names = ", ".join(t for t, _ in baselined)
+            as_of = baselined[0][1]
+            out.append(
+                f"story {slot.get('slot')}: continuity word {m.group(0)!r} on a "
+                f"cold-start thread ({names}) is attributed to the baseline but "
+                "NOT dated-anchored — a baseline licenses continuity diction only "
+                f"inside the dated cite '{mc.baseline_cite(as_of)}', never bare "
+                "(NL-77 dated-anchored-never-bare).")
     return out
 
 
@@ -1080,6 +1176,7 @@ def forward_claim_findings(con, stories: List[Dict], slots: List[Dict],
     stories. Returns surfaced warnings."""
     out: List[str] = []
     out.extend(repetition_antecedent_findings(con, stories, slots, edition_date))
+    out.extend(baseline_diction_findings(con, stories, slots, edition_date))
     out.extend(future_relative_watch_findings(stories, slots, edition_date))
     out.extend(expiry_conversion_findings(stories, slots))
     return out
@@ -1970,6 +2067,284 @@ def run_state_repair(
             con.close()
 
 
+# ===========================================================================
+# NL-77 the thread cold-start backgrounder — the generator + the retroactive
+# command driver. The generation is ONE analyst-model call (the existing analyst
+# machinery pointed backwards; ~$0.01-0.02, GPT-4o via call_analysis_model), the
+# same seam ANALYSIS_MODEL/STATE_MODEL ride. Refusal never fabricates; the spend
+# is durable on the thread_baselines row. DO NOT run the retroactive sweep
+# against real data — it is a principal checkpoint (and waits on the junk-sweep
+# ruling); the command exists so it CAN be run, under his word, against the
+# sandbox first.
+# ===========================================================================
+_BASELINE_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")   # a plausible year, not any 4-digit quantity
+
+
+def _default_baseline_chat(key: str, prompt: str) -> Tuple[Dict, float]:
+    """The real backgrounder call on the ANALYSIS_MODEL seam (the existing
+    analyst machinery — call_analysis_model: one retry, then raises; cost
+    accumulates every billed attempt). Injectable so the offline suite exercises
+    this exact path without spending."""
+    from . import analysis
+    return analysis.call_analysis_model(key, prompt)
+
+
+def _baseline_bare_repetition(text: str) -> List[str]:
+    """Continuity words in `text` that sit in a sentence carrying NO date at all
+    (no ISO date, no 'Month D', no 4-digit year, no baseline cite) — the "never
+    bare" class the backgrounder law forbids. A repetition word inside a dated
+    clause ('reimposed the sanctions lifted in 2015') is fine."""
+    from . import memory_core as mc
+    bad: List[str] = []
+    for sent in re.split(r"(?<=[.!?])\s+", text or ""):
+        m = _REPETITION_RE.search(sent)
+        if not m:
+            continue
+        dated = (mc._ISO_RE.search(sent) or mc._MONTH_DAY_RE.search(sent)
+                 or _BASELINE_YEAR_RE.search(sent) or mc.has_baseline_cite(sent))
+        if not dated:
+            bad.append(m.group(0))
+    return bad
+
+
+class BaselineRejected(ValueError):
+    """The backgrounder failed its validation teeth (fabrication/bare-continuity
+    class) — a 'failed' baseline row is written, never fabricated content."""
+
+
+def _validate_baseline(raw) -> Tuple[str, str, List[str]]:
+    """validate_brief-grade teeth for the backgrounder genre. Returns
+    (backgrounder, state_seed, cites) or raises BaselineRejected. The adversary
+    is the model author (analysis._require_str precedent): a non-string / empty
+    field, or a BARE continuity word, is rejected — the honest refusal beats
+    invented founding history."""
+    if not isinstance(raw, dict):
+        raise BaselineRejected(
+            f"baseline response was not a JSON object ({type(raw).__name__})")
+    bg = raw.get("backgrounder")
+    seed = raw.get("state_seed")
+    if not isinstance(bg, str) or not bg.strip():
+        raise BaselineRejected("baseline 'backgrounder' is missing or not a "
+                               "non-empty string")
+    if not isinstance(seed, str) or not seed.strip():
+        raise BaselineRejected("baseline 'state_seed' is missing or not a "
+                               "non-empty string")
+    bare = _baseline_bare_repetition(bg) + _baseline_bare_repetition(seed)
+    if bare:
+        raise BaselineRejected(
+            "baseline carries bare continuity diction with no dated anchor "
+            f"({', '.join(sorted(set(bare)))}) — a backgrounder licenses a "
+            "continuity word only inside a dated clause (never bare)")
+    cites_raw = raw.get("cites")
+    cites = [c.strip() for c in cites_raw
+             if isinstance(c, str) and c.strip()] if isinstance(cites_raw, list) else []
+    return bg.strip(), seed.strip(), cites
+
+
+@dataclass
+class BaselineGenResult:
+    thread_id: int
+    topic: str
+    outcome: str              # written | rejected | skipped-budget | failed
+    detail: str = ""
+    cost_usd: float = 0.0
+
+
+def generate_thread_baseline(
+    con: sqlite3.Connection, thread_id: int, topic: str, note: str, date: str,
+    key: str, remaining_usd: float, chat=None,
+) -> BaselineGenResult:
+    """Generate ONE thread's entry-zero backgrounder end to end: render the
+    backwards-pointed prompt, cap-pre-check, ONE analyst-model call, validate
+    (teeth), then either record a 'ready' baseline (backgrounder + state_seed,
+    marked external-synthesis, spend durable on the row) or a 'failed' baseline
+    (honest refusal — never fabricated). On a budget skip NO row is written and
+    the 'pending' intent stands for a later run. `chat(key, prompt) -> (raw,
+    cost)` is injectable so the suite spends nothing."""
+    from . import memory_core as mc
+    res = BaselineGenResult(thread_id=thread_id, topic=topic, outcome="failed")
+    chat = chat or _default_baseline_chat
+    try:
+        template = (paths.PROMPTS_DIR / "thread_baseline.txt").read_text(
+            encoding="utf-8")
+    except OSError as exc:
+        res.outcome = "failed"
+        res.detail = f"baseline prompt unreadable ({exc}) — nothing generated"
+        return res
+    prompt = template
+    for k, v in {"topic": topic, "note": (note or "").strip() or "(none)",
+                 "date": date, "date_human": mc.human_date(date)}.items():
+        prompt = prompt.replace("{" + k + "}", v)
+
+    from . import analysis
+    est = analysis.estimate_synthesis_usd(prompt)
+    if est > remaining_usd:
+        res.outcome = "skipped-budget"
+        res.detail = (f"baseline estimate ${est:.4f} exceeds remaining "
+                      f"${remaining_usd:.4f} — pending intent kept, nothing written")
+        return res
+    try:
+        raw, cost = chat(key, prompt)
+    except Exception as exc:  # noqa: BLE001 — degrade to an honest failed row
+        # A transport failure is a FAILURE, not a "stale" (there is no prior
+        # baseline to keep — unlike a state rewrite; the misleading borrowed name
+        # is dropped). The row lands 'failed'; the spend (if any billed) rides on
+        # the result (BUG-32 money-honesty class).
+        res.cost_usd = float(getattr(exc, "usd_spent", 0.0) or 0.0)
+        res.outcome = "failed"
+        res.detail = f"baseline call failed ({type(exc).__name__}: {exc})"
+        mc.record_baseline(
+            con, thread_id, date, mc.BASELINE_STATUS_FAILED, reason=res.detail,
+            model=analysis.ANALYSIS_MODEL, cost_usd=res.cost_usd)
+        return res
+    res.cost_usd = cost
+    # Post-paid: never let the spend escape as an exception (BUG-32 money-honesty
+    # class) — every path below records a row carrying the cost.
+    try:
+        try:
+            bg, seed, cites = _validate_baseline(raw)
+        except BaselineRejected as exc:
+            res.outcome = "rejected"
+            res.detail = f"baseline rejected ({exc}) — failed row recorded, not fabricated"
+            mc.record_baseline(
+                con, thread_id, date, mc.BASELINE_STATUS_FAILED, reason=res.detail,
+                cites=None, model=analysis.ANALYSIS_MODEL, cost_usd=cost)
+            return res
+        mc.record_baseline(
+            con, thread_id, date, mc.BASELINE_STATUS_READY, backgrounder=bg,
+            state_seed=seed, cites=cites,
+            reason="auto (NL-77 backgrounder): external-synthesis founding floor",
+            model=analysis.ANALYSIS_MODEL, cost_usd=cost)
+        res.outcome = "written"
+        res.detail = (f"backgrounder {len(bg.split())} words, "
+                      f"{len(cites)} cite(s), state seed "
+                      f"{len(mc._sentences(seed))} sentence(s)")
+        return res
+    except Exception as exc:  # noqa: BLE001 — never lose a paid baseline's spend
+        res.outcome = "failed"
+        res.detail = (f"baseline write failed after a paid call "
+                      f"({type(exc).__name__}: {exc}) — spend recorded on result")
+        return res
+
+
+@dataclass
+class BaselineBackfillReport:
+    """NL-77 retroactive-baseline outcome. `refused` is the honest no-op when
+    nothing awaits a baseline (every cold-start thread already floored)."""
+    refused: bool = False
+    reason: str = ""
+    cap: float = 0.0
+    spent_usd: float = 0.0
+    generated: List[Dict] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+def run_baseline_backfill(
+    thread_id: Optional[int] = None, all_threads: bool = False,
+    con: Optional[sqlite3.Connection] = None, env: Optional[dict] = None,
+    date: Optional[str] = None, chat=None,
+) -> BaselineBackfillReport:
+    """NL-77 the retroactive-baseline command driver (and the single-thread
+    materializer for a just-followed thread). Generates the entry-zero
+    backgrounder for followed threads with an EMPTY ledger and no ready baseline.
+    EXACTLY ONE selector: `thread_id=N` (one thread) or `all_threads=True` (sweep
+    the backlog). Cap pre-checked; SPENDS one analyst-model call per thread;
+    refuses when nothing awaits; disclose-don't-crash. Spend is durable on each
+    thread_baselines row's cost_usd; spent_usd is the run total.
+
+    IMPORTANT: the real-data sweep is a principal checkpoint (thread renames /
+    deletes — the junk sweep — land BEFORE baselines). `chat` is injectable so
+    the suite exercises this path without spending; the CLI runs it only with the
+    principal's word."""
+    import os
+
+    if (thread_id is None) == (not all_threads):
+        raise ValueError(
+            "run_baseline_backfill needs EXACTLY ONE of thread_id / all_threads "
+            f"(got thread_id={thread_id!r}, all_threads={all_threads!r})")
+
+    src_env = env if env is not None else os.environ
+    key = (src_env.get("OPENAI_API_KEY") or "").strip()
+    date = date or ranking.local_today()
+    rep = BaselineBackfillReport()
+
+    own_con = con is None
+    if own_con:
+        db.migrate()
+        con = db.connect()
+    try:
+        from . import memory_core
+        if thread_id is not None:
+            trow = con.execute("SELECT id, topic, principal_note, status FROM "
+                               "memory WHERE id = ?", (thread_id,)).fetchone()
+            if trow is None:
+                rep.refused = True
+                rep.reason = f"no thread with id {thread_id}"
+                return rep
+            # D3 (§F): the entry-zero genre is for FOLLOWED threads. A dismissed
+            # thread is one the reader explicitly stopped — refuse BEFORE any cap
+            # check or paid call (mirrors the --all lane's active/dormant filter
+            # in threads_awaiting_baseline; never inferred back into wanting one).
+            if trow["status"] == "dismissed_user":
+                rep.refused = True
+                rep.reason = (f"thread {trow['topic']!r} is dismissed — the reader "
+                              "stopped following it; no cold-start backgrounder "
+                              "(§F: nothing inferred from a dismissal)")
+                return rep
+            if con.execute("SELECT 1 FROM thread_deltas WHERE thread_id = ? LIMIT 1",
+                           (thread_id,)).fetchone():
+                rep.refused = True
+                rep.reason = (f"thread {trow['topic']!r} already has a ledger record "
+                              "— the entry-zero genre is for EMPTY-ledger cold starts")
+                return rep
+            if memory_core.ready_baseline(con, thread_id):
+                rep.refused = True
+                rep.reason = f"thread {trow['topic']!r} already has a ready baseline"
+                return rep
+            # Gate FIX-2: a standing pending intent's own date wins over the
+            # run date — the identical rule threads_awaiting_baseline applies
+            # (latest here is never 'ready'; the ready-refusal precedes).
+            latest = memory_core.latest_baseline(con, thread_id)
+            targets = [{"thread_id": thread_id, "topic": trow["topic"],
+                        "note": trow["principal_note"] or "",
+                        "as_of": latest.get("as_of_date") if latest else None}]
+        else:
+            awaiting = memory_core.threads_awaiting_baseline(con)
+            if not awaiting:
+                rep.refused = True
+                rep.reason = ("no followed thread awaits a baseline — every "
+                              "cold-start thread already has its founding floor")
+                return rep
+            targets = []
+            for a in awaiting:
+                trow = con.execute("SELECT principal_note FROM memory WHERE id = ?",
+                                   (a["thread_id"],)).fetchone()
+                targets.append({"thread_id": a["thread_id"], "topic": a["topic"],
+                                "note": (trow["principal_note"] if trow else "") or "",
+                                "as_of": a["as_of"]})
+
+        cap = config.budget_cap_usd_per_run(src_env)
+        rep.cap = cap
+        spent = 0.0
+        for t in targets:
+            as_of = t["as_of"] or date
+            gr = generate_thread_baseline(
+                con, t["thread_id"], t["topic"], t["note"], as_of, key,
+                remaining_usd=cap - spent, chat=chat)
+            spent += gr.cost_usd
+            rep.generated.append({"thread": t["topic"], "thread_id": t["thread_id"],
+                                  "outcome": gr.outcome, "detail": gr.detail,
+                                  "usd": round(gr.cost_usd, 6), "as_of": as_of})
+            if gr.outcome != "written":
+                rep.warnings.append(
+                    f"baseline for {t['topic']!r} {gr.outcome} — {gr.detail}")
+        rep.spent_usd = round(spent, 6)
+        return rep
+    finally:
+        if own_con:
+            con.close()
+
+
 def persist_generation(
     con: sqlite3.Connection, date: str, narrative: str, script: str,
     steps: List[Dict], audio_path: Optional[str] = None
@@ -2203,7 +2578,7 @@ def _run_generate_body(
         # avoid (ADR-0007 amendment: 'every thread/memory trace is stripped').
         inputs["slots"] = [
             {**s, "matched_memory": [], "revived_threads": [],
-             "thread_ledger": "", "expired_watch": []}
+             "thread_ledger": "", "thread_baseline": "", "expired_watch": []}
             for s in inputs["slots"]
         ]
     report.continuity_status = inputs["continuity_status"]

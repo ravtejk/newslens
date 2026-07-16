@@ -1905,11 +1905,64 @@ def _thread_verbs_html(topic: str, note: str, status: str) -> str:
     return f'<div class="thread-verbs">{"".join(b)}</div>'
 
 
+def _baseline_state_seed_html(con: sqlite3.Connection, tid: int) -> str:
+    """NL-77: the baseline's seeded day-one standing state, for "Where this
+    stands" when no real thread_state exists yet. Disclosed as external synthesis
+    and cited '(baseline, <date>)' so it is never mistaken for our own record.
+    Returns '' unless a 'ready' baseline with a non-empty seed exists."""
+    from . import memory_core
+    try:
+        b = memory_core.ready_baseline(con, tid)
+    except Exception:  # noqa: BLE001 — pre-0017/absent table = no seed
+        return ""
+    if not b or not (b.get("state_seed") or "").strip():
+        return ""
+    cite = memory_core.baseline_cite(b["as_of_date"])
+    return (f'<div class="baseline-seed">'
+            f'<p class="dossier-state">{_e(b["state_seed"].strip())}</p>'
+            f'<p class="baseline-disclosure">{_e(labels.BASELINE_DISCLOSURE)} '
+            f'<span class="baseline-cite">{_e(cite)}</span></p></div>')
+
+
+def _thread_baseline_html(con: sqlite3.Connection, tid: int, anchor: str) -> str:
+    """NL-77 the cold-start backgrounder — "How we got here", a permanent section
+    between "Where this stands" and "The story so far". Renders the newest
+    baseline: a 'ready' one shows its external-synthesis background (ALWAYS
+    disclosed as not-our-record — the writer-flow's non-licensing law made
+    reader-visible); a 'pending' one shows the honest "preparing" note. Returns ''
+    when there is no baseline (a thread predating NL-77, or one that needs no
+    founding floor) — the section simply does not appear. Degrades to '' on a
+    pre-0017 DB."""
+    from . import memory_core
+    try:
+        b = memory_core.latest_baseline(con, tid)
+    except Exception:  # noqa: BLE001 — a pre-0017/absent table is just "no baseline"
+        return ""
+    if not b:
+        return ""
+    status = b.get("status")
+    if status == memory_core.BASELINE_STATUS_PENDING:
+        body = f'<p class="empty-note">{_e(labels.BASELINE_PENDING)}</p>'
+    elif status == memory_core.BASELINE_STATUS_READY and (b.get("backgrounder") or "").strip():
+        cite = memory_core.baseline_cite(b["as_of_date"])
+        paras = [p.strip() for p in re.split(r"\n\s*\n", b["backgrounder"].strip())
+                 if p.strip()]
+        body = (f'<p class="baseline-disclosure">{_e(labels.BASELINE_DISCLOSURE)} '
+                f'<span class="baseline-cite">{_e(cite)}</span></p>'
+                + "".join(f"<p>{_e(p)}</p>" for p in paras))
+    else:
+        return ""      # a 'failed' newest baseline renders nothing (honest gap)
+    return (f'<div class="deep-section" id="{anchor}-baseline">'
+            f'<h2 class="deep-section-label">{_e(labels.HOW_WE_GOT_HERE)}</h2>'
+            f'{body}</div>')
+
+
 def _render_thread_page(con: sqlite3.Connection, mrow) -> str:
     """One thread page. Standing state ("Where this stands", as-of + staleness)
-    then the story-so-far (full ledger) then the edition back-links then the
-    verbs. Honest empty states throughout; a day-one thread (no state, no ledger)
-    renders the honest 'new thread' notes, never a fabricated arc."""
+    then the cold-start backgrounder ("How we got here", NL-77) then the
+    story-so-far (full ledger) then the edition back-links then the verbs. Honest
+    empty states throughout; a day-one thread (no state, no ledger) renders the
+    honest 'new thread' notes, never a fabricated arc."""
     from . import memory_core
     tid, topic, status = mrow["id"], mrow["topic"], mrow["status"]
     anchor = f"thread-{tid}"
@@ -1928,10 +1981,21 @@ def _render_thread_page(con: sqlite3.Connection, mrow) -> str:
          "state_as_of": (state or {}).get("as_of_date", ""),
          "last_delta": None}
     card = _thread_state_card(t)
-    state_body = card or f'<p class="empty-note">{_e(labels.THREAD_NO_STATE)}</p>'
+    if card:
+        state_body = card
+    else:
+        # NL-77: with no real (record-established) standing state yet, fall back
+        # to the baseline's seeded day-one state, disclosed as external
+        # synthesis and cited "(baseline, <date>)" — never dressed as our record.
+        seed = _baseline_state_seed_html(con, tid)
+        state_body = seed or f'<p class="empty-note">{_e(labels.THREAD_NO_STATE)}</p>'
     out.append(f'<div class="deep-section" id="{anchor}-state">'
                f'<h2 class="deep-section-label">{_e(labels.WHERE_THIS_STANDS)}</h2>'
                f'{state_body}</div>')
+
+    # NL-77 the cold-start backgrounder — "How we got here", between the standing
+    # state and the story-so-far. '' when there is no baseline (section absent).
+    out.append(_thread_baseline_html(con, tid, anchor))
 
     # The story so far — full ledger; day-one (no ledger) is an honest empty
     # state, never a fabricated arc (the kill-test law).

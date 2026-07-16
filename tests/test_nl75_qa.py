@@ -1069,8 +1069,8 @@ def test_all_three_new_migrations_are_idempotent_together(tmp_path):
     the collect-now closure + explained-once schemas, joined after — ruling C.)"""
     db_path = tmp_path / "idem.db"
     first = db.migrate(db_path=db_path)
-    assert [f[:4] for f in first][-6:] == ["0011", "0012", "0013", "0014",
-                                           "0015", "0016"]
+    assert [f[:4] for f in first][-7:] == ["0011", "0012", "0013", "0014",
+                                           "0015", "0016", "0017"]
     assert db.migrate(db_path=db_path) == []
     con = db.connect(db_path)
     try:

@@ -75,6 +75,26 @@ PROVENANCE_VALUES = (
 PROVENANCE_NON_LICENSING = frozenset(
     {PROVENANCE_SOURCE_ECHO, PROVENANCE_EXTERNAL_SYNTHESIS})
 
+# ---------------------------------------------------------------------------
+# NL-77 the thread cold-start backgrounder — the "entry-zero" baseline genre
+# (Executive Brief 2026-07-17). A baseline is external-synthesis by definition
+# (migration 0014's fourth class): synthesized from background the product never
+# itself covered. It rides its OWN table (thread_baselines, migration 0017), NOT
+# thread_deltas — so it can never sort into an edition-keyed read (the Today arc
+# "then" leg, the story-so-far timeline, the HSR numerator). Its cite currency is
+# "(baseline, <date>)", never a bare edition date. Lifecycle: 'pending' (the §F
+# intent, written on follow / first-open) -> 'ready' | 'failed'.
+# ---------------------------------------------------------------------------
+BASELINE_STATUS_PENDING = "pending"
+BASELINE_STATUS_READY = "ready"
+BASELINE_STATUS_FAILED = "failed"
+BASELINE_STATUSES = (BASELINE_STATUS_PENDING, BASELINE_STATUS_READY,
+                     BASELINE_STATUS_FAILED)
+# A baseline is external-synthesis, fixed — the 0014 class that NEVER licenses a
+# bare repetition word (has_predating_antecedent already drops it; a baseline is
+# additionally never a delta, so it is excluded a fortiori).
+BASELINE_PROVENANCE = PROVENANCE_EXTERNAL_SYNTHESIS
+
 
 def effective_provenance(entry: Dict) -> str:
     """The delta's provenance grade with the record-established default applied:
@@ -127,6 +147,57 @@ def human_date(iso: str) -> str:
     except ValueError:
         return iso or ""
     return f"{_MONTH_ABBR[d.month - 1]} {d.day}"
+
+
+# NL-77: the baseline's OWN cite currency. A baseline is not an edition, so it
+# never wears an edition date's clothes — it is cited "(baseline, Jul 14)". The
+# word 'baseline' plus a parseable date is what the diction validator recognizes
+# as the DATED-ANCHORED form that licenses baseline-derived continuity diction;
+# the bare word 'baseline' with no date does NOT (the "never bare" rule).
+def baseline_cite(as_of_date: str) -> str:
+    """The baseline's parenthetical cite, e.g. '(baseline, Jul 14)'. Falls back
+    to the raw as_of string if unparseable (never crashes a render)."""
+    return f"(baseline, {human_date(as_of_date)})"
+
+
+# Matches a well-formed baseline cite carrying a parseable date: "(baseline,
+# Jul 14)", "(baseline, July 14)", "(baseline, 2026-07-14)". A bare "(baseline)"
+# or "per the baseline" (no date) does NOT match — dated-anchored, never bare.
+_BASELINE_CITE_RE = re.compile(
+    r"\(\s*baseline\s*,\s*(?:" + _MONTH_ALT + r")\.?\s+\d{1,2}\s*\)|"
+    r"\(\s*baseline\s*,\s*\d{4}-\d{2}-\d{2}\s*\)", re.I)
+
+
+def has_baseline_cite(text: str) -> bool:
+    """True when `text` carries a well-formed dated baseline cite ('(baseline,
+    Jul 14)'). FORM only — the HSR numerator-exclusion signal (a sentence resting
+    on the baseline is not OUR record reaching prose). Licensing is a STRONGER
+    test (licensing_baseline_cite): form alone is counterfeit currency."""
+    return bool(_BASELINE_CITE_RE.search(text or ""))
+
+
+def _baseline_cite_matches_asof(text: str, as_of_iso: str) -> bool:
+    """True when some baseline cite in `text` names the SAME calendar date as
+    `as_of_iso` (form-insensitive: 'Jul 14' == 'July 14' == '2026-07-14' for an
+    as_of of 2026-07-14). An ISO cite matches year+month+day; a human 'Month D'
+    cite matches on month+day — the human form carries no year, and the issuing
+    baseline (a thread's single founding floor) supplies it."""
+    if len(as_of_iso or "") < 10:
+        return False
+    ay, am, ad = as_of_iso[:4], as_of_iso[5:7], as_of_iso[8:10]
+    for cm in _BASELINE_CITE_RE.finditer(text or ""):
+        blob = cm.group(0)
+        iso = _ISO_RE.search(blob)
+        if iso:
+            if (iso.group(1), iso.group(2), iso.group(3)) == (ay, am, ad):
+                return True
+            continue
+        dm = _MONTH_DAY_RE.search(blob)
+        if dm:
+            mon = _MONTH_NUM[dm.group(1).lower()]
+            if (f"{mon:02d}", f"{int(dm.group(2)):02d}") == (am, ad):
+                return True
+    return False
 
 
 _PAREN_RE = re.compile(r"\(([^)]*)\)")
@@ -1414,6 +1485,204 @@ def classify_delta_provenance(con: sqlite3.Connection, topic: str,
             if not has_predating_antecedent(con, topic, units, edition_date):
                 return PROVENANCE_SOURCE_ECHO
     return None
+
+
+# ===========================================================================
+# NL-77 the thread cold-start backgrounder — storage, writer-flow, intent-gate,
+# HSR-exclusion. The generation call (the analyst pointed backwards) lives in
+# generate.py behind an injectable seam; this module owns the deterministic
+# mechanics (no LLM here — Rook's law), mirroring how the delta ledger /
+# state-rewrite split their write path from generate.py.
+# ===========================================================================
+
+def latest_baseline(con: sqlite3.Connection, thread_id: int,
+                    before_date: Optional[str] = None) -> Optional[Dict]:
+    """Newest baseline row for the thread (versioned; newest wins), or None.
+    `before_date` (inclusive) bounds as_of_date. Degrades to None on a pre-0017
+    DB (the separability contract) — table-absence = no baseline yet."""
+    if not _table_exists(con, "thread_baselines"):
+        return None
+    if before_date:
+        row = con.execute(
+            "SELECT * FROM thread_baselines WHERE thread_id = ?"
+            " AND as_of_date <= ? ORDER BY id DESC LIMIT 1",
+            (thread_id, before_date)).fetchone()
+    else:
+        row = con.execute(
+            "SELECT * FROM thread_baselines WHERE thread_id = ?"
+            " ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def ready_baseline(con: sqlite3.Connection, thread_id: int,
+                   before_date: Optional[str] = None) -> Optional[Dict]:
+    """The newest baseline IFF it is 'ready' (a later 'failed'/'pending' row
+    means the ready one is stale/superseded — newest wins). None otherwise."""
+    b = latest_baseline(con, thread_id, before_date=before_date)
+    return b if b and b.get("status") == BASELINE_STATUS_READY else None
+
+
+def write_baseline_intent(con: sqlite3.Connection, thread_id: int,
+                          as_of_date: str) -> Optional[int]:
+    """The §F intent capture (follow / first-open): record that this thread WANTS
+    a baseline, as a 'pending' row. Returns the new row id, or None when the
+    newest baseline is ALREADY pending or ready (do not stack redundant intents
+    — a failed baseline DOES re-open intent so a retry can be requested). No LLM,
+    no spend; the generator materializes it later behind the explicit command."""
+    if not _table_exists(con, "thread_baselines"):
+        return None
+    latest = latest_baseline(con, thread_id)
+    if latest and latest.get("status") in (BASELINE_STATUS_PENDING,
+                                           BASELINE_STATUS_READY):
+        return None
+    with con:
+        cur = con.execute(
+            "INSERT INTO thread_baselines (thread_id, as_of_date, status, reason)"
+            " VALUES (?, ?, ?, ?)",
+            (thread_id, as_of_date, BASELINE_STATUS_PENDING,
+             "intent captured (§F explicit action: follow / first-open)"))
+    return cur.lastrowid
+
+
+def record_baseline(con: sqlite3.Connection, thread_id: int, as_of_date: str,
+                    status: str, backgrounder: str = "", state_seed: str = "",
+                    cites: Optional[List[str]] = None, reason: str = "",
+                    model: str = "", cost_usd: float = 0.0) -> int:
+    """Write a 'ready' or 'failed' baseline row (versioned append-only, newest
+    wins). A 'failed' row is the honest refusal — the gap stays recorded, never
+    fabricated. Returns the new row id."""
+    if status not in (BASELINE_STATUS_READY, BASELINE_STATUS_FAILED):
+        raise ValueError(
+            f"record_baseline status must be ready|failed (got {status!r}); "
+            "'pending' is written by write_baseline_intent")
+    if status == BASELINE_STATUS_READY and not (backgrounder or "").strip():
+        # Gate FIX-3 (defense-in-depth, 0010-style): ready_baseline feeds
+        # licensing_baseline_cite — a contentless 'ready' row would license
+        # continuity diction with nothing behind it. The generator validates
+        # before writing; this belt guards every other caller.
+        raise ValueError(
+            "record_baseline refuses status='ready' with an empty "
+            "backgrounder — a contentless ready row would become licensing "
+            "currency; write 'failed' with a reason instead")
+    if not _table_exists(con, "thread_baselines"):
+        # A baseline is only ever written post-migrate, but fail LOUDLY and
+        # clearly on a pre-0017 DB rather than with a cryptic OperationalError.
+        raise RuntimeError(
+            "thread_baselines is absent — migration 0017 has not been applied; "
+            "run `newslens migrate` before writing a baseline")
+    with con:
+        cur = con.execute(
+            "INSERT INTO thread_baselines (thread_id, as_of_date, status,"
+            " backgrounder, state_seed, cites_json, reason, model, cost_usd)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (thread_id, as_of_date, status, backgrounder or "", state_seed or "",
+             json.dumps(cites or [], ensure_ascii=False), reason or "",
+             model or "", round(float(cost_usd or 0.0), 6)))
+    return cur.lastrowid
+
+
+def capture_baseline_intent(con: sqlite3.Connection, topic: str,
+                            as_of_date: str) -> Optional[int]:
+    """§F intent entrypoint keyed by TOPIC (the surface both `memory add` and the
+    server's first-open call). Resolves the thread (case-insensitive, never a
+    dismissed one), then records the pending intent. Returns the row id or None
+    (unresolvable thread, or intent already standing). NEVER inferred from
+    reading behaviour — the caller must be an explicit action."""
+    tid = resolve_thread_id(con, topic)
+    if tid is None:
+        return None
+    return write_baseline_intent(con, tid, as_of_date)
+
+
+def threads_awaiting_baseline(con: sqlite3.Connection) -> List[Dict]:
+    """Active/dormant followed threads whose newest baseline is NOT 'ready' and
+    that carry NO ledger delta yet — the retroactive-baseline backlog (the
+    entry-zero genre is for threads with an EMPTY ledger; a thread that has
+    already moved has a real record and needs no founding floor). Returns
+    [{thread_id, topic, as_of}] where as_of is the pending intent's date when one
+    exists, else None (the caller stamps 'today'). Oldest thread id first."""
+    if not _table_exists(con, "thread_baselines"):
+        return []
+    out: List[Dict] = []
+    rows = con.execute(
+        "SELECT id, topic FROM memory WHERE status IN ('active', 'dormant')"
+        " ORDER BY id").fetchall()
+    for r in rows:
+        tid = r["id"]
+        if con.execute("SELECT 1 FROM thread_deltas WHERE thread_id = ? LIMIT 1",
+                       (tid,)).fetchone():
+            continue                    # has a real record — not a cold start
+        latest = latest_baseline(con, tid)
+        if latest and latest.get("status") == BASELINE_STATUS_READY:
+            continue                    # already has its founding floor
+        as_of = latest.get("as_of_date") if latest else None
+        out.append({"thread_id": tid, "topic": r["topic"], "as_of": as_of})
+    return out
+
+
+def writer_baseline_block(con: sqlite3.Connection, topic: str,
+                          before_date: str) -> str:
+    """Writer-flow LAST: the thread's baseline formatted for the WRITER prompt as
+    its OWN labeled section — context for the writer, NEVER blended into edition
+    prose as unattributed knowledge. Returns '' unless a 'ready' baseline exists
+    as-of before_date. The block states its non-licensing law inline so the model
+    cannot launder the background into a bare continuity claim: any continuity
+    diction drawn from it must carry the dated baseline cite '(baseline, <date>)',
+    never a bare 'reinstated'/'again'."""
+    tid = resolve_thread_id(con, topic)
+    if tid is None:
+        return ""
+    b = ready_baseline(con, tid, before_date=before_date)
+    if not b or not (b.get("backgrounder") or "").strip():
+        return ""
+    cite = baseline_cite(b["as_of_date"])
+    lines = [
+        f"BACKGROUNDER — how {topic!r} got here (EXTERNAL SYNTHESIS, "
+        f"cite currency {cite}):",
+        "This is researched background NewsLens never itself covered. It is "
+        "CONTEXT ONLY — do not present it as our record. If you draw any "
+        "continuity word from it (reinstated, resumed, again, renewed), it MUST "
+        f"carry the dated baseline cite {cite} in the sentence; a BARE continuity "
+        "word sourced from this backgrounder is forbidden.",
+        (b["backgrounder"] or "").strip(),
+    ]
+    return "\n".join(lines)
+
+
+def licensing_baseline_cite(con: sqlite3.Connection, topics: List[str],
+                            sentence: str, edition_date: str) -> bool:
+    """The dated baseline cite is a CURRENCY, not a spelling (NL-77 defects
+    D1/D2). It licenses a repetition word ONLY when an actual READY baseline
+    stands behind it: some matched thread carries a ready baseline as-of the
+    edition WHOSE as_of the cited date parse-equals. A fabricated '(baseline, Jul
+    14)' on a thread with no baseline (or no matched thread, or a baseline dated
+    otherwise) is counterfeit and licenses NOTHING — the read sites treat it
+    exactly as bare. This is the single baseline-licensing gate; has_baseline_cite
+    (form only) must never be used for a licensing decision."""
+    if not has_baseline_cite(sentence):
+        return False
+    for t in (topics or []):
+        if not t:
+            continue
+        tid = resolve_thread_id(con, t)
+        if tid is None:
+            continue
+        b = ready_baseline(con, tid, before_date=edition_date)
+        if b and _baseline_cite_matches_asof(sentence, b["as_of_date"]):
+            return True
+    return False
+
+
+def is_baseline_sourced_sentence(sentence: str) -> bool:
+    """HSR-numerator exclusion (Executive Brief sequencing law item 3): a
+    sentence resting on the baseline (it carries the '(baseline, <date>)' cite) is
+    researched founding context, NOT our own record reaching prose — so it does
+    NOT count toward History-Surfaced-Rate. The numerator counts record-grade
+    surfacing; a baseline-cited sentence is excluded here at the sentence gate.
+    (A baseline is also never a delta/arc, so no delta-keyed HSR count sees it —
+    this predicate covers the writer-prose surface, the only place a baseline
+    cite reaches shipped text.)"""
+    return has_baseline_cite(sentence)
 
 
 # ===========================================================================
