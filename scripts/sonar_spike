@@ -29,7 +29,9 @@ sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
 def main() -> int:
     import os
 
-    from newslens import config, discovery
+    from newslens import config, discovery, paths
+
+    paths.allow_real_paths()  # real entrypoint (seam completion, 2026-07-16)
 
     try:
         config.load_env()

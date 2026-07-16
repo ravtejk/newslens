@@ -36,9 +36,18 @@ def allow_real_paths() -> None:
 _GUARDED = {
     "DATA_DIR": PROJECT_ROOT / "data",           # gitignored; created on demand
     "DB_PATH": PROJECT_ROOT / "data" / "newslens.db",
+    # Principal-owned files behind the same seam (2026-07-16 incident: a
+    # sandboxed serve probe rewrote the REAL memory.md — the seam covered
+    # only DATA_DIR/DB_PATH; second instance of the v7-M1 pinhole class).
+    "SOURCES_FILE": PROJECT_ROOT / "sources.yaml",
+    "ENV_FILE": PROJECT_ROOT / ".env",           # principal-edited; never committed
+    "MEMORY_FILE": PROJECT_ROOT / "memory.md",   # hand-editable; personal state
 }
 
-_ENV_OVERRIDE = {"DATA_DIR": "NEWSLENS_DATA_DIR", "DB_PATH": "NEWSLENS_DB_PATH"}
+_ENV_OVERRIDE = {"DATA_DIR": "NEWSLENS_DATA_DIR", "DB_PATH": "NEWSLENS_DB_PATH",
+                 "SOURCES_FILE": "NEWSLENS_SOURCES_FILE",
+                 "ENV_FILE": "NEWSLENS_ENV_FILE",
+                 "MEMORY_FILE": "NEWSLENS_MEMORY_FILE"}
 
 
 def __getattr__(name: str):
@@ -72,18 +81,17 @@ def __getattr__(name: str):
             "real generation_log). Run via `newslens ...`/scripts/doctor, or "
             "set NEWSLENS_REAL_DATA=1 for a conscious one-off. Sandboxed and "
             "child processes set NEWSLENS_DATA_DIR (and optionally "
-            "NEWSLENS_DB_PATH) to redirect instead. Ad-hoc probes must "
+            "NEWSLENS_DB_PATH / NEWSLENS_SOURCES_FILE / NEWSLENS_ENV_FILE / "
+            "NEWSLENS_MEMORY_FILE) to redirect instead. Ad-hoc probes must "
             "sandbox. LIMIT: hardcoded 'data/...' strings bypass this guard.")
     raise AttributeError(f"module 'newslens.paths' has no attribute {name!r}")
 
 
 MIGRATIONS_DIR = PROJECT_ROOT / "migrations"
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
-SOURCES_FILE = PROJECT_ROOT / "sources.yaml"
-ENV_FILE = PROJECT_ROOT / ".env"                 # principal-edited; never committed
 ENV_EXAMPLE_FILE = PROJECT_ROOT / ".env.example"
-MEMORY_FILE = PROJECT_ROOT / "memory.md"         # hand-editable memory surface
-                                                  # (gitignored; personal state)
+# SOURCES_FILE / ENV_FILE / MEMORY_FILE are NOT module globals — they resolve
+# through the PEP 562 guard above (see _GUARDED).
 
 
 def looks_like_checkout() -> bool:

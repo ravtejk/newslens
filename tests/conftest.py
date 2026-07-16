@@ -36,7 +36,9 @@ _REAL_DATA_DIR = paths._GUARDED["DATA_DIR"]
 # probe: an append to a pre-existing watched-dir file passed the pre-widening
 # tripwire. test_v7_m2_qa.py::test_tripwire_snapshot_sees_inplace_db_and_log_rewrites
 # is the red test only this widening flips.
-_REAL_STATE_FILES = (paths.SOURCES_FILE, paths.MEMORY_FILE, paths.ENV_FILE,
+_REAL_STATE_FILES = (paths._GUARDED["SOURCES_FILE"],
+                     paths._GUARDED["MEMORY_FILE"],
+                     paths._GUARDED["ENV_FILE"],
                      paths._GUARDED["DB_PATH"],
                      _REAL_DATA_DIR / "generation_log.jsonl")
 
@@ -92,6 +94,9 @@ SCRUBBED_ENV_VARS = [
     "NEWSLENS_REAL_DATA",  # the paths-guard opt-in must never leak into tests
     "NEWSLENS_DATA_DIR",   # ambient redirections scrubbed; sandbox_paths sets
     "NEWSLENS_DB_PATH",    # its own per-test values after this scrub
+    "NEWSLENS_SOURCES_FILE",
+    "NEWSLENS_ENV_FILE",
+    "NEWSLENS_MEMORY_FILE",
     "OPENAI_API_KEY",
     "PERPLEXITY_API_KEY",
     "GNEWS_API_KEY",
@@ -168,11 +173,18 @@ def sandbox_paths(tmp_path, monkeypatch, scrub_env):
 
     sources = tmp_path / "sources.yaml"
     sources.write_text(SYNTHETIC_TEMPLATE, encoding="utf-8")
-    monkeypatch.setattr(paths, "SOURCES_FILE", sources)
-    monkeypatch.setattr(paths, "ENV_FILE", tmp_path / ".env")  # does not exist
+    # setitem + setenv, same reasoning as DATA_DIR/DB_PATH above: the env
+    # seams carry the sandbox across process boundaries (the 2026-07-16
+    # memory.md incident: a serve child resolved the REAL file because
+    # these three had no env seam).
+    monkeypatch.setitem(vars(paths), "SOURCES_FILE", sources)
+    monkeypatch.setenv("NEWSLENS_SOURCES_FILE", str(sources))
+    monkeypatch.setitem(vars(paths), "ENV_FILE", tmp_path / ".env")  # absent
+    monkeypatch.setenv("NEWSLENS_ENV_FILE", str(tmp_path / ".env"))
     # M4: memory.md is live principal state on this machine — the suite must
     # never read or write the real one.
-    monkeypatch.setattr(paths, "MEMORY_FILE", tmp_path / "memory.md")
+    monkeypatch.setitem(vars(paths), "MEMORY_FILE", tmp_path / "memory.md")
+    monkeypatch.setenv("NEWSLENS_MEMORY_FILE", str(tmp_path / "memory.md"))
     return tmp_path
 
 
