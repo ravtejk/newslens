@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import config, db, events, labels, memory, paths, webui
+from . import analysis, config, db, events, labels, memory, paths, webui
 
 DEFAULT_PORT = 8484
 DEVELOPING_WINDOW_DAYS = 7  # dot = thread picked up within this many days
@@ -808,13 +808,50 @@ def _today_arc_html(con, slot: Dict, st: Dict, date: str,
     return "".join(out)
 
 
+def _story_movement_paras(st: Dict, date: str) -> List[str]:
+    """The story's Today body beats — the 'Why it matters' / 'Watch for'
+    movements as .move-label headers. Shared by the Today story body AND the
+    deep view's opening prose (NL-68 item 3 superset), so the two carry the
+    identical beats. NL-68 item 4: a forward-looking watch beat carrying a date
+    already past relative to the edition has that stale sentence stripped, and
+    the beat is dropped whole if nothing forward-looking survives; non-watch
+    beats ('Why it matters') legitimately cite past dates and are untouched."""
+    out: List[str] = []
+    for mv in st.get("movements") or []:
+        text = mv.get("text", "")
+        if _is_watch_label(mv.get("label", "")) and _is_calendar_date(date):
+            text, _stale = analysis.strip_stale_watch(text, date)
+            if not (text or "").strip():
+                continue
+        em = " my-read" if mv.get("em") else ""
+        out.append(f'<p class="move-label">{_e(mv["label"])}</p>'
+                   f'<p class="{em.strip()}">{_e(text)}</p>')
+    return out
+
+
+def _deep_today_prose(st: Dict, date: str) -> str:
+    """NL-68 item 3 (THE SUPERSET LAW): the analyst deep view OPENS with the
+    story's own Today prose — its lede + the 'Why it matters'/'Watch for' beats —
+    before the analyst sections, so a story's deep view always contains AT LEAST
+    its Today-page content, plus more. Byte-for-byte the Today beats (the shared
+    movement helper); '' when the story carries no prose (no residue)."""
+    paras: List[str] = []
+    if st and st.get("lede"):
+        paras.append(f'<p>{_e(st["lede"])}</p>')
+    if st:
+        paras.extend(_story_movement_paras(st, date))
+    if not paras:
+        return ""
+    return f'<div class="deep-section deep-today-prose">{"".join(paras)}</div>'
+
+
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   active_topics: set, has_file: bool = False,
                   slug: Optional[str] = None, date: str = "",
                   deep_return: str = "view-today", con=None,
                   arc_seen: Optional[set] = None, role: str = "story") -> str:
     """One story in the v7 grid. `role` selects the shape:
-    - "lead"    → article.lead: kicker + h1 + deck + body + [full picture] + furniture
+    - "lead"    → article.lead: h1 + deck + body + [full picture] + furniture
     - "story"   → article.story (col-right full-picture story): h2 + deck + body + …
     - "snippet" → article.snippet (In Brief, quick tier): h3 + compact deck + body + …
     NL-65: the DECK under the title carries ONLY the follow control; the deep-view
@@ -838,13 +875,25 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
             + (f'<span class="reason">{_e(reason)}</span>' if reason else "")
             + "</p>")
 
-    if role == "lead":
-        parts.append(f'<p class="kicker">{_e(labels.KICKER_LEAD)}</p>')
-    parts.append(f'<{h} class="headline">{_e(st.get("headline", ""))}</{h}>')
+    # NL-68 item 6: the visible "The Lead" kicker DIES — the design carries the
+    # hierarchy (lead = largest type, top-left of the asymmetric grid). No label.
+    parts.append(_headline_html(h, st.get("headline", ""), slot, has_file, tier,
+                                slug, deep_return))
 
-    # NL-65: the follow control (tracked marker OR follow toggle) STAYS under the
-    # title, alone, in the deck. Recognition spans thread (marks) + title-follow.
-    follow = _follow_control(st, slot, marks, active_topics, date)
+    # NL-68 item 7 (kill the covered-before DUPE): the arc line ("When we last
+    # covered this …") and the tracked-ongoing marker ("Tracked ongoing story —
+    # …") BOTH signal prior coverage — on the real 07-14 lead they rendered
+    # together (marker in the deck + arc in the body = the signal TWICE). Compute
+    # the arc first: when it renders on a tracked story it is the richer,
+    # superseding signal (then → now → difference, with a link to the prior
+    # edition), so the redundant deck marker is suppressed. A tracked story with
+    # NO arc (day-one / tells-nothing) keeps the marker as its sole signal; a
+    # non-tracked story keeps its follow toggle (never carries an arc). This kills
+    # the dupe without redesigning the marker/follow control (NL-68 item 2's job).
+    arc_html = _today_arc_html(con, slot, st, date, arc_seen)
+    suppress_marker = bool(marks) and bool(arc_html)
+    follow = "" if suppress_marker else _follow_control(
+        st, slot, marks, active_topics, date)
     if follow:
         parts.append(f'<p class="deck">{follow}</p>')
 
@@ -853,15 +902,10 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     body_parts: List[str] = []
     if st.get("lede"):
         body_parts.append(f'<p>{_e(st["lede"])}</p>')
-    arc_html = _today_arc_html(con, slot, st, date, arc_seen)
     if arc_html:
         body_parts.append(arc_html)
     if role != "snippet":
-        for mv in st.get("movements") or []:
-            em = " my-read" if mv.get("em") else ""
-            body_parts.append(
-                f'<p class="move-label">{_e(mv["label"])}</p>'
-                f'<p class="{em.strip()}">{_e(mv["text"])}</p>')
+        body_parts.extend(_story_movement_paras(st, date))
     parts.append(f'<div class="body">{"".join(body_parts)}</div>')
 
     # NL-65: the deep-view entry moves to the story BOTTOM, before the furniture.
@@ -949,6 +993,35 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
             f'{_e(label)}</button>')
 
 
+def _has_deep_view(has_file: bool, tier: str) -> bool:
+    """A story has an openable deep view iff it carries an analyst brief
+    (has_file) OR it is an In-Brief quick-tier item (the $0 sources-&-context
+    view). Everything else — a degraded-hidden full/medium, a still-tracking
+    status line — has none, and must never render a dead link (NL-68 item 8)."""
+    return bool(has_file) or tier == "quick"
+
+
+def _deep_view_onclick(slug: str, deep_return: str) -> str:
+    """The ONE deep-view open call, shared by the story title (NL-68 item 8) and
+    the bottom entry link so both target the identical view. openDeepView calls
+    e.preventDefault(), so the href='#' fallback never navigates."""
+    ret = "" if deep_return == "view-today" else f", '{_e(deep_return)}'"
+    return f"openDeepView('{_e(slug)}', event{ret})"
+
+
+def _headline_html(tag: str, headline: str, slot: Dict, has_file: bool,
+                   tier: str, slug: str, deep_return: str) -> str:
+    """The story headline. NL-68 item 8: when the story has a deep view, the
+    TITLE itself is a click-through to it (same target as the bottom entry), a
+    real keyboard-operable <a> (never a bare onclick div). A story with no deep
+    view (degraded-hidden) renders a plain heading — no dead link."""
+    text = _e(headline)
+    if _has_deep_view(has_file, tier):
+        text = (f'<a class="headline-link" href="#" '
+                f'onclick="{_deep_view_onclick(slug, deep_return)}">{text}</a>')
+    return f'<{tag} class="headline">{text}</{tag}>'
+
+
 def _deep_entry_link(has_file: bool, tier: str, slug: str,
                      deep_return: str) -> str:
     """The deep-view entry (NL-65: moved to the story BOTTOM). Three binding
@@ -957,14 +1030,14 @@ def _deep_entry_link(has_file: bool, tier: str, slug: str,
     (a failed full/medium brief renders NOTHING — absence is the signal).
     has_file wins: a briefed slot is never demoted to the sources-&-context
     label."""
-    ret = "" if deep_return == "view-today" else f", '{_e(deep_return)}'"
+    onclick = _deep_view_onclick(slug, deep_return)
     if has_file:
         return (f'<a class="deep-view-entry-link" href="#" '
-                f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">'
+                f'onclick="{onclick}">'
                 f'→ {_e(labels.FULL_PICTURE)}</a>')
     if tier == "quick":
         return (f'<a class="deep-view-entry-link sources-context-link" href="#" '
-                f'onclick="openDeepView(\'{_e(slug)}\', event{ret})">'
+                f'onclick="{onclick}">'
                 f'→ {_e(labels.SOURCES_CONTEXT)}</a>')
     return ""
 
@@ -1161,14 +1234,36 @@ def _topic_vocabulary(con: sqlite3.Connection, cfg) -> List[str]:
 
 
 def _topic_suggestions(con: sqlite3.Connection, cfg) -> List[Dict]:
-    """NL-11 suggestions for the Topics add-field: the recall vocabulary MINUS
-    what the principal already follows (you can't add what you have). Topics
-    carry no secondary line."""
+    """NL-68 item 12: the Topics search suggests LIVE topics — the tags the
+    LATEST edition matched — minus what you already follow. WAS drawn from
+    _topic_vocabulary (the ALL-TIME accumulation of every tag ever matched), so a
+    topic you'd DELETED lingered as a suggestion forever ('returns only deleted
+    topics'). Scoping to the latest edition keeps the recall live and stops old
+    deleted topics resurfacing; typing a genuinely new topic still adds it.
+
+    Flagged (NL-17/18): matched_tags are structurally a subset of your followed
+    vocabulary, so in steady state this is empty — a real 'topics to discover'
+    add-source is the skeleton-catalog work, not a suggestion off past editions.
+    Topics carry no secondary line."""
     followed = {t.lower() for t in cfg.interests_broad} \
         | {t.lower() for t in cfg.interests_granular}
-    return [{"v": name, "l": name}
-            for name in _topic_vocabulary(con, cfg)
-            if name.lower() not in followed]
+    row = con.execute("SELECT story_slots FROM briefings"
+                      " ORDER BY date DESC LIMIT 1").fetchone()
+    if row is None:
+        return []
+    try:
+        slots = json.loads(row["story_slots"] or "[]")
+    except (ValueError, TypeError):
+        return []
+    names: Dict[str, str] = {}
+    for s in slots if isinstance(slots, list) else []:
+        for tg in s.get("matched_tags") or []:
+            if not (isinstance(tg, dict) and tg.get("name")):
+                continue
+            key = tg["name"].lower()
+            if key not in followed and key not in names:
+                names[key] = tg["name"]
+    return [{"v": n, "l": n} for _, n in sorted(names.items())]
 
 
 def _writer_suggestions(cfg) -> List[Dict]:
@@ -1199,7 +1294,8 @@ def _writer_suggestions(cfg) -> List[Dict]:
 
 
 def _render_suggest(kind: str, list_id: str, placeholder: str,
-                    aria_label: str, data: List[Dict]) -> str:
+                    aria_label: str, data: List[Dict],
+                    suggest_only: bool = False) -> str:
     """The shared house-styled suggestion combobox (NL-11) — replaces the
     native datalist, which is browser-dependent (notoriously weak in Safari)
     and structurally could not exclude followed entries, carry a secondary
@@ -1207,12 +1303,17 @@ def _render_suggest(kind: str, list_id: str, placeholder: str,
     outlined, spaced, uncolored, no chips. Keyboard-driven (arrow/enter/escape)
     in the shipped JS; with no JS the list stays hidden and the field degrades
     to a plain text input. The JSON payload is <>&-escaped so a hostile
-    recalled name can't break out of the <script> element."""
+    recalled name can't break out of the <script> element.
+
+    NL-68 item 10: suggest_only marks a surface where raw typed text must NEVER
+    act — only a picked suggestion follows (the ruled story-follow contract);
+    the client JS reads data-suggest-only and no-ops any non-matching entry."""
+    only = ' data-suggest-only="1"' if suggest_only else ''
     payload = (json.dumps(data, ensure_ascii=False)
                .replace("<", "\\u003c").replace(">", "\\u003e")
                .replace("&", "\\u0026"))
     return (
-        f'<div class="suggest" data-kind="{_e(kind)}">'
+        f'<div class="suggest" data-kind="{_e(kind)}"{only}>'
         f'<input class="token-search" type="text" role="combobox"'
         f' aria-expanded="false" aria-autocomplete="list"'
         f' aria-controls="{_e(list_id)}" autocomplete="off"'
@@ -1328,10 +1429,45 @@ def _lifecycle_row(t: Dict, stamp: str) -> str:
             f'<span class="q-stamp">{_e(stamp)}</span></div>')
 
 
-def _following_threads_subview(g: Dict[str, List[Dict]]) -> str:
+def _story_follow_suggestions(con: sqlite3.Connection) -> List[Dict]:
+    """NL-68 item 10: the SUGGESTIONS the 'Follow a new story' combobox offers —
+    recent briefing stories/threads you don't already actively follow (the ruled
+    contract: no free text). Sources: the story titles from recent editions, then
+    dormant/dismissed threads you could re-follow. Active follows are excluded
+    (you can't follow what you have). Deterministic, deduped, recent-first."""
+    active = {r["topic"].lower() for r in con.execute(
+        "SELECT topic FROM memory WHERE status = 'active'")}
+    seen: set = set()
+    out: List[Dict] = []
+    for r in con.execute(
+            "SELECT story_slots FROM briefings ORDER BY date DESC LIMIT 10"):
+        try:
+            slots = json.loads(r["story_slots"] or "[]")
+        except (ValueError, TypeError):
+            continue
+        for s in slots if isinstance(slots, list) else []:
+            title = (s.get("story_title") or "").strip()
+            key = title.lower()
+            if title and key not in active and key not in seen:
+                seen.add(key)
+                out.append({"v": title, "l": title})
+    for r in con.execute(
+            "SELECT topic FROM memory WHERE status != 'active' ORDER BY id DESC"):
+        topic = (r["topic"] or "").strip()
+        key = topic.lower()
+        if topic and key not in active and key not in seen:
+            seen.add(key)
+            out.append({"v": topic, "l": topic, "s": "an earlier thread"})
+    return out
+
+
+def _following_threads_subview(g: Dict[str, List[Dict]],
+                               story_suggest: str = "") -> str:
     """The Threads view — the Spine at real scale (§7/§12.2/§12.5): loud updated
     rows (few), then the counted quiet fold; then the lifecycle sections (Quiet
-    for now / You stopped following) below, their headers real h2s."""
+    for now / You stopped following) below, their headers real h2s. NL-68 item
+    10: 'Follow a new story' is a suggestions-only combobox (story_suggest),
+    never a free-text field."""
     active = g["active"]
     updated = sorted((t for t in active if t.get("updated")),
                      key=lambda t: t["topic"].lower())
@@ -1339,8 +1475,7 @@ def _following_threads_subview(g: Dict[str, List[Dict]]) -> str:
     quiet.sort(key=lambda t: t["topic"].lower())                    # A–Z tiebreak
     quiet.sort(key=lambda t: t.get("last_updated") or "", reverse=True)  # recency
 
-    out = ['<div class="follow-story"><button class="follow-new" '
-           'onclick="openAddStory()">＋ Follow a new story</button></div>']
+    out = [f'<div class="follow-story">{story_suggest}</div>']
     if not active:
         out.append(f'<p class="empty-note">{_e(labels.FOLLOWING_EMPTY)}</p>')
     for t in updated:
@@ -1365,7 +1500,11 @@ def _following_threads_subview(g: Dict[str, List[Dict]]) -> str:
 def _render_following(con: sqlite3.Connection) -> str:
     g = _following_rows(con)
     cfg = config.load_sources()
-    threads_html = _following_threads_subview(g)
+    # NL-68 item 10: the story-follow combobox — suggestions-only (no free text).
+    story_suggest = _render_suggest(
+        "story", "story-suggest", "Follow a story…", "Follow a story",
+        _story_follow_suggestions(con), suggest_only=True)
+    threads_html = _following_threads_subview(g, story_suggest)
 
     def token(name: str, kind: str, label: Optional[str] = None) -> str:
         return (f'<span class="token">{_e(label or name)}'
@@ -1375,12 +1514,12 @@ def _render_following(con: sqlite3.Connection) -> str:
     # NL-11: the shared house-styled suggestion component (replaces the native
     # datalist). Excludes already-followed topics; keyboard-accessible; no-JS
     # degrades to a plain input.
+    # NL-68 item 14: the "suggestions draw from everything coverage has
+    # matched…" explainer DIES (interface narration; also stale after item 12).
+    # The placeholder carries the affordance.
     topics = [
         _render_suggest("topic", "topic-suggest", "Search or add a topic…",
                         "Search or add a topic", _topic_suggestions(con, cfg)),
-        '<p class="token-search-hint">Type a topic and press Enter to add, or '
-        'pick a suggestion — suggestions draw from everything coverage has '
-        'matched that you don’t already follow.</p>',
     ]
     for group, label in ((cfg.interests_broad, "Broad"),
                          (cfg.interests_granular, "Specific")):
@@ -1391,13 +1530,16 @@ def _render_following(con: sqlite3.Connection) -> str:
             topics.append('<p class="empty-note">Nothing yet</p>')
         topics.append("</div></div>")
 
+    # NL-68 item 14: the "Suggestions recall writers the system already knows…"
+    # interface narration DIES; the functional facts (a follow adds their feed;
+    # a new writer needs a feed link) stay — they tell the user what an action
+    # does and what it requires, not "here's what you're looking at".
     writers = [
         _render_suggest("writer", "writer-suggest", "Search or add a writer…",
                         "Search or add a writer", _writer_suggestions(cfg)),
         '<p class="token-search-hint">Following a writer adds their feed to '
-        'your sources and boosts their pieces in ranking. Suggestions recall '
-        'writers the system already knows (with their outlet); adding someone '
-        'new still takes their feed link.</p>',
+        'your sources and boosts their pieces in ranking; adding someone '
+        'new takes their feed link.</p>',
         '<div class="token-group"><div class="token-list">',
     ]
     followed = cfg.followed_analyst_sources
@@ -1525,8 +1667,10 @@ def _render_archive(con: sqlite3.Connection) -> str:
     return head + (
         f'<div class="page">'
         f'<h1 class="month-title">{_e(month_name)} <span class="yr">{y}</span></h1>'
-        f'<p class="cal-note">{n_ed} edition{"s" if n_ed != 1 else ""} this month. '
-        f'{_e(labels.ARCHIVE_CAL_INDEX_NOTE)}</p>'
+        # NL-68 item 14: the "The grid is an index of the list below it."
+        # interface-explainer DIES (the audience is smarter). The edition COUNT
+        # is a factual caption, not condescension, and stays.
+        f'<p class="cal-note">{n_ed} edition{"s" if n_ed != 1 else ""} this month.</p>'
         f'{cal}'
         f'<ul class="archive-list">{"".join(list_items)}</ul></div>')
 
@@ -1760,6 +1904,14 @@ def _cite_qualifier(cites: List[str], src_by_key: Dict[str, Dict],
     return f"({names})"
 
 
+def _is_watch_label(label: str) -> bool:
+    """A forward-looking beat label ('Watch for', 'What could follow', 'What to
+    watch') — the seam NL-68 item 4's stale-date guard applies to. Matched by
+    keyword so a copy re-pin of the label doesn't silently unwire the guard."""
+    low = (label or "").lower()
+    return "watch" in low or "could follow" in low or "what's next" in low
+
+
 def _glue_sentence(s: str) -> str:
     """Dumb glue (register spec D5): fixed connective punctuation only — a
     trailing period so joined field-strings read as separate sentences. Never
@@ -1789,13 +1941,25 @@ def _open_unknown_prose(u: Dict) -> str:
     return " ".join(parts)
 
 
-def _open_watch_prose(watch: List[Dict]) -> str:
+def _open_watch_prose(watch: List[Dict], edition_date: str = "") -> str:
     """All watch observables as one closing forward-calendar paragraph
     (register spec D2/D3): observables in contract order, `settles` never
     rendered (it is a join key, not reading material). No lead-in label and no
-    unknowns-flavored opener (D4)."""
-    sents = [_glue_sentence(w.get("observable", "")) for w in watch
-             if (w.get("observable", "") or "").strip()]
+    unknowns-flavored opener (D4). NL-68 item 4: an observable whose only
+    forward date is already past relative to the edition is stripped (the same
+    guard the Today 'Watch for' beat uses); an observable that goes entirely
+    stale is dropped."""
+    guard = _is_calendar_date(edition_date)
+    sents = []
+    for w in watch:
+        obs = (w.get("observable", "") or "").strip()
+        if not obs:
+            continue
+        if guard:
+            obs, _stale = analysis.strip_stale_watch(obs, edition_date)
+            if not obs.strip():
+                continue
+        sents.append(_glue_sentence(obs))
     return " ".join(sents)
 
 
@@ -1877,22 +2041,33 @@ def _deep_numbers_subgroup(brief: Dict, story_anchor: str,
 
 
 def _deep_discrepancy_subgroup(brief: Dict, src_by_key: Dict[str, Dict]) -> str:
-    """NL-29 consolidation slate (DECISIONS 2026-07-14, Merge 1): the
-    discrepancy register FOLDS INTO 'What's still open' as a visually distinct
-    ATTRIBUTED sub-group (two not-settled sections become one). Each entry is
-    the two sides the record actually reports, EACH attributed, plus the
-    record's own note — this is where the receipts themselves disagree RIGHT NOW
-    (it sits with the forward-looking unknowns/watch under one not-settled
-    heading, per the principal's 'if they mean the same thing, why not just
-    combine those'). Display-only recombination, no LLM; gated on content (no
-    discrepancies -> no sub-group). Returns the rows wrapped in a visually
-    distinct container (byte-for-byte the same attributed rows the retired
-    'Unresolved' section rendered), for placement INSIDE the open .deep-section."""
+    """NL-29 consolidation slate (DECISIONS 2026-07-14, Merge 1): the discrepancy
+    register FOLDS INTO 'What's still open' as an ATTRIBUTED sub-group. Each entry
+    is the two sides the record reports, EACH attributed, plus the record's note.
+
+    NL-68 item 5 (his read: 'mostly noise' — matches the CoS 12-entry scan):
+      * RAISE THE BAR — a row survives only if it is a SUBSTANTIVE contested
+        FIGURE/claim. Same-referent figure pairs (a number and its paraphrase/
+        rounding restatement) are not a contradiction and are dropped, reusing
+        analysis' same-referent machinery. Disclosed bar: '20%' vs 'about 20
+        percent' drops; '20% closed' vs '20% open' and 'fully closed' vs 'not
+        fully closed' (the live 07-14 row) survive. (Same-referent DATE pairs are
+        already dropped upstream at generation — validate_brief's Editor F2 rule —
+        so the bar here is the new FIGURE class, not a re-application.)
+      * COLLAPSE BY DEFAULT — the surviving rows render inside a native, keyboard-
+        operable <details> (closed), the count carried in the summary's
+        accessible name. Removal stays one ruling away (the principal's veto).
+    Display-only; no LLM. Gated on content (no substantive discrepancy -> no
+    sub-group, no fold). For placement INSIDE the open .deep-section."""
     rows = []
     for e in brief.get("ledger", []):
         if not e.get("discrepancy"):
             continue
         a, b = e.get("a") or {}, e.get("b") or {}
+        a_val, b_val = str(a.get("value", "")), str(b.get("value", ""))
+        # Raise the bar: drop same-referent figure restatements (paraphrase/round).
+        if analysis.same_referent_numbers(a_val, b_val):
+            continue
         # D1 (M3 gate): non-str treated as absent, never str()-ed — a dict
         # repr is not disclosure; historical rows bypass the validator-side
         # typing, so both surfaces guard.
@@ -1902,23 +2077,29 @@ def _deep_discrepancy_subgroup(brief: Dict, src_by_key: Dict[str, Dict]) -> str:
                      if note else "")
         rows.append(
             '<div class="deep-unresolved-row">'
-            f'<p class="deep-unresolved-side">{_e(a.get("value", ""))} '
+            f'<p class="deep-unresolved-side">{_e(a_val)} '
             f'<span class="cite">{_e(_cite_qualifier(_cites_list(a), src_by_key))}'
             '</span></p>'
             '<p class="deep-unresolved-vs" aria-hidden="true">vs</p>'
-            f'<p class="deep-unresolved-side">{_e(b.get("value", ""))} '
+            f'<p class="deep-unresolved-side">{_e(b_val)} '
             f'<span class="cite">{_e(_cite_qualifier(_cites_list(b), src_by_key))}'
             '</span></p>'
             f'{note_html}</div>')
     if not rows:
         return ""
-    return ('<div class="deep-open-discrepancies">' + "".join(rows) + "</div>")
+    n = len(rows)
+    noun = labels.DISCREPANCY_FOLD_ONE if n == 1 else labels.DISCREPANCY_FOLD
+    return (f'<details class="deep-open-discrepancies">'
+            f'<summary><span class="caret" aria-hidden="true">▸</span> '
+            f'<span class="disc-count">{n} {_e(noun)}</span></summary>'
+            + "".join(rows) + "</details>")
 
 
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       date: str, back_label: Optional[str] = None,
                       return_view: str = "view-today", con=None,
-                      slot: Optional[Dict] = None) -> str:
+                      slot: Optional[Dict] = None,
+                      story: Optional[Dict] = None) -> str:
     """The reader rendering — v6-as-edited is the spec. One artifact, two
     renderings (§5.3): this template never re-composes, never re-ledes;
     'cited' never 'verified'; notes_for_writer never renders. NL-11: back-link
@@ -1976,6 +2157,13 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                f'<h1 class="deep-title">{_e(headline)}</h1>'
                f'{arc_line}</div>')
 
+    # NL-68 item 3 (THE SUPERSET LAW): open with the story's OWN Today prose
+    # (lede + why-it-matters + watch-for) before any analyst section, so the deep
+    # view carries at least everything the Today story showed, plus more.
+    prose_block = _deep_today_prose(story or {}, date)
+    if prose_block:
+        out.append(prose_block)
+
     # NL-63 item 5: the "story so far" timeline — the deep view's flagship
     # section, deterministic from the ledger, sitting under the title block.
     timeline_html = _deep_timeline_html(con, slot, date, story_anchor)
@@ -1992,7 +2180,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                   for prose in (_open_unknown_prose(u)
                                 for u in brief.get("unknowns", []))
                   if prose]
-    open_watch_para = _open_watch_prose(brief.get("watch", []))
+    open_watch_para = _open_watch_prose(brief.get("watch", []), date)
     if open_watch_para:
         open_paras.append(f'<p>{_e(open_watch_para)}</p>')
 
@@ -2239,7 +2427,11 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                f'<p class="deep-eyebrow">{_e(labels.SOURCES_CONTEXT)}</p>'
                f'<h1 class="deep-title">{_e(headline)}</h1></div>')
 
-    summary = (slot.get("summary") or st.get("lede") or "").strip()
+    # NL-68 item 3 (superset): open with the story's Today blurb — the SAME text
+    # the In-Brief snippet shows (st.lede), so the sources-&-context view is never
+    # thinner than the Today card. Falls back to the ranker summary only when the
+    # narrative lede is absent.
+    summary = (st.get("lede") or slot.get("summary") or "").strip()
     if summary:
         out.append(f'<div class="deep-section" id="{story_anchor}-summary">'
                    f'<h2 class="deep-section-label">{_e(labels.IN_BRIEF)}</h2>'
@@ -2274,10 +2466,12 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                + body + "</div>")
 
     # honest footer — this is context, NOT the analyst report (no trust-line
-    # borrowing; the two-lane distinction is the whole point of NL-66(b))
-    out.append('<div class="deep-footer"><p>This is the sources-and-context view '
-               'for an In-Brief item — the summary and sources already '
-               'collected, not a full-picture analysis.</p></div>')
+    # borrowing; the two-lane distinction is the whole point of NL-66(b)). NL-68
+    # item 14: the interface-narration ("This is the sources-and-context view
+    # for an In-Brief item") is trimmed; the load-bearing HONESTY disclosure —
+    # this is NOT a full-picture analysis — stays (boundary: disclosures live).
+    out.append('<div class="deep-footer"><p>Sources and context already '
+               'collected — not a full-picture analysis.</p></div>')
     out.append("</section>")
     return "".join(out)
 
@@ -2313,7 +2507,7 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
             sections.append(_render_deep_view(
                 f"{slug_prefix}story-{i}", st.get("headline", ""), doc,
                 row["date"], back_label=back_label, return_view=return_view,
-                con=con, slot=slot))
+                con=con, slot=slot, story=st))
         elif tier == "quick":
             sections.append(_render_sources_context_view(
                 f"{slug_prefix}story-{i}", st.get("headline", ""), st,

@@ -114,8 +114,6 @@ article.story { scroll-margin-top: 0.75rem; }
 
 /* ============================ TODAY — asymmetric grid (§12.3) ============================ */
 .today-grid { display: grid; grid-template-columns: 7fr 5fr; gap: 0 4rem; padding: 2.2rem 0 1rem; }
-.kicker { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
-  letter-spacing: 0.14em; text-transform: uppercase; color: var(--terra); margin: 0 0 0.6rem; }
 .lead h2.headline { font-family: var(--font-display); font-weight: 700; font-size: 3.5rem;
   line-height: 1.06; letter-spacing: -0.015em; margin: 0 0 0.7rem; }
 .lead .body { font-size: 1.05rem; max-width: 38rem; }
@@ -145,6 +143,11 @@ article.story { scroll-margin-top: 0.75rem; }
 .override-note .reason { display: block; font-weight: 400; margin-top: 0.2rem; color: var(--ink); }
 h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-weight: 700;
   margin: 0 0 0.4rem; line-height: 1.22; }
+/* NL-68 item 8: the story title IS the click-through to its deep view — it reads
+   as a headline (inherits type + ink), not a coloured link; the deep-view intent
+   shows on hover. Keyboard focus lands on the real <a>. */
+.headline a.headline-link { color: inherit; text-decoration: none; }
+.headline a.headline-link:hover { color: var(--terra-deep); }
 
 /* Right column: quiet register */
 .col-right article.story { padding: 0 0 1.6rem; margin-bottom: 1.6rem; border-bottom: 1px solid var(--rule); }
@@ -445,6 +448,24 @@ h1.view-title { font-family: var(--font-display); font-size: 1.5rem; margin: 1.5
   text-transform: uppercase; letter-spacing: 0.06em; margin: 0.1rem 0; }
 .deep-unresolved-note { color: var(--ink-soft); font-size: 0.85rem;
   font-style: italic; margin: 0.2rem 0 0; }
+/* NL-68 item 5: the discrepancy sub-group folds behind a collapsed <details> by
+   default (his read: mostly noise) — native, keyboard-operable, count in the
+   summary; the substantive contested rows stay one click away. */
+details.deep-open-discrepancies { margin: 0.4rem 0 0; }
+details.deep-open-discrepancies > summary { cursor: pointer; list-style: none;
+  font-size: 0.85rem; color: var(--ink-soft); padding: 0.3rem 0; }
+details.deep-open-discrepancies > summary::-webkit-details-marker { display: none; }
+details.deep-open-discrepancies > summary:hover { color: var(--ink); }
+details.deep-open-discrepancies > summary .disc-count { font-weight: 700; color: var(--ink); }
+details.deep-open-discrepancies > summary .caret { display: inline-block;
+  font-size: 0.85em; transition: transform 0.12s ease; }
+details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg); }
+/* NL-68 item 3 (superset law): the deep view opens with the story's own Today
+   prose before the analyst sections — same reading rhythm as the Today body. */
+.deep-today-prose .move-label { font-family: var(--font-sans); font-size: 0.78rem;
+  font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-soft); margin: 1.4rem 0 0.3rem; }
+.deep-today-prose > p { margin: 0 0 0.8rem; }
 /* NL-66(b): the In-Brief sources-&-context view. */
 .sc-tags, .sc-threads, .sc-herefor { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.35rem; }
 .sc-corrob { color: var(--ink-faint); font-size: 0.85rem; margin: 0 0 0.6rem; }
@@ -524,17 +545,6 @@ POPUPS = """
     </div>
   </div>
 </div>
-<div class="popup-scrim" id="popup-add-story" role="dialog" aria-modal="true" aria-labelledby="popup-add-story-title">
-  <div class="popup-card">
-    <h3 id="popup-add-story-title">Follow a new story</h3>
-    <label for="add-story-input">What are you tracking?</label>
-    <input type="text" id="add-story-input" placeholder="e.g. Redistricting fight in Texas">
-    <div class="popup-actions">
-      <button class="cta-outline" onclick="closePopup('popup-add-story')">Cancel</button>
-      <button class="cta-quiet" onclick="addStory()">Follow</button>
-    </div>
-  </div>
-</div>
 <div class="popup-scrim" id="popup-add-topic" role="dialog" aria-modal="true" aria-labelledby="popup-add-topic-title">
   <div class="popup-card">
     <h3 id="popup-add-topic-title">Add topic — <span id="add-topic-name"></span></h3>
@@ -610,7 +620,7 @@ function api(path, body, cb) {
 /* NL-11: ONE mechanism for every verb — reload for fresh server-rendered
    counts, then land the user back on the view + sub-view + scroll they were
    in (never bounce to Today). Verbs replace location.reload() with this. */
-function reloadPreservingView() {
+function reloadPreservingView(expandQuiet) {
   try {
     var av = document.querySelector('.view.active');
     var view = (av && (av.id === 'view-following' || av.id === 'view-archive'))
@@ -619,8 +629,12 @@ function reloadPreservingView() {
     var sub = activeSub ? activeSub.id.replace('sub-', '') : null;
     var y = window.scrollY || window.pageYOffset ||
             document.documentElement.scrollTop || 0;
+    // NL-68 item 10: a just-followed story is a brand-new thread with no delta,
+    // so it lands in the COLLAPSED quiet fold (collapsed whenever any thread
+    // updated this edition) — invisible after the refresh. expandQuiet carries a
+    // one-shot flag so restore opens the fold and the new follow is seen.
     sessionStorage.setItem('nl-restore',
-      JSON.stringify({view: view, sub: sub, y: y}));
+      JSON.stringify({view: view, sub: sub, y: y, expandQuiet: !!expandQuiet}));
   } catch (e) {}
   location.reload();
 }
@@ -651,10 +665,22 @@ function restoreViewAfterReload() {
       });
     }
   }
+  // NL-68 item 10: open the quiet fold after a story-follow so the just-added
+  // (delta-less, therefore quiet) thread is visible rather than buried.
+  if (st.expandQuiet) {
+    var fold = document.querySelector('#sub-threads details.quiet-fold');
+    if (fold) fold.setAttribute('open', '');
+  }
   // Defer the scroll to after layout settles (and after the browser's own
   // restoration, which we opt out of below) so the position actually sticks.
+  // NL-68 item 10: CLAMP to the document height — the quiet fold collapses on
+  // reload (shorter page), so an un-clamped restore could scroll past all
+  // content into blank space and read as "no threads".
   if (typeof st.y === 'number' && st.y > 0) {
-    var applyScroll = function () { window.scrollTo(0, st.y); };
+    var applyScroll = function () {
+      var maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      window.scrollTo(0, Math.min(st.y, maxY));
+    };
     requestAnimationFrame(function () { requestAnimationFrame(applyScroll); });
   }
 }
@@ -863,12 +889,16 @@ function saveNote() {
   api('/api/note', {topic: noteTopic, note: document.getElementById('edit-note-textarea').value},
       function () { closePopup('popup-edit-note'); reloadPreservingView(); });
 }
-function openAddStory() { openPopup('popup-add-story'); }
-function addStory() {
-  var v = document.getElementById('add-story-input').value.trim();
-  if (!v) return;
-  api('/api/follow', {topic: v, briefing_date: CURRENT_DATE},
-      function () { closePopup('popup-add-story'); reloadPreservingView(); });
+/* NL-68 item 10: "Follow a new story" is SUGGESTIONS-ONLY (the ruled contract,
+   DECISIONS 2026-07-10 NL-58 #3) — the free-text add-story input is gone; a
+   follow is created only by picking a recent briefing story/thread from the
+   suggestion combobox. followStory reloads with the quiet fold expanded so the
+   new (delta-less) thread is visible, not buried. */
+function followStory(value) {
+  value = (value || '').trim();
+  if (!value) return;
+  api('/api/follow', {topic: value, briefing_date: CURRENT_DATE},
+      function () { reloadPreservingView(true); });
 }
 var pendingTopic = null;
 function openAddTopic(name) {
@@ -1020,10 +1050,22 @@ function suggestSubmit(container, value) {
   value = (value || '').trim();
   var inp = container.querySelector('input');
   var list = container.querySelector('.suggest-list');
+  // NL-68 item 10: a suggestions-only surface (the story follow) must never act
+  // on raw typed text — only a value that matches a real suggestion follows. A
+  // non-matching entry is a no-op (the input keeps the typed text for
+  // correction); picking a suggestion always matches by construction.
+  if (container.getAttribute('data-suggest-only') === '1') {
+    var match = suggestData(container).some(function (o) {
+      return String(o.v || o.l).toLowerCase() === value.toLowerCase();
+    });
+    if (!value || !match) return;
+  }
   list.hidden = true; inp.setAttribute('aria-expanded', 'false'); container._active = -1;
   inp.value = '';
   if (!value) return;
-  if (container.getAttribute('data-kind') === 'writer') { openAddWriter(value); }
+  var kind = container.getAttribute('data-kind');
+  if (kind === 'writer') { openAddWriter(value); }
+  else if (kind === 'story') { followStory(value); }
   else { openAddTopic(value); }
 }
 function suggestBlur(inp) {

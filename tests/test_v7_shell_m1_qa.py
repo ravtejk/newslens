@@ -267,8 +267,11 @@ def test_still_tracking_mid_list_keeps_story_and_deep_view_ids_aligned():
 
 def test_label_liveness_breadth_shell_surfaces(monkeypatch):
     """Re-pins land in rendered output for the surfaces the implementer's two
-    liveness tests don't cover: the lead kicker, the Archive nav destination,
-    and the still-tracking honest fallback."""
+    liveness tests don't cover: the Archive nav destination and the still-
+    tracking honest fallback. NL-68 item 6 (DECISIONS 2026-07-16) CONSCIOUSLY
+    FLIPS the lead-kicker liveness: the visible 'The Lead' kicker DIED (the
+    design carries the hierarchy), so it no longer renders — WAS: a KICKER_LEAD
+    re-pin appeared in the page."""
     con = _con()
     monkeypatch.setattr(labels, "KICKER_LEAD", "ZZ-KICKER")
     monkeypatch.setattr(labels, "NAV_ARCHIVE", "ZZ-ARCHIVE")
@@ -279,7 +282,7 @@ def test_label_liveness_breadth_shell_surfaces(monkeypatch):
     seed(con, slots, stories)
     page, _ = server.build_page(con)
     con.close()
-    assert "ZZ-KICKER" in page and "The Lead" not in page
+    assert "ZZ-KICKER" not in page and "The Lead" not in page   # kicker retired (item 6)
     assert "ZZ-ARCHIVE" in page
     assert "ZZ-NO-DATE." in page and "No next date is set." not in page
 

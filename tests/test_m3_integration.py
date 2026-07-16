@@ -110,9 +110,14 @@ def test_deep_view_renders_with_affordance_only_where_valid_brief(tmp_paths):
     assert page.count("→ The full picture") == 1
     assert "openDeepView('story-0', event)" in page
     assert "view-deep-story-0" in page and "view-deep-story-1" not in page
-    # the file's law: cited never verified; no re-lede; jumplist; back-nav
+    # the file's law: cited never verified; jumplist; back-nav.
     assert "cited, not verified" in page
-    assert "Lede." not in page.split("view-deep-story-0")[1].split("</section>")[0]
+    # NL-68 item 3 (THE SUPERSET LAW, DECISIONS 2026-07-16) CONSCIOUSLY FLIPS the
+    # old "no re-lede" assertion: a story's deep view now OPENS with its own Today
+    # prose (lede + beats) before the analyst sections, so it always contains AT
+    # LEAST the Today story. WAS: `"Lede." not in` the deep view.
+    deep0 = page.split("view-deep-story-0")[1].split("</section>")[0]
+    assert "deep-today-prose" in deep0 and "Lede." in deep0
     assert "deep-jumplist" in page and "closeDeepView(event)" in page
     assert "lastStoryAnchor" in page
     # trailing qualifier grammar, not badges

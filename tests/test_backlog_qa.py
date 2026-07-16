@@ -75,8 +75,10 @@ def test_cancel_buttons_keep_an_explicit_ungated_exit():
     """The guard must not trap: every popup keeps an explicit
     closePopup('popup-...') control that bypasses the dirty check —
     Cancel is a deliberate act, the guard is for accidents."""
+    # NL-68 item 10 (DECISIONS 2026-07-16): popup-add-story (the free-text follow)
+    # is GONE — the story follow is a suggestions-only combobox, not a popup.
     for pid in ("popup-add-topic", "popup-add-writer", "popup-edit-note",
-                "popup-add-story", "popup-delete-confirm"):
+                "popup-delete-confirm"):
         assert f"closePopup('{pid}')" in webui.PAGE + webui.JS
 
 

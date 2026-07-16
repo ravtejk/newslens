@@ -1204,7 +1204,10 @@ def test_following_uses_suggestion_component_not_datalist(ui):
     page = body.decode("utf-8")
     following = page[page.index('id="view-following"'):page.index('id="view-archive"')]
     assert "<datalist" not in page                    # native datalist gone everywhere
-    assert following.count('class="suggest"') == 2    # topics + writers, one component
+    # NL-68 item 10 (DECISIONS 2026-07-16): 'Follow a new story' became a THIRD
+    # suggest combobox (suggestions-only) — WAS 2 (topics + writers).
+    assert following.count('class="suggest"') == 3    # topics + writers + story-follow
+    assert following.count('data-suggest-only="1"') == 1   # only the story follow is constrained
     assert 'role="combobox"' in following
     assert 'class="suggest-data"' in following         # JSON payload embedded
     assert 'role="listbox"' in following and "hidden></ul>" in following  # hidden until JS
@@ -1282,12 +1285,15 @@ def test_verbs_preserve_view_through_one_reload_mechanism():
     assert "function restoreViewAfterReload" in js
     assert "restoreViewAfterReload();" in js               # run on load
     assert "sessionStorage.setItem('nl-restore'" in js
-    # every mutating verb reloads through the preserving path — no raw bounce:
-    for fn in ("saveNote", "addStory", "addTopic", "addWriter",
+    # every mutating verb reloads through the preserving path — no raw bounce.
+    # NL-68 item 10 (DECISIONS 2026-07-16): addStory (free-text) is GONE, replaced
+    # by followStory (suggestions-only), which reloads with the fold-expand flag
+    # reloadPreservingView(true) — so the assertion matches the call prefix.
+    for fn in ("saveNote", "followStory", "addTopic", "addWriter",
                "deleteThread", "threadAction", "generateAgain", "removeToken"):
         region = js.split("function " + fn, 1)[1].split("\nfunction ", 1)[0]
         assert "location.reload()" not in region, fn
-        assert "reloadPreservingView()" in region, fn
+        assert "reloadPreservingView(" in region, fn
     # removeToken re-fetches (count refresh), never the old silent in-place hide:
     remove_region = js.split("function removeToken", 1)[1].split("\nfunction ", 1)[0]
     assert "style.display = 'none'" not in remove_region

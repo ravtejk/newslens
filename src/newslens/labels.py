@@ -23,7 +23,10 @@ NAV_FOLLOWING = "Following"
 NAV_ARCHIVE = "Archive"
 
 # --- Today front-page furniture ---------------------------------------------
-KICKER_LEAD = "The Lead"          # the lead story's kicker
+# NL-68 item 6: the visible "The Lead" kicker DIED — the design carries the
+# hierarchy (largest type, top-left). The constant is retired-but-kept so nothing
+# imports a dangling name; no surface renders it (grep server.py for KICKER_LEAD).
+KICKER_LEAD = "The Lead"          # RETIRED (NL-68 item 6) — not rendered anywhere
 IN_BRIEF = "In brief"             # the quick-tier cluster heading
 
 # --- The edition bar (§6 — the podcast player is edition-level furniture) -----
@@ -46,6 +49,9 @@ DEEP_EYEBROW = "The full picture"           # the deep-view eyebrow (same words 
 # --- Deep-view jumplist short labels (where they differ from the section head) -
 JUMP_FACTS = "Facts"
 JUMP_OPEN = "Still open"
+# NL-68 item 5: the collapsed discrepancy sub-group's summary (count-bearing).
+DISCREPANCY_FOLD = "points where the sources disagree"
+DISCREPANCY_FOLD_ONE = "point where the sources disagree"
 
 # --- Memory surfaces (thread page + deep-view memory sections) ---------------
 WHERE_THIS_STANDS = "Where this stands"
@@ -115,5 +121,6 @@ BACK_TO_ARCHIVE = "← Back to Archive"
 
 # --- Archive (§8 calendar law) -----------------------------------------------
 ARCHIVE_EMPTY = "Nothing yet"
-ARCHIVE_CAL_INDEX_NOTE = "The grid is an index of the list below it."
+# NL-68 item 14: ARCHIVE_CAL_INDEX_NOTE ("The grid is an index of the list below
+# it.") REMOVED — interface-explaining copy the principal named as condescension.
 ARCHIVE_TODAY_TAG = "TODAY"

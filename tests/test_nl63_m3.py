@@ -283,8 +283,11 @@ def test_sources_context_view_shows_summary_sources_tags_and_here_for(tmp_paths)
     # honestly labeled — sources & context, NOT the analyst 'full picture'
     assert "Sources &amp; context" in sec
     assert "The full picture" not in sec
-    # the summary
-    assert "A quick-hit summary of the court story." in sec
+    # NL-68 item 3 (SUPERSET LAW, DECISIONS 2026-07-16): the view opens with the
+    # story's Today blurb — the SAME text the In-Brief snippet shows (st.lede) —
+    # so it is never thinner than the Today card. WAS: it opened with the ranker
+    # summary (slot['summary']), which could differ from the Today blurb.
+    assert "Lede." in sec                        # the Today In-Brief blurb (superset)
     # a real source list resolved from item_ids -> source_items
     assert "Al Jazeera" in sec and "Court independence in question" in sec
     assert 'href="https://aj.example/a"' in sec

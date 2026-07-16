@@ -767,6 +767,132 @@ def _same_referent_dates(a_val: str, b_val: str, briefing_date: str) -> bool:
     return any(da.date() == db.date() for da in a_dates for db in b_dates)
 
 
+def _resolve_near(month: int, day: int, base: datetime) -> Optional[datetime]:
+    """Resolve a bare month+day to the calendar year that lands it NEAREST the
+    edition date (a bare 'July 12' in a July edition is this year's; a bare
+    'January 3' read in July is next January, not seven months back)."""
+    best = None
+    for yr in (base.year - 1, base.year, base.year + 1):
+        try:
+            d = datetime(yr, month, day)
+        except ValueError:
+            continue
+        if best is None or abs((d - base).days) < abs((best - base).days):
+            best = d
+    return best
+
+
+_YEAR_TAIL_RE = re.compile(r"^\s*,?\s*(\d{4})\b")
+_STALE_PAST_WINDOW_DAYS = 90
+
+
+def _sentence_has_stale_date(sentence: str, base: datetime) -> bool:
+    for m in _MONTH_DAY_RE.finditer(sentence or ""):
+        month, day = _MONTHS[m.group(1).lower()], int(m.group(2))
+        year_m = _YEAR_TAIL_RE.match(sentence[m.end():])
+        if year_m:
+            # An explicit year is the writer's own referent — resolved
+            # verbatim, never nearest-year (gate fix, QA item-4 edge b).
+            try:
+                d = datetime(int(year_m.group(1)), month, day)
+            except ValueError:
+                continue
+            if d.date() < base.date():
+                return True
+            continue
+        d = _resolve_near(month, day, base)
+        # Asymmetric window (gate fix, QA item-4 edge a): in forward-looking
+        # text a bare month-day months behind the edition means NEXT year,
+        # not a stale reference — only the recent-past window strips.
+        if (d is not None and d.date() < base.date()
+                and (base - d).days <= _STALE_PAST_WINDOW_DAYS):
+            return True
+    return False
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def strip_stale_watch(text: str, edition_date: str) -> Tuple[str, List[str]]:
+    """NL-68 item 4: forward-looking watch / what-could-follow material carrying
+    a month-name+day date EARLIER than the edition date is a defect (the live
+    07-14 'talks on July 12' shipped in the July-14 edition). Drop any SENTENCE
+    whose date resolves to before the edition; keep the rest. Best-effort by
+    design — dateless or unparseable text is returned untouched (no false teeth,
+    per the dispatch). Returns (cleaned_text, [stripped sentences])."""
+    try:
+        base = datetime.strptime((edition_date or "")[:10], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return text, []
+    if not text or not text.strip():
+        return text, []
+    kept, stripped = [], []
+    for s in _SENTENCE_SPLIT_RE.split(text.strip()):
+        (stripped if _sentence_has_stale_date(s, base) else kept).append(s)
+    if not stripped:
+        return text, []
+    return " ".join(kept).strip(), stripped
+
+
+_NUM_TOKEN_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+_SCALE_WORDS = {"thousand": 1e3, "million": 1e6, "billion": 1e9, "trillion": 1e12,
+                "k": 1e3, "m": 1e6, "bn": 1e9, "b": 1e9, "tn": 1e12}
+
+
+def _numeric_referents(value: str) -> frozenset:
+    """The set of numeric magnitudes a discrepancy side actually asserts, scale-
+    words applied ('1.2 billion' -> 1.2e9, '$1,200' -> 1200). Empty when the side
+    carries no number. Rounding to 4 significant figures folds '19.8' and '19.80'
+    but keeps genuinely different figures apart."""
+    text = (value or "").lower()
+    out = set()
+    for m in _NUM_TOKEN_RE.finditer(text):
+        try:
+            n = float(m.group(0).replace(",", ""))
+        except ValueError:
+            continue
+        tail = text[m.end():m.end() + 12]
+        for word, mult in _SCALE_WORDS.items():
+            if re.match(r"\s*(?:%s)\b" % re.escape(word), tail):
+                n *= mult
+                break
+        out.add(float(f"{n:.4g}"))
+    return frozenset(out)
+
+
+_NUMERIC_NOISE = frozenset(_SCALE_WORDS) | {
+    "percent", "pct", "about", "approximately", "approx", "around", "roughly",
+    "nearly", "circa", "est", "estimated", "some"}
+
+
+def _residual_words(value: str) -> Tuple[str, ...]:
+    """The meaning-bearing words of a discrepancy side once its numbers, scale
+    words, units and pure hedges are removed — what remains distinguishes '20%
+    up' from '20% down' (residual 'up' vs 'down') while '20%' and 'about 20
+    percent' collapse to the same empty residual."""
+    text = _NUM_TOKEN_RE.sub(" ", (value or "").lower())
+    return tuple(sorted(w for w in re.findall(r"[a-z]+", text)
+                        if w not in _NUMERIC_NOISE))
+
+
+def same_referent_numbers(a_val: str, b_val: str) -> bool:
+    """NL-68 item 5 (raise the discrepancy bar): two 'contested' figures that are
+    really the SAME number worn differently — '20%' vs 'about 20 percent',
+    '$1.2B' vs '$1.2 billion', '1,200' vs '1200' — are paraphrase/rounding noise,
+    not a substantive contradiction. True only when BOTH sides carry exactly ONE
+    number each (BUG-36: multi-number sides can swap number–noun pairings —
+    '20 dead, 50 injured' vs '50 dead, 20 injured' — which set-comparison cannot
+    see; multi-referent sides always keep the row), the numeric magnitudes match
+    exactly (4-sig-fig rounding folded), AND the residual meaning-bearing words
+    are identical — so '20% up' vs '20% down' (same number, opposite direction)
+    and '20% closed' vs '20% open' are NEVER folded.
+    Conservative by construction: any doubt keeps the row."""
+    a_nums, b_nums = _numeric_referents(a_val), _numeric_referents(b_val)
+    if len(a_nums) != 1 or len(b_nums) != 1 or a_nums != b_nums:
+        return False
+    return _residual_words(a_val) == _residual_words(b_val)
+
+
 def compute_provenance(cites: List[str], sources: Dict[str, Dict]) -> str:
     """CODE-computed provenance tier (contract §5.1.2) — never model-claimed."""
     cluster_outlets = {sources[c]["outlet"] for c in cites
@@ -1003,6 +1129,15 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
                 warnings.append(
                     f"false discrepancy dropped: {a_val!r} and {b_val!r} "
                     "resolve to the same day (Editor F2 same-referent rule)")
+                continue
+            # NL-68 item 5 (raise the bar): a figure and its paraphrase/rounding
+            # restatement ('20%' vs 'about 20 percent') is not a contradiction —
+            # drop it here so new briefs never persist the noise (the render-side
+            # guard cleans already-persisted editions).
+            if same_referent_numbers(a_val, b_val):
+                warnings.append(
+                    f"false discrepancy dropped: {a_val!r} and {b_val!r} "
+                    "restate the same figure (NL-68 item 5 same-referent rule)")
                 continue
             # D1 (M3 gate): `note` typed at the boundary like every field
             # (BUG-10 law) — non-str note dropped as a disclosed repair
