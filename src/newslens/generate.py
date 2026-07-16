@@ -1628,6 +1628,15 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
     delta_rep = memory_core.write_deltas_for_edition(
         con, date, briefing_id, briefs_by_slot, slots)
     report.warnings.append("memory: " + delta_rep.summary())
+    # Delta-7 photocopy gap (Content council 2026-07-16): a near-duplicate
+    # significance is WARN-grade — surfaced here (and into report.memory below)
+    # so diagnose sees it; the delta itself is written as-is.
+    for sus in delta_rep.photocopy_suspects:
+        report.warnings.append(
+            f"memory: photocopy-suspect delta on {sus['thread']!r} "
+            f"({sus['date']}) — significance near-identical (Jaccard "
+            f"{sus['score']}) to the {sus['against_edition']} delta; written "
+            "as-is (WARN), supersede/repair if a true duplicate")
     state_results: List[Dict] = []
     try:
         state_template = (paths.PROMPTS_DIR / "thread_state.txt").read_text(
@@ -1651,7 +1660,8 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
             report.memory_usd += sr.cost_usd
             state_results.append({"thread": topic, "outcome": sr.outcome,
                                   "detail": sr.detail, "usd": round(sr.cost_usd, 6)})
-            if sr.outcome in ("stale", "rejected", "skipped-budget", "skipped-no-ledger"):
+            if sr.outcome in ("stale", "rejected", "skipped-budget",
+                              "skipped-no-ledger", "failed"):
                 report.warnings.append(
                     f"memory: state for {topic!r} {sr.outcome} — {sr.detail}")
     finally:
@@ -1673,6 +1683,10 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
         "deltas_skipped_reasons": list(delta_rep.skipped),
         "threads_moved": len(delta_rep.moved_thread_ids),
         "state_rewrites": state_results,
+        # Delta-7 photocopy gap: the WARN-grade near-duplicate significances,
+        # carried durably (like deltas_skipped_reasons) so diagnose can show
+        # them — a silent write-as-is would be indistinguishable from amnesia.
+        "photocopy_suspects": list(delta_rep.photocopy_suspects),
     }
     return spent
 
@@ -1696,7 +1710,7 @@ class BackfillReport:
 
 def run_memory_backfill(
     date: Optional[str] = None, con: Optional[sqlite3.Connection] = None,
-    env: Optional[dict] = None, state_chat=None,
+    env: Optional[dict] = None, state_chat=None, force: bool = False,
 ) -> BackfillReport:
     """Live-contact fix #4 — run the NL-63 memory pass for an ALREADY-PUBLISHED
     edition of record whose moat was never written (a `--no-refresh` record
@@ -1785,6 +1799,38 @@ def run_memory_backfill(
                 "recorded, not filled with invented material)")
             return bf
 
+        # NL-72 (gate chip, loop #5): a backfill for an edition OLDER than a
+        # thread's existing activity would build state from FUTURE-DATED ledger
+        # entries and stamp it with the older as_of_date — poisoning BUG-30's
+        # strict prior-coverage reads (a state stamped `date` holding later
+        # knowledge). Refuse when any thread the pass WOULD MOVE already carries
+        # a newer delta or state; --force overrides with a disclosed warning.
+        from . import memory_core
+        offenders = memory_core.backfill_newer_activity(
+            con, date, slots, briefs_by_slot)
+        if offenders:
+            detail = "; ".join(
+                f"{o['thread']} has activity through {o['newer_date']}"
+                for o in offenders)
+            if not force:
+                bf.refused = True
+                bf.reason = (
+                    f"the {date} backfill would MOVE thread(s) that already "
+                    f"carry NEWER activity ({detail}) — building state from "
+                    f"future-dated ledger entries and stamping it as-of {date} "
+                    "would poison strict prior-coverage reads (a state stamped "
+                    f"{date} holding later knowledge, worse than the latest-by-"
+                    "id regression NL-72 guards). Re-run with --force to build "
+                    "the older-edition state from the ledger as it stands "
+                    "(the poison is then a disclosed, deliberate choice)")
+                return bf
+            bf.warnings.append(
+                f"NL-72 --force override: backfilling {date} over thread(s) "
+                f"with newer activity ({detail}) — the standing state is being "
+                f"regenerated from the FULL ledger and stamped as-of {date}, so "
+                "it may carry knowledge that postdates the edition; this was an "
+                "explicit --force choice, not a silent one")
+
         cap = config.budget_cap_usd_per_run(src_env)
         bf.cap = cap
         report = GenReport(date=date, variant=ACTIVE_VOICE)
@@ -1813,8 +1859,112 @@ def run_memory_backfill(
         bf.threads_moved = report.memory.get("threads_moved", 0)
         bf.state_rewrites = report.memory.get("state_rewrites", [])
         bf.memory_usd = report.memory_usd
-        bf.warnings = list(report.warnings)
+        # Preserve any pre-pass warning already on the report (the NL-72 --force
+        # disclosure is appended before the pass runs) — append, never replace.
+        bf.warnings = list(bf.warnings) + list(report.warnings)
         return bf
+    finally:
+        if own_con:
+            con.close()
+
+
+@dataclass
+class StateRepairReport:
+    """NL-73 outcome. `refused` is the honest no-op when nothing is stale (the
+    common, healthy case) — distinct from a failed run. `repaired` carries one
+    entry per stale thread the pass touched: {thread, thread_id, outcome, detail,
+    usd, as_of}."""
+    refused: bool = False
+    reason: str = ""
+    cap: float = 0.0
+    spent_usd: float = 0.0
+    repaired: List[Dict] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+def run_state_repair(
+    thread_id: Optional[int] = None, all_threads: bool = False,
+    con: Optional[sqlite3.Connection] = None, env: Optional[dict] = None,
+    state_chat=None,
+) -> StateRepairReport:
+    """NL-73 the state-repair rung: rewrite the standing state for threads whose
+    latest LIVE delta postdates their latest state (the exact shape a failed
+    state rewrite leaves — the delta landed, the rewrite failed, and under the
+    fixed moved-semantics it self-heals only on the thread's NEXT real move). A
+    targeted repair does the healing now: full-ledger regeneration per the write
+    law (memory_core.rewrite_state, stamped at the latest live delta's date),
+    cap pre-checked, disclose-don't-crash, refuses when nothing is stale.
+
+    Exactly ONE selector: `thread_id=N` scopes to one thread; `all_threads=True`
+    sweeps every stale thread. Passing neither or both is a caller error
+    (ValueError) — the CLI enforces the mutually-exclusive group.
+
+    The paid spend is durable on each new thread_state row's cost_usd (there is
+    no single edition to fold into — a repair is thread-scoped, not edition-
+    scoped); rep.spent_usd is the run total. `state_chat` is injectable so the
+    offline suite exercises this exact path without spending."""
+    import os
+
+    if (thread_id is None) == (not all_threads):
+        raise ValueError(
+            "run_state_repair needs EXACTLY ONE of thread_id / all_threads "
+            f"(got thread_id={thread_id!r}, all_threads={all_threads!r})")
+
+    src_env = env if env is not None else os.environ
+    key = (src_env.get("OPENAI_API_KEY") or "").strip()
+    rep = StateRepairReport()
+
+    own_con = con is None
+    if own_con:
+        db.migrate()
+        con = db.connect()
+    try:
+        from . import memory_core
+        stale = memory_core.find_stale_state_threads(con, thread_id=thread_id)
+        if not stale:
+            rep.refused = True
+            rep.reason = (
+                "no thread has a standing state behind its latest live delta — "
+                "nothing is stale, nothing to repair"
+                + (f" (thread {thread_id})" if thread_id is not None else ""))
+            return rep
+
+        try:
+            state_template = (paths.PROMPTS_DIR / "thread_state.txt").read_text(
+                encoding="utf-8")
+        except OSError as exc:
+            rep.refused = True
+            rep.reason = (f"state prompt unreadable ({exc}) — cannot repair "
+                          "without the regeneration template")
+            return rep
+
+        cap = config.budget_cap_usd_per_run(src_env)
+        rep.cap = cap
+        spent = 0.0
+        try:
+            for s in stale:
+                # Each rewrite stamps the state at the thread's LATEST LIVE delta
+                # date — the state catches up exactly to where the ledger is.
+                sr = memory_core.rewrite_state(
+                    con, s["thread_id"], s["topic"], s["latest_delta_date"],
+                    None, key, state_template, remaining_usd=cap - spent,
+                    chat=state_chat)
+                spent += sr.cost_usd
+                rep.repaired.append({
+                    "thread": s["topic"], "thread_id": s["thread_id"],
+                    "outcome": sr.outcome, "detail": sr.detail,
+                    "usd": round(sr.cost_usd, 6),
+                    "as_of": s["latest_delta_date"]})
+                if sr.outcome != "written":
+                    rep.warnings.append(
+                        f"state repair for {s['topic']!r} {sr.outcome} — "
+                        f"{sr.detail}")
+        finally:
+            # rewrite_state never raises post-paid-chat (D2 fix), so spent is
+            # always complete here; the finally is defense-in-depth against a
+            # pre-chat raise (template render) leaving the total unreported.
+            rep.spent_usd = round(spent, 6)
+        return rep
     finally:
         if own_con:
             con.close()

@@ -90,6 +90,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     mem_note.add_argument("topic")
     mem_note.add_argument("text")
+    mem_close = memory_sub.add_parser(
+        "close",
+        help="record that a thread reached its end (collect-now closure "
+        "register, migration 0015) — the explicit-action lane (§F). Writes a "
+        "dated closure fact; refuses a second closure on the same thread.",
+    )
+    mem_close.add_argument("topic")
+    mem_close.add_argument("--reason", default="",
+                           help="why the thread closed (stored on the record)")
 
     analyze_p = sub.add_parser(
         "analyze",
@@ -148,6 +157,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--date", default=None, metavar="YYYY-MM-DD",
         help="edition date to backfill (default: today, local)",
     )
+    mb_p.add_argument(
+        "--force", action="store_true",
+        help="NL-72 override: backfill even when a thread the pass would move "
+        "already carries activity NEWER than the target date. Without --force "
+        "the backfill REFUSES (stamping older-dated state built from future "
+        "ledger entries poisons strict prior-coverage reads); --force proceeds "
+        "and DISCLOSES the choice in a warning.",
+    )
 
     mp_p = sub.add_parser(
         "memory-mark-provenance",
@@ -171,6 +188,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     mp_p.add_argument(
         "--reason", default="",
         help="the human/basis note stored with the mark",
+    )
+
+    rs_p = sub.add_parser(
+        "memory-repair-state",
+        help="NL-73: rewrite the standing state for threads whose latest LIVE "
+        "delta postdates their state (the shape a failed state rewrite leaves — "
+        "it otherwise self-heals only on the thread's next real move). Full-"
+        "ledger regeneration per the write law, stamped at the latest delta's "
+        "date; cap pre-checked; SPENDS (one state-rewrite LLM call per stale "
+        "thread); refuses when nothing is stale.",
+    )
+    rs_group = rs_p.add_mutually_exclusive_group(required=True)
+    rs_group.add_argument(
+        "--thread-id", type=int, metavar="N",
+        help="repair exactly this thread (memory.id)",
+    )
+    rs_group.add_argument(
+        "--all", action="store_true",
+        help="sweep and repair every stale thread",
     )
 
     args = parser.parse_args(argv)
@@ -312,7 +348,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 2
         config.load_env()
         try:
-            bf = generate.run_memory_backfill(date=args.date)
+            bf = generate.run_memory_backfill(date=args.date, force=args.force)
         except Exception as exc:  # CLI boundary: loud, human-readable, nonzero
             print(f"memory-backfill failed: {type(exc).__name__}: {exc}",
                   file=sys.stderr)
@@ -371,6 +407,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         finally:
             con.close()
+
+    if args.command == "memory-repair-state":
+        from . import config, generate
+
+        config.load_env()
+        try:
+            rep = generate.run_state_repair(
+                thread_id=args.thread_id, all_threads=args.all)
+        except Exception as exc:  # CLI boundary: loud, human-readable, nonzero
+            print(f"memory-repair-state failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1
+        if rep.refused:
+            print(f"memory-repair-state — nothing to do: {rep.reason}")
+            return 0
+        print(f"memory-repair-state — cap ${rep.cap:.2f} | "
+              f"state-rewrite spend ${rep.spent_usd:.4f}")
+        for r in rep.repaired:
+            print(f"  state[{r['thread']}]: {r['outcome']} (as of "
+                  f"{r['as_of']}) — {r['detail']}")
+        for w in rep.warnings:
+            print(f"  ⚠ {w}")
+        return 0
 
     if args.command == "rank":
         import re as _re
@@ -574,6 +633,17 @@ def _memory_command(args) -> int:
                     (args.text.strip() or None, memory._utc_now_iso(), row["id"]),
                 )
             print(f"note set on {topic!r} — the generation prompt reads it verbatim")
+        elif args.memory_command == "close":
+            from . import memory_core, ranking
+
+            edition_date = ranking.local_today()
+            ok, msg, _cid = memory_core.close_thread(
+                con, topic, args.reason, edition_date)
+            if not ok:
+                print(msg, file=sys.stderr)
+                return 1
+            print(f"{msg} — recorded as a dated closure fact (the thread page "
+                  "renders it when the closure feature ships)")
 
         # RENDER-ONLY refresh — a trailing full sync would re-read the file
         # written by the OPENING sync (which predates this verb) and file-wins

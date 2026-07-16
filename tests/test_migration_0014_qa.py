@@ -611,7 +611,10 @@ def test_migrations_0011_0014_apply_in_order_on_a_real_shaped_db(tmp_path):
         con.close()
 
     applied = db.migrate(db_path=db_path)   # full shipped migrations dir
-    assert [f[:4] for f in applied] == ["0011", "0012", "0013", "0014"]
+    # 0011-0014 are the memory-core set under test; 0015/0016 are the later
+    # collect-now schemas (ruling C) — all apply in lexicographic order.
+    assert [f[:4] for f in applied] == ["0011", "0012", "0013", "0014",
+                                        "0015", "0016"]
 
     con = db.connect(db_path)
     try:

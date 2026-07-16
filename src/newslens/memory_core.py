@@ -213,10 +213,19 @@ class DeltaWriteReport:
     # nothing — the self-limiting property that makes the "any persisted run
     # writes the moat" gate (incl. --no-refresh record runs, re-runs) safe.
     moved_thread_ids: List[int] = field(default_factory=list)  # newly-written -> state rewrite
+    # The delta-7 photocopy gap (Content council 2026-07-16): a newly-written
+    # delta whose significance is near-identical to an existing LIVE delta's
+    # significance on the same thread. WARN-grade only — the delta is written
+    # AS-IS (never a silent rewrite); this note rides into the durable report so
+    # diagnose/supersession can see it. {thread, thread_id, date, against_edition,
+    # against_delta_id, score}.
+    photocopy_suspects: List[Dict] = field(default_factory=list)
 
     def summary(self) -> str:
         return (f"ledger: {len(self.written)} delta(s) written"
-                + (f", {len(self.skipped)} skipped" if self.skipped else ""))
+                + (f", {len(self.skipped)} skipped" if self.skipped else "")
+                + (f", {len(self.photocopy_suspects)} photocopy-suspect"
+                   if self.photocopy_suspects else ""))
 
 
 def _arc_two_clause(arc: Dict) -> Tuple[str, str]:
@@ -238,6 +247,71 @@ def _external_cites(arc: Dict) -> List[str]:
             if k and k[0] in "SRC":
                 cites.append(k)
     return cites
+
+
+# ---------------------------------------------------------------------------
+# The delta-7 photocopy gap (Content council 2026-07-16, §1.3 / Sten's audit).
+# The anti-photocopier law governs STATE (regen from ledger, never from the
+# prior state text). It has NO delta-level check — so delta 7's significance
+# ("The conflict has MOVED BEYOND ...") could photocopy delta 5's ("The conflict
+# has ESCALATED FROM ...") nearly verbatim and slip onto the ledger. Detection
+# is deterministic (normalized token overlap, no LLM — Rook's law); the honest
+# response is WARN + write-as-is (NEVER a silent rewrite of model output),
+# leaving supersession/repair (NL-73) to cure a genuine duplicate.
+# ---------------------------------------------------------------------------
+
+# The disclosed threshold: two significance clauses whose normalized token sets
+# overlap at Jaccard >= this are near-identical. The real delta-5-vs-7 shape
+# ("escalated from" vs "moved beyond", 2 of ~20 tokens differ) scores ~0.80;
+# 0.7 clears that comfortably while a genuinely different clause (delta 3 vs 5)
+# scores near 0. Conservative by construction: it under-flags (misses a loose
+# paraphrase) rather than over-flags (never mislabels distinct developments).
+PHOTOCOPY_SIGNIFICANCE_JACCARD = 0.7
+
+_PHOTOCOPY_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _normalized_tokens(text: str) -> frozenset:
+    """Case-, punctuation-, and whitespace-normalized token SET for overlap
+    scoring. Deterministic; no stemming, no stopword list (a stopword list is a
+    tuning surface — the plain set + a high threshold is the boring, inspectable
+    choice)."""
+    t = _PHOTOCOPY_PUNCT_RE.sub(" ", (text or "").lower())
+    return frozenset(w for w in t.split() if w)
+
+
+def _significance_overlap(a: str, b: str) -> float:
+    """Jaccard overlap of two significance clauses' normalized token sets in
+    [0.0, 1.0]. 0.0 when either is empty."""
+    ta, tb = _normalized_tokens(a), _normalized_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    union = len(ta | tb)
+    return len(ta & tb) / union if union else 0.0
+
+
+def photocopy_suspect_significance(
+    con: sqlite3.Connection, thread_id: int, significance: str,
+    before_date: str) -> Optional[Dict]:
+    """The FIRST existing LIVE delta on this thread (edition_date STRICTLY BEFORE
+    `before_date`) whose significance is near-identical (normalized Jaccard >=
+    PHOTOCOPY_SIGNIFICANCE_JACCARD) to `significance`, or None. Compares only
+    strictly-earlier deltas so a sanctioned same-day split never reads as a
+    photocopy of itself. Superseded deltas are excluded (_live_entries). Returns
+    {delta_id, edition_date, score} — detection only; the caller WARNs and writes
+    the delta AS-IS."""
+    sig = (significance or "").strip()
+    if not sig:
+        return None
+    for e in _live_entries(ledger_for_thread(con, thread_id, before_date=before_date)):
+        other = (e.get("significance") or "").strip()
+        if not other:
+            continue
+        score = _significance_overlap(sig, other)
+        if score >= PHOTOCOPY_SIGNIFICANCE_JACCARD:
+            return {"delta_id": e.get("id"), "edition_date": e["edition_date"],
+                    "score": round(score, 3)}
+    return None
 
 
 def write_deltas_for_edition(
@@ -310,6 +384,18 @@ def write_deltas_for_edition(
                 # now means "the ledger MOVED this pass" (newly-written only).
                 report.skipped.append(f"{topic}: delta for {date} already on file (idempotent)")
                 continue
+            # Delta-7 photocopy gap (Content council 2026-07-16): a new delta
+            # whose significance near-duplicates an existing LIVE delta's on this
+            # thread is WARN-grade — recorded here, written AS-IS below (never a
+            # silent rewrite of model output). Supersession/repair (NL-73) cures a
+            # genuine duplicate. Checked against strictly-earlier deltas only.
+            suspect = photocopy_suspect_significance(con, tid, signif, before_date=date)
+            if suspect:
+                report.photocopy_suspects.append({
+                    "thread": topic, "thread_id": tid, "date": date,
+                    "against_edition": suspect["edition_date"],
+                    "against_delta_id": suspect["delta_id"],
+                    "score": suspect["score"]})
             # NL-69 self-mark (migration 0014): classify BEFORE the insert, so
             # the antecedent search (strict before_date) reads only PRIOR rows
             # and never the delta we are about to write. A delta echoing a
@@ -394,6 +480,80 @@ def _table_exists(con: sqlite3.Connection, name: str) -> bool:
     return con.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
         (name,)).fetchone() is not None
+
+
+# ---------------------------------------------------------------------------
+# NL-72: the backfill newer-activity guard (gate chip, loop #5). A backfill for
+# an edition OLDER than a thread's existing activity would build state from
+# FUTURE-DATED ledger entries, stamp it with the older as_of_date, and poison
+# BUG-30's strict prior-coverage reads (a state stamped 07-10 holding 07-14
+# knowledge). The guard refuses; --force overrides with a disclosed warning.
+# ---------------------------------------------------------------------------
+
+def thread_activity_after(con: sqlite3.Connection, thread_id: int,
+                          date: str) -> Optional[str]:
+    """The newest ledger OR state activity on this thread STRICTLY AFTER `date`,
+    or None. A backfill for `date` that would MOVE this thread must not build
+    state over this future-dated activity (NL-72). Ledger AND state are both
+    checked — a thread can be state-ahead without a newer delta (a prior
+    backfill or a same-day render), and either poisons an older-stamped
+    regeneration."""
+    drow = con.execute(
+        "SELECT MAX(edition_date) AS d FROM thread_deltas"
+        " WHERE thread_id = ? AND edition_date > ?", (thread_id, date)).fetchone()
+    srow = con.execute(
+        "SELECT MAX(as_of_date) AS d FROM thread_state"
+        " WHERE thread_id = ? AND as_of_date > ?", (thread_id, date)).fetchone()
+    cands = [d for d in ((drow["d"] if drow else None),
+                         (srow["d"] if srow else None)) if d]
+    return max(cands) if cands else None
+
+
+def backfill_newer_activity(
+    con: sqlite3.Connection, date: str, slots: List[Dict],
+    briefs_by_slot: Dict[int, Optional[Dict]],
+) -> List[Dict]:
+    """NL-72: the threads a backfill for `date` WOULD MOVE that already carry
+    activity NEWER than `date`. Keys on the SAME moving gate write_deltas_for_
+    edition uses — only a slot whose brief arc verdict is advances|reverses
+    would write a delta, so a merely-matches arc never trips the guard. Returns
+    [{thread, thread_id, newer_date}], empty when the backfill is safe (the
+    sanctioned newest-edition use). Conservative by construction: it keys on the
+    moving verdict (the primary write gate), not the full write_deltas gate set,
+    so it may over-refuse a delta the pass would have dropped for a missing cite
+    — the safe direction, and --force is the escape hatch."""
+    slot_by_n = {int(s["slot"]): s for s in slots}
+    offenders: List[Dict] = []
+    seen: set = set()
+    for n, doc in (briefs_by_slot or {}).items():
+        brief = (doc or {}).get("brief") if isinstance(doc, dict) else None
+        if brief is None and isinstance(doc, dict) and "arc" in doc:
+            brief = doc
+        arc = brief.get("arc") if isinstance(brief, dict) else None
+        if not isinstance(arc, dict):
+            continue
+        if str(arc.get("delta") or "").strip() not in VERDICTS_THAT_MOVE:
+            continue
+        slot = slot_by_n.get(int(n)) or {}
+        for topic in (slot.get("matched_memory") or []):
+            if not topic or topic in seen:
+                continue
+            seen.add(topic)
+            tid = resolve_thread_id(con, topic)
+            if tid is None:
+                continue
+            # NL72-QA-1: a delta already on file for this (thread, slot, date)
+            # means the pass would idempotent-skip — it moves nothing, so
+            # newer activity is no hazard (the idempotent-jobs law).
+            happened = str(arc.get("what_happened")
+                           or arc.get("what_changed") or "").strip()
+            if _delta_exists(con, tid, date, happened, slot=int(n)):
+                continue
+            after = thread_activity_after(con, tid, date)
+            if after:
+                offenders.append({"thread": topic, "thread_id": tid,
+                                  "newer_date": after})
+    return offenders
 
 
 def ledger_for_thread(con: sqlite3.Connection, thread_id: int,
@@ -946,44 +1106,60 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
         res.detail = f"state call failed ({type(exc).__name__}: {exc}) — prior state kept"
         return res
     res.cost_usd = cost
-    # BUG-31: the model author is an adversary; a non-string state field
-    # degrades stale-but-honest (analysis._require_str precedent), never an
-    # AttributeError (int.strip) escaping a paid validation and killing the run.
-    state_text = raw.get("state") if isinstance(raw, dict) else None
-    if not isinstance(state_text, str):
-        res.outcome = "rejected"
-        res.detail = ("state rewrite returned a non-string 'state' field "
-                      f"({type(state_text).__name__}) — prior state kept, "
-                      "stale-but-honest")
-        return res
-    # BUG-25: cites resolve against THIS thread's LEDGER dates only — never all
-    # editions. A cite to a date this thread never moved on is the backfill
-    # fabrication class even if some other edition ran that day (the prompt's
-    # own rule 3: cite ONLY dates in the ledger). Today is always a ledger date
-    # when a rewrite fires, so no legitimate state loses a cite.
-    ledger_dates = {e["edition_date"] for e in entries}
+    # NL-73 D2 residual (money honesty, BUG-6/BUG-32 write-side twin): once
+    # chat() has been PAID, NO post-call step may let the cost escape as an
+    # exception. A raise between here and the INSERT (a bug in the diff/cite
+    # helpers, a DB error on the INSERT itself) would propagate past the caller's
+    # `spent += res.cost_usd` fold, losing real money from briefings.token_cost
+    # and the state cost ledger. Wrap the whole post-paid body so ANY unexpected
+    # failure degrades to a RETURNED result with the spend intact. The existing
+    # BUG-31 (non-string) / StateRejected handlers keep their specific outcomes;
+    # this outer guard only catches what they don't.
     try:
-        clean, warnings = validate_state(state_text, ledger_dates)
-    except StateRejected as exc:
-        res.outcome = "rejected"
-        res.detail = f"state rejected ({exc}) — prior state kept, stale-but-honest"
+        # BUG-31: the model author is an adversary; a non-string state field
+        # degrades stale-but-honest (analysis._require_str precedent), never an
+        # AttributeError (int.strip) escaping a paid validation and killing the run.
+        state_text = raw.get("state") if isinstance(raw, dict) else None
+        if not isinstance(state_text, str):
+            res.outcome = "rejected"
+            res.detail = ("state rewrite returned a non-string 'state' field "
+                          f"({type(state_text).__name__}) — prior state kept, "
+                          "stale-but-honest")
+            return res
+        # BUG-25: cites resolve against THIS thread's LEDGER dates only — never
+        # all editions. A cite to a date this thread never moved on is the
+        # backfill fabrication class even if some other edition ran that day (the
+        # prompt's own rule 3: cite ONLY dates in the ledger). Today is always a
+        # ledger date when a rewrite fires, so no legitimate state loses a cite.
+        ledger_dates = {e["edition_date"] for e in entries}
+        try:
+            clean, warnings = validate_state(state_text, ledger_dates)
+        except StateRejected as exc:
+            res.outcome = "rejected"
+            res.detail = f"state rejected ({exc}) — prior state kept, stale-but-honest"
+            return res
+        prior = latest_state(con, thread_id)
+        diff = _state_diff((prior or {}).get("state_text", ""), clean,
+                           (prior or {}).get("as_of_date", ""))
+        # Store the RESOLVED ISO cites (year-agnostic against this thread's ledger).
+        cites = sorted(_resolve_cites(clean, ledger_dates)[0])
+        with con:
+            con.execute(
+                "INSERT INTO thread_state (thread_id, briefing_id, as_of_date,"
+                " state_text, cites_json, diff_json, model, cost_usd)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (thread_id, briefing_id, date, clean, json.dumps(cites),
+                 json.dumps(diff, ensure_ascii=False), STATE_MODEL, round(cost, 6)))
+        res.outcome = "written"
+        res.detail = ("; ".join(warnings) if warnings else
+                      f"{len(_sentences(clean))} sentence(s), {len(cites)} edition cite(s)")
         return res
-    prior = latest_state(con, thread_id)
-    diff = _state_diff((prior or {}).get("state_text", ""), clean,
-                       (prior or {}).get("as_of_date", ""))
-    # Store the RESOLVED ISO cites (year-agnostic against this thread's ledger).
-    cites = sorted(_resolve_cites(clean, ledger_dates)[0])
-    with con:
-        con.execute(
-            "INSERT INTO thread_state (thread_id, briefing_id, as_of_date,"
-            " state_text, cites_json, diff_json, model, cost_usd)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (thread_id, briefing_id, date, clean, json.dumps(cites),
-             json.dumps(diff, ensure_ascii=False), STATE_MODEL, round(cost, 6)))
-    res.outcome = "written"
-    res.detail = ("; ".join(warnings) if warnings else
-                  f"{len(_sentences(clean))} sentence(s), {len(cites)} edition cite(s)")
-    return res
+    except Exception as exc:  # noqa: BLE001 — never lose a paid rewrite's spend
+        res.outcome = "failed"
+        res.detail = (f"state write failed after a paid rewrite "
+                      f"({type(exc).__name__}: {exc}) — prior state kept, "
+                      "stale-but-honest; the spend is recorded on the result")
+        return res
 
 
 def state_is_stale(state: Optional[Dict], today: str) -> Tuple[bool, str]:
@@ -996,6 +1172,52 @@ def state_is_stale(state: Optional[Dict], today: str) -> Tuple[bool, str]:
     if as_of and as_of < today:
         return True, f"as of {human_date(as_of)}"
     return False, ""
+
+
+# ---------------------------------------------------------------------------
+# NL-73: the state-repair rung (gate chip, loop #5). Under the fixed
+# moved_thread_ids semantics a FAILED state rewrite self-heals ONLY on the
+# thread's next real move — so a delta can land while its state rewrite fails,
+# leaving the standing state PERMANENTLY behind the newest live delta until the
+# thread happens to move again. find_stale_state_threads names that exact shape;
+# generate.run_state_repair heals it (a full-ledger regeneration per the write
+# law, stamped at the latest live delta's date).
+# ---------------------------------------------------------------------------
+
+def find_stale_state_threads(con: sqlite3.Connection,
+                             thread_id: Optional[int] = None) -> List[Dict]:
+    """Threads whose latest LIVE delta edition_date POSTDATES their latest
+    state's as_of_date — the shape a failed state rewrite leaves. A thread with
+    live deltas but NO state row is stale too (an absent state is behind every
+    delta). Superseded deltas are excluded (a corrected-away delta must not force
+    a repair — the latest LIVE delta is the reference). `thread_id` scopes to one
+    thread. Returns [{thread_id, topic, latest_delta_date, state_as_of}], oldest
+    thread id first."""
+    if thread_id is not None:
+        tids = ([thread_id] if con.execute(
+            "SELECT 1 FROM thread_deltas WHERE thread_id = ? LIMIT 1",
+            (thread_id,)).fetchone() else [])
+    else:
+        tids = [r["thread_id"] for r in con.execute(
+            "SELECT DISTINCT thread_id FROM thread_deltas ORDER BY thread_id")]
+    out: List[Dict] = []
+    for tid in tids:
+        live = _live_entries(ledger_for_thread(con, tid))
+        if not live:
+            continue                       # every delta superseded — nothing live
+        latest_delta = live[-1]["edition_date"]
+        st = latest_state(con, tid)
+        state_as_of = st["as_of_date"] if st else ""
+        if latest_delta > state_as_of:
+            trow = con.execute("SELECT topic FROM memory WHERE id = ?",
+                               (tid,)).fetchone()
+            out.append({
+                "thread_id": tid,
+                "topic": trow["topic"] if trow else f"thread {tid}",
+                "latest_delta_date": latest_delta,
+                "state_as_of": state_as_of,
+            })
+    return out
 
 
 # ===========================================================================
@@ -1192,6 +1414,46 @@ def classify_delta_provenance(con: sqlite3.Connection, topic: str,
             if not has_predating_antecedent(con, topic, units, edition_date):
                 return PROVENANCE_SOURCE_ECHO
     return None
+
+
+# ===========================================================================
+# Collect-now schema (substrate ruling C): the closure register writer. The
+# CLOSURE FEATURE (render, halt-generating) is a backlog vision-item; this is
+# only the explicit-action write lane behind `memory close <topic> --reason`.
+# §F-compatible: an explicit operator action, never inferred.
+# ===========================================================================
+
+def close_thread(con: sqlite3.Connection, topic: str, reason: str,
+                 edition_date: str) -> Tuple[bool, str, Optional[int]]:
+    """Record that a thread reached its end (migration 0015). Writes ONE
+    thread_closures row and returns (ok, message, closure_id).
+
+    Refuses (ok=False, NO write) on: an unknown topic (no memory row, any
+    status); a thread ALREADY closed (one closure per thread — a closure is a
+    dated fact; a re-close is refused and the existing closure named, not
+    silently duplicated). The behavioral consequences of closure (stop taking
+    deltas, render the dated line) belong to the closure FEATURE and are NOT
+    applied here — this only records the fact."""
+    row = con.execute(
+        "SELECT id FROM memory WHERE lower(topic) = lower(?)", (topic,)).fetchone()
+    if row is None:
+        return (False,
+                f"no thread named {topic!r} — `newslens memory list` shows them",
+                None)
+    tid = row["id"]
+    existing = con.execute(
+        "SELECT id, edition_date FROM thread_closures WHERE thread_id = ?"
+        " ORDER BY id LIMIT 1", (tid,)).fetchone()
+    if existing is not None:
+        return (False,
+                f"thread {topic!r} is already closed (as of "
+                f"{existing['edition_date']}) — a closure is a dated fact, "
+                "recorded once", None)
+    with con:
+        cur = con.execute(
+            "INSERT INTO thread_closures (thread_id, reason, edition_date)"
+            " VALUES (?, ?, ?)", (tid, (reason or "").strip(), edition_date))
+    return (True, f"closed {topic!r} as of {edition_date}", cur.lastrowid)
 
 
 def mark_delta_provenance(con: sqlite3.Connection, delta_id: int,
