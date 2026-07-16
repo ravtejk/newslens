@@ -237,12 +237,12 @@ def test_ambiguous_human_cite_fails_closed():
         "As of (Jul 10).", {"2026-07-10", "2027-07-10"})
     assert ambiguous == {"07-10"} and not resolved
     with pytest.raises(memory_core.StateRejected, match="ambiguous, fails closed"):
-        memory_core.validate_state("As of (Jul 10).", {"2026-07-10", "2027-07-10"}, set())
+        memory_core.validate_state("As of (Jul 10).", {"2026-07-10", "2027-07-10"})
 
 
 def test_validate_state_accepts_a_cross_year_human_cite():
     clean, warns = memory_core.validate_state(
-        "The confrontation holds (Jul 10).", {"2027-07-10"}, set())
+        "The confrontation holds (Jul 10).", {"2027-07-10"})
     assert clean.startswith("The confrontation holds")
 
 

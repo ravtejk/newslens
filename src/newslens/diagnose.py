@@ -42,6 +42,8 @@ _EDITOR_RE = re.compile(r"editor: (\d+) -> (\d+) words \((\d+)% tighter\)")
 # Warning-line buckets: mechanical substring classification of the pipeline's
 # own disclosure vocabulary. Anything unmatched prints under "other".
 _BUCKETS: List[Tuple[str, str]] = [
+    ("Content rule", "forward-claim findings (NL-75: antecedent/stale-date/expiry)"),
+    ("watch-items:", "watch register disclosures (NL-75; fires every run on a declined-0013 DB)"),
     ("hedge-ratio", "hedge-ratio warns (editor forensics, 18a)"),
     ("repair", "disclosed deterministic repairs (M3 class)"),
     ("tag shape", "tag-shape tolerance disclosures"),

@@ -108,8 +108,7 @@ class TestStateCiteResolution:
         with pytest.raises(memory_core.StateRejected) as e:
             memory_core.validate_state(
                 "Iran reopened the strait (Jul 8).",
-                ledger_dates={"2026-07-05", "2026-07-10"},
-                edition_dates={"2026-07-05", "2026-07-10"})
+                ledger_dates={"2026-07-05", "2026-07-10"})
         assert "fabrication" in str(e.value)
         assert "Jul 8" in str(e.value)
 
@@ -123,7 +122,7 @@ class TestStateCiteResolution:
         cite's REFERENT, not its typography."""
         clean, _ = memory_core.validate_state(
             f"The strait is closed {form}.",
-            ledger_dates={"2026-07-10"}, edition_dates=set())
+            ledger_dates={"2026-07-10"})
         assert "closed" in clean
 
     def test_sept_style_abbreviation_fails_closed(self):
@@ -137,7 +136,7 @@ class TestStateCiteResolution:
         with pytest.raises(memory_core.StateRejected):
             memory_core.validate_state(
                 "The strait is closed (Sept 10).",
-                ledger_dates={"2026-09-10"}, edition_dates=set())
+                ledger_dates={"2026-09-10"})
 
     def test_garbage_iso_date_fails_closed(self):
         """'2026-99-99' matches the ISO shape but is not a calendar day; it
@@ -146,7 +145,7 @@ class TestStateCiteResolution:
         with pytest.raises(memory_core.StateRejected) as e:
             memory_core.validate_state(
                 "The strait is closed (2026-99-99).",
-                ledger_dates={"2026-07-10"}, edition_dates=set())
+                ledger_dates={"2026-07-10"})
         assert "fabrication" in str(e.value)
 
     def test_dateless_parenthetical_is_not_a_cite(self):
@@ -156,7 +155,7 @@ class TestStateCiteResolution:
         with pytest.raises(memory_core.StateRejected) as e:
             memory_core.validate_state(
                 "The strait is closed (no editions).",
-                ledger_dates={"2026-07-10"}, edition_dates=set())
+                ledger_dates={"2026-07-10"})
         assert "no parenthetical edition cite" in str(e.value)
 
     def test_no_cite_at_all_rejects(self):
@@ -165,7 +164,7 @@ class TestStateCiteResolution:
         with pytest.raises(memory_core.StateRejected):
             memory_core.validate_state(
                 "The strait is closed and talks continue.",
-                ledger_dates={"2026-07-10"}, edition_dates=set())
+                ledger_dates={"2026-07-10"})
 
     def test_in_prose_date_is_content_not_cite(self):
         """'Talks are set for July 12' (a scheduled-event date) is CONTENT;
@@ -173,7 +172,7 @@ class TestStateCiteResolution:
         resolves to no edition must not reject the state."""
         clean, warns = memory_core.validate_state(
             "Talks are set for July 12 (Jul 10).",
-            ledger_dates={"2026-07-10"}, edition_dates=set())
+            ledger_dates={"2026-07-10"})
         assert "July 12" in clean and warns == []
 
     def test_BUG26_uncited_sentence_rides_silently(self):
@@ -192,7 +191,7 @@ class TestStateCiteResolution:
         _, warnings = memory_core.validate_state(
             "The strait is closed (Jul 10). A fabricated uncited claim rides"
             " along here.",
-            ledger_dates={"2026-07-10"}, edition_dates=set())
+            ledger_dates={"2026-07-10"})
         assert warnings, ("an uncited sentence must at least WARN — it is a "
                           "fabrication lane with no receipt")
 

@@ -89,6 +89,28 @@ CONTINUITY RULES:
   SILENTLY: never quote or paraphrase a note back to the reader — simply
   lead with the angle the note asks for.
 
+MEMORY AND FORWARD CLAIMS (binding — this is the accountability the briefing
+exists for; a story may carry a MEMORY block and/or an expired-watch block):
+- When a story carries a MEMORY block (this thread's standing state + dated
+  deltas), compose the continuity INTO the sentence with the dates doing the
+  work — "what began as a fee dispute on Jul 5 had by Jul 10 become a closure"
+  — never as furniture. The dated record IS the reporting; surface it.
+- TWO CLOCKS: narrate the EDITION's history (what this briefing reported, by
+  date); NEVER the READER's history (when they read/opened/followed). Edition
+  history in prose; reader history never.
+- REPETITION WORDS — reinstated, resumed, renewed, reimposed, again, once more
+  — assert a prior. Use one ONLY when the MEMORY block holds a PRIOR (dated,
+  before today) entry supporting it, and ship that date in the sentence. No
+  such prior but a source uses the word → attribute it plainly. Record
+  contradicts it → cut it. Never assert a repetition your record cannot support.
+- ATTRIBUTE PLAINLY: name the outlet or give the count ("none of today's nine
+  outlets says"); do NOT lean on "today's reporting" as a mass noun.
+- An expired-watch block: you promised to watch it and its date has passed.
+  CONVERT it — RESOLVED (report the outcome), UNANSWERED (say the sources are
+  silent — the silence is content), or SUPERSEDED (name what overtook it).
+  Never silently drop it; never re-ship it.
+- Every watch-for points STRICTLY FORWARD — a date already passed is a defect.
+
 STORY MECHANICS:
 - headline: 12 words or fewer, declarative sentence case, carries the actual
   news — never withholds, no clickbait shapes, no colon-stacked labelese.

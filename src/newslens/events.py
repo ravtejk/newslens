@@ -45,6 +45,32 @@ def log_listen(con: sqlite3.Connection, briefing_date: str) -> bool:
     return True
 
 
+VIEW_REFERRERS = ("today", "following", "archive")
+
+
+def log_thread_view(con: sqlite3.Connection, briefing_date: str, target: str,
+                    referrer: Optional[str] = None) -> None:
+    """NL-75 (Data council; migration 0011): a thread-page open. `target` is the
+    thread topic; `referrer` is the surface it came from — today | following |
+    archive. Answers Sol's "did memory pull him in": a thread_view referred
+    from 'today' is the moat working. Raw truth (the metric dedups). Server-side
+    emission wiring rides the live phase; this is the instrument itself."""
+    with con:
+        con.execute(
+            "INSERT INTO consumption_events (date, kind, target, referrer)"
+            " VALUES (?, 'thread_view', ?, ?)", (briefing_date, target, referrer))
+
+
+def log_deep_view(con: sqlite3.Connection, briefing_date: str, target: str,
+                  referrer: Optional[str] = None) -> None:
+    """NL-75: a deep-view open. `target` is the story anchor; `referrer` the
+    origin surface (today | following | archive)."""
+    with con:
+        con.execute(
+            "INSERT INTO consumption_events (date, kind, target, referrer)"
+            " VALUES (?, 'deep_view', ?, ?)", (briefing_date, target, referrer))
+
+
 def trailing_open_days(con: sqlite3.Connection, days: int = 14,
                        now_utc: Optional[datetime] = None) -> int:
     """The day-30 read: distinct calendar days with ANY consumption event in

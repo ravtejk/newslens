@@ -1685,6 +1685,31 @@ def _render_archive(con: sqlite3.Connection) -> str:
 # sibling .view like the deep views, switched client-side.
 # ---------------------------------------------------------------------------
 
+def _superseded_li_marks(con: sqlite3.Connection, by_id: Dict,
+                         superseded_by) -> Tuple[str, str]:
+    """D1 / the 0012 read-side contract (migration header; Rook's gate;
+    memory_core's own 'the server strikes it'): a superseded ledger row renders
+    STRUCK and annotated with the date of the entry that corrected it — never
+    dropped, never indistinguishable from live history (else the reader-facing
+    archive and the machine state disagree). Returns (li_class_suffix,
+    correction_note_html); ('', '') for a live row. The superseding date comes
+    from the same row set when present (both render paths carry `id`), else a
+    direct ledger lookup so a corrector outside the shown window still names."""
+    if not superseded_by:
+        return "", ""
+    from . import memory_core
+    row = by_id.get(superseded_by)
+    raw = (row.get("date") or row.get("edition_date")) if row else None
+    if raw is None:
+        r = con.execute("SELECT edition_date FROM thread_deltas WHERE id = ?",
+                        (superseded_by,)).fetchone()
+        raw = r["edition_date"] if r else None
+    when = memory_core.human_date(raw).upper() if raw else ""
+    tail = f" {_e(when)}" if when else ""
+    note = f' <span class="tl-superseded-note">— superseded{tail}</span>'
+    return " tl-superseded", note
+
+
 def _thread_timeline_html(con: sqlite3.Connection, tid: int, anchor: str) -> str:
     """The story so far — the FULL dated ledger (the thread page is edition-
     independent, so no never-re-lede bound; it shows every entry incl. today's).
@@ -1695,12 +1720,16 @@ def _thread_timeline_html(con: sqlite3.Connection, tid: int, anchor: str) -> str
     if not rows:
         return ""
     items = []
+    by_id = {e.get("id"): e for e in rows}
     for e in rows:
         hd = memory_core.human_date(e["date"]).upper()
         signif = (f' <span class="tl-signif">— {_e(e["significance"])}</span>'
                   if e.get("significance") else "")
-        items.append(f'<li class="tl-entry"><span class="tl-date">{_e(hd)}</span> — '
-                     f'{_e(e["what_happened"])}{signif}</li>')
+        sup_class, sup_note = _superseded_li_marks(con, by_id, e.get("superseded_by"))
+        what = (f'<s class="tl-struck">{_e(e["what_happened"])}</s>'
+                if sup_class else _e(e["what_happened"]))
+        items.append(f'<li class="tl-entry{sup_class}"><span class="tl-date">'
+                     f'{_e(hd)}</span> — {what}{signif}{sup_note}</li>')
     return (f'<div class="deep-section" id="{anchor}-timeline">'
             f'<h2 class="deep-section-label">{_e(labels.THE_STORY_SO_FAR)}</h2>'
             f'<ul class="deep-timeline-list">{"".join(items)}</ul></div>')
@@ -1982,6 +2011,7 @@ def _deep_timeline_html(con, slot: Optional[Dict], date: str,
         have_edition = {r["date"] for r in con.execute(
             "SELECT date FROM briefings")}
         items = []
+        by_id = {e.get("id"): e for e in rows}
         for e in rows:
             d = e["edition_date"]
             hd = memory_core.human_date(d)
@@ -1993,9 +2023,15 @@ def _deep_timeline_html(con, slot: Optional[Dict], date: str,
                 date_html = f'<span class="tl-date">{_e(hd)}</span>'
             signif = (f' <span class="tl-signif">— {_e(e["significance"])}</span>'
                       if e.get("significance") else "")
+            # D1: the 0012 read-side contract on the deep view's story-so-far —
+            # a superseded prior delta renders struck/annotated here too.
+            sup_class, sup_note = _superseded_li_marks(
+                con, by_id, e.get("superseded_by"))
+            what = (f'<s class="tl-struck">{_e(e["what_happened"])}</s>'
+                    if sup_class else _e(e["what_happened"]))
             items.append(
-                f'<li class="tl-entry">{date_html} — '
-                f'{_e(e["what_happened"])}{signif}</li>')
+                f'<li class="tl-entry{sup_class}">{date_html} — '
+                f'{what}{signif}{sup_note}</li>')
         return (f'<div class="deep-section deep-timeline" id="{anchor}-timeline">'
                 f'<h2 class="deep-section-label">{_e(labels.THE_STORY_SO_FAR)}</h2>'
                 f'<ul class="deep-timeline-list">{"".join(items)}</ul></div>')

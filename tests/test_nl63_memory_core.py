@@ -212,14 +212,14 @@ def test_state_hard_rejects_a_cite_to_a_non_edition_date(migrated_con):
     with pytest.raises(memory_core.StateRejected) as e:
         memory_core.validate_state(
             "The war escalated (Jul 99-shaped: Aug 30).",
-            ledger_dates={"2026-07-10"}, edition_dates={"2026-07-10"})
+            ledger_dates={"2026-07-10"})
     assert "fabrication" in str(e.value)
 
 
 def test_state_accepts_resolvable_edition_cites(migrated_con):
     clean, warns = memory_core.validate_state(
         "The strait is closed (Jul 10). Fees preceded it (Jul 5).",
-        ledger_dates={"2026-07-05", "2026-07-10"}, edition_dates=set())
+        ledger_dates={"2026-07-05", "2026-07-10"})
     assert "closed" in clean
 
 
@@ -227,7 +227,7 @@ def test_in_prose_content_date_is_not_a_required_cite(migrated_con):
     # 'July 12' (a scheduled talks date) is content, not an edition citation.
     clean, warns = memory_core.validate_state(
         "Talks are set for July 12 (Jul 10).",
-        ledger_dates={"2026-07-10"}, edition_dates=set())
+        ledger_dates={"2026-07-10"})
     assert "July 12" in clean
 
 

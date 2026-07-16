@@ -44,7 +44,13 @@ WHAT TO DO, in priority order:
 6. PRESERVE ABSOLUTELY: tier values; story order; why_label / watch_label
    values exactly as declared; every revival phrase and its exact date; outlet names in single-source ledes; all facts, numbers,
    dates, and attributions you keep must appear character-honest (no
-   rounding, no paraphrase of quoted matter).
+   rounding, no paraphrase of quoted matter). NL-75 — preserve the
+   ACCOUNTABILITY moves: a watch-for CONVERSION (a sentence reporting the
+   outcome of a prior promise, noting today's sources are silent on it, or
+   naming what superseded it) is load-bearing content — never cut it as
+   "throat-clearing." A repetition word shipped WITH its record date or WITH
+   its source attribution ("reports call it 'reinstated'") is correct — keep
+   the date and the attribution; do not strip them into a bare assertion.
 7. Quick-tier ("In Brief") stories are STRUCTURED mini-stories, not snippets:
    they carry lede + why_it_matters + watch_for like every other story, just
    tighter (~180-260 words). Tighten them, but NEVER strip their why_it_matters

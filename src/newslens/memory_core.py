@@ -339,16 +339,31 @@ def ledger_for_thread(con: sqlite3.Connection, thread_id: int,
                       before_date: Optional[str] = None) -> List[Dict]:
     """The thread's dated ledger, oldest first. `before_date` (exclusive)
     returns only PRIOR coverage — the arc line's 'then' half and the
-    thread-scoped P-material both need history strictly before today."""
+    thread-scoped P-material both need history strictly before today.
+
+    NL-75 (Rook's gate): each row carries a `superseded_by` field — the id of a
+    later, corrected delta (migration 0012's thread_delta_supersessions), or
+    None. This is READ-SIDE surfacing only: rows are all returned, in order,
+    unchanged; consumers decide what to do with a superseded row. State
+    regeneration EXCLUDES superseded rows (a wrong delta must stop re-entering
+    every future state — the whole point); the timeline SHOWS them struck. The
+    LEFT JOIN is idempotent w.r.t. the old behavior when nothing is superseded."""
+    sql = (
+        "SELECT d.*, s.superseded_by AS superseded_by FROM thread_deltas d"
+        " LEFT JOIN thread_delta_supersessions s ON s.delta_id = d.id"
+        " WHERE d.thread_id = ?")
+    params: Tuple = (thread_id,)
     if before_date:
-        rows = con.execute(
-            "SELECT * FROM thread_deltas WHERE thread_id = ? AND edition_date < ?"
-            " ORDER BY edition_date, id", (thread_id, before_date)).fetchall()
-    else:
-        rows = con.execute(
-            "SELECT * FROM thread_deltas WHERE thread_id = ?"
-            " ORDER BY edition_date, id", (thread_id,)).fetchall()
-    return [dict(r) for r in rows]
+        sql += " AND d.edition_date < ?"
+        params = (thread_id, before_date)
+    sql += " ORDER BY d.edition_date, d.id"
+    return [dict(r) for r in con.execute(sql, params).fetchall()]
+
+
+def _live_entries(entries: List[Dict]) -> List[Dict]:
+    """The ledger rows a REGENERATED read model may stand on: superseded rows
+    dropped (Rook's gate — a wrong delta must not re-enter state forever)."""
+    return [e for e in entries if not e.get("superseded_by")]
 
 
 def _ledger_integrity(entries: List[Dict]) -> Tuple[bool, str]:
@@ -521,12 +536,19 @@ def timeline_rows(con: sqlite3.Connection, thread_id: int,
     out = []
     for e in entries:
         out.append({
+            "id": e.get("id"),
             "date": e["edition_date"],
             "human": human_date(e["edition_date"]),
             "what_happened": e["what_happened"],
             "significance": e.get("significance", ""),
             "briefing_id": e.get("briefing_id"),
             "verdict": e.get("verdict", ""),
+            # NL-75 (Rook's gate): a superseded row STAYS in the timeline but is
+            # rendered struck/annotated (the server strikes it) — the archive
+            # tells the truth, including that a fact was later corrected. `id`
+            # (D1) lets the render name the SUPERSEDING entry (by its date) from
+            # the same row set without a second query.
+            "superseded_by": e.get("superseded_by"),
         })
     return out
 
@@ -552,7 +574,7 @@ def prior_for_slot(con: sqlite3.Connection, date: str, slot: Dict,
         text = thread_record_text(con, tid, topic, before_date=date)
         if not text:
             continue
-        entries = ledger_for_thread(con, tid, before_date=date)
+        entries = _live_entries(ledger_for_thread(con, tid, before_date=date))
         last = entries[-1]["edition_date"] if entries else date
         scoped.append({"date": last, "text": text, "thread": topic})
     return scoped or generic_prior
@@ -562,8 +584,13 @@ def thread_record_text(con: sqlite3.Connection, thread_id: int, topic: str,
                        before_date: Optional[str] = None) -> str:
     """The thread's own record as prior-coverage prose for the analyst: its
     dated ledger lines + its standing state. Labeled 'per our prior coverage'
-    so a P-only claim can never be laundered as external background."""
-    entries = ledger_for_thread(con, thread_id, before_date=before_date)
+    so a P-only claim can never be laundered as external background.
+
+    F1 (NL-75 QA): superseded (corrected-away) deltas are EXCLUDED here too —
+    the writer surface already drops them via _live_entries (Rook's gate: a wrong
+    fact must stop re-entering downstream prose); the analyst P-channel is the
+    same downstream and must not re-anchor on a delta the record has corrected."""
+    entries = _live_entries(ledger_for_thread(con, thread_id, before_date=before_date))
     # BUG-30: the analyst's prior-coverage bound is strictly-before for BOTH the
     # ledger (edition_date <) and the state (as_of_date <) — a same-day
     # regeneration must never feed run-1's as-of-today state back as run-2's
@@ -626,8 +653,7 @@ def _sentences(text: str) -> List[str]:
     return out
 
 
-def validate_state(state_text: str, ledger_dates: set,
-                   edition_dates: Optional[set] = None) -> Tuple[str, List[str]]:
+def validate_state(state_text: str, ledger_dates: set) -> Tuple[str, List[str]]:
     """The write law, checkable. HARD-REJECT (StateRejected) the fabrication
     class: a sentence cited to a date that resolves to NO ledger entry (a past
     THIS thread never moved on). Returns (clean, warnings); an over-long
@@ -637,18 +663,19 @@ def validate_state(state_text: str, ledger_dates: set,
     M3 cites-fork decision (carried from the M2 gate; DECISIONS 2026-07-14):
     LEDGER-RESOLVED-ONLY. thread_state.cites_json persists ledger-resolved cites
     only — rewrite_state resolves the clean text against the thread's ledger
-    dates alone (below, `cites = _resolve_cites(clean, ledger_dates)[0]`), and
-    it already calls this with edition_dates=set(). Acceptance is narrowed to
-    MATCH that persistence: a cite must resolve to a date THIS thread moved on
-    (a ledger date). An edition date that is not a ledger date is the BUG-25
-    fabrication class (some other edition ran that day, but this thread did not
-    move) — it is rejected here rather than accepted-then-silently-dropped by
-    cites_json. The wider `resolvable = ledger|edition` was headroom no consumer
-    ever used: M3's first render consumers of receipts (The numbers / Unresolved
-    / the In-Brief view) read BRIEF-level source-key cites, not this surface, so
-    nothing needs the wider set. `edition_dates` is retained inert (every caller
-    passes an empty set) so the QA call sites keep compiling; a follow-up may
-    drop the parameter once those sites are updated."""
+    dates alone (below, `cites = _resolve_cites(clean, ledger_dates)[0]`).
+    Acceptance is narrowed to MATCH that persistence: a cite must resolve to a
+    date THIS thread moved on (a ledger date). An edition date that is not a
+    ledger date is the BUG-25 fabrication class (some other edition ran that
+    day, but this thread did not move) — it is rejected here rather than
+    accepted-then-silently-dropped by cites_json.
+
+    NL-75 (M3 gate ruling 4): the inert `edition_dates` parameter is DROPPED.
+    It was retained after the M3 cites-fork so QA call sites kept compiling
+    (every caller passed an empty set); the wider `resolvable = ledger|edition`
+    was headroom no consumer ever used (M3's receipt renderers read BRIEF-level
+    source-key cites, not this surface). The 19 call sites are swept with this
+    change."""
     text = (state_text or "").strip()
     if not text:
         raise StateRejected("empty state paragraph")
@@ -808,12 +835,21 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
     """
     res = StateRewriteResult(thread_id=thread_id, topic=topic, outcome="failed")
     chat = chat or _default_state_chat
-    entries = ledger_for_thread(con, thread_id)          # full ledger incl today
-    if not entries:
+    all_entries = ledger_for_thread(con, thread_id)      # full ledger incl today
+    if not all_entries:
         # M1 gate F3: day-one is NOT a budget event — its own label so
         # diagnose's outcome aggregation never conflates the two.
         res.outcome = "skipped-no-ledger"
         res.detail = "no ledger — nothing to synthesize (day-one)"
+        return res
+    # NL-75 (Rook's gate): a superseded delta is EXCLUDED from state
+    # regeneration — the whole reason the link is machine-readable. The state
+    # is synthesized from the live ledger only, so a corrected-away delta stops
+    # re-entering every future state.
+    entries = _live_entries(all_entries)
+    if not entries:
+        res.outcome = "skipped-no-ledger"
+        res.detail = "every ledger entry is superseded — nothing live to synthesize"
         return res
     prompt = render_state_prompt(topic, date, entries, prompt_template)
     est = estimate_state_usd(prompt)
@@ -850,7 +886,7 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
     # when a rewrite fires, so no legitimate state loses a cite.
     ledger_dates = {e["edition_date"] for e in entries}
     try:
-        clean, warnings = validate_state(state_text, ledger_dates, set())
+        clean, warnings = validate_state(state_text, ledger_dates)
     except StateRejected as exc:
         res.outcome = "rejected"
         res.detail = f"state rejected ({exc}) — prior state kept, stale-but-honest"
@@ -883,3 +919,226 @@ def state_is_stale(state: Optional[Dict], today: str) -> Tuple[bool, str]:
     if as_of and as_of < today:
         return True, f"as of {human_date(as_of)}"
     return False, ""
+
+
+# ===========================================================================
+# NL-75 rung (a): the ledger reaches the WRITER (Engineering's spike — the one
+# missing hop). The analyst already receives thread state + deltas via M2's
+# P-channel (prior_for_slot / thread_record_text); the writer got thread NAMES
+# only (generate.py:578). These helpers give the writer prompt the standing
+# state + last-N dated deltas, budgeted, so exemplar A's arc-compression is
+# writable — "what began as X on <date> has become Y."
+# ===========================================================================
+
+DELTA_CONTEXT_N = 5   # last N ledger deltas the writer sees per thread (budget:
+#                       ~5 dated lines + a <=5-sentence state ≈ few hundred
+#                       input tokens/thread; Engineering priced rung (a) at
+#                       ~+$0.005/edition — this is the token spend that buys it.
+
+
+def writer_thread_context(con: sqlite3.Connection, topic: str,
+                          before_date: str,
+                          last_n: int = DELTA_CONTEXT_N) -> str:
+    """Rung (a): the thread's memory formatted for the WRITER prompt — the
+    standing state (or an explicit note of its ABSENCE) plus the last N ledger
+    deltas WITH edition dates. Strictly-before the edition (a writer sees only
+    PRIOR coverage; today's own delta is written after generation, never fed
+    back — the same before_date discipline the analyst path uses). Superseded
+    deltas are excluded (Rook's gate). Returns '' when the thread has no prior
+    record so the caller renders nothing (day-one threads get no history block,
+    matching render_today_arc's day-one silence)."""
+    tid = resolve_thread_id(con, topic)
+    if tid is None:
+        return ""
+    entries = _live_entries(ledger_for_thread(con, tid, before_date=before_date))
+    state = latest_state(con, tid, before_date=before_date, strict=True)
+    if not entries and not state:
+        return ""
+    lines: List[str] = [f"MEMORY — the record for thread {topic!r} (edition "
+                        "history only; NEVER the reader's history):"]
+    if state:
+        lines.append(f"standing state (as of {human_date(state['as_of_date'])}): "
+                     f"{state['state_text']}")
+    else:
+        lines.append("standing state: none on record yet — do not imply the "
+                     "record holds one.")
+    recent = entries[-last_n:]
+    if recent:
+        lines.append("this thread's record so far (edition dates are load-"
+                     "bearing — build continuity from them in the sentence, "
+                     "e.g. \"what began as X on Jul 5 had by Jul 10 become Y\"):")
+        for e in recent:
+            signif = f" — {e['significance']}" if e.get("significance") else ""
+            lines.append(f"  * {human_date(e['edition_date'])}: "
+                         f"{e['what_happened']}{signif}")
+    return "\n".join(lines)
+
+
+def has_predating_antecedent(con: sqlite3.Connection, topic: str,
+                             subject_units: set, edition_date: str) -> bool:
+    """The Forward-Claim antecedent rule (Content rule 3), POISONED-ANTECEDENT
+    hardened (HSR baseline finding 1, BINDING). A repetition word — reinstated,
+    resumed, renewed, again — is only licensed by a ledger antecedent that
+    PREDATES the edition being written. A row dated == the edition (the 07-14
+    same-day backfill that merely echoed edition-day source diction) does NOT
+    establish the antecedent; the well is poisoned before the pump is installed.
+
+    The mechanism IS strict before_date: today's own rows are never in the
+    search set, so a naive antecedent-check can never 'find' delta 5 and
+    validate a future "reinstated." `subject_units` are the salient content
+    words of the repetition's subject (e.g. {'blockade'}); an antecedent must
+    mention at least one, so an unrelated prior delta cannot license the word.
+    A superseded prior delta does not count (Rook's gate — excluded)."""
+    tid = resolve_thread_id(con, topic)
+    if tid is None:
+        return False
+    prior = _live_entries(ledger_for_thread(con, tid, before_date=edition_date))
+    wanted = {u.lower() for u in subject_units if u}
+    if not wanted:
+        return bool(prior)   # no subject discriminator — any predating history counts
+    for e in prior:
+        hay = f"{e.get('what_happened','')} {e.get('significance','')}".lower()
+        if any(u in hay for u in wanted):
+            return True
+    return False
+
+
+# ===========================================================================
+# NL-75: the expiry register (Content Forward-Claim Rules item 2). A watch-for
+# is a ledger-adjacent object (observable, due-date when parseable, status);
+# at the next edition an expired watch-for must CONVERT — RESOLVED / UNANSWERED
+# / SUPERSEDED — never re-shipped, never silently dropped. Persisted in
+# watch_items (migration 0013), append-only: a conversion is a NEW row.
+# ===========================================================================
+
+def parse_due_date(text: str, edition_date: str) -> Optional[str]:
+    """The FIRST resolvable date in a watch-for's prose, as YYYY-MM-DD. ISO
+    forms resolve to themselves; a human 'Month D' resolves to the edition's
+    YEAR (a briefing's forward-looking date reads in the edition's calendar).
+    Returns None when the observable names no parseable date — a dateless
+    watch-for is tracked but does not auto-expire by date (Content: "due-date
+    when parseable"). Known limitation: a December edition naming a January
+    date resolves to the wrong year; flagged, out of scope for the loop."""
+    m = _ISO_RE.search(text or "")
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    dm = _MONTH_DAY_RE.search(text or "")
+    if dm:
+        year = (edition_date or "")[:4]
+        if not (year.isdigit() and len(year) == 4):
+            return None
+        mon = _MONTH_NUM[dm.group(1).lower()]
+        return f"{year}-{mon:02d}-{int(dm.group(2)):02d}"
+    return None
+
+
+def persist_watch_items(con: sqlite3.Connection, date: str,
+                        briefing_id: Optional[int], stories: List[Dict],
+                        slots: List[Dict]) -> int:
+    """Write each story's watch_for as an OPEN watch-item (the promise). One
+    per (briefing, slot); idempotent by that key (append-only — a re-gen finds
+    it on file and writes nothing, never UPDATEs). thread_id links the item to
+    the slot's matched thread when there is one, so accountability is
+    thread-scoped where a thread exists. Returns the count written."""
+    slot_by_n = {int(s["slot"]): s for s in slots}
+    written = 0
+    for story, slot in zip(stories, slots):
+        n = int(slot["slot"])
+        observable = (story.get("watch_for") or "").strip()
+        if not observable:
+            continue
+        if con.execute(
+                "SELECT 1 FROM watch_items WHERE briefing_id IS ? AND slot = ?"
+                " AND kind = 'open' LIMIT 1", (briefing_id, n)).fetchone():
+            continue
+        topics = [t for t in (slot_by_n.get(n, {}).get("matched_memory") or []) if t]
+        tid = resolve_thread_id(con, topics[0]) if topics else None
+        due = parse_due_date(observable, date)
+        with con:
+            con.execute(
+                "INSERT INTO watch_items (thread_id, briefing_id, slot,"
+                " edition_date, kind, observable, due_date)"
+                " VALUES (?, ?, ?, ?, 'open', ?, ?)",
+                (tid, briefing_id, n, date, observable, due))
+        written += 1
+    return written
+
+
+def expired_unconverted_watch_items(con: sqlite3.Connection, topic: str,
+                                    today_edition: str) -> List[Dict]:
+    """Open watch-items for the thread whose parseable due-date has PASSED
+    relative to today's edition and that no conversion row has closed yet.
+    These are the accountability debts the next edition MUST convert (Content
+    rule 2). Dateless open items are excluded (they can't auto-expire by date;
+    a later edition converts them explicitly)."""
+    tid = resolve_thread_id(con, topic)
+    if tid is None:
+        return []
+    rows = con.execute(
+        "SELECT w.* FROM watch_items w WHERE w.thread_id = ? AND w.kind = 'open'"
+        " AND w.due_date IS NOT NULL AND w.due_date < ?"
+        " AND NOT EXISTS (SELECT 1 FROM watch_items c WHERE c.converts = w.id)"
+        " ORDER BY w.due_date, w.id", (tid, today_edition)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def record_watch_conversion(con: sqlite3.Connection, open_item: Dict, date: str,
+                            briefing_id: Optional[int], kind: str,
+                            note: str) -> None:
+    """Close an expired watch-item with a conversion row (a NEW row — the
+    register is append-only). `kind` in resolved|unanswered|superseded.
+
+    D2 (NL-75 QA): AT MOST ONE conversion row may close an open item. The read
+    filter (expired_unconverted_watch_items) already dedups ACROSS editions, but
+    within ONE run the same thread can ride two slots and reach here twice for a
+    single promise — a per-slot loop then writes duplicate (and potentially
+    contradictory: 'resolved' + 'unanswered') rows, double-counting Data's
+    conversion-rate metric. Dedup at record time: if a conversion row already
+    closes this open item, write nothing (the append-only table needs no schema
+    change for the skip)."""
+    if kind not in ("resolved", "unanswered", "superseded"):
+        raise ValueError(f"conversion kind {kind!r} is not a conversion state")
+    if con.execute("SELECT 1 FROM watch_items WHERE converts = ? LIMIT 1",
+                   (open_item["id"],)).fetchone():
+        return
+    with con:
+        con.execute(
+            "INSERT INTO watch_items (thread_id, briefing_id, slot, edition_date,"
+            " kind, observable, converts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (open_item.get("thread_id"), briefing_id, open_item.get("slot"),
+             date, kind, note, open_item["id"]))
+
+
+_CONV_SUPERSEDED = ("supersed", "moot", "overtaken", "overtook", "overrun",
+                    "rendered irrelevant", "no longer relevant", "eclipsed",
+                    "outpaced", "outrun", "made moot")
+_CONV_UNANSWERED = ("without a mention", "went unmentioned", "unmentioned",
+                    "no mention", "none of", "no word", "stayed silent",
+                    "silent on", "unanswered", "did not say", "does not say",
+                    "no outlet", "goes unmentioned", "came and gone", "no report")
+
+
+def classify_conversion(observable: str, prose: str) -> Optional[str]:
+    """How an expired observable was ADDRESSED in the edition's prose:
+    'superseded' | 'unanswered' | 'resolved', or None when it was NOT addressed
+    (the silent-drop violation Content rule 2 forbids). The writer produces the
+    real conversion; this deterministic classifier catches the OMISSION (None)
+    and instruments the outcome. Order: a supersession or an explicit silence
+    is named as such; otherwise a referenced observable is 'resolved' (its
+    outcome reported). Not-referenced-at-all is the failure."""
+    low = (prose or "").lower()
+    subject = [u for u in _salient_units(observable) if u]
+    # Gate FIX-4 (milestone review): a numeric-only match must not close an
+    # accountability debt — a bare "12" anywhere in a body (substring: "2012"
+    # included) would resolve the Switzerland promise. Non-numeric units carry
+    # the reference test; numeric-only observables keep numeric matching.
+    non_numeric = [u for u in subject if not u[0].isdigit()]
+    check = non_numeric or subject
+    referenced = any(u in low for u in check) if check else False
+    if not referenced:
+        return None
+    if any(k in low for k in _CONV_SUPERSEDED):
+        return "superseded"
+    if any(k in low for k in _CONV_UNANSWERED):
+        return "unanswered"
+    return "resolved"

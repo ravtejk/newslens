@@ -484,7 +484,7 @@ def test_dec_jan_cross_year_cites_resolve_uniquely_each_side():
     assert not unresolved and not ambiguous
     clean, _ = memory_core.validate_state(
         "Talks froze (Dec 30). They resumed (Jan 5).",
-        ledger_dates=resolvable, edition_dates=set())
+        ledger_dates=resolvable)
     assert clean.startswith("Talks froze")
 
 
@@ -496,7 +496,7 @@ def test_jan5_repeating_across_years_fails_closed():
     _, _, ambiguous = memory_core._resolve_cites("As of (Jan 5).", both)
     assert ambiguous == {"01-05"}
     with pytest.raises(memory_core.StateRejected, match="ambiguous, fails closed"):
-        memory_core.validate_state("As of (Jan 5).", both, set())
+        memory_core.validate_state("As of (Jan 5).", both)
 
 
 def test_iso_cite_wrong_year_rejects_as_fabrication_never_reanchors():
@@ -505,7 +505,7 @@ def test_iso_cite_wrong_year_rejects_as_fabrication_never_reanchors():
     record never published) — it must NOT year-shift to the nearest match."""
     with pytest.raises(memory_core.StateRejected, match="fabrication"):
         memory_core.validate_state(
-            "The strait closed (2026-07-10).", {"2027-07-10"}, set())
+            "The strait closed (2026-07-10).", {"2027-07-10"})
 
 
 # ===========================================================================

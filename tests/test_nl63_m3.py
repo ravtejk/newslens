@@ -365,13 +365,14 @@ def test_validate_state_rejects_an_edition_only_cite_as_fabrication():
     with pytest.raises(memory_core.StateRejected, match="fabrication"):
         memory_core.validate_state(
             "The strait stayed shut (2026-07-08).",
-            ledger_dates={"2026-07-10"},
-            edition_dates={"2026-07-08"})   # an edition that never moved THIS thread
+            # 2026-07-08 never moved THIS thread; with edition_dates dropped
+            # (NL-75) a non-ledger date is unresolvable -> the fabrication class.
+            ledger_dates={"2026-07-10"})
 
 
 def test_validate_state_still_accepts_a_ledger_resolved_cite():
     """No regression: a cite that resolves to a real ledger date validates."""
     clean, _ = memory_core.validate_state(
         "The strait stayed shut (2026-07-10).",
-        ledger_dates={"2026-07-10"}, edition_dates=set())
+        ledger_dates={"2026-07-10"})
     assert clean.startswith("The strait stayed shut")

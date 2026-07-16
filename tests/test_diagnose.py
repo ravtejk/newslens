@@ -177,3 +177,31 @@ def test_fresh_install_readout_creates_nothing(tmp_paths, no_network):
     assert not paths.DB_PATH.exists()          # measurement created no DB
     assert not (paths.DATA_DIR / "generation_log.jsonl").exists()
     assert no_network == []
+
+
+def test_forward_claim_warnings_get_their_own_bucket(tmp_paths):
+    """Gate FIX-3 (NL-75 milestone review): with warn-grade as the ruled
+    enforcement, forward-claim findings must be LEGIBLE where the principal
+    looks — a dedicated bucket, never the anonymous 'other'. Both needle
+    classes: the Content-rule findings and the watch-register disclosure
+    (which fires every run on a declined-0013 DB)."""
+    seed_world(
+        tmp_paths, events=["2026-07-05"],
+        log_entries=[
+            {"date": "2026-07-05", "status": "ok", "ts": "2026-07-05T12:00:00Z",
+             "total_usd": 0.045, "tiers": ["full"],
+             "warnings": [
+                 "story 1: repetition word 'reinstated' has no predating "
+                 "ledger antecedent and is not source-attributed — the "
+                 "'reinstated' class (Content rule iii). Ship the record's "
+                 "date in the sentence, attribute the word to a source, or "
+                 "cut it.",
+                 "watch-items: register update failed after persist (no such "
+                 "table: watch_items) — the edition is PUBLISHED and "
+                 "unaffected",
+             ]},
+        ],
+    )
+    out = diagnose.run_diagnose(now_utc=NOW)
+    assert "forward-claim findings (NL-75: antecedent/stale-date/expiry)" in out
+    assert "watch register disclosures" in out

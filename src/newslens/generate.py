@@ -519,6 +519,47 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str) -> Dict:
     except ValueError:
         corroboration = {}
 
+    # NL-75 rung (a): attach each slot's thread MEMORY for the writer — the
+    # standing state + last-N dated deltas (Engineering's one missing hop:
+    # the analyst already had this via the P-channel; the writer had thread
+    # NAMES only). before_date=date is strict (prior coverage only; today's own
+    # delta is written after generation). Plus the expired watch-items this
+    # edition must CONVERT (the accountability loop). Cheap read-side joins on
+    # tables the renders already trust; skipped gracefully pre-migration.
+    from . import memory_core as _mc
+    for s in slots:
+        topics = [t for t in (s.get("matched_memory") or []) if t]
+        blocks: List[str] = []
+        expired: List[Dict] = []
+        for topic in topics:
+            # D7 (NL-75 QA): the ledger/state read and the expired-watch read are
+            # DECOUPLED seams. The ledger read (0010/0012 tables, always present
+            # once 0012 has run) must never die with the watch read: on a
+            # 0013-less DB the shared try/except cleared the already-built ledger
+            # blocks, silently disabling rung (a) — the approved core deliverable
+            # — whenever the un-approved 0013 migration was declined. Now the
+            # watch read's absence degrades ONLY the register (expired -> []); its
+            # failure surfaces at the post-persist register write ("watch-items:
+            # register update failed after persist"), so declining 0013 degrades
+            # the watch register alone, never the ledger.
+            try:
+                blk = _mc.writer_thread_context(con, topic, before_date=date)
+                if blk:
+                    blocks.append(blk)
+            except sqlite3.OperationalError:
+                # pre-0012 DB (supersession table absent) — this thread's ledger
+                # degrades to nothing rather than crash the run.
+                pass
+            try:
+                expired.extend(
+                    _mc.expired_unconverted_watch_items(con, topic, date))
+            except sqlite3.OperationalError:
+                # pre-0013 DB (watch_items absent) — the register degrades to []
+                # INDEPENDENTLY; the ledger read above is unaffected.
+                pass
+        s["thread_ledger"] = "\n".join(blocks)
+        s["expired_watch"] = expired
+
     return {
         "row": row,
         "slots": slots,
@@ -610,6 +651,27 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
         tags = ", ".join(t["name"] for t in s.get("matched_tags", [])) or "(none)"
         threads_m = ", ".join(s.get("matched_memory", [])) or "(none)"
         lines.append(f"matched tags: {tags} | matched threads: {threads_m}")
+        # NL-75 rung (a): the thread's MEMORY reaches the writer here — standing
+        # state + last-N dated deltas. Dates are load-bearing: compose the arc
+        # in the sentence ("what began as X on Jul 5 had by Jul 10 become Y"),
+        # never as furniture. The two-clocks law: this is EDITION history, in
+        # prose; the reader's own history is never referenced.
+        if s.get("thread_ledger"):
+            lines.append(s["thread_ledger"])
+        # NL-75 the accountability loop: watch-fors this edition PROMISED whose
+        # date has passed. Each MUST convert — never re-shipped, never dropped.
+        for w in s.get("expired_watch", []):
+            due = w.get("due_date") or "(no parseable date)"
+            lines.append(
+                f"EXPIRED WATCH-FOR you flagged on {w.get('edition_date')} "
+                f"(due {due}, now past): \"{w.get('observable', '')}\"\n"
+                "  You promised the reader to watch this; the date has passed. "
+                "CONVERT it in this story — exactly ONE of: RESOLVED (report the "
+                "outcome the record or today's sources now hold), UNANSWERED "
+                "(say plainly that today's sources are silent on it — the "
+                "silence is itself the content), or SUPERSEDED (name what "
+                "overtook it). NEVER re-ship it as a fresh forward-looking "
+                "watch-for; NEVER drop it silently.")
         lines.append(f"corroboration: {s.get('corroboration_label', '')}")
         if s.get("corroboration_count") == 1:
             outlets = s.get("outlets") or []
@@ -825,6 +887,232 @@ def validate_narrative_payload(
                 "A8 wants the lead's why-movement built from source specifics"
             )
     return clean, warnings
+
+
+# ---------------------------------------------------------------------------
+# NL-75 THE FORWARD-CLAIM RULES (Content council 2026-07-16) — generation-side
+# writer/editor validation. Warn-grade and SURFACED (report.warnings ->
+# generation_log -> diagnose): a visible, handled error path, not a silent
+# no-op and not a dead run on a heuristic. The primary defense is the prompt
+# steer; these are the safety net. Escalation to block-with-informed-retry
+# (Content rule i) is flagged for the gate as a severity decision.
+# ---------------------------------------------------------------------------
+
+# Continuity/repetition diction that PRESUPPOSES a prior state (Content rule
+# iii). Word-boundary matched so "again" never fires inside "against".
+# D3b (NL-75 QA): the spec lexicon reads 'reinstated, again, resumed, renewed,
+# re-imposed, once more, for the Nth time'. News copy hyphenates the re- stems
+# freely (HSR §5.1(4) found the unhyphenated sibling), so the re- forms accept
+# an optional hyphen; the for-the-Nth-time class is a bounded alternative.
+_REPETITION_RE = re.compile(
+    r"\b(re-?instat(?:e|es|ed|ing)|re-?impos(?:e|es|ed|ing)|re-?imposition|"
+    r"renew(?:s|ed|ing)?|resum(?:e|es|ed|ing)|re-?open(?:s|ed|ing)?|"
+    r"restor(?:e|es|ed|ing)|once more|back on|consecutive|again|"
+    r"for the (?:second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+    r"\d+(?:st|nd|rd|th)) time)\b", re.I)
+
+# D3a (NL-75 QA): attribution is a FRAME (a verb/phrase that hands the word to a
+# source), NOT a bare quote byte. 32% of real edition prose carries a possessive
+# apostrophe, so a bare "'" laundered unattributed repetition words past rule
+# iii; the possessive alone must not attribute. A quote character counts only
+# when the repetition word itself sits INSIDE a quoted span (see _is_source_
+# attributed / _match_in_quoted_span).
+_ATTRIB_MARKERS = (
+    "said", "says", "according to", "reported", "reports", "call it",
+    "calls it", "called it", "described", "per ", "cited",
+    "claim", "announced", "warned", "warns", "told",
+)
+_QUOTES = "\"'“”‘’"
+
+
+def _match_in_quoted_span(sentence: str, start: int, end: int) -> bool:
+    """The repetition word (sentence[start:end]) sits inside a quoted span: an
+    OPENING quote before it (a quote not preceded by an alnum — so a possessive
+    apostrophe in "Tehran's" never opens a span) and a CLOSING quote after it (a
+    quote not followed by an alnum). Distinguishes a quoted word from a bare
+    possessive. Boundary: a stray opening span earlier in the sentence plus a
+    stray closing span later can read as enclosing — warn-grade output, and
+    over-attributing a genuinely quoted-heavy sentence is the safe direction."""
+    def is_open(i: int) -> bool:
+        return sentence[i] in _QUOTES and (i == 0 or not sentence[i - 1].isalnum())
+
+    def is_close(i: int) -> bool:
+        return sentence[i] in _QUOTES and (
+            i == len(sentence) - 1 or not sentence[i + 1].isalnum())
+
+    has_open = any(is_open(i) for i in range(0, start))
+    has_close = any(is_close(i) for i in range(end, len(sentence)))
+    return has_open and has_close
+
+
+def _is_source_attributed(sentence: str, match: Optional[re.Match] = None) -> bool:
+    """A repetition word is legal when carried by a source (Content rule iii's
+    middle state): in an attribution FRAME ("today's reports call it 'X'",
+    "according to", "per ") OR with the word itself sitting inside a quoted span
+    ("a step reports call \"reinstated\""). A bare possessive apostrophe is
+    neither (D3a)."""
+    low = sentence.lower()
+    if any(m in low for m in _ATTRIB_MARKERS):
+        return True
+    if match is not None and _match_in_quoted_span(
+            sentence, match.start(), match.end()):
+        return True
+    return False
+
+
+# D6 (NL-75 QA, the HIGH one — HSR §5.1(2)): the antecedent SUBJECT must
+# discriminate the repetition's OBJECT (the thing being re-X'd), not echo the
+# whole sentence. The live call site passed the full sentence's salient units;
+# on a thread with ANY real prior history a mundane shared word (the thread-topic
+# word 'strait' living in a genuine prior row) licensed the repetition word with
+# ZERO prior blockade on record — the exact §5.1(2) false hit, alive in the live
+# path. Scope the subject to a bounded window AFTER the match, minus the thread
+# topic's own words; a thread-topic word alone must never license.
+_SUBJECT_WINDOW_CHARS = 64
+
+
+def _repetition_subject_units(sentence: str, match: "re.Match",
+                              topics: List[str]) -> set:
+    """The salient units of the repetition's object: a bounded window AFTER the
+    match (the noun phrase being re-X'd), minus the thread topics' own salient
+    words. Falls back to the full sentence (still minus topic words) only when
+    the window yields no units, so a trailing repetition word ("prices rose
+    again.") still has a subject rather than licensing on nothing."""
+    from . import memory_core as mc
+    topic_words: set = set()
+    for t in topics:
+        topic_words.update(mc._salient_units(t))
+    window = sentence[match.end():match.end() + _SUBJECT_WINDOW_CHARS]
+    units = [u for u in mc._salient_units(window) if u not in topic_words]
+    if not units:
+        # Gate FIX-1 (milestone review): the full-sentence fallback excludes
+        # the match's OWN units — a sentence-final "again"/"resumed" must not
+        # become its own subject and license off any prior row carrying the
+        # word (or a superstring: "again" substring-matches "against").
+        match_units = set(mc._salient_units(match.group(0)))
+        units = [u for u in mc._salient_units(sentence)
+                 if u not in topic_words and u not in match_units]
+    return set(units)
+
+
+def repetition_antecedent_findings(con, stories: List[Dict], slots: List[Dict],
+                                   edition_date: str) -> List[str]:
+    """Content rule iii, poisoned-antecedent hardened. A repetition word is
+    licensed only by a PREDATING ledger antecedent (a same-day backfill row
+    citing edition-day sources does NOT count — the antecedent must predate the
+    edition) OR by explicit source attribution. Neither → the 'reinstated'
+    class, flagged."""
+    from . import memory_core as mc
+    out: List[str] = []
+    for story, slot in zip(stories, slots):
+        if not isinstance(story, dict):
+            continue
+        topics = [t for t in (slot.get("matched_memory") or []) if t]
+        blob = " ".join(story.get(f, "") for f in ("headline", "lede", "why_it_matters")
+                        if isinstance(story.get(f), str))
+        for sent in re.split(r"(?<=[.!?])\s+", blob):
+            m = _REPETITION_RE.search(sent)
+            if not m:
+                continue
+            units = _repetition_subject_units(sent, m, topics)
+            # D6-R (QA re-verify, fix loop 1): an EMPTY subject set must never
+            # license — with no discriminating units, has_predating_antecedent
+            # falls through to any-prior-history ("The strait is back on." on
+            # a thread with unrelated priors). Conservative direction: this is
+            # warn-grade surface, so the false positive costs a warning; the
+            # false negative ships unearned diction.
+            licensed = bool(units) and any(
+                mc.has_predating_antecedent(con, t, units, edition_date)
+                for t in topics)
+            if licensed or _is_source_attributed(sent, m):
+                continue
+            out.append(
+                f"story {slot.get('slot')}: repetition word {m.group(0)!r} has "
+                "no predating ledger antecedent and is not source-attributed — "
+                "the 'reinstated' class (Content rule iii). Ship the record's "
+                "date in the sentence, attribute the word to a source, or cut it.")
+    return out
+
+
+def future_relative_watch_findings(stories: List[Dict], slots: List[Dict],
+                                   edition_date: str) -> List[str]:
+    """Content rule i: date-bearing forward material must resolve STRICTLY later
+    than the edition. A watch-for naming a date on-or-before the edition is the
+    stale-July-12 class (the render guard from v7.2 stays as a backstop; this
+    catches it at generation)."""
+    from . import memory_core as mc
+    out: List[str] = []
+    year = (edition_date or "")[:4]
+    for story, slot in zip(stories, slots):
+        if not isinstance(story, dict):
+            continue
+        wf = story.get("watch_for") or ""
+        dates = set()
+        for m in mc._ISO_RE.finditer(wf):
+            dates.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+        if year.isdigit():
+            for dm in mc._MONTH_DAY_RE.finditer(wf):
+                mon = mc._MONTH_NUM[dm.group(1).lower()]
+                dates.add(f"{year}-{mon:02d}-{int(dm.group(2)):02d}")
+        for d in sorted(d for d in dates if d <= edition_date):
+            out.append(
+                f"story {slot.get('slot')}: watch-for names {mc.human_date(d)} "
+                f"({d}) — not future-relative to the {edition_date} edition "
+                "(Content rule i, the stale-watch-for class). A watch-for points "
+                "strictly forward; convert or drop this, never re-ship it.")
+    return out
+
+
+# D5 (NL-75 QA): the conversion check runs against the story BODY only. An
+# expired watch-for is NEVER re-shipped; a re-ship whose only reference sits in
+# `watch_for` (dateless — the evasion clause rule i cannot grep) would otherwise
+# make the observable 'referenced' and classify 'resolved', closing the very
+# debt the edition just re-incurred. Body = headline + lede + why_it_matters;
+# the register write path (run_generate) uses the SAME body-only prose.
+_STORY_BODY_FIELDS = ("headline", "lede", "why_it_matters")
+
+
+def _story_body_prose(story: Dict) -> str:
+    return " ".join(story.get(f, "") for f in _STORY_BODY_FIELDS
+                    if isinstance(story.get(f), str))
+
+
+def expiry_conversion_findings(stories: List[Dict], slots: List[Dict]) -> List[str]:
+    """Content rule ii: an EXPIRED watch-for (a promise whose date has passed,
+    carried on the slot as `expired_watch`) must CONVERT in this edition —
+    RESOLVED / UNANSWERED / SUPERSEDED — never silently dropped. Flags an
+    expired item the story's BODY does not address (a reference that lives only
+    in `watch_for` is a re-ship, D5 — flagged here, never a conversion)."""
+    from . import memory_core as mc
+    out: List[str] = []
+    for story, slot in zip(stories, slots):
+        if not isinstance(story, dict):
+            continue
+        expired = slot.get("expired_watch") or []
+        if not expired:
+            continue
+        prose = _story_body_prose(story)
+        for w in expired:
+            if mc.classify_conversion(w.get("observable", ""), prose) is None:
+                obs = (w.get("observable", "") or "")[:60]
+                out.append(
+                    f"story {slot.get('slot')}: expired watch-for \"{obs}...\" "
+                    f"(due {w.get('due_date')}) was NOT converted — the story "
+                    "neither reports its outcome, notes the sources are silent, "
+                    "nor says what superseded it (Content rule ii: never "
+                    "silently dropped, never re-shipped).")
+    return out
+
+
+def forward_claim_findings(con, stories: List[Dict], slots: List[Dict],
+                           edition_date: str) -> List[str]:
+    """The three Forward-Claim Rules, run generation-side over the edited
+    stories. Returns surfaced warnings."""
+    out: List[str] = []
+    out.extend(repetition_antecedent_findings(con, stories, slots, edition_date))
+    out.extend(future_relative_watch_findings(stories, slots, edition_date))
+    out.extend(expiry_conversion_findings(stories, slots))
+    return out
 
 
 def assemble_narrative(
@@ -1788,8 +2076,14 @@ def _run_generate_body(
         # meta-lines, and script labels are all consistently thread-free. The
         # persisted slots are untouched (samples never persist).
         inputs["threads"] = []
+        # D4 (NL-75 QA): rung (a) attached `thread_ledger`/`expired_watch` in
+        # load_briefing_inputs BEFORE this strip, so the copy must empty THEM too
+        # — otherwise the cold-start sample's prompt ships the MEMORY block and
+        # the EXPIRED WATCH-FOR conversion demand it just stripped its threads to
+        # avoid (ADR-0007 amendment: 'every thread/memory trace is stripped').
         inputs["slots"] = [
-            {**s, "matched_memory": [], "revived_threads": []}
+            {**s, "matched_memory": [], "revived_threads": [],
+             "thread_ledger": "", "expired_watch": []}
             for s in inputs["slots"]
         ]
     report.continuity_status = inputs["continuity_status"]
@@ -2072,6 +2366,12 @@ def _run_generate_body(
         else:
             raise GenerateError(f"narrative failed validation: {exc}") from exc
     report.warnings.extend(narrative_warnings)
+    # NL-75 THE FORWARD-CLAIM RULES — run generation-side over the EDITED
+    # stories (the same text that persists). Repetition diction without a
+    # predating antecedent (poisoned-antecedent hardened), stale watch-fors,
+    # and unconverted expired watch-fors surface as visible warnings.
+    report.warnings.extend(
+        forward_claim_findings(con, stories, inputs["slots"], date))
 
     narrative = assemble_narrative(date, report.variant, stories, inputs)
     report.narrative_text = narrative
@@ -2347,6 +2647,29 @@ def _run_generate_body(
                 late_steps = report.steps[steps_before:]
                 if late_steps:
                     _fold_cost_steps(con, date, late_steps)
+        # NL-75 the expiry register (post-persist, contained like the memory
+        # pass): persist this edition's watch-fors as ledger-adjacent objects,
+        # and record conversions for the expired items this edition addressed.
+        # $0 spend; a failure never crashes a PUBLISHED edition.
+        try:
+            from . import memory_core as _mc
+            _brow = con.execute("SELECT id FROM briefings WHERE date = ?",
+                                (date,)).fetchone()
+            _bid = _brow["id"] if _brow else None
+            _mc.persist_watch_items(con, date, _bid, stories, inputs["slots"])
+            for _story, _slot in zip(stories, inputs["slots"]):
+                # D5: classify against the story BODY only — a re-shipped
+                # observable sitting in `watch_for` must NOT close the debt.
+                _prose = _story_body_prose(_story)
+                for _w in (_slot.get("expired_watch") or []):
+                    _outcome = _mc.classify_conversion(_w.get("observable", ""), _prose)
+                    if _outcome:
+                        _mc.record_watch_conversion(
+                            con, _w, date, _bid, _outcome, _prose[:280])
+        except Exception as exc:  # noqa: BLE001 — post-persist containment
+            report.warnings.append(
+                f"watch-items: register update failed after persist ({exc}) — "
+                "the edition is PUBLISHED and unaffected")
     report.artifact_path = str(
         write_artifact(date, report.variant, report.sample, narrative, script,
                        no_threads=no_threads)
