@@ -74,14 +74,27 @@ def _hdr(req, name):
 # ---------------------------------------------------------------------------
 
 def test_post_chat_routes_through_seam_as_rank_seat(monkeypatch):
+    # B2: rank flipped to the Claude API lane (claude-haiku-4-5). The request is
+    # now the anthropic Messages shape (x-api-key, anthropic-version, max_tokens
+    # required, a system nudge for json_mode instead of response_format, no
+    # thinking/effort on a Haiku mechanical seat), POSTed to the anthropic
+    # endpoint (the lane reads its own endpoint + credential, ignoring the
+    # openai offline-seam url the caller still passes).
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
     seen = _capture(monkeypatch)
     ranking._post_chat("sk-x", "hello")
-    assert seen["body"]["model"] == "gpt-4o"
-    assert seen["body"]["temperature"] == 0
-    assert seen["body"]["max_tokens"] == ranking.MAX_COMPLETION_TOKENS
-    assert seen["body"]["response_format"] == {"type": "json_object"}
+    body = seen["body"]
+    assert body["model"] == "claude-haiku-4-5"
+    assert body["temperature"] == 0
+    assert body["max_tokens"] == ranking.MAX_COMPLETION_TOKENS
+    assert body["messages"] == [{"role": "user", "content": "hello"}]
+    assert "system" in body                      # json_mode nudge (no json_object mode)
+    assert "response_format" not in body
+    assert "thinking" not in body and "output_config" not in body  # Haiku: mechanical
+    assert _hdr(seen["req"], "x-api-key") == "sk-ant-fake"
+    assert _hdr(seen["req"], "anthropic-version") == llm.ANTHROPIC_VERSION
     assert _hdr(seen["req"], "User-Agent") == ranking.USER_AGENT
-    assert seen["url"] == ranking.OPENAI_CHAT_URL
+    assert seen["url"] == llm.ANTHROPIC_MESSAGES_URL
     assert seen["timeout"] == llm.SEATS["rank"].timeout_s == 90
 
 
@@ -139,11 +152,21 @@ def test_per_seat_lane_override_wins_over_global():
 # B2's model/lane flips are deliberate, never accidental)
 # ---------------------------------------------------------------------------
 
-def test_every_seat_defaults_to_gpt4o_openai_api():
+def test_seat_map_after_b2_haiku_flip():
+    # B2 (approved Option C): rank/editor/script flipped to the Claude API lane
+    # on Haiku 4.5; analyst/writer/synthesis + the newly-joined state seat stay
+    # gpt-4o on the api lane. Every seat is still on the api lane (the
+    # subscription lane is B3). This guard makes the flip deliberate.
+    haiku = {"rank", "editor", "script"}
     for name, cfg in llm.SEATS.items():
-        assert cfg.provider == "openai", name
-        assert cfg.model == "gpt-4o", name
         assert cfg.lane == "api", name
+        if name in haiku:
+            assert cfg.provider == "anthropic", name
+            assert cfg.model == "claude-haiku-4-5", name
+        else:
+            assert cfg.provider == "openai", name
+            assert cfg.model == "gpt-4o", name
+    assert "state" in llm.SEATS  # R1: the state/memory seat joined the table
 
 
 def test_default_env_is_behaviour_neutral():
@@ -163,12 +186,13 @@ def test_fallback_flag_is_opt_in_default_off():
 # ---------------------------------------------------------------------------
 
 def test_cost_fields_api_lane_shadow_equals_charged():
+    # rank is Haiku now ($1.00 in / $5.00 out per MTok) — per-seat prices.
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 0}
     fields = llm.cost_fields(llm.SEATS["rank"], usage)
     assert fields["lane"] == "api"
-    assert fields["model"] == "gpt-4o"
-    assert fields["usd_shadow"] == pytest.approx(2.50)
-    assert fields["usd_charged"] == pytest.approx(2.50)
+    assert fields["model"] == "claude-haiku-4-5"
+    assert fields["usd_shadow"] == pytest.approx(1.00)
+    assert fields["usd_charged"] == pytest.approx(1.00)
 
 
 def test_cost_fields_records_cache_read_tokens():
@@ -182,7 +206,7 @@ def test_cost_fields_subscription_lane_charges_zero_shadow_holds():
     sub = replace(llm.SEATS["rank"], lane="subscription")
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 0}
     fields = llm.cost_fields(sub, usage)
-    assert fields["usd_shadow"] == pytest.approx(2.50)   # shadow still binds
+    assert fields["usd_shadow"] == pytest.approx(1.00)   # shadow still binds (Haiku)
     assert fields["usd_charged"] == 0.0                   # subscription = $0
 
 
@@ -206,9 +230,9 @@ def test_rank_cost_sink_gains_lane_and_shadow_keys(monkeypatch):
     ranking.call_llm_validated("sk-x", "p", {1}, {}, [], cost_sink=sink)
     assert sink, "cost_sink recorded no attempt"
     e = sink[0]
-    assert e["lane"] == "api" and e["model"] == "gpt-4o"
+    assert e["lane"] == "api" and e["model"] == "claude-haiku-4-5"  # B2: Haiku
     assert "usd_shadow" in e and "usd_charged" in e
-    assert e["usd"] == e["usd_charged"]        # legacy key preserved
+    assert e["usd"] == e["usd_charged"]        # legacy key preserved, per-seat priced
 
 
 def test_generate_cost_sink_gains_lane_and_shadow_keys(monkeypatch):

@@ -7,9 +7,11 @@ construction). Plus: thread matches as personal signal, reference recording,
 item-11 narrative NULLing, sync-first loudness, truncation naming, the
 Retry-After clamp, and the [id=N] prompt armor.
 
-All offline (fake server via ranking.OPENAI_CHAT_URL); memory.md sandboxed —
-the real file is live principal state. Reds are self-contained acceptance
-criteria (Option A).
+All offline (fake server; B2 fake migration: the rank seat rides the Claude
+API lane, so the `llm` fixture redirects llm.ANTHROPIC_MESSAGES_URL at the
+loopback and transport bodies are anthropic-shaped — every contract here is
+unchanged); memory.md sandboxed — the real file is live principal state. Reds
+are self-contained acceptance criteria (Option A).
 """
 
 from __future__ import annotations
@@ -20,7 +22,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from newslens import config, memory, paths, ranking
+from conftest import anthropic_envelope
+from newslens import config, llm as llm_mod, memory, paths, ranking
 
 NOW = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
 DATE = "2026-07-04"
@@ -45,6 +48,12 @@ def llm(fake_api, monkeypatch):
     monkeypatch.setattr(
         ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
+    # B2: the rank seat's transport is the anthropic provider's own endpoint;
+    # give it the loopback fake + the fake credential it authenticates with.
+    monkeypatch.setattr(
+        llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setattr(time, "sleep", lambda s: None)
     return fake_api
 
@@ -195,15 +204,12 @@ def test_valid_dormant_match_passes_validation():
 # --- truncation + clamp (item 12 batch) ----------------------------------------------------
 
 def test_truncated_completion_is_named_precisely_not_malformed(llm):
-    body = json.dumps(
-        {
-            "choices": [
-                {"finish_reason": "length", "message": {"content": "{\"clusters\": ["}}
-            ],
-            "usage": {"prompt_tokens": 900, "completion_tokens": 3000},
-        }
-    ).encode("utf-8")
-    llm.add_route("/chat/completions", status=200, body=body,
+    # B2: the cap-hit shape on the Claude lane is stop_reason='max_tokens';
+    # the provider must map it to finish_reason 'length' or the truncation
+    # guard goes blind (the load-bearing row of llm._STOP_REASON_MAP).
+    body = anthropic_envelope('{"clusters": [', input_tokens=900,
+                              output_tokens=3000, stop_reason="max_tokens")
+    llm.add_route("/v1/messages", status=200, body=body,
                   content_type="application/json")
     with pytest.raises(ranking.RankingError) as excinfo:
         ranking.call_llm_validated("sk-x", "p", {1}, TAGS, [], [])
@@ -314,7 +320,7 @@ def test_revival_end_to_end_all_products(migrated_con, memfile, llm):
                     dormant=["Helium Shortage"], impact=6),
         ]
     }
-    llm.add_route("/chat/completions", status=200, body=envelope(payload),
+    llm.add_route("/v1/messages", status=200, body=anthropic_envelope(payload, input_tokens=900),
                   content_type="application/json")
     report = ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),
                               env={"OPENAI_API_KEY": "sk-x"})
@@ -375,7 +381,7 @@ def test_dismissed_user_is_absent_from_prompt_and_cannot_revive(
     payload = {
         "clusters": [cluster([1], title="T", tags=TOPIC, impact=5)]
     }
-    llm.add_route("/chat/completions", status=200, body=envelope(payload),
+    llm.add_route("/v1/messages", status=200, body=anthropic_envelope(payload, input_tokens=900),
                   content_type="application/json")
     ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),
                      env={"OPENAI_API_KEY": "sk-x"})
@@ -405,7 +411,7 @@ def test_thread_reference_recording_e2e(migrated_con, memfile, llm):
         "clusters": [cluster([1, 2], title="Thread hit", tags=TOPIC,
                              mem=["Iran War"], impact=4)]
     }
-    llm.add_route("/chat/completions", status=200, body=envelope(payload),
+    llm.add_route("/v1/messages", status=200, body=anthropic_envelope(payload, input_tokens=900),
                   content_type="application/json")
     ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),
                      env={"OPENAI_API_KEY": "sk-x"})
@@ -425,7 +431,7 @@ def test_item11_rerank_nulls_generation_fields(migrated_con, memfile, llm):
     re-rank — the fields NULL on overwrite; history archives the originals."""
     _seed_revival_world(migrated_con)
     payload = {"clusters": [cluster([1], title="V1", tags=TOPIC, impact=5)]}
-    llm.add_route("/chat/completions", status=200, body=envelope(payload),
+    llm.add_route("/v1/messages", status=200, body=anthropic_envelope(payload, input_tokens=900),
                   content_type="application/json")
     env = {"OPENAI_API_KEY": "sk-x"}
     ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(), env=env)
@@ -494,7 +500,7 @@ def test_gatefix3_untouched_file_gets_the_refresh_with_no_warning(
     _seed_revival_world(migrated_con)
     payload = {"clusters": [cluster([1], title="T", tags=TOPIC,
                                     mem=["Iran War"], impact=5)]}
-    llm.add_route("/chat/completions", status=200, body=envelope(payload),
+    llm.add_route("/v1/messages", status=200, body=anthropic_envelope(payload, input_tokens=900),
                   content_type="application/json")
     report = ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),
                               env={"OPENAI_API_KEY": "sk-x"})

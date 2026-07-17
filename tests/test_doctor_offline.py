@@ -224,10 +224,14 @@ def test_exit_0_with_warnings_once_everything_required_passes(
     the (fake) endpoints, DB migrated, guards defaulted — while the template
     sources still produce ⚠ lines."""
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.base_url + "/v1/models")
+    # B2: the Claude API lane (rank/editor/script on Haiku) makes
+    # ANTHROPIC_API_KEY required; validate it against the same fake /v1/models.
+    monkeypatch.setattr(doctor, "ANTHROPIC_MODELS_URL", fake_api.base_url + "/v1/models")
     monkeypatch.setattr(
         doctor, "PERPLEXITY_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
     monkeypatch.setenv("OPENAI_API_KEY", fake_api.good_key)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setenv("PERPLEXITY_API_KEY", fake_api.good_key)
     db.migrate()  # sandboxed
     # M6: the TTS engine is REQUIRED (listening-primary product). Fake its
@@ -257,10 +261,13 @@ def test_exit_0_with_warnings_once_everything_required_passes(
     assert "Doctor exit 0 — everything required passes; the ⚠ lines are worth a look." in out
     assert "0 required failing" in out
     assert config.NO_ACTIVE_SOURCES_MSG in out  # warnings present, not blocking
-    # Exactly the two key validations hit the network — nothing else.
+    # Exactly the three key validations hit the network — nothing else. B2 adds
+    # the anthropic GET /v1/models (the Claude API lane's read-only key check)
+    # alongside the openai GET /v1/models and the perplexity POST.
     assert [(r["method"], r["path"]) for r in fake_api.recorded] == [
-        ("GET", "/v1/models"),
-        ("POST", "/chat/completions"),
+        ("GET", "/v1/models"),      # openai key check
+        ("GET", "/v1/models"),      # anthropic key check (B2)
+        ("POST", "/chat/completions"),  # perplexity key check
     ]
 
 

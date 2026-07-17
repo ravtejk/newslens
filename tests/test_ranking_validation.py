@@ -1,9 +1,21 @@
 """Ranking LLM seam: hard validation + retry/expense discipline (ADR-0004 §10;
 ranking.py structured-output block; the 2026-07-04 live finding).
 
-Everything runs against the local fake server via ranking.OPENAI_CHAT_URL, or
-pure functions — no real endpoint, no spend, and a real key in .env changes
-nothing (tests pass env dicts explicitly).
+Everything runs against the local fake server, or pure functions — no real
+endpoint, no spend, and a real key in .env changes nothing (tests pass env
+dicts explicitly / the fixture sets a fake ANTHROPIC_API_KEY).
+
+B2 fake migration (QA, 2026-07-16): the rank seat rides the Claude API lane
+(claude-haiku-4-5) now, and the anthropic provider reads its OWN endpoint
+(llm.ANTHROPIC_MESSAGES_URL) + credential (ANTHROPIC_API_KEY) — the historical
+ranking.OPENAI_CHAT_URL patch no longer reaches it. The `llm` fixture therefore
+redirects BOTH endpoint names at the loopback fake, and transport bodies are
+anthropic-shaped (conftest.anthropic_envelope / anthropic error envelopes).
+Every test's CONTRACT is unchanged: same retry counts, same fail-fast classes,
+same disclosure assertions. Where the ERROR STRINGS misdirect on this lane
+("OpenAI rejected the key ... platform.openai.com" for a failure that happened
+at api.anthropic.com), the tests pin current behavior and NAME the misdirection
+— characterized for the gate, deliberately not fixed in a QA pass.
 
 KNOWN-RED: test_BUG6_* — ADR-0004 §6 says failed runs log to ranking_runs
 too, but pre-call failures (budget abort) currently log nothing.
@@ -17,7 +29,8 @@ import urllib.error
 
 import pytest
 
-from newslens import config, ranking
+from conftest import anthropic_envelope
+from newslens import config, llm as llm_mod, ranking
 
 DATE = "2026-07-04"
 TAGS = {"AI regulation": "topic", "economy": "domain"}
@@ -210,13 +223,32 @@ def test_retry_after_seconds_parses_caps_and_defaults(header, expected):
 
 @pytest.fixture
 def llm(fake_api, monkeypatch):
+    # Both lanes point at the loopback fake: the openai seam (historical) AND
+    # the anthropic provider's own module-level endpoint — B2's rank seat rides
+    # the latter and ignores LaneRequest.url. The anthropic credential is the
+    # fake server's good_key so the x-api-key auth succeeds unless a test
+    # routes an explicit error.
     monkeypatch.setattr(
         ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
+    monkeypatch.setattr(
+        llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     sleeps = []
     monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
     fake_api.sleeps = sleeps
     return fake_api
+
+
+def anthropic_error(err_type: str, message: str) -> bytes:
+    """An anthropic-shaped error body (the twin of the OpenAI {'error': {...}}
+    bodies these tests historically served). ranking._http_error_detail reads
+    error.code-or-TYPE + error.message off it, so the detail line becomes e.g.
+    'authentication_error: bad key'."""
+    return json.dumps(
+        {"type": "error", "error": {"type": err_type, "message": message}}
+    ).encode("utf-8")
 
 
 def _posts(fake_api):
@@ -229,34 +261,55 @@ def call(key="sk-qa-fake"):
 
 def test_success_returns_clusters_and_usage(llm):
     llm.add_route(
-        "/chat/completions", status=200,
-        body=envelope({"clusters": [cluster([1])]}),
+        "/v1/messages", status=200,
+        body=anthropic_envelope({"clusters": [cluster([1])]}),
         content_type="application/json",
     )
     clusters, usage = call()
+    # usage is the OpenAI-shaped dict the anthropic provider synthesises:
+    # input_tokens=1000 must surface as prompt_tokens=1000 (the ledger reader).
     assert len(clusters) == 1 and usage["prompt_tokens"] == 1000
     assert len(_posts(llm)) == 1
 
 
 def test_401_fails_immediately_naming_the_key(llm):
+    """Contract unchanged on the Claude lane: auth failure = immediate
+    RankingError, zero retries, zero sleeps, body detail surfaced.
+
+    FIX B (gate, landed): the rank seat is anthropic, so a 401 now names the
+    RIGHT console — 'Anthropic rejected the key ... regenerate at
+    console.anthropic.com/settings/keys and update .env' — instead of sending
+    the principal to rotate the wrong (OpenAI) key. The openai arm is unchanged
+    (the rollback path; pinned by test_generate.test_call_llm_401_names_the_key)."""
     llm.add_route(
-        "/chat/completions", status=401,
-        body=json.dumps({"error": {"code": "invalid_api_key", "message": "Incorrect API key"}}).encode(),
+        "/v1/messages", status=401,
+        body=anthropic_error("authentication_error", "invalid x-api-key"),
         content_type="application/json",
     )
     with pytest.raises(ranking.RankingError) as excinfo:
         call()
-    assert "regenerate at platform.openai.com" in str(excinfo.value)
-    assert "invalid_api_key" in str(excinfo.value)
+    msg = str(excinfo.value)
+    assert "Anthropic rejected the key" in msg
+    assert "console.anthropic.com/settings/keys" in msg   # the RIGHT console
+    assert "platform.openai.com" not in msg               # no longer misdirects
+    assert "authentication_error" in msg  # anthropic detail surfaced
     assert len(_posts(llm)) == 1  # never retried
     assert llm.sleeps == []
 
 
 def test_429_insufficient_quota_fails_immediately_with_billing_hint(llm):
+    """The quota fast-fail ARM, pinned: any 429 whose body detail carries
+    'insufficient_quota' fails immediately with the billing hint — retrying
+    spends nothing and fixes nothing. NOTE (B2 QA): 'insufficient_quota' is an
+    OpenAI error code; the anthropic API signals credit exhaustion as HTTP 400
+    'credit balance is too low' instead (characterized in
+    test_anthropic_credit_exhaustion_400_fails_immediately below), so on this
+    lane the arm is reachable only via this synthetic body. Kept: it pins the
+    arm's behavior and the doctor-blind-spot honesty line."""
     llm.add_route(
-        "/chat/completions", status=429,
-        body=json.dumps({"error": {"code": "insufficient_quota",
-                                   "message": "You exceeded your current quota"}}).encode(),
+        "/v1/messages", status=429,
+        body=anthropic_error("rate_limit_error",
+                             "insufficient_quota: You exceeded your current quota"),
         content_type="application/json",
     )
     with pytest.raises(ranking.RankingError) as excinfo:
@@ -268,10 +321,35 @@ def test_429_insufficient_quota_fails_immediately_with_billing_hint(llm):
     assert llm.sleeps == []
 
 
+def test_anthropic_credit_exhaustion_400_fails_immediately(llm):
+    """FIX C (gate, landed) — the REAL anthropic quota-exhaustion shape
+    (HTTP 400 invalid_request_error, 'credit balance is too low') now takes a
+    DEDICATED billing arm ahead of the generic 4xx arm: immediate RankingError,
+    no retry, no sleep, and an actionable message that names the anthropic
+    billing console and keeps the doctor-blind-spot honesty line. The openai
+    insufficient_quota arm (a different wire code) is unchanged."""
+    llm.add_route(
+        "/v1/messages", status=400,
+        body=anthropic_error("invalid_request_error",
+                             "Your credit balance is too low to access the Anthropic API."),
+        content_type="application/json",
+    )
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    msg = str(excinfo.value)
+    assert "Anthropic account has no available credit" in msg
+    assert "add credits at console.anthropic.com billing" in msg
+    assert "cannot catch this" in msg                  # doctor blind-spot honesty
+    assert "credit balance is too low" in msg          # the actionable detail surfaces
+    assert "OpenAI" not in msg                          # no longer misdirects
+    assert len(_posts(llm)) == 1  # non-retryable: never retried
+    assert llm.sleeps == []
+
+
 def test_transient_429_retries_once_honoring_retry_after(llm):
     llm.add_route(
-        "/chat/completions", status=429,
-        body=json.dumps({"error": {"code": "rate_limit_exceeded", "message": "Rate limit"}}).encode(),
+        "/v1/messages", status=429,
+        body=anthropic_error("rate_limit_error", "Rate limit"),
         content_type="application/json",
         headers={"Retry-After": "0"},
     )
@@ -284,11 +362,28 @@ def test_transient_429_retries_once_honoring_retry_after(llm):
 
 
 def test_5xx_retries_once_then_visible_error(llm):
-    llm.add_route("/chat/completions", status=503, body=b'{"error": "down"}',
+    llm.add_route("/v1/messages", status=503,
+                  body=anthropic_error("api_error", "down"),
                   content_type="application/json")
     with pytest.raises(ranking.RankingError) as excinfo:
         call()
     assert "failed after one retry" in str(excinfo.value)
+    assert len(_posts(llm)) == 2
+
+
+def test_529_overloaded_is_retryable_like_5xx(llm):
+    """B2 adversarial: anthropic's 529 overloaded_error is its load-shed shape
+    (a code OpenAI never sent). It must ride the >=500 transient arm — one
+    retry, then a visible error naming the status + detail — never the
+    non-retryable 4xx raise."""
+    llm.add_route("/v1/messages", status=529,
+                  body=anthropic_error("overloaded_error", "Overloaded"),
+                  content_type="application/json")
+    with pytest.raises(ranking.RankingError) as excinfo:
+        call()
+    msg = str(excinfo.value)
+    assert "failed after one retry" in msg
+    assert "HTTP 529" in msg and "overloaded_error" in msg
     assert len(_posts(llm)) == 2
 
 
@@ -297,8 +392,8 @@ def test_duplicate_ids_payload_repairs_and_succeeds_with_disclosure(llm):
     DISCLOSED deterministic repair: keep each item's first cluster, drop later
     duplicates, count every drop — one call, no retry burned."""
     llm.add_route(
-        "/chat/completions", status=200,
-        body=envelope({"clusters": [cluster([1, 2]), cluster([2, 3], title="B")]}),
+        "/v1/messages", status=200,
+        body=anthropic_envelope({"clusters": [cluster([1, 2]), cluster([2, 3], title="B")]}),
         content_type="application/json",
     )
     repairs = {}
@@ -314,8 +409,8 @@ def test_duplicate_ids_payload_repairs_and_succeeds_with_disclosure(llm):
 
 def test_cluster_emptied_by_repair_is_dropped_whole_and_disclosed(llm):
     llm.add_route(
-        "/chat/completions", status=200,
-        body=envelope({"clusters": [cluster([1, 2]), cluster([2, 1], title="Echo")]}),
+        "/v1/messages", status=200,
+        body=anthropic_envelope({"clusters": [cluster([1, 2]), cluster([2, 1], title="Echo")]}),
         content_type="application/json",
     )
     repairs = {}
@@ -344,8 +439,8 @@ def test_repair_scope_other_violation_classes_still_hard_reject_end_to_end(
     violation class still walks the reject -> one retry -> visible-error
     path, with the validator's diagnosis in the message."""
     llm.add_route(
-        "/chat/completions", status=200,
-        body=envelope({"clusters": [bad_cluster]}),
+        "/v1/messages", status=200,
+        body=anthropic_envelope({"clusters": [bad_cluster]}),
         content_type="application/json",
     )
     with pytest.raises(ranking.RankingError) as excinfo:
@@ -378,7 +473,11 @@ def test_repair_duplicate_ids_unit_semantics():
 
 
 def test_unreachable_endpoint_retries_once_then_fails(llm, fake_api, monkeypatch):
-    monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.dead_url("/chat"))
+    # B2: the DEAD endpoint must be the one the rank seat actually posts to —
+    # the anthropic module URL. (Pre-migration this patched only the openai
+    # seam, which the Claude lane ignores; the test then passed by hitting the
+    # loopback DNS guard instead of the dead port — green for the wrong reason.)
+    monkeypatch.setattr(llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.dead_url("/v1/messages"))
     with pytest.raises(ranking.RankingError) as excinfo:
         call()
     assert "failed after one retry" in str(excinfo.value)
@@ -478,7 +577,11 @@ def test_llm_failure_logs_a_failed_ranking_runs_row(migrated_con, llm):
     """The live 2026-07-04 behavior, pinned: an LLM/validation failure raises
     RankingError AND leaves a status=failed instrumentation row."""
     seed_items(migrated_con)
-    llm.add_route("/chat/completions", status=503, body=b'{"error": "down"}',
+    # B2: route the 503 at the endpoint the rank seat actually posts to (the
+    # pre-migration /chat/completions route was dead code on this lane — the
+    # test stayed green only via the loopback guard's connection failure).
+    llm.add_route("/v1/messages", status=503,
+                  body=anthropic_error("api_error", "down"),
                   content_type="application/json")
     with pytest.raises(ranking.RankingError):
         ranking.run_rank(
@@ -513,7 +616,7 @@ def test_repaired_run_succeeds_end_to_end_with_full_disclosure(migrated_con, llm
         ]
     }
     llm.add_route(
-        "/chat/completions", status=200, body=envelope(payload),
+        "/v1/messages", status=200, body=anthropic_envelope(payload),
         content_type="application/json",
     )
     report = ranking.run_rank(

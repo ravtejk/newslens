@@ -67,7 +67,21 @@ product's actual running state. If you want the daily discovery query later:
    in-app guard.
 3. Put the key in `.env` as `PERPLEXITY_API_KEY=...`
 
-### 2c. Everything else in .env
+### 2c. ANTHROPIC_API_KEY (required — rank/editor/script on Claude Haiku 4.5)
+
+The B2 depth-architecture flip (2026-07-16) runs the ranking, editorial-tighten,
+and TTS-script seats on Claude Haiku 4.5 (the Claude API lane). A normal
+`newslens generate` cannot run without this key — the doctor validates it with a
+harmless read-only call and **FAILs the run** when it's missing.
+
+1. Go to <https://console.anthropic.com/settings/keys> → **Create Key**
+   (a standard API key; no special permissions needed).
+2. **Set a hard monthly spend cap in the Anthropic console** — Settings →
+   Billing → set a monthly limit. Haiku 4.5 is $1.00/$5.00 per MTok in/out, so
+   these three seats cost pennies per run; the cap is a runaway guard.
+3. Put the key in `.env` as `ANTHROPIC_API_KEY=...`
+
+### 2d. Everything else in .env
 
 - `BUDGET_CAP_USD_PER_RUN` — leave the 0.25 default unless you have a reason
   (recommended value cut from 0.50 with the M9 Analyst ruling, 2026-07-06 —

@@ -307,28 +307,41 @@ def _time_of_day() -> str:
 WRITER_UA = "NewsLens/0.1 (personal news briefing prototype; writer)"
 
 
+# The seat _chat transports on for the current call. call_llm (the sole
+# orchestrator) resolves seat_for_step(step) ONCE, gates it, sets it here, and
+# resets it in a finally — so _chat rides the SAME seat the gate checked and the
+# ledger attributes, while KEEPING ITS EXACT SIGNATURE (the ADR-0014 §2 law,
+# pinned by test_signatures_preserved: _chat is the suite's monkeypatch target).
+# B2 uses this to transport editor/script on the Claude API Haiku seats and
+# narrative on gpt-4o — closing the B1 "B4 residual" (a frozen writer transport
+# under a per-step ledger) without a signature change. None => the writer seat
+# (direct callers / the signature test keep the historical gpt-4o writer path).
+# Request-scoped, single-threaded pipeline, always reset in call_llm's finally.
+_ACTIVE_SEAT_CFG: "Optional[llm.SeatConfig]" = None
+
+
 def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
           json_mode: bool) -> Dict:
-    # Transport delegates to the provider seam (llm.py, B1). The request is
-    # byte-identical to the historical POST: writer seat = gpt-4o / api /
-    # timeout 120s (llm.SEATS["writer"]); temperature/max_tokens/json_mode
-    # are the caller's per-call knobs, passed through unchanged. Returns the
-    # native OpenAI dict (.raw) so call_llm's parse/retry law is untouched.
-    # This function keeps its signature: it is the suite's monkeypatch target.
-    # B4 (writer -> Opus) must thread the per-step seat through here; in B1
-    # narrative/editor/script are the identical gpt-4o writer-family seat, so
-    # transporting all three as "writer" is behaviour-neutral.
+    # Transport delegates to the provider seam (llm.py) on _ACTIVE_SEAT_CFG (set
+    # by call_llm to the gated per-step seat; the writer seat by default).
+    # temperature/max_tokens/json_mode are the caller's per-call knobs, passed
+    # through unchanged. Returns the native-shaped `.raw` (OpenAI shape for the
+    # gpt-4o seats; the anthropic provider synthesises the same shape for the
+    # Claude lane) so call_llm's parse/retry law is untouched. Keeps its exact
+    # signature: it is the suite's monkeypatch target.
     return llm.chat(
         llm.LaneRequest(
-            cfg=llm.resolve_seat("writer"),
+            cfg=_ACTIVE_SEAT_CFG or llm.resolve_seat("writer"),
             prompt=prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             json_mode=json_mode,
             user_agent=WRITER_UA,
             api_key=key,
-            # offline-test seam: generate has always POSTed via
-            # ranking.OPENAI_CHAT_URL (the suite patches that name).
+            # openai offline-test seam: generate has always POSTed via
+            # ranking.OPENAI_CHAT_URL (the suite patches that name). The
+            # anthropic lane (editor/script) reads its own endpoint + credential
+            # and ignores this url.
             url=ranking.OPENAI_CHAT_URL,
         )
     ).raw
@@ -375,103 +388,169 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
     validation (and still billed) is never lost from a failed run's money
     record. The OK-path caller keeps billing report.steps from the returned
     usage; this sink is a separate, complete per-attempt ledger."""
-    # B1 fail-loud gate (D1 close): resolve THIS step's seat ONCE and preflight
-    # its lane BEFORE any transport or retry. This makes the seat that the
-    # ledger attributes the same seat whose lane must be transportable — so a
-    # per-seat override (NEWSLENS_LANE_EDITOR=subscription) can never let the
-    # writer transport charge while the ledger files a different lane. A config
-    # error surfaces immediately, never after a pointless retry+sleep. (B4:
-    # when the writer family forks models, _chat must transport on seat_cfg
-    # itself; in B1 writer/editor/script are the identical gpt-4o/api seat, so
-    # the gate is exact and the transport bytes match.)
+    # Fail-loud gate (D1 close): resolve THIS step's seat ONCE and preflight its
+    # lane BEFORE any transport or retry. B2 CLOSES the B1 "B4 residual": _chat
+    # now transports on THIS resolved seat_cfg (below), so the seat the ledger
+    # attributes, the seat the gate checks, and the seat whose bytes ride the
+    # wire are one and the same — a per-seat override (NEWSLENS_LANE_EDITOR=…)
+    # can never let one seat's transport charge while the ledger files another
+    # seat's lane. A config error surfaces immediately, never after a pointless
+    # retry+sleep, and never a silent wrong-lane call.
     seat_cfg = llm.resolve_seat(llm.seat_for_step(step))
     llm.check_lane(seat_cfg)
     last_error = "unknown"
     backoff = 1.0
     next_prompt = prompt  # augmented below only after a validation/malformed miss
-    for attempt in (1, 2):
-        try:
-            response = _chat(key, next_prompt, max_tokens, temperature, json_mode)
-            usage = response.get("usage") or {}
-            if cost_sink is not None:
-                entry = {
-                    "step": step, "attempt": attempt,
-                    "prompt_tokens": usage.get("prompt_tokens"),
-                    "completion_tokens": usage.get("completion_tokens"),
-                    "usd": round(_step_cost(usage), 6),
-                }
-                # B1: lane/shadow keys, additive, from the SAME resolution the
-                # gate preflighted. The writer family is gpt-4o/api, so
-                # usd_shadow == usd_charged == usd; the keys keep the cost
-                # dashboard lane-aware before B2's second lane.
-                entry.update(llm.cost_fields(seat_cfg, usage))
-                cost_sink.append(entry)
-            choice = response["choices"][0]
-            if choice.get("finish_reason") == "length":
-                raise ValueError(
-                    f"completion truncated at the {step} token cap ({max_tokens})"
+    global _ACTIVE_SEAT_CFG
+    _prev_seat_cfg = _ACTIVE_SEAT_CFG
+    # B2: point _chat's transport at the SAME seat the gate preflighted and the
+    # ledger attributes — editor/script ride the Claude API Haiku seat, narrative
+    # stays gpt-4o. Because check_lane already passed for seat_cfg, the transport
+    # can never hit an unavailable lane inside the loop (the FIX-2 GenerateError-
+    # wrapped-LaneUnavailable carve-out is structurally impossible — a raw
+    # LaneUnavailable dies at the gate above, before the seat is armed).
+    _ACTIVE_SEAT_CFG = seat_cfg
+    try:
+        for attempt in (1, 2):
+            try:
+                response = _chat(key, next_prompt, max_tokens, temperature,
+                                 json_mode)
+                usage = response.get("usage") or {}
+                if cost_sink is not None:
+                    # B2: lane/shadow keys from the SAME resolution the gate/
+                    # transport used. legacy `usd` == usd_charged, sourced
+                    # per-seat from the seam (editor/script are Haiku now), so the
+                    # entry never forks the model that ran from the price the
+                    # ledger records.
+                    fields = llm.cost_fields(seat_cfg, usage)
+                    entry = {
+                        "step": step, "attempt": attempt,
+                        "prompt_tokens": usage.get("prompt_tokens"),
+                        "completion_tokens": usage.get("completion_tokens"),
+                        "usd": fields["usd_charged"],
+                    }
+                    entry.update(fields)
+                    cost_sink.append(entry)
+                choice = response["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise ValueError(
+                        f"completion truncated at the {step} token cap "
+                        f"({max_tokens})"
+                    )
+                content = choice["message"]["content"]
+                if validate is not None:
+                    validate(content)
+                return content, usage
+            except urllib.error.HTTPError as exc:
+                detail = ranking._http_error_detail(exc)
+                if exc.code in (401, 403):
+                    # B2: provider-conditional off the in-scope seat_cfg so an
+                    # anthropic (Haiku) editor/script seat names the RIGHT
+                    # console; the openai arm is unchanged (the rollback path).
+                    if seat_cfg.provider == "anthropic":
+                        raise GenerateError(
+                            f"Anthropic rejected the key (HTTP {exc.code}"
+                            + (f"; {detail}" if detail else "")
+                            + ") — regenerate at console.anthropic.com/settings/keys "
+                            "and update .env"
+                        ) from exc
+                    raise GenerateError(
+                        f"OpenAI rejected the key (HTTP {exc.code}"
+                        + (f"; {detail}" if detail else "")
+                        + ") — regenerate at platform.openai.com/api-keys"
+                    ) from exc
+                if (exc.code == 400 and seat_cfg.provider == "anthropic"
+                        and "credit balance is too low" in detail):
+                    # Anthropic signals an exhausted balance as a 400 (key valid
+                    # but can't spend) — named precisely, before the generic arm.
+                    raise GenerateError(
+                        f"Anthropic account has no available credit ({detail}) — "
+                        "the key is valid but can't spend; add credits at "
+                        "console.anthropic.com billing (the doctor's read-only "
+                        "key check cannot catch this)"
+                    ) from exc
+                if exc.code == 429 and "insufficient_quota" in detail:
+                    raise GenerateError(
+                        f"OpenAI account has no available quota ({detail}) — add "
+                        "credits / check billing at platform.openai.com"
+                    ) from exc
+                if exc.code == 429:
+                    last_error = f"rate limited (HTTP 429{'; ' + detail if detail else ''})"
+                    backoff = ranking._retry_after_seconds(exc)
+                elif exc.code >= 500:
+                    last_error = f"HTTP {exc.code}" + (f" ({detail})" if detail else "")
+                else:
+                    provider_name = ("Anthropic" if seat_cfg.provider == "anthropic"
+                                     else "OpenAI")
+                    raise GenerateError(
+                        f"{provider_name} rejected the {step} call (HTTP {exc.code}"
+                        + (f"; {detail}" if detail else "") + ")"
+                    ) from exc
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                # malformed output / failed validation / truncation — the spec'd
+                # retry-then-fail path. Correct the retry so it is not a byte-
+                # identical re-POST (rank run-28 precedent): quote the exact
+                # failure so attempt 2 is steered at the rule that failed.
+                # Anchored to the ORIGINAL `prompt`, not `next_prompt`, so a
+                # correction can never compound if the attempt count ever grows
+                # past two.
+                last_error = f"invalid {step} output ({exc})"
+                next_prompt = (
+                    prompt + "\n\n"
+                    + RETRY_CORRECTION_PREFIX + str(exc) + RETRY_CORRECTION_SUFFIX
                 )
-            content = choice["message"]["content"]
-            if validate is not None:
-                validate(content)
-            return content, usage
-        except urllib.error.HTTPError as exc:
-            detail = ranking._http_error_detail(exc)
-            if exc.code in (401, 403):
-                raise GenerateError(
-                    f"OpenAI rejected the key (HTTP {exc.code}"
-                    + (f"; {detail}" if detail else "")
-                    + ") — regenerate at platform.openai.com/api-keys"
-                ) from exc
-            if exc.code == 429 and "insufficient_quota" in detail:
-                raise GenerateError(
-                    f"OpenAI account has no available quota ({detail}) — add "
-                    "credits / check billing at platform.openai.com"
-                ) from exc
-            if exc.code == 429:
-                last_error = f"rate limited (HTTP 429{'; ' + detail if detail else ''})"
-                backoff = ranking._retry_after_seconds(exc)
-            elif exc.code >= 500:
-                last_error = f"HTTP {exc.code}" + (f" ({detail})" if detail else "")
-            else:
-                raise GenerateError(
-                    f"OpenAI rejected the {step} call (HTTP {exc.code}"
-                    + (f"; {detail}" if detail else "") + ")"
-                ) from exc
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
-            # malformed output / failed validation / truncation — the spec'd
-            # retry-then-fail path. Correct the retry so it is not a byte-
-            # identical re-POST (rank run-28 precedent): quote the exact failure
-            # so attempt 2 is steered at the rule that failed. Anchored to the
-            # ORIGINAL `prompt`, not `next_prompt`, so a correction can never
-            # compound if the attempt count ever grows past two.
-            last_error = f"invalid {step} output ({exc})"
-            next_prompt = (
-                prompt + "\n\n"
-                + RETRY_CORRECTION_PREFIX + str(exc) + RETRY_CORRECTION_SUFFIX
-            )
-        except Exception as exc:  # timeout / connection — network-shaped
-            # transport, not the model's doing: the retry re-sends ORIGINAL bytes
-            # (next_prompt stays `prompt` — no correction).
-            last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
-        if attempt == 1:
-            time.sleep(backoff)
-    raise GenerateError(
-        f"{step} failed after one retry: {last_error} — nothing was written; "
-        "re-run `newslens generate` (this failure is logged)"
-    )
+            except Exception as exc:  # timeout / connection — network-shaped
+                # transport, not the model's doing: the retry re-sends ORIGINAL
+                # bytes (next_prompt stays `prompt` — no correction).
+                last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
+            if attempt == 1:
+                time.sleep(backoff)
+        raise GenerateError(
+            f"{step} failed after one retry: {last_error} — nothing was written; "
+            "re-run `newslens generate` (this failure is logged)"
+        )
+    finally:
+        # Always disarm the request-scoped seat so a direct _chat call (or the
+        # next call_llm) is never contaminated by this step's seat.
+        _ACTIVE_SEAT_CFG = _prev_seat_cfg
 
 
-def _est_cost(prompt: str, max_tokens: int) -> float:
-    return (len(prompt) / 3.5 / 1e6) * WRITER_USD_PER_MTOK_IN + (
+def _step_seat_cfg(step: str) -> "llm.SeatConfig":
+    """The resolved seat for a generate step (llm.seat_for_step maps
+    narrative*->writer, editor*->editor, script*->script). B2: editor/script are
+    the Claude API Haiku seats; the narrative/writer family stays gpt-4o."""
+    return llm.resolve_seat(llm.seat_for_step(step))
+
+
+def _est_cost(prompt: str, max_tokens: int, step: str = "narrative") -> float:
+    # B2: the pre-call budget estimate uses the STEP'S seat prices (Haiku for
+    # editor/script), not a global writer constant — so the ladder's headroom
+    # math tracks the seat that will actually be charged.
+    cfg = _step_seat_cfg(step)
+    return (len(prompt) / 3.5 / 1e6) * cfg.usd_per_mtok_in + (
         max_tokens / 1e6
-    ) * WRITER_USD_PER_MTOK_OUT
+    ) * cfg.usd_per_mtok_out
 
 
 def _step_cost(usage: Dict) -> float:
+    # The writer-family (gpt-4o) rate — retained for the writer/narrative seat.
+    # The per-step display ledger uses _step_ledger below (seat-sourced); this
+    # helper stays writer-rate for the narrative path and its direct test.
     return (usage.get("prompt_tokens", 0) / 1e6) * WRITER_USD_PER_MTOK_IN + (
         usage.get("completion_tokens", 0) / 1e6
     ) * WRITER_USD_PER_MTOK_OUT
+
+
+def _step_ledger(step: str, usage: Dict) -> Dict:
+    """The per-step display-ledger fields for report.steps — model/lane/usd plus
+    the shadow-ledger keys, all sourced from the STEP'S seat (B2: editor/script
+    Haiku, narrative gpt-4o). Replaces the WRITER_MODEL + WRITER-rate _step_cost
+    that forked the ledger the moment editor/script left gpt-4o (ledger claiming
+    the model that did NOT run, at the price it was NOT charged)."""
+    cfg = _step_seat_cfg(step)
+    fields = llm.cost_fields(cfg, usage)
+    return {"model": cfg.model, "lane": cfg.lane,
+            "usd": fields["usd_charged"], **fields}
 
 
 # ---------------------------------------------------------------------------
@@ -1793,9 +1872,19 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
         # exception propagates, or both callers' containment folds see nothing
         # and briefings.token_cost under-reports money the CLI prints.
         if report.memory_usd:
+            # B2 (gate ruling R1): the state seat's aggregate spend carries the
+            # shadow-ledger keys off the seam — model/lane + usd_shadow/
+            # usd_charged — so the cost dashboard stays coherent when the state
+            # seat's lane/model flips later. State is gpt-4o/api this milestone,
+            # so usd_shadow == usd_charged == the accumulated spend.
+            _state_cfg = llm.resolve_seat("state")
+            _state_usd = round(report.memory_usd, 6)
             report.steps.append({"step": "state_rewrites",
-                                 "model": memory_core.STATE_MODEL,
-                                 "usd": round(report.memory_usd, 6)})
+                                 "model": _state_cfg.model,
+                                 "lane": _state_cfg.lane,
+                                 "usd": _state_usd,
+                                 "usd_shadow": _state_usd,
+                                 "usd_charged": _state_usd})
     report.memory = {
         "deltas_written": len(delta_rep.written),
         "deltas_skipped": len(delta_rep.skipped),
@@ -2696,10 +2785,10 @@ def _run_generate_body(
         cost_sink=report.attempt_ledger,
     )
     draft_payload = draft_holder[0]
-    step_n = {"step": f"narrative_{report.variant}", "model": WRITER_MODEL,
+    step_n = {"step": f"narrative_{report.variant}",
               "prompt_tokens": usage_n.get("prompt_tokens"),
               "completion_tokens": usage_n.get("completion_tokens"),
-              "usd": round(_step_cost(usage_n), 6)}
+              **_step_ledger("narrative", usage_n)}
     report.steps.append(step_n)
     spent += step_n["usd"] or 0
 
@@ -2738,10 +2827,10 @@ def _run_generate_body(
                     validate=_shape_check, cost_sink=report.attempt_ledger,
                 )
                 retry_payload = draft_holder[0]
-                step_rn = {"step": "narrative_retry", "model": WRITER_MODEL,
+                step_rn = {"step": "narrative_retry",
                            "prompt_tokens": usage_rn.get("prompt_tokens"),
                            "completion_tokens": usage_rn.get("completion_tokens"),
-                           "usd": round(_step_cost(usage_rn), 6)}
+                           **_step_ledger("narrative_retry", usage_rn)}
                 report.steps.append(step_rn)
                 spent += step_rn["usd"] or 0
                 retry_w = _lead_words(retry_payload)
@@ -2778,7 +2867,7 @@ def _run_generate_body(
             analysis_facts_block=build_analysis_facts_block(inputs),
             draft_json=json.dumps(draft_payload, ensure_ascii=False),
         )
-        est_e = _est_cost(e_prompt, EDITOR_MAX_TOKENS)
+        est_e = _est_cost(e_prompt, EDITOR_MAX_TOKENS, "editor")
         if spent + est_e > cap:
             raise GenerateError(
                 f"editor pass estimate ${est_e:.4f} would exceed the run cap"
@@ -2807,10 +2896,10 @@ def _run_generate_body(
             cost_sink=report.attempt_ledger,
         )
         edited_payload = edited_holder[0]
-        step_e = {"step": "editor_pass", "model": WRITER_MODEL,
+        step_e = {"step": "editor_pass",
                   "prompt_tokens": usage_e.get("prompt_tokens"),
                   "completion_tokens": usage_e.get("completion_tokens"),
-                  "usd": round(_step_cost(usage_e), 6)}
+                  **_step_ledger("editor", usage_e)}
         report.steps.append(step_e)
         spent += step_e["usd"] or 0
         before = sum(wc(" ".join(v for v in s.values() if isinstance(v, str)))
@@ -2926,7 +3015,7 @@ def _run_generate_body(
 
     # --- Script pass ---
     s_prompt = build_script_prompt(date, report.variant, narrative, inputs)
-    est_s = _est_cost(s_prompt, SCRIPT_MAX_TOKENS)
+    est_s = _est_cost(s_prompt, SCRIPT_MAX_TOKENS, "script")
     if spent + est_s > cap:
         raise GenerateError(
             f"estimated script cost ${est_s:.4f} would exceed the run budget "
@@ -2986,10 +3075,10 @@ def _run_generate_body(
     # pre-check under-counts true spend by one script call, and a run can
     # overshoot the cap by one retry. (report.steps keeps its original
     # append position after the block.)
-    step_s = {"step": "script_adapt", "model": WRITER_MODEL,
+    step_s = {"step": "script_adapt",
               "prompt_tokens": usage_s.get("prompt_tokens"),
               "completion_tokens": usage_s.get("completion_tokens"),
-              "usd": round(_step_cost(usage_s), 6)}
+              **_step_ledger("script", usage_s)}
     spent += step_s["usd"] or 0.0
 
     # P3.1 items 1+2 — the spoken editorial bar, enforcement-grade: ONE
@@ -3004,7 +3093,7 @@ def _run_generate_body(
             "VIOLATIONS (fix exactly these; everything else above still "
             "binds) ===\n"
             + "\n".join(f"- {v}" for v in structural))
-        est_r = _est_cost(retry_prompt, SCRIPT_MAX_TOKENS)
+        est_r = _est_cost(retry_prompt, SCRIPT_MAX_TOKENS, "script_retry")
         if spent + est_r > cap:
             report.warnings.append(
                 "script STRUCTURAL violations stand (retry skipped — "
@@ -3018,10 +3107,10 @@ def _run_generate_body(
                 )
                 retry_script = script_holder[0]
                 retry_script_warns = script_warnings[:]
-                step_r = {"step": "script_retry", "model": WRITER_MODEL,
+                step_r = {"step": "script_retry",
                           "prompt_tokens": usage_r.get("prompt_tokens"),
                           "completion_tokens": usage_r.get("completion_tokens"),
-                          "usd": round(_step_cost(usage_r), 6)}
+                          **_step_ledger("script_retry", usage_r)}
                 report.steps.append(step_r)
                 spent += step_r["usd"] or 0.0
                 structural_2 = script_structural_check(retry_script)

@@ -50,14 +50,17 @@ from typing import Dict, List, Optional, Tuple
 from . import config, db, llm, memory, paths
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-# Active ranking model (CoS recommendation on the principal's own question,
-# 2026-07-05; objection window open until commit — REVERT = this constant +
-# the two rates below, one clean diff). Evidence in ADR-0004's up-tier note:
-# three loose semantic matches in two days + the GPT-4o writer visibly
-# outrunning its ranking inputs (pre-registered trigger (c)).
-RANK_MODEL = "gpt-4o"
-RANK_USD_PER_MTOK_IN = 2.50
-RANK_USD_PER_MTOK_OUT = 10.00
+# Active ranking model + prices — B2 (approved Option C): the rank seat flipped
+# to claude-haiku-4-5 on the Claude API lane. The seam's SEATS["rank"] row is
+# now the SINGLE SOURCE OF TRUTH for model + price; these module names DERIVE
+# from it so the legacy `usd` ledger key, the pre-call estimate, and the
+# persisted token_cost label all track the seat automatically (dispatch B2:
+# "shadow math must use per-seat prices, not a global constant"). REVERT =
+# flip SEATS["rank"] back to **_GPT4O_API in llm.py, one clean diff. Historical
+# note: rank ran gpt-4o at $2.50/$10.00 from 2026-07-05 (ADR-0004 up-tier).
+RANK_MODEL = llm.SEATS["rank"].model
+RANK_USD_PER_MTOK_IN = llm.SEATS["rank"].usd_per_mtok_in
+RANK_USD_PER_MTOK_OUT = llm.SEATS["rank"].usd_per_mtok_out
 # The documented fallback rung (kept as a constant so the fallback is a named
 # fact, not lore): gpt-4o-mini ran ranking M3 -> M5-day-1.
 MODEL = "gpt-4o-mini"
@@ -347,13 +350,16 @@ def usage_to_usd(usage: Dict) -> float:
 
 
 def _post_chat(key: str, prompt: str) -> Dict:
-    # Transport delegates to the provider seam (llm.py, B1). The request is
-    # byte-identical to the historical POST: rank seat = gpt-4o / api /
-    # timeout 90s (llm.SEATS["rank"]), temperature 0 (exact-copy discipline
-    # for ids/tag names — M4 live finding), json_mode on. Returns the native
-    # OpenAI dict (.raw), so call_llm_validated's parse/retry law is
-    # untouched. This function keeps its signature: it is the suite's
-    # monkeypatch target.
+    # Transport delegates to the provider seam (llm.py). B2: the rank seat is now
+    # claude-haiku-4-5 on the Claude API lane (llm.SEATS["rank"]), timeout 90s,
+    # temperature 0 (exact-copy discipline for ids/tag names — M4 live finding),
+    # json_mode on. The anthropic provider synthesises the OpenAI-shaped `.raw`
+    # (choices/usage), so call_llm_validated's parse/retry law is UNTOUCHED, and
+    # it satisfies json_mode by nudging bare JSON while the caller's json.loads +
+    # validate_payload + corrected retry remain the backstop (the same discipline
+    # gpt-4o rode). The anthropic lane reads its own endpoint + credential, so the
+    # url/key passed here are the (harmless) openai offline-test seam values. This
+    # function keeps its signature: it is the suite's monkeypatch target.
     return llm.chat(
         llm.LaneRequest(
             cfg=llm.resolve_seat("rank"),
@@ -363,7 +369,7 @@ def _post_chat(key: str, prompt: str) -> Dict:
             json_mode=True,
             user_agent=USER_AGENT,
             api_key=key,
-            url=OPENAI_CHAT_URL,  # offline-test seam (patched by the suite)
+            url=OPENAI_CHAT_URL,  # openai offline-test seam; ignored by anthropic
         )
     ).raw
 
@@ -681,10 +687,30 @@ def call_llm_validated(
         except urllib.error.HTTPError as exc:
             detail = _http_error_detail(exc)
             if exc.code in (401, 403):
+                # B2: provider-conditional off the in-scope rank_cfg so an
+                # anthropic (Haiku) seat's key failure names the RIGHT console;
+                # the openai arm is unchanged (the rollback path).
+                if rank_cfg.provider == "anthropic":
+                    raise RankingError(
+                        f"Anthropic rejected the key (HTTP {exc.code}"
+                        + (f"; {detail}" if detail else "")
+                        + ") — regenerate at console.anthropic.com/settings/keys "
+                        "and update .env"
+                    ) from exc
                 raise RankingError(
                     f"OpenAI rejected the key (HTTP {exc.code}"
                     + (f"; {detail}" if detail else "")
                     + ") — regenerate at platform.openai.com/api-keys and update .env"
+                ) from exc
+            if (exc.code == 400 and rank_cfg.provider == "anthropic"
+                    and "credit balance is too low" in detail):
+                # Anthropic signals an exhausted balance as a 400 (key valid but
+                # can't spend) — named precisely BEFORE the generic 4xx arm.
+                raise RankingError(
+                    f"Anthropic account has no available credit ({detail}) — the "
+                    "key is valid but can't spend; add credits at "
+                    "console.anthropic.com billing (the doctor's read-only key "
+                    "check cannot catch this)"
                 ) from exc
             if exc.code == 429:
                 if "insufficient_quota" in detail:
@@ -699,8 +725,10 @@ def call_llm_validated(
             elif exc.code >= 500:
                 last_error = f"HTTP {exc.code}" + (f" ({detail})" if detail else "")
             else:
+                provider_name = ("Anthropic" if rank_cfg.provider == "anthropic"
+                                 else "OpenAI")
                 raise RankingError(
-                    f"OpenAI rejected the ranking call (HTTP {exc.code}"
+                    f"{provider_name} rejected the ranking call (HTTP {exc.code}"
                     + (f"; {detail}" if detail else "") + ")"
                 ) from exc
         except (ValueError, KeyError, IndexError, TypeError) as exc:

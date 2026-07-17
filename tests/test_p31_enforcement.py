@@ -283,10 +283,12 @@ def test_structural_retry_skipped_when_it_would_breach_the_cap(
     estimate over the remaining cap means zero retry calls + disclosure."""
     real_est = generate._est_cost
 
-    def starving_est(prompt, max_tokens):
+    def starving_est(prompt, max_tokens, step="narrative"):
+        # B2: _est_cost is seat-priced per step now — the stub passes the step
+        # through so the poisoned estimate stays the ONLY difference.
         if "STRUCTURAL VIOLATIONS" in prompt:
             return 999.0
-        return real_est(prompt, max_tokens)
+        return real_est(prompt, max_tokens, step)
 
     monkeypatch.setattr(generate, "_est_cost", starving_est)
     db.migrate()
@@ -393,10 +395,11 @@ def test_tier_floor_retry_skipped_when_it_would_breach_the_cap(
     zero retry calls, shipped with disclosure."""
     real_est = generate._est_cost
 
-    def starving_est(prompt, max_tokens):
+    def starving_est(prompt, max_tokens, step="narrative"):
+        # B2: step-aware passthrough (seat-priced estimates), same poison.
         if "TIER-EXPRESSION VIOLATION" in prompt:
             return 999.0
-        return real_est(prompt, max_tokens)
+        return real_est(prompt, max_tokens, step)
 
     monkeypatch.setattr(generate, "_est_cost", starving_est)
     db.migrate()
@@ -633,8 +636,19 @@ def test_structural_retry_skipped_when_real_spend_already_ate_the_cap(
     'retry cost pre-checked vs cap'. Fix contract: `spent += step-cost of
     usage_s` immediately after the script call_llm (before :1665);
     everything this file pins must stay green and THIS test flips."""
-    monkeypatch.setattr(generate, "_est_cost", lambda p, m: 0.05)
-    monkeypatch.setattr(generate, "_step_cost", lambda usage: 0.50)
+    # B2 seam shift, stub follows the live path: every spend-accumulation site
+    # now reads _step_ledger (seat-sourced via llm.cost_fields) — _step_cost is
+    # no longer on the accumulation path, so patching it would steer nothing
+    # (a dead stub silently un-testing the invariant). The heavy 0.50 rides the
+    # ledger's usd key; shape kept honest with the shadow/lane fields.
+    monkeypatch.setattr(generate, "_est_cost",
+                        lambda p, m, step="narrative": 0.05)
+    monkeypatch.setattr(
+        generate, "_step_ledger",
+        lambda step, usage: {"model": "stub-model", "lane": "api", "usd": 0.50,
+                             "usd_shadow": 0.50, "usd_charged": 0.50,
+                             "cache_read_tokens": 0,
+                             "cache_creation_tokens": 0})
     db.migrate()
     con = db.connect()
     try:

@@ -26,6 +26,26 @@ from newslens import db, paths
 
 PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
 
+
+def anthropic_envelope(content, input_tokens: int = 1000, output_tokens: int = 200,
+                       stop_reason: str = "end_turn", cache_creation: int = 0,
+                       cache_read: int = 0) -> bytes:
+    """B2 Claude API lane fake: an anthropic /v1/messages response body. The
+    twin of each test-file's OpenAI-shaped `envelope()`. `content` is the text
+    (a JSON string for json_mode seats, a plain string otherwise; a dict/list is
+    json.dumps'd for convenience). stop_reason 'max_tokens' is what the provider
+    maps to finish_reason 'length' (the truncation-guard trigger)."""
+    text = json.dumps(content) if isinstance(content, (dict, list)) else str(content)
+    return json.dumps({
+        "id": "msg_qa", "type": "message", "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": stop_reason,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens,
+                  "cache_creation_input_tokens": cache_creation,
+                  "cache_read_input_tokens": cache_read},
+    }).encode("utf-8")
+
 # The actual on-disk locations, captured through the guard's backing table
 # (plain dict read — no sanction check, no PEP 562) before any sandboxing.
 _REAL_DATA_DIR = paths._GUARDED["DATA_DIR"]
@@ -102,11 +122,13 @@ SCRUBBED_ENV_VARS = [
     "GNEWS_API_KEY",
     "BUDGET_CAP_USD_PER_RUN",
     "GENERATE_HOUR_LOCAL",
-    # B1 provider seam (ADR-0014): llm.resolve_seat / llm.fallback_armed read
-    # these at call time, so an ambient shell export must not leak into the
-    # suite (a stray NEWSLENS_LANE=subscription would fail-loud real-path
-    # tests). ANTHROPIC_API_KEY is unread in B1 but credential-shaped — scrub
-    # it now, before B2 makes it live.
+    # Provider seam (ADR-0014): llm.resolve_seat / llm.fallback_armed read these
+    # at call time, so an ambient shell export must not leak into the suite (a
+    # stray NEWSLENS_LANE=subscription would fail-loud real-path tests).
+    # ANTHROPIC_API_KEY is now LIVE (B2 — the anthropic provider reads it as its
+    # x-api-key), so it must be scrubbed so no test can make a real Claude call.
+    # NEWSLENS_LANE_STATE joins the per-seat set (B2 gate ruling R1: the state
+    # seat joined the seam).
     "ANTHROPIC_API_KEY",
     "NEWSLENS_LANE",
     "NEWSLENS_LANE_FALLBACK",
@@ -116,6 +138,7 @@ SCRUBBED_ENV_VARS = [
     "NEWSLENS_LANE_EDITOR",
     "NEWSLENS_LANE_SCRIPT",
     "NEWSLENS_LANE_SYNTHESIS",
+    "NEWSLENS_LANE_STATE",
     "http_proxy",
     "https_proxy",
     "all_proxy",
@@ -342,7 +365,11 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
         if self._try_route():
             return
         if self.path == "/v1/models":
-            if self._bearer() == self.server.good_key:
+            # Accepts the OpenAI bearer OR the anthropic x-api-key (B2: the doctor
+            # validates ANTHROPIC_API_KEY with a read-only GET /v1/models too).
+            ok = (self._bearer() == self.server.good_key
+                  or self.headers.get("x-api-key", "") == self.server.good_key)
+            if ok:
                 self._send(
                     200,
                     json.dumps(
@@ -398,6 +425,19 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
                 )
             else:
                 self._send(401, b'{"error": {"message": "bad key"}}')
+        elif self.path == "/v1/messages":
+            # B2 Claude API lane: the anthropic provider authenticates with the
+            # x-api-key header (its own credential, read from ANTHROPIC_API_KEY),
+            # NOT a bearer token. Default canned response is anthropic-SHAPED; the
+            # provider synthesises the OpenAI shape its callers parse. Per-test
+            # bodies come via FakeAPI.add_route("/v1/messages", ...) with
+            # anthropic_envelope(...).
+            if self.headers.get("x-api-key", "") == self.server.good_key:
+                self._send(200, anthropic_envelope("ok"))
+            else:
+                self._send(401, b'{"type": "error", '
+                                b'"error": {"type": "authentication_error", '
+                                b'"message": "bad key"}}')
         else:
             self._send(404, b'{"error": "not found"}')
 

@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
+from . import llm  # B2 (gate ruling R1): the state seat joins the provider seam
+
 # ---------------------------------------------------------------------------
 # The state-rewrite LLM seam (the ONLY new spend; per thread, advance/reverse
 # days only). Behind a one-constant seam like ANALYSIS_MODEL / WRITER_MODEL —
@@ -1062,31 +1064,44 @@ def estimate_state_usd(prompt: str) -> float:
 
 
 def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float]:
-    """Real state-rewrite call on the STATE_MODEL seam. One retry, then raises
-    (the caller degrades stale-but-honest). Cost accumulates every paid
-    attempt (money-honesty)."""
-    import urllib.request
-    body = {"model": STATE_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2, "max_tokens": STATE_MAX_TOKENS,
-            "response_format": {"type": "json_object"}}
+    """Real state-rewrite call on the state seat. B2 (gate ruling R1): this seat
+    now rides the provider seam (llm.py) like every other. The seat stays
+    gpt-4o/api this milestone (its model flip is a later one), so the request
+    bytes and the cost value are byte-identical to the pre-B2 inline POST; what
+    changes is that the transport, the fail-loud lane gate (check_lane), and the
+    shadow-ledger cost math (cost_fields) now come from the seam — "memory_core
+    byte-unchanged" is no longer an acceptance property. One retry, then raises
+    (the caller degrades stale-but-honest); cost accumulates every paid attempt
+    (money-honesty).
+
+    Fail-loud note (FIX-1 class): a NEWSLENS_LANE_STATE misconfig raises
+    LaneUnavailable from check_lane here, which rewrite_state's broad except
+    swallows into a `stale` outcome (prior state kept, disclosed) — the same
+    degrade-not-death asymmetry the analyst carries. B2's FIX-1 report rules on
+    whether this joins gate-kills-run."""
+    state_cfg = llm.resolve_seat("state")
+    # D1 fail-loud gate: preflight the state seat's lane ONCE, before any
+    # transport or retry (transport-seat == ledger-seat, so the ledger can never
+    # attribute a lane the bytes did not ride).
+    llm.check_lane(state_cfg)
     total = 0.0
     last: Exception = RuntimeError("unreachable")
     import time
     for attempt in (1, 2):
         try:
-            req = urllib.request.Request(
-                "https://api.openai.com/v1/chat/completions",
-                data=json.dumps(body).encode("utf-8"),
-                headers={"Authorization": f"Bearer {key}",
-                         "Content-Type": "application/json",
-                         "User-Agent": STATE_UA})
-            with urllib.request.urlopen(req, timeout=STATE_TIMEOUT_S) as resp:
-                payload = json.load(resp)
-            usage = payload.get("usage") or {}
-            total += (usage.get("prompt_tokens", 0) / 1e6 * STATE_USD_IN_PER_MTOK
-                      + usage.get("completion_tokens", 0) / 1e6 * STATE_USD_OUT_PER_MTOK)
-            choice = payload["choices"][0]
+            raw = llm.chat(
+                llm.LaneRequest(
+                    cfg=state_cfg, prompt=prompt, temperature=0.2,
+                    max_tokens=STATE_MAX_TOKENS, json_mode=True,
+                    user_agent=STATE_UA, api_key=key,
+                    url=llm.OPENAI_CHAT_URL)  # openai offline seam (state=gpt-4o)
+            ).raw
+            usage = raw.get("usage") or {}
+            # B2: cost via the seam's shadow ledger (per-seat prices), not the
+            # STATE_USD_* module constants — the state spend re-prices with the
+            # seat when it flips lanes/models.
+            total += llm.cost_fields(state_cfg, usage)["usd_charged"]
+            choice = raw["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise ValueError(f"truncated at {STATE_MAX_TOKENS} tokens")
             return json.loads(choice["message"]["content"]), total

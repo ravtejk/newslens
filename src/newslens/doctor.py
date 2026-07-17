@@ -48,8 +48,10 @@ WARN = "⚠"
 INFO = "○"
 
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
+ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
 PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions"
 OPENAI_TIMEOUT_S = 15
+ANTHROPIC_TIMEOUT_S = 15
 PERPLEXITY_TIMEOUT_S = 20
 FEED_TIMEOUT_S = 15  # WaPo's feeds measured 8-10s in the M2 sweep — headroom
 USER_AGENT = "NewsLens-doctor/0.1 (personal prototype; one-user health check)"
@@ -243,6 +245,72 @@ def check_openai_key(env: Dict[str, str]) -> List[Result]:
                 "present but unverified; check network/VPN/proxy and re-run",
             )
         ]
+
+
+def check_anthropic_key(env: Dict[str, str]) -> List[Result]:
+    """The Claude API lane credential (B2). Required precisely when — under the
+    current seat map + lane env — some seat resolves to the anthropic provider
+    (rank/editor/script run Haiku 4.5 by default). A keyless install is reported
+    honestly (those seats cannot run) rather than making a live call without a
+    key; when a key is present, a harmless read-only GET /v1/models validates it.
+    The value is never echoed anywhere."""
+    anthropic_seats = sorted(
+        name for name in llm.SEATS
+        if llm.resolve_seat(name, env).provider == "anthropic"
+    )
+    key = (env.get("ANTHROPIC_API_KEY") or "").strip()
+    if not anthropic_seats:
+        # Everything routes to openai (e.g. lanes overridden) — the key is not
+        # needed. Say so; note it only if it happens to be set.
+        if key:
+            return [Result(INFO, "ANTHROPIC_API_KEY set but no seat currently "
+                                 "routes to the Claude API lane — unused")]
+        return [Result(INFO, "ANTHROPIC_API_KEY not needed — no seat routes to "
+                             "the Claude API lane under the current seat map")]
+    seats_txt = ", ".join(anthropic_seats)
+    if not key:
+        return [Result(
+            FAIL,
+            f"ANTHROPIC_API_KEY not set — the {seats_txt} seat(s) now run on the "
+            "Claude API lane (Haiku 4.5) and cannot run without it; get one at "
+            "console.anthropic.com/settings/keys, set a monthly cap, add to .env",
+        )]
+    req = urllib.request.Request(
+        ANTHROPIC_MODELS_URL,
+        headers={"x-api-key": key, "anthropic-version": llm.ANTHROPIC_VERSION,
+                 "User-Agent": USER_AGENT},
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=ANTHROPIC_TIMEOUT_S) as resp:
+            payload = json.load(resp)
+        elapsed = time.monotonic() - started
+        count = len(payload.get("data", []))
+        return [Result(
+            PASS,
+            f"ANTHROPIC_API_KEY valid — read-only GET /v1/models OK "
+            f"({count} models visible, {elapsed:.1f}s); powers the {seats_txt} "
+            "seat(s)",
+        )]
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return [Result(
+                FAIL,
+                f"ANTHROPIC_API_KEY rejected (HTTP {exc.code}) — mistyped or "
+                "revoked; regenerate at console.anthropic.com/settings/keys and "
+                "update .env",
+            )]
+        return [Result(
+            FAIL,
+            f"Anthropic check failed (HTTP {exc.code}) — key is present; retry in "
+            "a minute or check status.anthropic.com",
+        )]
+    except Exception as exc:  # URLError / timeout / DNS — network-shaped failures
+        return [Result(
+            FAIL,
+            f"could not reach api.anthropic.com ({type(exc).__name__}) — key is "
+            "present but unverified; check network/VPN/proxy and re-run",
+        )]
 
 
 def check_perplexity_key(env: Dict[str, str]) -> List[Result]:
@@ -709,10 +777,10 @@ def check_tts() -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
-    """The provider-seam lane map (B1): one line per seat showing the resolved
-    provider/model/lane, plus fallback state. In B1 every seat is gpt-4o on
-    the api lane; this section is where B2's Claude API lane and B3's
-    subscription lane become visible. A seat resolved (via NEWSLENS_LANE /
+    """The provider-seam lane map: one line per seat showing the resolved
+    provider/model/lane + per-seat price, plus fallback state. B2: rank/editor/
+    script now show the Claude API lane on Haiku 4.5; writer/analyst/synthesis/
+    state stay gpt-4o on the api lane. A seat resolved (via NEWSLENS_LANE /
     NEWSLENS_LANE_<SEAT>) to a lane with no registered provider is flagged
     FAIL here — the same fail-loud condition the run itself hits."""
     out: List[Result] = []
@@ -741,8 +809,8 @@ def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
         ))
     out.append(Result(
         INFO,
-        "only the openai api lane is implemented this milestone (B1); the "
-        "Claude API lane lands in B2, the claude -p subscription lane in B3",
+        "the openai api lane and the Claude (anthropic) api lane are both "
+        "implemented (B2); the claude -p subscription lane lands in B3",
     ))
     return out
 
@@ -751,14 +819,17 @@ def cost_estimate() -> List[Result]:
     return [
         Result(
             INFO,
-            "estimated cost-per-run ~$0.07-0.10 for the full text pipeline (all "
-            "three calls on GPT-4o since 2026-07-05: rank ~$0.03-0.04 + "
-            "narrative & script ~$0.04-0.06; ~$2-3/month at daily cadence) "
-            "plus ~$0.07/run audio on the default TTS — gpt-4o-mini-tts "
-            "(~$0.015/min; the 2026-07-06 ear-test ruling; measured $0.067 "
-            "on a 4.4-min episode). Pin settings.tts_engine: kokoro for the "
-            "$0 local fallback. Real per-step costs are logged to "
-            "briefings.token_cost on every generate",
+            "estimated cost-per-run is DROPPING with the B2 Claude-lane flip: "
+            "rank + editor + script now run Haiku 4.5 ($1.00/$5.00 per MTok, "
+            "~5x cheaper in / 2x cheaper out than GPT-4o), narrative stays "
+            "GPT-4o ($2.50/$10.00). The prior all-GPT-4o text pipeline ran "
+            "~$0.07-0.10/run; the new mixed map is lower — the exact figure is "
+            "a B2 budget re-baseline the principal's first real generate will "
+            "measure. Plus ~$0.07/run audio on the default TTS — gpt-4o-mini-tts "
+            "(~$0.015/min; the 2026-07-06 ear-test ruling; measured $0.067 on a "
+            "4.4-min episode). Pin settings.tts_engine: kokoro for the $0 local "
+            "fallback. Real per-step costs are logged to briefings.token_cost "
+            "on every generate (now with per-seat model/lane/shadow keys)",
         )
     ]
 
@@ -780,6 +851,7 @@ def run_doctor() -> int:
     key_results = (
         env_notes
         + check_openai_key(env)
+        + check_anthropic_key(env)
         + check_perplexity_key(env)
         + check_optional_and_guards(env)
     )

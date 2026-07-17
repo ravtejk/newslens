@@ -18,7 +18,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from newslens import db, generate, paths, ranking
+from conftest import anthropic_envelope
+from newslens import db, generate, llm, paths, ranking
 
 A_DAY = "2026-07-05"   # dogfood day 1 — even ordinal, variant A of record
 B_DAY = "2026-07-06"
@@ -436,9 +437,16 @@ def test_BUG7_tag_shape_tolerance_must_persist_not_just_warn(migrated_con, monke
     nothing, so the day-30 readout cannot count how often the tolerance
     fired. Fix contract: persist repair_sink when EITHER repaired or
     tag_shape_normalized is nonzero; this test goes green then."""
+    # B2 fake migration: rank rides the Claude API lane — redirect the
+    # anthropic endpoint + credential at the loopback fake, serve the
+    # anthropic shape. Contract under test is unchanged.
     monkeypatch.setattr(
         ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
+    monkeypatch.setattr(
+        llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setattr(time, "sleep", lambda s: None)
     now = iso_now()
     migrated_con.execute(
@@ -455,12 +463,8 @@ def test_BUG7_tag_shape_tolerance_must_persist_not_just_warn(migrated_con, monke
         }]
     }
     fake_api.add_route(
-        "/chat/completions", status=200,
-        body=json.dumps({
-            "choices": [{"finish_reason": "stop",
-                         "message": {"content": json.dumps(payload)}}],
-            "usage": {"prompt_tokens": 500, "completion_tokens": 100},
-        }).encode("utf-8"),
+        "/v1/messages", status=200,
+        body=anthropic_envelope(payload, input_tokens=500, output_tokens=100),
         content_type="application/json",
     )
     from newslens import config as config_mod
@@ -481,14 +485,15 @@ def test_BUG7_tag_shape_tolerance_must_persist_not_just_warn(migrated_con, monke
 # --- writer-model seam (principal amendment 2026-07-05) ----------------------------------
 
 def test_writer_model_seam_and_rates():
-    """The up-tiers are SEAMS, not scatters: writer AND ranking both run
-    gpt-4o at 2.50/10.00 per M (principal-triggered up-tiers, 2026-07-05);
-    gpt-4o-mini remains only as the documented fallback rung
-    (ranking.MODEL), not the active model."""
+    """Model + price are SEAMED to the seat table, not scattered. B2: the writer
+    (narrative) seat stays gpt-4o at 2.50/10.00; the RANK seat flipped to the
+    Claude API lane on claude-haiku-4-5 at 1.00/5.00, and ranking's module
+    constants now DERIVE from llm.SEATS["rank"] (single source of truth)."""
     assert generate.WRITER_MODEL == "gpt-4o"
-    assert ranking.RANK_MODEL == "gpt-4o"
-    assert ranking.RANK_USD_PER_MTOK_IN == 2.50
-    assert ranking.RANK_USD_PER_MTOK_OUT == 10.00
+    assert ranking.RANK_MODEL == "claude-haiku-4-5"           # B2: Haiku
+    assert ranking.RANK_MODEL == llm.SEATS["rank"].model      # derived from the seat
+    assert ranking.RANK_USD_PER_MTOK_IN == 1.00
+    assert ranking.RANK_USD_PER_MTOK_OUT == 5.00
     assert ranking.MODEL == "gpt-4o-mini"  # the fallback rung, kept documented
     assert generate.WRITER_USD_PER_MTOK_IN == 2.50
     assert generate.WRITER_USD_PER_MTOK_OUT == 10.00
@@ -496,18 +501,31 @@ def test_writer_model_seam_and_rates():
     assert generate._step_cost(usage) == pytest.approx(0.0045)  # writer rates
 
 
-def test_writer_steps_log_the_writer_model(migrated_con, fake_model):
+def test_each_generate_step_logs_its_own_seat_model(migrated_con, fake_model):
+    # B2: each step's ledger row names the seat that actually ran — narrative on
+    # gpt-4o, script/editor on Haiku (the Claude API lane). The ledger no longer
+    # forks the model that ran from the model it records.
     slots = [slot(1)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
     fake_model.script = compliant_script(slots)
     rep = run(migrated_con, date=A_DAY, refresh=False)
-    assert all(s["model"] == "gpt-4o" for s in rep.steps)
+    seat_model = {"gpt-4o", "claude-haiku-4-5"}
+    for s in rep.steps:
+        assert s["model"] in seat_model, s
+    by_step = {s["step"]: s["model"] for s in rep.steps}
+    assert by_step.get("narrative_A", "gpt-4o") == "gpt-4o"
+    for step, model in by_step.items():
+        if step.startswith("script") or step.startswith("editor"):
+            assert model == "claude-haiku-4-5", step
     tc = json.loads(migrated_con.execute(
         "SELECT token_cost FROM briefings WHERE date = ?", (A_DAY,)
     ).fetchone()["token_cost"])
-    writer_steps = [s for s in tc["steps"] if s["step"] != "rank_select"]
-    assert all(s["model"] == "gpt-4o" for s in writer_steps)
+    for s in tc["steps"]:
+        if s["step"].startswith("narrative"):
+            assert s["model"] == "gpt-4o", s
+        elif s["step"].startswith(("script", "editor")):
+            assert s["model"] == "claude-haiku-4-5", s
 
 
 def test_doctor_cost_line_matches_the_measured_pipeline():
@@ -1109,8 +1127,13 @@ def test_pipeline_scopes_disclosures_to_covered_stories_LIVENESS(
 def test_cost_sink_records_every_api_reaching_attempt(monkeypatch):
     """QA (money honesty at the unit): the sink row lands BEFORE validation can
     reject — two API-reaching attempts that both fail validation leave exactly
-    two billed rows behind the GenerateError, priced by _step_cost from the
-    usage the API actually returned."""
+    two billed rows behind the GenerateError, priced from the usage the API
+    actually returned at the STEP'S OWN SEAT rates. B2 conscious update: the
+    script step rides the Claude Haiku seat now, so the per-attempt oracle is
+    llm.cost_fields(resolve_seat('script')) — Haiku 1.00/5.00 — not the writer
+    _step_cost the pre-B2 version priced against (a global writer rate here
+    would be the exact ledger fork B2 exists to prevent). Strengthened: the
+    rows must also carry the seat's model/lane and charged-honesty keys."""
     def chat(key, prompt, max_tokens, temperature, json_mode):
         return {"choices": [{"finish_reason": "stop",
                              "message": {"content": "body"}}],
@@ -1127,9 +1150,16 @@ def test_cost_sink_records_every_api_reaching_attempt(monkeypatch):
                           validate=reject, cost_sink=sink)
     assert [(e["step"], e["attempt"]) for e in sink] == [("script", 1),
                                                          ("script", 2)]
-    per = round(generate._step_cost(
-        {"prompt_tokens": 1000, "completion_tokens": 500}), 6)
+    script_cfg = llm.resolve_seat("script")
+    per = llm.cost_fields(script_cfg,
+                          {"prompt_tokens": 1000, "completion_tokens": 500}
+                          )["usd_charged"]
+    assert per == pytest.approx(0.0035)  # Haiku 1.00/5.00, NOT writer 2.50/10.00
     assert all(e["usd"] == per and e["usd"] > 0 for e in sink)
+    for e in sink:
+        assert e["model"] == script_cfg.model == "claude-haiku-4-5"
+        assert e["lane"] == "api"
+        assert e["usd"] == e["usd_charged"] == e["usd_shadow"]
 
 
 def test_ok_run_ledger_and_log_arithmetic_no_double_count(migrated_con, fake_model):
@@ -1318,8 +1348,11 @@ def test_script_budget_abort_leaves_row_untouched(migrated_con, fake_model, monk
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
     # M6 sequence: narrative -> editor -> script; abort at the SCRIPT estimate.
+    # (B2: _est_cost grew a step arg — seat-priced estimates — so the stub
+    # accepts it; the sequenced values keep the same meaning.)
     ests = iter([0.0001, 0.0001, 999.0])
-    monkeypatch.setattr(generate, "_est_cost", lambda p, m: next(ests))
+    monkeypatch.setattr(generate, "_est_cost",
+                        lambda p, m, step="narrative": next(ests))
     with pytest.raises(generate.GenerateError) as excinfo:
         run(migrated_con, date=A_DAY, refresh=False)
     msg = str(excinfo.value)
@@ -1404,7 +1437,12 @@ def test_generation_log_records_ok_runs_fully(migrated_con, fake_model):
 
 @pytest.fixture
 def llm_http(fake_api, monkeypatch):
+    # Both lanes at the loopback: narrative rides the writer seat (gpt-4o via
+    # the openai seam url); editor/script ride the Claude Haiku seat via the
+    # anthropic module endpoint (B2). Same fake server serves both shapes.
     monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions")
+    monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setattr(time, "sleep", lambda s: None)
     return fake_api
 
@@ -1422,12 +1460,14 @@ def test_call_llm_401_names_the_key(llm_http):
 
 
 def test_call_llm_truncation_named_and_retried(llm_http):
+    # B2: script rides the Claude lane — the cap-hit is stop_reason
+    # 'max_tokens', which the provider must map to finish_reason 'length' for
+    # call_llm's truncation guard to fire (llm._STOP_REASON_MAP's load-bearing
+    # row). Same contract as pre-B2: named precisely, retried once, then fails.
     llm_http.add_route(
-        "/chat/completions", status=200,
-        body=json.dumps({
-            "choices": [{"finish_reason": "length", "message": {"content": "{"}}],
-            "usage": {},
-        }).encode(),
+        "/v1/messages", status=200,
+        body=anthropic_envelope("{", input_tokens=10, output_tokens=3200,
+                                stop_reason="max_tokens"),
         content_type="application/json",
     )
     with pytest.raises(generate.GenerateError) as excinfo:
@@ -1675,7 +1715,10 @@ def test_A6_steering_off_still_records_references_and_persists_flag(
     ZERO score (cluster earns its slot on tags alone) yet reference recording
     still runs in persist(), and the run's ranking_runs meta persists
     threads_steer_selection=false."""
+    # B2 fake migration: rank rides the Claude API lane (see test_BUG7 above).
     monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions")
+    monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setattr(time, "sleep", lambda s: None)
     now = iso_now()
     migrated_con.execute(
@@ -1696,12 +1739,8 @@ def test_A6_steering_off_still_records_references_and_persists_flag(
         }]
     }
     fake_api.add_route(
-        "/chat/completions", status=200,
-        body=json.dumps({
-            "choices": [{"finish_reason": "stop",
-                         "message": {"content": json.dumps(payload)}}],
-            "usage": {"prompt_tokens": 500, "completion_tokens": 100},
-        }).encode("utf-8"),
+        "/v1/messages", status=200,
+        body=anthropic_envelope(payload, input_tokens=500, output_tokens=100),
         content_type="application/json",
     )
     from newslens import config as config_mod
@@ -1798,7 +1837,8 @@ def test_editor_success_discloses_and_merges_cost(migrated_con, fake_model):
     assert "% tighter)" in notes[0]
     assert "Tighter and better." in rep.narrative_text  # the EDIT shipped
     editor_steps = [s for s in rep.steps if s["step"] == "editor_pass"]
-    assert len(editor_steps) == 1 and editor_steps[0]["model"] == "gpt-4o"
+    # B2: the editor seat runs on the Claude API lane (Haiku 4.5).
+    assert len(editor_steps) == 1 and editor_steps[0]["model"] == "claude-haiku-4-5"
     entry = json.loads(
         (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
     )
@@ -2028,7 +2068,8 @@ def test_editor_budget_abort_routes_through_the_degrade_path(
     fake_model.narrative = stories_payload(slots)
     fake_model.script = compliant_script(slots)
     ests = iter([0.0001, 999.0, 0.0001])  # narrative ok, EDITOR over, script ok
-    monkeypatch.setattr(generate, "_est_cost", lambda p, m: next(ests))
+    monkeypatch.setattr(generate, "_est_cost",
+                        lambda p, m, step="narrative": next(ests))
     rep = run(migrated_con, date=A_DAY, refresh=False)
     degraded = [w for w in rep.warnings if w.startswith("editor: DEGRADED")]
     assert len(degraded) == 1 and "editor pass estimate" in degraded[0]

@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from newslens import config, ranking
+from conftest import anthropic_envelope
+from newslens import config, llm as llm_mod, ranking
 
 NOW = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -347,9 +348,15 @@ def test_gather_items_respects_window_and_cap(migrated_con, monkeypatch):
 def _seed_and_route(con, fake_api, monkeypatch):
     import time as _time
 
+    # B2 fake migration: the rank seat rides the Claude API lane — redirect
+    # the anthropic module endpoint + credential at the loopback fake.
     monkeypatch.setattr(
         ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
+    monkeypatch.setattr(
+        llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setattr(_time, "sleep", lambda s: None)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     for i, (outlet, wire) in enumerate(
@@ -383,13 +390,8 @@ def _seed_and_route(con, fake_api, monkeypatch):
             },
         ]
     }
-    body = json.dumps(
-        {
-            "choices": [{"message": {"content": json.dumps(payload)}}],
-            "usage": {"prompt_tokens": 1000, "completion_tokens": 200},
-        }
-    ).encode("utf-8")
-    fake_api.add_route("/chat/completions", status=200, body=body,
+    body = anthropic_envelope(payload, input_tokens=1000, output_tokens=200)
+    fake_api.add_route("/v1/messages", status=200, body=body,
                        content_type="application/json")
 
 
@@ -548,7 +550,10 @@ def test_dedup_dropped_override_leaves_its_slot_empty():
 def test_dedup_disclosure_reaches_the_run_warnings(migrated_con, fake_api, monkeypatch):
     import time as _time
 
+    # B2 fake migration: rank rides the Claude API lane (see _seed_and_route).
     monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions")
+    monkeypatch.setattr(llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setattr(_time, "sleep", lambda s: None)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     for i in (1, 2):
@@ -573,12 +578,8 @@ def test_dedup_disclosure_reaches_the_run_warnings(migrated_con, fake_api, monke
         ]
     }
     fake_api.add_route(
-        "/chat/completions", status=200,
-        body=json.dumps({
-            "choices": [{"finish_reason": "stop",
-                         "message": {"content": json.dumps(payload)}}],
-            "usage": {"prompt_tokens": 500, "completion_tokens": 100},
-        }).encode("utf-8"),
+        "/v1/messages", status=200,
+        body=anthropic_envelope(payload, input_tokens=500, output_tokens=100),
         content_type="application/json",
     )
     rep = ranking.run_rank(date="2026-07-04", con=migrated_con, cfg=rank_cfg(),

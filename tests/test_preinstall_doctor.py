@@ -59,11 +59,15 @@ def _scrubbed_env(tmp_path):
         "HOME": os.environ.get("HOME", str(tmp_path)),
         "PYTHONPATH": str(tmp_path),
         "PYTHONIOENCODING": "utf-8",
-        # Force-empty: a real .env (with a real key) now exists in the
-        # checkout. The doctor gives the process environment precedence, so
-        # empty vars here keep the keyless contract testable — and make it
-        # impossible for this subprocess to reach a paid API, ever.
+        # Force-empty: a real .env (with real keys) now exists in the checkout.
+        # The doctor gives the process environment precedence, so empty vars here
+        # keep the keyless contract testable — and make it impossible for this
+        # subprocess to reach a paid API, ever. ANTHROPIC_API_KEY joins the list
+        # in B2 (the Claude API lane's credential; the doctor validates it with a
+        # read-only GET when present, so it MUST be forced empty here or the child
+        # would reach api.anthropic.com with the real key).
         "OPENAI_API_KEY": "",
+        "ANTHROPIC_API_KEY": "",
         "PERPLEXITY_API_KEY": "",
         "GNEWS_API_KEY": "",
         # v7-M1 pinhole fix (2026-07-14): doctor.main() self-sanctions via

@@ -14,7 +14,7 @@ import pytest
 
 from newslens import cli, db, paths
 
-from conftest import PROTOTYPE_ROOT
+from conftest import PROTOTYPE_ROOT, anthropic_envelope
 
 
 def test_version_flag(capsys):
@@ -371,11 +371,17 @@ def test_rank_happy_path_prints_window_caveat_override_and_cost(
 ):
     import json as _json
 
-    from newslens import db, ranking
+    from newslens import db, llm, ranking
 
+    # B2 fake migration: `newslens rank` transports the rank seat on the
+    # Claude API lane — same in-process env/module seams the pipeline reads.
     monkeypatch.setattr(
         ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
+    monkeypatch.setattr(
+        llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-qa-fake-cli")
     paths.SOURCES_FILE.write_text(INTERESTED_SOURCES, encoding="utf-8")
     db.migrate()
@@ -406,14 +412,9 @@ def test_rank_happy_path_prints_window_caveat_override_and_cost(
         ]
     }
     fake_api.add_route(
-        "/chat/completions",
+        "/v1/messages",
         status=200,
-        body=_json.dumps(
-            {
-                "choices": [{"message": {"content": _json.dumps(payload)}}],
-                "usage": {"prompt_tokens": 900, "completion_tokens": 150},
-            }
-        ).encode("utf-8"),
+        body=anthropic_envelope(payload, input_tokens=900, output_tokens=150),
         content_type="application/json",
     )
     rc = cli.main(["rank", "--date", "2026-07-04"])

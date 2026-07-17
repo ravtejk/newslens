@@ -105,20 +105,27 @@ def _no_sleep(monkeypatch):
 # rank, response_format present/absent per caller).
 # ---------------------------------------------------------------------------
 
-def test_rank_request_bytes_identical_to_pre_seam(monkeypatch):
+def test_rank_request_bytes_are_the_anthropic_messages_shape(monkeypatch):
+    # B2: rank rides the Claude API lane. The request is the anthropic Messages
+    # body (max_tokens REQUIRED; a `system` nudge stands in for json_object mode;
+    # temperature preserved as int 0 by the exact-copy law; no thinking/effort on
+    # a mechanical Haiku seat), authenticated with x-api-key (the lane's own
+    # credential), POSTed to the anthropic endpoint.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     seen = _capture(monkeypatch)
     ranking._post_chat("sk-qa", "PROMPT-R")
     expected = json.dumps({
-        "model": "gpt-4o",
+        "model": "claude-haiku-4-5",
+        "max_tokens": ranking.MAX_COMPLETION_TOKENS,
         "messages": [{"role": "user", "content": "PROMPT-R"}],
         "temperature": 0,                     # int 0, not 0.0 (exact-copy law)
-        "max_tokens": ranking.MAX_COMPLETION_TOKENS,
-        "response_format": {"type": "json_object"},
+        "system": llm._ANTHROPIC_JSON_SYSTEM,
     }).encode("utf-8")
     assert seen["data"] == expected
-    assert seen["url"] == ranking.OPENAI_CHAT_URL
+    assert seen["url"] == llm.ANTHROPIC_MESSAGES_URL
     assert seen["timeout"] == 90
-    assert _hdr(seen["req"], "Authorization") == "Bearer sk-qa"
+    assert _hdr(seen["req"], "x-api-key") == "sk-ant-qa"
+    assert _hdr(seen["req"], "anthropic-version") == llm.ANTHROPIC_VERSION
     assert _hdr(seen["req"], "Content-Type") == "application/json"
     assert _hdr(seen["req"], "User-Agent") == ranking.USER_AGENT
 
@@ -352,16 +359,21 @@ def test_per_seat_lane_override_on_generate_steps_fails_loud(
 
 
 def test_generate_steps_default_env_transport_and_ledger_agree(monkeypatch):
-    """Green guard the D1 fix must keep: with NO lane env, editor/script
-    steps transport as gpt-4o/api and their ledger rows say exactly that,
-    charged == shadow == legacy usd."""
+    """The D1 close under B2: with NO lane env, each step's ledger row names the
+    seat that actually rode the wire — narrative on gpt-4o, editor/script on the
+    Claude API Haiku seat — all on the api lane, charged == shadow == legacy usd.
+    The ledger no longer forks the model that ran from the price it records."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
     _capture(monkeypatch)
+    expect_model = {"narrative": "gpt-4o", "narrative_retry": "gpt-4o",
+                    "editor": "claude-haiku-4-5", "script": "claude-haiku-4-5",
+                    "script_retry": "claude-haiku-4-5"}
     for step in ("narrative", "narrative_retry", "editor", "script",
                  "script_retry"):
         sink = []
         generate.call_llm("k", "p", step, 100, 0.5, False, cost_sink=sink)
         e = sink[0]
-        assert e["lane"] == "api" and e["model"] == "gpt-4o", step
+        assert e["lane"] == "api" and e["model"] == expect_model[step], step
         assert e["usd"] == e["usd_shadow"] == e["usd_charged"], step
 
 
@@ -426,6 +438,7 @@ def test_cost_fields_exact_key_set_and_charged_semantics():
     fields = llm.cost_fields(llm.SEATS["rank"], {"prompt_tokens": 10,
                                                  "completion_tokens": 10})
     assert set(fields) == {"model", "lane", "cache_read_tokens",
+                           "cache_creation_tokens",  # B2: recorded for B4 caching
                            "usd_shadow", "usd_charged"}
     assert "usd" not in fields                 # can never displace legacy key
     assert fields["usd_charged"] == fields["usd_shadow"]     # api lane
@@ -475,10 +488,12 @@ def test_rank_sink_entry_full_shape_legacy_usd_untouched(monkeypatch):
     e = sink[0]
     assert set(e) == {"step", "attempt", "prompt_tokens", "completion_tokens",
                       "usd", "model", "lane", "cache_read_tokens",
-                      "usd_shadow", "usd_charged"}
+                      "cache_creation_tokens", "usd_shadow", "usd_charged"}
     assert e["step"] == "rank_select" and e["attempt"] == 1
+    # legacy `usd` == usd_charged, both from the (now Haiku) rank seat's prices
     assert e["usd"] == round(ranking.usage_to_usd(good["usage"]), 6)
     assert e["usd"] == e["usd_shadow"] == e["usd_charged"]
+    assert e["model"] == "claude-haiku-4-5" and e["lane"] == "api"
     assert e["cache_read_tokens"] == 1000
     assert e["prompt_tokens"] == 1234 and e["completion_tokens"] == 567
 
@@ -493,29 +508,43 @@ def test_generate_sink_entry_full_shape_legacy_usd_untouched(monkeypatch):
     e = sink[0]
     assert set(e) == {"step", "attempt", "prompt_tokens", "completion_tokens",
                       "usd", "model", "lane", "cache_read_tokens",
-                      "usd_shadow", "usd_charged"}
+                      "cache_creation_tokens", "usd_shadow", "usd_charged"}
+    # narrative rides the writer seat (still gpt-4o), so legacy `usd` == the
+    # writer-rate _step_cost == usd_charged == usd_shadow.
     assert e["usd"] == round(generate._step_cost(resp["usage"]), 6)
     assert e["usd"] == e["usd_shadow"] == e["usd_charged"]
+    assert e["model"] == "gpt-4o" and e["lane"] == "api"
 
 
 # ---------------------------------------------------------------------------
 # C1/C3 guard — the seat table is the current stack, exactly
 # ---------------------------------------------------------------------------
 
-def test_seat_table_pins_the_current_stack_exactly():
+def test_seat_table_pins_the_b2_stack_exactly():
+    # B2: rank/editor/script -> anthropic/claude-haiku-4-5 ($1.00/$5.00); the
+    # rest stay openai/gpt-4o ($2.50/$10.00); the state seat joined (R1). Every
+    # seat is api-lane; timeouts are unchanged from B1. thinking/effort stay None
+    # everywhere (Haiku seats are mechanical; no thinking param sent).
     assert set(llm.SEATS) == {"rank", "analyst", "writer", "editor", "script",
-                              "synthesis"}
+                              "synthesis", "state"}
+    haiku = {"rank", "editor", "script"}
     timeouts = {"rank": 90, "analyst": 90, "writer": 120, "editor": 120,
-                "script": 120, "synthesis": 120}
+                "script": 120, "synthesis": 120, "state": 60}
     for name, cfg in llm.SEATS.items():
         assert cfg.seat == name
-        assert cfg.provider == "openai"
-        assert cfg.model == "gpt-4o"
         assert cfg.lane == "api"
         assert cfg.timeout_s == timeouts[name]
-        assert cfg.usd_per_mtok_in == 2.50
-        assert cfg.usd_per_mtok_out == 10.00
         assert cfg.thinking is None and cfg.effort is None
+        if name in haiku:
+            assert cfg.provider == "anthropic"
+            assert cfg.model == "claude-haiku-4-5"
+            assert cfg.usd_per_mtok_in == 1.00
+            assert cfg.usd_per_mtok_out == 5.00
+        else:
+            assert cfg.provider == "openai"
+            assert cfg.model == "gpt-4o"
+            assert cfg.usd_per_mtok_in == 2.50
+            assert cfg.usd_per_mtok_out == 10.00
 
 
 def test_seat_for_step_covers_every_live_generate_step():
@@ -573,12 +602,14 @@ def test_importing_llm_does_not_pull_in_the_callers():
 
 def test_doctor_lanes_default_env_renders_all_seats_no_fail():
     results = doctor.check_llm_lanes({})
-    assert len(results) == len(llm.SEATS) + 2       # seats + fallback + B1 note
-    assert all(r.status == doctor.INFO for r in results)
+    assert len(results) == len(llm.SEATS) + 2       # seats + fallback + lane note
+    assert all(r.status == doctor.INFO for r in results)  # every seat on an api lane
     seat_lines = [r.text for r in results[:len(llm.SEATS)]]
-    for name in llm.SEATS:
-        assert any(line.startswith(f"{name}: openai/gpt-4o · lane=api")
-                   for line in seat_lines), name
+    # B2: rank/editor/script render the Claude lane on Haiku; the rest gpt-4o.
+    for name, cfg in llm.SEATS.items():
+        assert any(
+            line.startswith(f"{name}: {cfg.provider}/{cfg.model} · lane=api")
+            for line in seat_lines), name
     assert "fallback unarmed" in results[len(llm.SEATS)].text
 
 
@@ -661,6 +692,24 @@ _SWEEP_PAYLOAD = {
                  "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1000, "completion_tokens": 200},
 }
+# B2: the Claude API lane returns an anthropic-SHAPED body; the anthropic
+# provider synthesises the OpenAI shape callers parse. The sweep now exercises
+# real anthropic seats (rank/editor/script), so the fake transport must serve
+# the shape that MATCHES the endpoint the provider POSTs to.
+_ANTHROPIC_SWEEP_PAYLOAD = {
+    "id": "msg_sweep", "type": "message", "role": "assistant",
+    "model": "claude-haiku-4-5",
+    "content": [{"type": "text", "text": _RANK_OK_CONTENT}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1000, "output_tokens": 200,
+              "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+}
+
+
+def _sweep_resp_for(url):
+    if url == llm.ANTHROPIC_MESSAGES_URL:
+        return _Resp(_ANTHROPIC_SWEEP_PAYLOAD)
+    return _Resp(_SWEEP_PAYLOAD)
 
 
 def _recording_transport(monkeypatch):
@@ -668,35 +717,40 @@ def _recording_transport(monkeypatch):
 
     def fake_urlopen(req, timeout=None):
         calls.append(req.full_url)
-        return _Resp(_SWEEP_PAYLOAD)
+        return _sweep_resp_for(req.full_url)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     return calls
 
 
-def test_writer_lane_override_on_editor_step_dies_loud_b4_residual(
-        monkeypatch):
-    """Coordinator row 1: NEWSLENS_LANE_WRITER=subscription while the step
-    is 'editor'. The gate passes (editor seat = api) but _chat's internal
-    frozen 'writer' resolution hits the unimplemented lane at the seam —
-    the call must die LOUD with zero transport and zero ledger rows, never
-    silently mis-lane. (Documented B4 residual: over-loud, fail-safe.)"""
+def test_writer_lane_override_does_not_leak_into_editor_step(monkeypatch):
+    """B2 CLOSED the B1 'B4 residual': _chat now transports on the per-step seat
+    (via _ACTIVE_SEAT_CFG), so NEWSLENS_LANE_WRITER=subscription no longer reaches
+    an 'editor' step — that step rides the editor seat (Claude api/Haiku). It
+    COMPLETES honestly on its own lane; the writer override is inert for it, and
+    the ledger attributes the editor seat, not writer. (Was: died loud via the
+    frozen-writer residual; that residual is now structurally impossible, so a
+    seat-threading regression would resurface it and fail the sweep — FIX-2 b.)"""
     _no_sleep(monkeypatch)
-    calls = _transport_tripwire(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic-fake")
+    calls = _recording_transport(monkeypatch)
     monkeypatch.setenv("NEWSLENS_LANE_WRITER", "subscription")
     sink = []
-    with pytest.raises(Exception) as exc:
-        generate.call_llm("k", "p", "editor", 100, 0.5, False, cost_sink=sink)
-    assert "no registered implementation" in str(exc.value)
-    assert calls == []
-    assert sink == []
+    generate.call_llm("k", "p", "editor", 100, 0.5, False, cost_sink=sink)
+    assert len(calls) == 1
+    assert calls[0] == llm.ANTHROPIC_MESSAGES_URL  # rode the Claude lane, not writer
+    assert sink and sink[0]["lane"] == "api"
+    assert sink[0]["model"] == "claude-haiku-4-5"
+    assert sink[0]["usd"] == sink[0]["usd_charged"] == sink[0]["usd_shadow"]
 
 
 @pytest.mark.parametrize("env,step,should_complete", [
-    # per-seat api pin + bad global: gate passes per-seat, but the frozen
-    # writer transport reads the bad GLOBAL -> loud, zero transport
+    # per-seat api pin + bad global: the editor step rides the editor seat
+    # (api-pinned), and B2's per-step transport no longer reads the writer seat
+    # under the bad global -> the editor COMPLETES on its own lane (was False in
+    # B1's frozen-writer residual; the residual is closed)
     ({"NEWSLENS_LANE": "subscription", "NEWSLENS_LANE_EDITOR": "api"},
-     "editor", False),
+     "editor", True),
     # bad per-seat + good global: gate raises immediately
     ({"NEWSLENS_LANE": "api", "NEWSLENS_LANE_EDITOR": "subscription"},
      "editor", False),
@@ -755,11 +809,12 @@ def test_armed_fallback_plus_bad_lane_still_dies_loud_at_wrappers(
 
 def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
         monkeypatch):
-    """THE D1-CLOSE INVARIANT, swept exhaustively over the whole B1 env
-    surface: global lane {unset, api, subscription, junk} x one per-seat
-    var {none, or NEWSLENS_LANE_<SEAT> in {api, subscription, junk} for all
-    six seats} x fallback {unarmed, armed} x every live entrypoint
-    (5 generate steps, rank_select, analysis) — 4 x 19 x 2 x 7 = 1064
+    """THE D1-CLOSE INVARIANT, swept exhaustively over the whole env surface:
+    global lane {unset, api, subscription, junk} x one per-seat var {none, or
+    NEWSLENS_LANE_<SEAT> in {api, subscription, junk} for all SEVEN seats
+    (rank/analyst/writer/editor/script/synthesis + the B2-joined state seat)}
+    x fallback {unarmed, armed} x every live call_llm-family entrypoint (5
+    generate steps, rank_select, analysis) — 4 x 22 x 2 x 7 = 1232
     combinations. For every one:
 
       completed  => exactly the recorded transport calls produced ledger
@@ -769,23 +824,26 @@ def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
       gate-blocked (the entrypoint's own seat resolves to an unregistered
                     lane) => RAW LaneUnavailable — never wrapped, zero
                     transport calls, zero ledger rows (check_lane law);
-      B4 residual (gate seat passes but the step is a non-writer generate
-                    step and the WRITER lane is blocked: _chat's frozen
-                    internal 'writer' resolution raises at the seam inside
-                    the retry loop) => loud failure carrying the
-                    LaneUnavailable fix text, zero transport calls, zero
-                    ledger rows; the class is GenerateError today (the
-                    retry arm wraps it). Accepted for EXACTLY this shape —
-                    unreachable in the real pipeline, where the narrative
-                    step (gate seat == writer) dies raw first;
-      anything else => failure.
+      anything else => FAILURE. B2 CLOSED the old "B4 residual" (generate's
+                    _chat no longer transports on a frozen 'writer' seat while
+                    the ledger uses seat_for_step — it now transports on the
+                    gated per-step seat via _ACTIVE_SEAT_CFG). So a gate-passing
+                    config can no longer raise a wrapped LaneUnavailable inside
+                    the retry loop; if any entrypoint ever does again, that is a
+                    seat-threading regression and this sweep must fail on it
+                    (FIX-2 b — the residual acceptance arm is deleted).
 
     Silent wrong-lane and phantom-$0 ledger rows are structurally
     unreachable across the entire env surface, or this test names the
     combination that breaks it."""
     _no_sleep(monkeypatch)
+    # B2: rank/editor/script are on the Claude lane now; give the anthropic
+    # provider a key so its x-api-key is populated (the fake transport ignores
+    # its value — this only avoids an empty-header edge in the provider).
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic-sweep-fake")
 
-    seats = ["RANK", "ANALYST", "WRITER", "EDITOR", "SCRIPT", "SYNTHESIS"]
+    seats = ["RANK", "ANALYST", "WRITER", "EDITOR", "SCRIPT", "SYNTHESIS",
+             "STATE"]
     per_seat_options = [None] + [(f"NEWSLENS_LANE_{s}", v)
                                  for s in seats
                                  for v in ("api", "subscription", "junk")]
@@ -826,11 +884,6 @@ def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
                     else:
                         gate_seat = "analyst"
                     gate_blocked = llm.resolve_seat(gate_seat).lane != "api"
-                    residual_possible = (
-                        name.startswith("generate:")
-                        and gate_seat != "writer"
-                        and llm.resolve_seat("writer").lane != "api"
-                    )
                     try:
                         if name.startswith("generate:"):
                             generate.call_llm("k", "p", step, 100, 0.5,
@@ -847,21 +900,17 @@ def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
                         assert sink == [], (
                             f"{label}: raised but ledger rows written: {sink}")
                     except Exception as exc:  # noqa: BLE001 — sweep verdict
-                        if not (residual_possible and not gate_blocked):
-                            pytest.fail(
-                                f"{label}: raised {type(exc).__name__} "
-                                f"(a gate-blocked config error must be raw "
-                                f"LaneUnavailable): {exc}")
-                        # B4 residual, exactly: loud + fix text + $0
-                        assert "no registered implementation" in str(exc), (
-                            f"{label}: residual failure lost the fix text: "
-                            f"{exc}")
-                        assert calls == [], (
-                            f"{label}: residual raised AFTER "
-                            f"{len(calls)} transport call(s)")
-                        assert sink == [], (
-                            f"{label}: residual raised but ledger rows "
-                            f"written: {sink}")
+                        # FIX-2 b: the residual acceptance arm is DELETED. After
+                        # B2's per-step seat threading, a gate-blocked config
+                        # raises RAW LaneUnavailable (above) and a gate-passing
+                        # config completes — any other exception is a
+                        # seat-threading regression (the old frozen-'writer'
+                        # residual resurfacing) and MUST fail the sweep.
+                        pytest.fail(
+                            f"{label}: raised {type(exc).__name__} — a "
+                            f"gate-blocked config must raise raw LaneUnavailable "
+                            f"and a gate-passing config must complete; any other "
+                            f"exception is a seat-threading regression: {exc}")
                     else:
                         assert calls, f"{label}: completed without transport?"
                         if name.startswith("generate:"):
@@ -882,4 +931,4 @@ def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
                                 row["usd_shadow"], (
                                     f"{label}: charged-honesty broken: {row}")
                     checked += 1
-    assert checked == 4 * 19 * 2 * 7
+    assert checked == 4 * 22 * 2 * 7  # 4 global x 22 per-seat (7 seats) x 2 x 7

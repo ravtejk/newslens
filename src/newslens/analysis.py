@@ -1381,10 +1381,8 @@ def _analysis_chat(key: str, prompt: str) -> Dict:
     call_analysis_model's parse/retry law is untouched. Keeps its signature:
     it is the suite's monkeypatch target.
 
-    NOTE (B2 hand-off): call_analysis_model accumulates a float cost (not a
-    cost_sink ledger), so the analyst path does NOT yet carry the lane/shadow
-    keys. B2 flips analyst -> Haiku and migrates this path onto llm.cost_fields
-    then; until then the analyst ledger is gpt-4o/api implicitly."""
+    The analyst seat STAYS gpt-4o/api in B2 (its flip to Sonnet is B4); only the
+    cost PATH migrates onto the seam's shadow ledger — see call_analysis_model."""
     return llm.chat(
         llm.LaneRequest(
             cfg=llm.resolve_seat("analyst"),
@@ -1405,21 +1403,30 @@ def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float]:
     BUG13: the returned cost accumulates EVERY attempt that returned usage
     — attempt 1 that completed HTTP (tokens paid) and then failed
     truncation/parse still spent real money against the $0.25 cap, and the
-    log must carry real spend (BUG-6 money-honesty class)."""
-    # B1 fail-loud gate (D1 close): preflight the analyst seat's lane ONCE
-    # before any transport or retry, so a NEWSLENS_LANE / NEWSLENS_LANE_ANALYST
-    # override to an unimplemented lane surfaces immediately, never after a
-    # pointless retry+sleep.
-    llm.check_lane(llm.resolve_seat("analyst"))
+    log must carry real spend (BUG-6 money-honesty class).
+
+    B2 (dispatch item 4): the float accumulator now DERIVES from the seam's
+    shadow ledger — llm.cost_fields(analyst_cfg, usage)["usd_charged"] — rather
+    than the module ANALYSIS_USD_* constants, so the analyst cost path speaks the
+    seat's lane/shadow language and re-prices automatically when B4 flips analyst
+    -> Sonnet. The analyst seat stays gpt-4o/api this milestone, so the value is
+    unchanged. The signature is preserved (ADR-0014 §2, pinned by
+    test_signatures_preserved: this is a suite monkeypatch target); the
+    lane/model are surfaced on run_analysis's report."""
+    # D1 fail-loud gate: preflight the analyst seat's lane ONCE, before any
+    # transport or retry, so a NEWSLENS_LANE / NEWSLENS_LANE_ANALYST override to
+    # an unimplemented lane surfaces immediately, never after a pointless
+    # retry+sleep. The SAME resolution feeds cost_fields (transport-seat ==
+    # ledger-seat — the D1 close).
+    analyst_cfg = llm.resolve_seat("analyst")
+    llm.check_lane(analyst_cfg)
     last: Exception = RuntimeError("unreachable")
     total_cost = 0.0
     for attempt in (1, 2):
         try:
             payload = _analysis_chat(key, prompt)
             usage = payload.get("usage") or {}
-            total_cost += (
-                usage.get("prompt_tokens", 0) / 1e6 * ANALYSIS_USD_IN_PER_MTOK
-                + usage.get("completion_tokens", 0) / 1e6 * ANALYSIS_USD_OUT_PER_MTOK)
+            total_cost += llm.cost_fields(analyst_cfg, usage)["usd_charged"]
             choice = payload["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise ValueError(f"truncated at {ANALYSIS_MAX_TOKENS} tokens")
@@ -1724,7 +1731,11 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
         prior = _prior_briefing_material(con, date)
         report = {"ts": datetime.now(timezone.utc).isoformat(),
                   "stage": "analysis", "date": date, "status": "ok",
-                  "model": ANALYSIS_MODEL, "per_story": [], "total_usd": 0.0,
+                  "model": ANALYSIS_MODEL,
+                  # B2: the analyst spend is lane-attributed off the seam so the
+                  # cost dashboard stays coherent when analyst flips lanes (B4+).
+                  "lane": llm.resolve_seat("analyst").lane,
+                  "per_story": [], "total_usd": 0.0,
                   "derating": False, "warnings": []}
         for i, (slot, tier) in enumerate(zip(slots, tiers), start=1):
             if tier not in ("full", "medium"):

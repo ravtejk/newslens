@@ -46,8 +46,9 @@ def test_env_example_has_exactly_the_spec_vars_with_no_secret_values():
         "OPENAI_API_KEY": "",
         "PERPLEXITY_API_KEY": "",
         "GNEWS_API_KEY": "",
-        # B1 provider seam (ADR-0014): the Claude API-lane credential — empty,
-        # unread until B2. Key-shaped, so it stays blank like the others.
+        # Provider seam (ADR-0014): the Claude API-lane credential — LIVE since
+        # B2 (rank/editor/script on Haiku 4.5). Key-shaped, so it stays blank
+        # here (agents maintain names only; the principal fills it).
         "ANTHROPIC_API_KEY": "",
         # B1 lane selectors — optional; empty = the gpt-4o api default. Not
         # secret-shaped. Selecting an unimplemented lane fails loud (B1).
@@ -57,6 +58,17 @@ def test_env_example_has_exactly_the_spec_vars_with_no_secret_values():
         "BUDGET_CAP_USD_PER_RUN": "0.25",  # M9 ruling 2026-07-06 (was 0.50)
         "GENERATE_HOUR_LOCAL": "6",
     }
+
+
+def test_setup_md_documents_every_api_key_from_env_example():
+    """FIX D (gate, B2): every credential var in .env.example must have a home in
+    SETUP.md so no required key — notably ANTHROPIC_API_KEY, live and REQUIRED
+    since the B2 Claude-lane flip — is silently unfilled on a fresh install."""
+    setup = (PROTOTYPE_ROOT / "SETUP.md").read_text(encoding="utf-8")
+    key_vars = [k for k in _env_example_entries() if k.endswith("_API_KEY")]
+    assert "ANTHROPIC_API_KEY" in key_vars  # the parser sees it (guards a silent drop)
+    missing = [k for k in key_vars if k not in setup]
+    assert not missing, f"SETUP.md does not document these keys: {missing}"
 
 
 def test_env_example_contains_nothing_secret_shaped():
