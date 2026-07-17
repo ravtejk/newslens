@@ -264,7 +264,12 @@ class GenReport:
     continuity_status: str = "none"   # ok | none | corrupt
     analysis_usd: float = 0.0          # M9-M3: the analysis stage's spend
     deep_views: Dict[str, str] = field(default_factory=dict)  # slot -> availability (Axel instrumentation)
-    memory_usd: float = 0.0            # NL-63: state-rewrite spend (the only new LLM cost)
+    memory_usd: float = 0.0            # NL-63: state-rewrite spend charged (real money)
+    # R-B3a (B3): the state-rewrite SHADOW spend (always API-priced). Equals
+    # memory_usd on the api lane; on a subscription-lane state seat memory_usd
+    # is 0.0 while this stays non-zero — the ledger row keys off THIS so a
+    # $0-charged subscription rewrite never vanishes from the record.
+    memory_shadow_usd: float = 0.0
     memory: Dict = field(default_factory=dict)  # NL-63: ledger/state instrumentation for diagnose
     # BUG-6/32 family (NL-63 M2 obs): call_llm's raw per-ATTEMPT cost record —
     # every writer attempt that reached the API, including ones that failed
@@ -318,6 +323,32 @@ WRITER_UA = "NewsLens/0.1 (personal news briefing prototype; writer)"
 # (direct callers / the signature test keep the historical gpt-4o writer path).
 # Request-scoped, single-threaded pipeline, always reset in call_llm's finally.
 _ACTIVE_SEAT_CFG: "Optional[llm.SeatConfig]" = None
+
+# B3-D6 (the generate flap window): the ONE effective_seat resolution per
+# writer-family seat for a run, published by _run_generate_body and shared by
+# EVERY reader — call_llm's gate + transport (via _ACTIVE_SEAT_CFG) + cost_sink,
+# _step_ledger's DURABLE report.steps/token_cost row, and the fall warning.
+# Post-D2 effective_seat is filesystem-dependent, and _step_ledger runs AFTER
+# call_llm's _ACTIVE_SEAT_CFG teardown; re-resolving there let a `claude` binary
+# that vanished mid-run PERSIST a lane the transport never rode (the D1 lie via
+# the durable record) — or RAISE LaneUnavailable at a display site over an
+# already-paid step. One resolution per seat closes it (the ranking _ACTIVE_RANK
+# pattern). Keyed by seat; a direct call_llm (a test, no run scope) fresh-
+# resolves. Reset in generate()'s outer finally.
+_ACTIVE_STEP_SEATS: "Dict[str, tuple]" = {}
+
+
+def _resolve_step_seat(step: str) -> "tuple":
+    """The (SeatConfig, fallback_reason) a generate step rides — the run-scoped
+    resolution _run_generate_body published, else a fresh effective_seat for a
+    direct caller (the _effective_rank fallback). Every generate reader of a
+    step's seat goes through here so the gate, transport, cost_sink, durable
+    step row, and warning can never diverge on a mid-run binary flap (B3-D6)."""
+    seat = llm.seat_for_step(step)
+    snap = _ACTIVE_STEP_SEATS.get(seat)
+    if snap is not None:
+        return snap
+    return llm.effective_seat(seat)
 
 
 def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
@@ -396,8 +427,13 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
     # can never let one seat's transport charge while the ledger files another
     # seat's lane. A config error surfaces immediately, never after a pointless
     # retry+sleep, and never a silent wrong-lane call.
-    seat_cfg = llm.resolve_seat(llm.seat_for_step(step))
-    llm.check_lane(seat_cfg)
+    # B3-D2/D6: read the ONE run-scoped resolution for this step's seat (the gate
+    # + fall already applied when _run_generate_body published it) — the SAME
+    # (seat_cfg, _fb_reason) _step_ledger's durable row and the cost_sink ride, so
+    # a mid-run binary flap can never fork the transport lane from the record. A
+    # direct call_llm (no run scope) fresh-resolves + gates via effective_seat.
+    # The narrative/writer seat is openai/api and never falls.
+    seat_cfg, _fb_reason = _resolve_step_seat(step)
     last_error = "unknown"
     backoff = 1.0
     next_prompt = prompt  # augmented below only after a validation/malformed miss
@@ -421,8 +457,9 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
                     # transport used. legacy `usd` == usd_charged, sourced
                     # per-seat from the seam (editor/script are Haiku now), so the
                     # entry never forks the model that ran from the price the
-                    # ledger records.
-                    fields = llm.cost_fields(seat_cfg, usage)
+                    # ledger records. B3-D2: the fall label rides too.
+                    fields = llm.cost_fields(seat_cfg, usage,
+                                             fallback_reason=_fb_reason)
                     entry = {
                         "step": step, "attempt": attempt,
                         "prompt_tokens": usage.get("prompt_tokens"),
@@ -542,14 +579,20 @@ def _step_cost(usage: Dict) -> float:
 
 
 def _step_ledger(step: str, usage: Dict) -> Dict:
-    """The per-step display-ledger fields for report.steps — model/lane/usd plus
-    the shadow-ledger keys, all sourced from the STEP'S seat (B2: editor/script
-    Haiku, narrative gpt-4o). Replaces the WRITER_MODEL + WRITER-rate _step_cost
-    that forked the ledger the moment editor/script left gpt-4o (ledger claiming
-    the model that did NOT run, at the price it was NOT charged)."""
-    cfg = _step_seat_cfg(step)
-    fields = llm.cost_fields(cfg, usage)
-    return {"model": cfg.model, "lane": cfg.lane,
+    """The per-step DURABLE-ledger fields for report.steps (-> persist_generation
+    -> briefings.token_cost + the generation log) — model/lane/usd plus the
+    shadow keys, sourced from the STEP'S seat (B2: editor/script Haiku, narrative
+    gpt-4o). Replaces the WRITER_MODEL + WRITER-rate _step_cost that forked the
+    ledger the moment editor/script left gpt-4o. B3-D6: reads the SAME run-scoped
+    resolution call_llm's gate/transport/cost_sink used (via _resolve_step_seat),
+    NEVER a fresh effective_seat — so a `claude` binary that vanished mid-run
+    can't persist a lane the transport didn't ride, or raise LaneUnavailable at
+    this display site over an already-paid step. A fallen editor/script row
+    records lane=api(fallback:…) exactly as the wire did. Direct callers fresh-
+    resolve (the _effective_rank fallback)."""
+    cfg, reason = _resolve_step_seat(step)
+    fields = llm.cost_fields(cfg, usage, fallback_reason=reason)
+    return {"model": cfg.model, "lane": fields["lane"],
             "usd": fields["usd_charged"], **fields}
 
 
@@ -1858,10 +1901,15 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
             sr = memory_core.rewrite_state(
                 con, tid, topic, date, briefing_id, key, state_template,
                 remaining_usd=cap - spent, chat=state_chat)
-            spent += sr.cost_usd
+            # Cap binds on SHADOW (Onna's law): remaining_usd above is cap-spent,
+            # and spent accumulates shadow so a subscription seat (usd_charged==0)
+            # still counts against the cap at its API-equivalent price.
+            spent += sr.shadow_usd
             report.memory_usd += sr.cost_usd
+            report.memory_shadow_usd += sr.shadow_usd
             state_results.append({"thread": topic, "outcome": sr.outcome,
-                                  "detail": sr.detail, "usd": round(sr.cost_usd, 6)})
+                                  "detail": sr.detail, "usd": round(sr.cost_usd, 6),
+                                  "usd_shadow": round(sr.shadow_usd, 6)})
             if sr.outcome in ("stale", "rejected", "skipped-budget",
                               "skipped-no-ledger", "failed"):
                 report.warnings.append(
@@ -1871,20 +1919,25 @@ def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
         # (gate Fix 1, loop #5): paid spend must reach report.steps BEFORE the
         # exception propagates, or both callers' containment folds see nothing
         # and briefings.token_cost under-reports money the CLI prints.
-        if report.memory_usd:
-            # B2 (gate ruling R1): the state seat's aggregate spend carries the
-            # shadow-ledger keys off the seam — model/lane + usd_shadow/
-            # usd_charged — so the cost dashboard stays coherent when the state
-            # seat's lane/model flips later. State is gpt-4o/api this milestone,
-            # so usd_shadow == usd_charged == the accumulated spend.
+        #
+        # R-B3a (B3): the row is gated on SHADOW spend, not charged. A
+        # subscription-lane state seat bills usd_charged == 0.0 while its
+        # usd_shadow is non-zero; the OLD `if report.memory_usd:` guard dropped
+        # that row entirely — the state seat's whole spend vanished from the
+        # ledger the moment the lane went subscription (the guard class the
+        # rider names). Now: record whenever there was shadow spend, and carry
+        # BOTH figures (usd == usd_charged for back-compat; usd_shadow always
+        # populated). On the api lane the two are equal, so no existing row moves.
+        if report.memory_shadow_usd:
             _state_cfg = llm.resolve_seat("state")
-            _state_usd = round(report.memory_usd, 6)
+            _state_charged = round(report.memory_usd, 6)
+            _state_shadow = round(report.memory_shadow_usd, 6)
             report.steps.append({"step": "state_rewrites",
                                  "model": _state_cfg.model,
                                  "lane": _state_cfg.lane,
-                                 "usd": _state_usd,
-                                 "usd_shadow": _state_usd,
-                                 "usd_charged": _state_usd})
+                                 "usd": _state_charged,
+                                 "usd_shadow": _state_shadow,
+                                 "usd_charged": _state_charged})
     report.memory = {
         "deltas_written": len(delta_rep.written),
         "deltas_skipped": len(delta_rep.skipped),
@@ -2161,7 +2214,7 @@ def run_state_repair(
                     con, s["thread_id"], s["topic"], s["latest_delta_date"],
                     None, key, state_template, remaining_usd=cap - spent,
                     chat=state_chat)
-                spent += sr.cost_usd
+                spent += sr.shadow_usd   # cap on shadow (== cost_usd on the api lane)
                 rep.repaired.append({
                     "thread": s["topic"], "thread_id": s["thread_id"],
                     "outcome": sr.outcome, "detail": sr.detail,
@@ -2446,6 +2499,8 @@ def run_baseline_backfill(
             gr = generate_thread_baseline(
                 con, t["thread_id"], t["topic"], t["note"], as_of, key,
                 remaining_usd=cap - spent, chat=chat)
+            # Baseline rides the analyst seat (gpt-4o/api — not a subscription
+            # seat), so usd_charged == usd_shadow; cost_usd is the cap figure.
             spent += gr.cost_usd
             rep.generated.append({"thread": t["topic"], "thread_id": t["thread_id"],
                                   "outcome": gr.outcome, "detail": gr.detail,
@@ -2644,6 +2699,12 @@ def run_generate(
                             "warnings": report.warnings})
             raise
     finally:
+        # B3-D6: guaranteed teardown of the run-scoped writer-family resolutions
+        # (_run_generate_body publishes them; this wraps that body 1:1) — always
+        # reset, so a raise mid-run never leaks a stale (cfg, reason) into the
+        # next run's steps.
+        global _ACTIVE_STEP_SEATS
+        _ACTIVE_STEP_SEATS = {}
         if own_con:
             con.close()
 
@@ -2707,6 +2768,51 @@ def _run_generate_body(
 
     cap = config.budget_cap_usd_per_run(src_env)
     spent = 0.0
+
+    # FIX-1 (B3, ruled into this milestone): stage-boundary lane preflight.
+    # A misconfigured lane — an unregistered provider/lane, or a subscription
+    # seat whose `claude` binary won't resolve — is a CONFIG error, not a
+    # transient one. It must KILL the run here, ONCE, at stage entry, BEFORE any
+    # expensive work or persist, rather than being swallowed downstream into a
+    # depth-absent edition (analyze_story's per-slot broad except) or a silently
+    # stale moat (run_memory_pass's post-persist broad except). Per-slot /
+    # per-thread degrade stays for TRANSIENT failures only. The seats that
+    # already fail loud at the CLI boundary (rank/writer/editor/script) don't
+    # need a preflight here — only the two historically-swallowed seats do, and
+    # each is gated on whether its stage actually runs this pass. check_lane is
+    # a pure resolution/registration check (+ a binary stat for a subscription
+    # seat) — no transport, no spend. LaneUnavailable propagates raw, the same
+    # kill-class behavior a rank/writer misconfig already has.
+    if refresh and not no_threads:
+        llm.check_lane(llm.resolve_seat("analyst"))   # analysis stage
+    if not no_threads:
+        llm.check_lane(llm.resolve_seat("state"))     # memory (state-rewrite) stage
+
+    # B3-D6: resolve each writer-family seat ONCE for this run and publish it on
+    # _ACTIVE_STEP_SEATS, so call_llm's gate/transport/cost_sink AND _step_ledger's
+    # DURABLE report.steps row ride the SAME (cfg, reason) — a `claude` binary that
+    # vanishes mid-run can no longer fork them (the D1 lie via the durable record,
+    # or a LaneUnavailable raised at a display site over an already-paid step).
+    # writer is openai/api (never falls); editor/script default to the subscription
+    # lane. An unavailable seat with the fallback UNARMED is left UNSCOPED so
+    # call_llm's per-step gate still fails loud at the stage that uses it (deferred
+    # kill preserved — not a stage-entry death for a seat a path might not reach).
+    # The fall warning derives from THIS resolution — exactly what the steps ride,
+    # so it can neither over- nor under-warn — one per fallen seat (QA's pin).
+    global _ACTIVE_STEP_SEATS
+    _ACTIVE_STEP_SEATS = {}
+    for _seat in ("writer", "editor", "script"):
+        try:
+            _ACTIVE_STEP_SEATS[_seat] = llm.effective_seat(_seat)
+        except llm.LaneUnavailable:
+            pass                              # unarmed/unavailable — call_llm's gate fails loud
+    for _seat, (_c, _r) in _ACTIVE_STEP_SEATS.items():
+        if _r:
+            report.warnings.append(
+                f"{_seat} ran the API fall-over lane (NEWSLENS_LANE_FALLBACK=api "
+                f"armed; subscription lane unavailable: {_r}) — this billed real "
+                "API money the subscription lane would not; ledger rows labeled "
+                "lane=api(fallback:…). Fix the CLI or unset the fallback to fail loud")
 
     # --- Analysis pass (M9-M3): the writer writes FROM the brief ---
     # Runs only on record-refreshing runs (samples and --no-refresh reuse
@@ -2790,7 +2896,12 @@ def _run_generate_body(
               "completion_tokens": usage_n.get("completion_tokens"),
               **_step_ledger("narrative", usage_n)}
     report.steps.append(step_n)
-    spent += step_n["usd"] or 0
+    # Cap binds on SHADOW (Onna's law): usd == usd_charged (0.0 on a
+    # subscription seat) but the cap must count the API-equivalent price, so
+    # `spent` accumulates usd_shadow. On the api lane the two are equal — no
+    # cost/cap test moves; the flip only matters once editor/script go
+    # subscription (below), where charged is 0 but the run must still be capped.
+    spent += step_n["usd_shadow"] or 0
 
     # P3.1 item 3: tier expression. A briefed lead under the floor gets ONE
     # retry with the deficiency injected; a second miss ships with
@@ -2832,7 +2943,7 @@ def _run_generate_body(
                            "completion_tokens": usage_rn.get("completion_tokens"),
                            **_step_ledger("narrative_retry", usage_rn)}
                 report.steps.append(step_rn)
-                spent += step_rn["usd"] or 0
+                spent += step_rn["usd_shadow"] or 0   # cap on shadow (see above)
                 retry_w = _lead_words(retry_payload)
                 if retry_w >= LEAD_FLOOR_WORDS:
                     draft_payload = retry_payload
@@ -2901,7 +3012,7 @@ def _run_generate_body(
                   "completion_tokens": usage_e.get("completion_tokens"),
                   **_step_ledger("editor", usage_e)}
         report.steps.append(step_e)
-        spent += step_e["usd"] or 0
+        spent += step_e["usd_shadow"] or 0   # editor: subscription-lane seat — cap on shadow
         before = sum(wc(" ".join(v for v in s.values() if isinstance(v, str)))
                      for s in draft_payload["stories"] if isinstance(s, dict))
         after = sum(wc(" ".join(v for v in s.values() if isinstance(v, str)))
@@ -3079,7 +3190,7 @@ def _run_generate_body(
               "prompt_tokens": usage_s.get("prompt_tokens"),
               "completion_tokens": usage_s.get("completion_tokens"),
               **_step_ledger("script", usage_s)}
-    spent += step_s["usd"] or 0.0
+    spent += step_s["usd_shadow"] or 0.0   # script: subscription-lane seat — cap on shadow
 
     # P3.1 items 1+2 — the spoken editorial bar, enforcement-grade: ONE
     # retry with the exact violations injected; then ship the better
@@ -3112,7 +3223,7 @@ def _run_generate_body(
                           "completion_tokens": usage_r.get("completion_tokens"),
                           **_step_ledger("script_retry", usage_r)}
                 report.steps.append(step_r)
-                spent += step_r["usd"] or 0.0
+                spent += step_r["usd_shadow"] or 0.0   # script retry: cap on shadow
                 structural_2 = script_structural_check(retry_script)
                 if not structural_2:
                     script = retry_script

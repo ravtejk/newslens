@@ -447,6 +447,7 @@ def test_BUG7_tag_shape_tolerance_must_persist_not_just_warn(migrated_con, monke
         llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
+    monkeypatch.setenv("NEWSLENS_LANE", "api")  # B3: exercise the api fall-over transport
     monkeypatch.setattr(time, "sleep", lambda s: None)
     now = iso_now()
     migrated_con.execute(
@@ -1139,6 +1140,11 @@ def test_cost_sink_records_every_api_reaching_attempt(monkeypatch):
                              "message": {"content": "body"}}],
                 "usage": {"prompt_tokens": 1000, "completion_tokens": 500}}
     monkeypatch.setattr(generate, "_chat", chat)
+    # B3: script DEFAULTS to the subscription lane (usd_charged 0.0); this test
+    # pins the api fall-over so it keeps asserting the api-lane ledger (Haiku
+    # charged==shadow). The subscription-lane ledger (charged=0/shadow) is
+    # proven born-red in test_b3_subscription_lane.py.
+    monkeypatch.setenv("NEWSLENS_LANE_SCRIPT", "api")
     monkeypatch.setattr(time, "sleep", lambda s: None)
     sink = []
 
@@ -1439,10 +1445,14 @@ def test_generation_log_records_ok_runs_fully(migrated_con, fake_model):
 def llm_http(fake_api, monkeypatch):
     # Both lanes at the loopback: narrative rides the writer seat (gpt-4o via
     # the openai seam url); editor/script ride the Claude Haiku seat via the
-    # anthropic module endpoint (B2). Same fake server serves both shapes.
+    # anthropic module endpoint. B3: the Haiku seats DEFAULT to the subscription
+    # lane now, so pin the whole run to the api lane — these HTTP tests exercise
+    # the api transport (the registered fall-over), routing editor/script to the
+    # loopback /v1/messages rather than the claude -p subprocess.
     monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions")
     monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages")
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
+    monkeypatch.setenv("NEWSLENS_LANE", "api")
     monkeypatch.setattr(time, "sleep", lambda s: None)
     return fake_api
 
@@ -1719,6 +1729,7 @@ def test_A6_steering_off_still_records_references_and_persists_flag(
     monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions")
     monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages")
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
+    monkeypatch.setenv("NEWSLENS_LANE", "api")  # B3: exercise the api fall-over transport
     monkeypatch.setattr(time, "sleep", lambda s: None)
     now = iso_now()
     migrated_con.execute(

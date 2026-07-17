@@ -81,6 +81,9 @@ def test_post_chat_routes_through_seam_as_rank_seat(monkeypatch):
     # endpoint (the lane reads its own endpoint + credential, ignoring the
     # openai offline-seam url the caller still passes).
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+    # B3: rank DEFAULTS to the subscription lane now; this test asserts the
+    # anthropic API-lane request bytes (the registered fall-over), so pin it.
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     seen = _capture(monkeypatch)
     ranking._post_chat("sk-x", "hello")
     body = seen["body"]
@@ -134,8 +137,13 @@ def test_analysis_chat_routes_through_seam_as_analyst_seat(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_unavailable_lane_fails_loud_naming_the_fix():
-    cfg = llm.resolve_seat("rank", {"NEWSLENS_LANE": "subscription"})
-    assert cfg.lane == "subscription"
+    # B3: rank/subscription is now a REGISTERED lane, so the fail-loud case moves
+    # to a genuinely unavailable combo — an OPENAI seat forced onto a non-api
+    # lane (openai runs ONLY on the api lane). Still fail-loud, still names the
+    # fix (unchanged intent). The subscription-lane's own unavailability (missing
+    # binary) is proven in test_b3_subscription_lane.py.
+    cfg = llm.resolve_seat("writer", {"NEWSLENS_LANE": "subscription"})
+    assert cfg.lane == "subscription" and cfg.provider == "openai"
     with pytest.raises(llm.LaneUnavailable) as exc:
         llm.chat(llm.LaneRequest(cfg, "p", 0, 10, True, "ua", "k"))
     assert "NEWSLENS_LANE" in str(exc.value)
@@ -153,19 +161,21 @@ def test_per_seat_lane_override_wins_over_global():
 # ---------------------------------------------------------------------------
 
 def test_seat_map_after_b2_haiku_flip():
-    # B2 (approved Option C): rank/editor/script flipped to the Claude API lane
-    # on Haiku 4.5; analyst/writer/synthesis + the newly-joined state seat stay
-    # gpt-4o on the api lane. Every seat is still on the api lane (the
-    # subscription lane is B3). This guard makes the flip deliberate.
-    haiku = {"rank", "editor", "script"}
+    # B3 (subscription-lane mandate): rank/editor/script run Haiku 4.5 and DEFAULT
+    # to the claude -p SUBSCRIPTION lane (the api lane is their registered
+    # fall-over); analyst/writer/synthesis + the state seat stay gpt-4o on the
+    # api lane. This guard makes both the model flip (B2) and the lane flip (B3)
+    # deliberate, never accidental.
+    haiku_sub = {"rank", "editor", "script"}
     for name, cfg in llm.SEATS.items():
-        assert cfg.lane == "api", name
-        if name in haiku:
+        if name in haiku_sub:
             assert cfg.provider == "anthropic", name
             assert cfg.model == "claude-haiku-4-5", name
+            assert cfg.lane == "subscription", name
         else:
             assert cfg.provider == "openai", name
             assert cfg.model == "gpt-4o", name
+            assert cfg.lane == "api", name
     assert "state" in llm.SEATS  # R1: the state/memory seat joined the table
 
 
@@ -186,9 +196,13 @@ def test_fallback_flag_is_opt_in_default_off():
 # ---------------------------------------------------------------------------
 
 def test_cost_fields_api_lane_shadow_equals_charged():
-    # rank is Haiku now ($1.00 in / $5.00 out per MTok) — per-seat prices.
+    # rank is Haiku now ($1.00 in / $5.00 out per MTok) — per-seat prices. B3:
+    # SEATS["rank"] DEFAULTS to the subscription lane, so pin an api-lane copy to
+    # assert the api invariant (shadow == charged). The subscription case (charged
+    # == 0.0) is the very next test.
+    from dataclasses import replace
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 0}
-    fields = llm.cost_fields(llm.SEATS["rank"], usage)
+    fields = llm.cost_fields(replace(llm.SEATS["rank"], lane="api"), usage)
     assert fields["lane"] == "api"
     assert fields["model"] == "claude-haiku-4-5"
     assert fields["usd_shadow"] == pytest.approx(1.00)
@@ -226,6 +240,10 @@ def test_rank_cost_sink_gains_lane_and_shadow_keys(monkeypatch):
         "usage": {"prompt_tokens": 1000, "completion_tokens": 200},
     }
     monkeypatch.setattr(ranking, "_post_chat", lambda key, prompt: good)
+    # B3: rank defaults to subscription; pin the api fall-over so this asserts
+    # the api-lane ledger row (charged == shadow). The subscription-lane row
+    # (charged == 0) is proven in test_b3_subscription_lane.py.
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     sink = []
     ranking.call_llm_validated("sk-x", "p", {1}, {}, [], cost_sink=sink)
     assert sink, "cost_sink recorded no attempt"

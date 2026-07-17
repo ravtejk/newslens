@@ -67,19 +67,46 @@ product's actual running state. If you want the daily discovery query later:
    in-app guard.
 3. Put the key in `.env` as `PERPLEXITY_API_KEY=...`
 
-### 2c. ANTHROPIC_API_KEY (required — rank/editor/script on Claude Haiku 4.5)
+### 2c. The Claude CLI — the subscription lane for rank/editor/script (B3)
 
-The B2 depth-architecture flip (2026-07-16) runs the ranking, editorial-tighten,
-and TTS-script seats on Claude Haiku 4.5 (the Claude API lane). A normal
-`newslens generate` cannot run without this key — the doctor validates it with a
-harmless read-only call and **FAILs the run** when it's missing.
+The B3 depth-architecture flip (2026-07-16) runs the ranking, editorial-tighten,
+and TTS-script seats (Claude Haiku 4.5) on the **`claude -p` subscription lane by
+default** — they ride your Claude subscription (a flat-rate seat), not the
+metered API. `usd_charged` for these seats is **$0.00**; the ledger still records
+`usd_shadow` (what the API would have cost) so caps and dashboards stay honest.
 
-1. Go to <https://console.anthropic.com/settings/keys> → **Create Key**
-   (a standard API key; no special permissions needed).
-2. **Set a hard monthly spend cap in the Anthropic console** — Settings →
-   Billing → set a monthly limit. Haiku 4.5 is $1.00/$5.00 per MTok in/out, so
-   these three seats cost pennies per run; the cap is a runaway guard.
-3. Put the key in `.env` as `ANTHROPIC_API_KEY=...`
+You grant this by **installing the CLI and logging in** — no key needed for the
+default path:
+
+1. **Install the Claude CLI.** On this machine it's already at
+   `~/.local/bin/claude` (the doctor confirms). If you ever need to reinstall,
+   follow the official install for your platform.
+2. **Log in once, interactively:** run `claude` (no flags) and complete the
+   subscription login. The subscription lane reuses that stored login; NewsLens
+   never handles your credentials.
+3. **PATH note:** the CLI is not on the non-login-shell PATH here. NewsLens
+   resolves it as `NEWSLENS_CLAUDE_BIN` → `PATH` → `~/.local/bin/claude`, so the
+   default just works. Set `NEWSLENS_CLAUDE_BIN=/full/path/to/claude` in `.env`
+   only if you install it elsewhere.
+4. **Verify:** `scripts/doctor` prints a "Subscription lane (claude -p)" section
+   — which binary resolved, the CLI version, and an "auth NOT probed" note. The
+   doctor does **not** spend your quota; to confirm you're logged in, either run
+   `claude` interactively once, or opt into the documented live probe with
+   `NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1` (it prints the recommended one-token
+   probe shape and reminds you it would spend quota — it still does not fire).
+
+### 2c-alt. ANTHROPIC_API_KEY (the API fall-over credential)
+
+`ANTHROPIC_API_KEY` is now needed only when a Haiku seat runs the **API lane**
+instead of the subscription default — i.e. you pin `NEWSLENS_LANE_<SEAT>=api`, or
+you arm `NEWSLENS_LANE_FALLBACK=api` (the principal-armed opt-in; the ship
+checkpoint asks whether to arm it). The API lane spends real money the
+subscription lane would not, so it stays opt-in.
+
+1. Go to <https://console.anthropic.com/settings/keys> → **Create Key**.
+2. **Set a hard monthly spend cap** — Settings → Billing.
+3. Put it in `.env` as `ANTHROPIC_API_KEY=...`. Leave blank if you only ever run
+   the subscription lane.
 
 ### 2d. Everything else in .env
 

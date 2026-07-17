@@ -44,6 +44,17 @@ BASE = "BASE-PROMPT"
 CORRECTED = BASE + "\n\n" + ranking.RETRY_CORRECTION
 
 
+@pytest.fixture(autouse=True)
+def _pin_rank_api_lane(monkeypatch):
+    """B3: rank DEFAULTS to the claude -p subscription lane (usd_charged 0.0).
+    These retry tests assert the per-attempt SPEND via _usd (usage_to_usd = the
+    shadow price), so they run on the api FALL-OVER lane where usd == usd_charged
+    == usd_shadow — the corrected-retry / transport-retry ledger mechanics they
+    pin are lane-agnostic. The subscription-lane cost_sink shape (legacy usd ==
+    usd_charged == 0.0) is proven in test_b3_subscription_lane.py."""
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
+
+
 def _wire(monkeypatch, script):
     """Monkeypatch _post_chat with a scripted attempt sequence; returns the
     list of prompts actually sent. A script entry is either a parsed-response

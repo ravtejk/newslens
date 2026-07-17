@@ -76,6 +76,17 @@ def _scrubbed_env(tmp_path):
         # bump caught at the gate). A hand-built env inherits nothing from
         # the conftest sandbox, so it opts into the redirection explicitly.
         "NEWSLENS_DATA_DIR": str(tmp_path / "doctor-data"),
+        # B3 pinhole fix (2026-07-17, QA): same class as the two above — this
+        # hand-built env inherited NEITHER the conftest's NEWSLENS_CLAUDE_BIN
+        # stub pin NOR a claude-free PATH, so the doctor child's
+        # check_subscription_lane resolved the REAL ~/.local/bin/claude via
+        # the default leg (HOME rides in this env) and SPAWNED it for
+        # --version — a real Claude Code execution from inside the suite,
+        # whose node grandchild the sitecustomize socket spy cannot see. A
+        # non-existent sentinel keeps the child honest: the fresh-clone
+        # pre-install experience on a machine without the CLI is a FAIL line
+        # naming the install fix, which is exactly what this test simulates.
+        "NEWSLENS_CLAUDE_BIN": str(tmp_path / "no-claude-here-qa-sentinel"),
     }
 
 

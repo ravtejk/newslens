@@ -1063,7 +1063,7 @@ def estimate_state_usd(prompt: str) -> float:
             + STATE_MAX_TOKENS / 1e6 * STATE_USD_OUT_PER_MTOK)
 
 
-def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float]:
+def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float, float]:
     """Real state-rewrite call on the state seat. B2 (gate ruling R1): this seat
     now rides the provider seam (llm.py) like every other. The seat stays
     gpt-4o/api this milestone (its model flip is a later one), so the request
@@ -1077,14 +1077,22 @@ def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float]:
     Fail-loud note (FIX-1 class): a NEWSLENS_LANE_STATE misconfig raises
     LaneUnavailable from check_lane here, which rewrite_state's broad except
     swallows into a `stale` outcome (prior state kept, disclosed) — the same
-    degrade-not-death asymmetry the analyst carries. B2's FIX-1 report rules on
-    whether this joins gate-kills-run."""
+    degrade-not-death asymmetry the analyst carries. B3's FIX-1 adds a
+    STAGE-boundary preflight (generate.run_memory_pass entry) so this config
+    error kills the run there; this unit-level degrade stays for TRANSIENT
+    failures.
+
+    R-B3a (B3): returns (raw, usd_charged, usd_shadow). usd_shadow is ALWAYS
+    recorded (API-priced from the seat), so when the state seat ever rides a
+    subscription lane (usd_charged == 0.0) the ledger still carries the shadow
+    spend — the state_rewrites row must not vanish because it was 'free'."""
     state_cfg = llm.resolve_seat("state")
     # D1 fail-loud gate: preflight the state seat's lane ONCE, before any
     # transport or retry (transport-seat == ledger-seat, so the ledger can never
     # attribute a lane the bytes did not ride).
     llm.check_lane(state_cfg)
-    total = 0.0
+    total = 0.0          # usd_charged (real money — 0.0 on a subscription lane)
+    total_shadow = 0.0   # usd_shadow (always API-priced — R-B3a: always recorded)
     last: Exception = RuntimeError("unreachable")
     import time
     for attempt in (1, 2):
@@ -1099,12 +1107,14 @@ def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float]:
             usage = raw.get("usage") or {}
             # B2: cost via the seam's shadow ledger (per-seat prices), not the
             # STATE_USD_* module constants — the state spend re-prices with the
-            # seat when it flips lanes/models.
-            total += llm.cost_fields(state_cfg, usage)["usd_charged"]
+            # seat when it flips lanes/models. B3: carry BOTH charged and shadow.
+            fields = llm.cost_fields(state_cfg, usage)
+            total += fields["usd_charged"]
+            total_shadow += fields["usd_shadow"]
             choice = raw["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise ValueError(f"truncated at {STATE_MAX_TOKENS} tokens")
-            return json.loads(choice["message"]["content"]), total
+            return json.loads(choice["message"]["content"]), total, total_shadow
         except Exception as exc:  # noqa: BLE001 — one retry for the whole class
             last = exc
             if attempt == 1:
@@ -1112,9 +1122,11 @@ def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float]:
     # BUG-32: both attempts may have billed real usage before failing (e.g. the
     # model answered and the response tripped the truncation guard) — carry the
     # accrued total on the raised exception so rewrite_state records the spend
-    # instead of silently discarding it (BUG-6 money-honesty class).
+    # instead of silently discarding it (BUG-6 money-honesty class). R-B3a: the
+    # shadow rides too, so a failed-but-paid subscription attempt still ledgers.
     try:
         last.usd_spent = total
+        last.usd_shadow = total_shadow
     except Exception:  # noqa: BLE001 — best-effort; never mask the real failure
         pass
     raise last
@@ -1141,7 +1153,11 @@ class StateRewriteResult:
     topic: str
     outcome: str              # written | stale | rejected | skipped-budget | failed
     detail: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0     # usd_charged (real money; 0.0 on a subscription lane)
+    # R-B3a: usd_shadow — always API-priced, always recorded, so a $0-charged
+    # subscription state rewrite still carries its shadow spend into the ledger.
+    # Defaults to cost_usd for the api lane / 2-tuple test chats (shadow==charged).
+    shadow_usd: float = 0.0
 
 
 def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
@@ -1182,16 +1198,22 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
                       " — prior state kept, stale-but-honest")
         return res
     try:
-        raw, cost = chat(openai_key, prompt)
+        # R-B3a: the default chat returns (raw, charged, shadow); older/injected
+        # 2-tuple chats (raw, cost) still work — shadow defaults to charged
+        # (api-lane invariant: usd_shadow == usd_charged).
+        raw, cost, *rest = chat(openai_key, prompt)
+        shadow = rest[0] if rest else cost
     except Exception as exc:  # noqa: BLE001 — degrade stale-but-honest, never raise
         # BUG-32 (money honesty, BUG-6 class): a failed call may still have paid
         # for one or more attempts — the raised exception carries the accrued
         # total; record it even though the call ultimately failed.
         res.cost_usd = float(getattr(exc, "usd_spent", 0.0) or 0.0)
+        res.shadow_usd = float(getattr(exc, "usd_shadow", res.cost_usd) or 0.0)
         res.outcome = "stale"
         res.detail = f"state call failed ({type(exc).__name__}: {exc}) — prior state kept"
         return res
     res.cost_usd = cost
+    res.shadow_usd = shadow
     # NL-73 D2 residual (money honesty, BUG-6/BUG-32 write-side twin): once
     # chat() has been PAID, NO post-call step may let the cost escape as an
     # exception. A raise between here and the INSERT (a bug in the diff/cite

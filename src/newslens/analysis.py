@@ -1737,6 +1737,14 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
                   "lane": llm.resolve_seat("analyst").lane,
                   "per_story": [], "total_usd": 0.0,
                   "derating": False, "warnings": []}
+        # FIX-1 (B3): stage-boundary lane preflight for the STANDALONE analyze
+        # path (`newslens analyze`). A config error (unregistered lane / missing
+        # subscription binary) KILLS the stage here, once, before the per-slot
+        # loop whose analyze_story broad except would otherwise swallow it into
+        # a disclosed $0 'failed' brief per slot. Transport-level per-slot
+        # degrade stays for TRANSIENT failures. When generate hosts this stage
+        # its own entry preflight fires first, so this is the standalone guard.
+        llm.check_lane(llm.resolve_seat("analyst"))
         for i, (slot, tier) in enumerate(zip(slots, tiers), start=1):
             if tier not in ("full", "medium"):
                 continue

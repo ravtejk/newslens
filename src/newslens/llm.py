@@ -12,6 +12,17 @@ rank/editor/script seats flip to claude-haiku-4-5 on the api lane. The
 state/memory seat joins the table (gate ruling R1). Writer/analyst/synthesis
 stay gpt-4o (their flips are B4/B6). See _anthropic_provider + the SEATS table.
 
+B3 UPDATE — the `claude -p` SUBSCRIPTION lane lands here (subscription-lane
+mandate, DECISIONS 2026-07-16): the "anthropic:subscription" provider (a thin
+subprocess, NOT the Agent SDK — the 3.9 floor holds) is registered, and the
+rank/editor/script DEFAULT lane flips api -> subscription (subscription is
+ALWAYS the priority; the api lane is the registered fall-over). The subprocess
+strips ANTHROPIC_API_KEY, disables all tools + the injection surface, runs in
+an empty scratch cwd, and reads its prompt on stdin (Rook's four conditions).
+Binary resolution is NEWSLENS_CLAUDE_BIN -> PATH -> ~/.local/bin/claude; a
+missing binary is LaneUnavailable at the gate. See _subscription_provider,
+resolve_claude_bin, and check_lane's subscription arm.
+
 B1 SCOPE — PURE REFACTOR (acceptance bar: existing suite green, unchanged):
   * B1 registered only the "openai" provider; every seat resolved to gpt-4o
     on the "api" lane — the current stack, expressed as config (the SEATS
@@ -53,10 +64,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 # The OpenAI chat endpoint (the seam's single copy — ranking.OPENAI_CHAT_URL
 # and analysis's inline literal both named this same URL before B1).
@@ -120,23 +134,37 @@ _GPT4O_API = dict(
     usd_per_mtok_out=GPT4O_USD_PER_MTOK_OUT,
 )
 
-# B2 (approved Option C): the three cheapest/most-validated seats flip to the
-# Claude API lane on Haiku 4.5. thinking/effort stay None — these are mechanical
+# B2 (approved Option C): the three cheapest/most-validated seats flipped to the
+# Claude lane on Haiku 4.5. thinking/effort stay None — these are mechanical
 # single-turn completions (rank clustering, editorial tightening, TTS-script
-# adaptation), not reasoning work, so the anthropic provider sends no thinking
-# param (dispatch B2). Rollback = flip these three rows back to **_GPT4O_API.
+# adaptation), not reasoning work, so no thinking param is sent (dispatch B2).
+# _HAIKU_API is retained as the REGISTERED ALTERNATIVE (the api fall-over lane
+# a seat reaches via NEWSLENS_LANE_<SEAT>=api or NEWSLENS_LANE_FALLBACK=api) and
+# the rollback target (flip a row back to **_HAIKU_API, or **_GPT4O_API).
 _HAIKU_API = dict(
     provider="anthropic", model="claude-haiku-4-5", lane="api",
     usd_per_mtok_in=HAIKU_USD_PER_MTOK_IN,
     usd_per_mtok_out=HAIKU_USD_PER_MTOK_OUT,
 )
 
+# B3 (subscription-lane mandate, DECISIONS 2026-07-16): the anthropic-provider
+# seats DEFAULT to the `claude -p` subscription lane — subscription is ALWAYS
+# the priority, the API lane is the registered fall-over (NEWSLENS_LANE_<SEAT>=
+# api, or the principal-armed NEWSLENS_LANE_FALLBACK=api). Same model + prices
+# as _HAIKU_API (shadow is API-priced regardless of lane); only the transport
+# and usd_charged change (usd_charged == 0.0 on the subscription lane).
+_HAIKU_SUB = dict(
+    provider="anthropic", model="claude-haiku-4-5", lane="subscription",
+    usd_per_mtok_in=HAIKU_USD_PER_MTOK_IN,
+    usd_per_mtok_out=HAIKU_USD_PER_MTOK_OUT,
+)
+
 SEATS: Dict[str, SeatConfig] = {
-    "rank":      SeatConfig("rank",      timeout_s=90,  **_HAIKU_API),
+    "rank":      SeatConfig("rank",      timeout_s=90,  **_HAIKU_SUB),
     "analyst":   SeatConfig("analyst",   timeout_s=90,  **_GPT4O_API),
     "writer":    SeatConfig("writer",    timeout_s=120, **_GPT4O_API),
-    "editor":    SeatConfig("editor",    timeout_s=120, **_HAIKU_API),
-    "script":    SeatConfig("script",    timeout_s=120, **_HAIKU_API),
+    "editor":    SeatConfig("editor",    timeout_s=120, **_HAIKU_SUB),
+    "script":    SeatConfig("script",    timeout_s=120, **_HAIKU_SUB),
     # synthesis has no live call site yet (B6 builds it); it is declared here
     # so the seat table is the whole roster the design named, not a subset.
     "synthesis": SeatConfig("synthesis", timeout_s=120, **_GPT4O_API),
@@ -431,12 +459,196 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Anthropic (Claude) SUBSCRIPTION lane — B3. A thin `claude -p` subprocess,
+# NOT the Python Agent SDK (ADR-0014 §5.2: the 3.9 floor + zero-SDK posture).
+# Rook's four red conditions are the milestone contract and are enforced HERE:
+#   (1) the child env STRIPS ANTHROPIC_API_KEY (else the CLI prefers the key and
+#       silently bills the API while the ledger says $0-subscription — D1 class);
+#   (2) ALL tools disabled + the injection surface (CLAUDE.md/skills/plugins/
+#       hooks/MCP/agents) off, cwd = a fresh empty scratch dir — the prompt is
+#       built from untrusted fetched news text;
+#   (3) fail-loud availability (a missing/unauthed binary is LaneUnavailable at
+#       the gate, never a silent wrong-lane call) — see check_lane;
+#   (4) usd_charged == 0.0 (subscription), usd_shadow always API-priced, caps
+#       bind on shadow — see cost_fields (unchanged; lane-driven).
+# Flags pinned READ-ONLY against the installed CLI's --help (v2.1.212):
+#   -p --output-format json     headless single JSON result (ADR-0014 spike #5)
+#   --model <model>             seat model
+#   --tools ""                  "" disables ALL built-in tools (Rook #2)
+#   --safe-mode                 no CLAUDE.md/skills/plugins/hooks/MCP/agents
+#   --strict-mcp-config         + no MCP servers (none are passed)
+#   --no-session-persistence    hermetic: no session files written to disk
+# ---------------------------------------------------------------------------
+
+# The known install location on the principal's machine (dispatch B2): the CLI
+# is NOT on the non-login-shell PATH, so resolution falls back to this default
+# after the NEWSLENS_CLAUDE_BIN override and PATH.
+CLAUDE_BIN_DEFAULT = os.path.expanduser("~/.local/bin/claude")
+
+# The base argv (everything but --model/--effort/--append-system-prompt). A
+# tuple so it is never mutated in place.
+_SUBSCRIPTION_BASE_FLAGS: Tuple[str, ...] = (
+    "-p", "--output-format", "json",
+    "--tools", "",                 # "" == disable ALL built-in tools (Rook #2)
+    "--safe-mode",                 # no CLAUDE.md/skills/plugins/hooks/MCP/agents
+    "--strict-mcp-config",         # + no MCP servers (none passed on argv)
+    "--no-session-persistence",    # hermetic: nothing written outside the sandbox
+)
+
+# The ONLY env vars the child inherits — an ALLOWLIST (Rook: allowlist, not
+# blocklist). ANTHROPIC_API_KEY is deliberately ABSENT and popped defensively.
+# HOME lets the CLI find its own subscription auth (~/.claude / keychain); the
+# locale/PATH vars keep it well-behaved. No NEWSLENS_*, no OPENAI_API_KEY, no
+# proxy vars ride into the child.
+_SUBSCRIPTION_ENV_ALLOW: Tuple[str, ...] = (
+    "HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "TMPDIR",
+)
+
+
+def resolve_claude_bin(env: Optional[Dict[str, str]] = None) -> Tuple[Optional[str], str]:
+    """Resolve the `claude` CLI for the subscription lane. Precedence:
+    NEWSLENS_CLAUDE_BIN (explicit override) -> PATH (shutil.which) -> the known
+    default (~/.local/bin/claude). Returns (path, source) with source in
+    {"env","path","default"} on success, or (None, reason) if nothing resolves
+    to an executable file. Pure filesystem resolution — NO spawn.
+
+    An explicit NEWSLENS_CLAUDE_BIN that is NOT an executable file fails loud
+    (returns None) rather than silently falling through to PATH — the operator
+    pointed at a specific binary, and a wrong path must be named, not skipped.
+    (This is also what keeps the test suite from ever reaching the real binary:
+    the conftest points NEWSLENS_CLAUDE_BIN at a non-existent sentinel.)"""
+    env = os.environ if env is None else env
+    override = (env.get("NEWSLENS_CLAUDE_BIN") or "").strip()
+    if override:
+        if os.path.isfile(override) and os.access(override, os.X_OK):
+            return override, "env"
+        return None, (f"NEWSLENS_CLAUDE_BIN={override!r} is not an executable "
+                      "file — fix the path or unset it to fall back to PATH")
+    found = shutil.which("claude", path=env.get("PATH"))
+    if found:
+        return found, "path"
+    if os.path.isfile(CLAUDE_BIN_DEFAULT) and os.access(CLAUDE_BIN_DEFAULT, os.X_OK):
+        return CLAUDE_BIN_DEFAULT, "default"
+    return None, (
+        "the `claude` CLI could not be found — install it, then set "
+        "NEWSLENS_CLAUDE_BIN, add it to PATH, or place it at "
+        f"{CLAUDE_BIN_DEFAULT}"
+    )
+
+
+def _subscription_env(env: Dict[str, str]) -> Dict[str, str]:
+    """The child process env — an allowlist with ANTHROPIC_API_KEY guaranteed
+    absent (Rook #1). Defensive pop in case a future allowlist entry aliases it."""
+    child = {k: env[k] for k in _SUBSCRIPTION_ENV_ALLOW if k in env}
+    child.pop("ANTHROPIC_API_KEY", None)
+    return child
+
+
+def _subscription_usage(payload: Dict, prompt: str,
+                        content: str) -> Tuple[Usage, bool]:
+    """Normalise the CLI's usage block. Returns (Usage, estimated). If the CLI
+    reported token counts we LEDGER them (input/output/cache_read); if it did
+    NOT, we ESTIMATE from char length and LABEL the estimate (mandate: never
+    fake precision — the shadow row carries usd_shadow_estimated=True)."""
+    u = payload.get("usage")
+    if isinstance(u, dict) and (u.get("input_tokens") or u.get("output_tokens")):
+        return Usage(
+            prompt_tokens=u.get("input_tokens") or 0,
+            completion_tokens=u.get("output_tokens") or 0,
+            cache_read_tokens=u.get("cache_read_input_tokens") or 0,
+            cache_creation_tokens=u.get("cache_creation_input_tokens") or 0,
+        ), False
+    # ~3.5 chars/token, the same conservative ratio the cost estimators use.
+    return Usage(prompt_tokens=int(len(prompt) / 3.5),
+                 completion_tokens=int(len(content) / 3.5)), True
+
+
+def _subscription_provider(req: LaneRequest) -> LaneResponse:
+    """Claude subscription lane: a `claude -p --output-format json` subprocess.
+    The prompt rides on STDIN (immune to ARG_MAX at 24k-char material budgets);
+    cwd is a fresh empty scratch dir removed after the call; the env is the
+    stripped allowlist. is_error / non-zero exit / non-JSON stdout are
+    transport-shaped (RuntimeError -> the caller retries the ORIGINAL bytes
+    once, same law as a 5xx); a timeout SIGKILLs the child (subprocess.run) and
+    surfaces as TimeoutError (also transport-shaped). LaneRequest.api_key /
+    .url (the openai offline-test seam) are IGNORED — this lane owns its own
+    auth (the logged-in CLI) and never makes an HTTP call of its own."""
+    cfg = req.cfg
+    bin_path, source = resolve_claude_bin()
+    if bin_path is None:
+        # Belt-and-suspenders: check_lane already resolved the binary at the
+        # gate, so this only fires on a between-gate-and-call disappearance.
+        raise LaneUnavailable(
+            f"seat '{cfg.seat}' is on the claude -p subscription lane but "
+            f"{source}"
+        )
+    args = [bin_path, *_SUBSCRIPTION_BASE_FLAGS, "--model", cfg.model]
+    if cfg.effort:                              # None on the Haiku seats -> omitted
+        args += ["--effort", cfg.effort]
+    if req.json_mode:                           # the same JSON nudge the api lane uses
+        args += ["--append-system-prompt", _ANTHROPIC_JSON_SYSTEM]
+    scratch = tempfile.mkdtemp(prefix="newslens-claude-lane-")
+    try:
+        proc = subprocess.run(
+            args, input=req.prompt, cwd=scratch,
+            env=_subscription_env(dict(os.environ)),
+            capture_output=True, text=True, timeout=cfg.timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run has already killed the child; surface transport-shaped.
+        raise TimeoutError(
+            f"claude -p ({cfg.seat}/{cfg.model}) exceeded {cfg.timeout_s}s "
+            "— the child was killed"
+        ) from exc
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"claude -p ({cfg.seat}) exited {proc.returncode}: "
+            f"{(proc.stderr or '').strip()[:200]}"
+        )
+    try:
+        payload = json.loads(proc.stdout)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(
+            f"claude -p ({cfg.seat}) returned non-JSON stdout "
+            f"({proc.stdout[:120]!r})"
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("is_error"):
+        raise RuntimeError(
+            f"claude -p ({cfg.seat}) reported an error result: "
+            f"{str(payload.get('result') if isinstance(payload, dict) else payload)[:200]}"
+        )
+    content = payload.get("result") or ""
+    usage, estimated = _subscription_usage(payload, req.prompt, content)
+    # Forensics: the CLI's own fields (total_cost_usd is the API-equivalent, kept
+    # as a CROSS-CHECK only — usd_charged is 0.0 on this lane, set by cost_fields
+    # off cfg.lane, never off this number). session_id aids log correlation.
+    native = {
+        "_claude_cli": {
+            "session_id": payload.get("session_id"),
+            "total_cost_usd": payload.get("total_cost_usd"),
+            "subtype": payload.get("subtype"),
+            "bin_source": source,
+            "token_source": "estimated" if estimated else "reported",
+        }
+    }
+    raw = _openai_shaped(usage, content, "stop", native)
+    if estimated:
+        # Label the shadow so a ledger reader never mistakes an estimated
+        # subscription-lane shadow for a metered one (cost_fields propagates it).
+        raw["usage"]["_token_source"] = "estimated"
+    return LaneResponse(content=content, usage=usage, finish_reason="stop", raw=raw)
+
+
 # Provider registry. Keyed by provider-lane so B2 registers "anthropic:api"
 # and B3 registers "anthropic:subscription" without touching this dispatch.
 # openai is always the api lane, so its key is just "openai".
 _PROVIDERS: Dict[str, Provider] = {
     "openai": _openai_provider,
-    "anthropic:api": _anthropic_provider,      # B2
+    "anthropic:api": _anthropic_provider,               # B2
+    "anthropic:subscription": _subscription_provider,   # B3
 }
 
 
@@ -459,11 +671,12 @@ def _select_provider(cfg: SeatConfig) -> Provider:
         default = SEATS[cfg.seat]
         raise LaneUnavailable(
             f"seat '{cfg.seat}' resolves to provider='{cfg.provider}' "
-            f"lane='{cfg.lane}', which has no registered implementation in "
-            f"this milestone. Fix: unset NEWSLENS_LANE / NEWSLENS_LANE_"
+            f"lane='{cfg.lane}', which has no registered implementation. "
+            f"Registered lanes: openai/api, anthropic/api, anthropic/"
+            f"subscription. Fix: unset NEWSLENS_LANE / NEWSLENS_LANE_"
             f"{cfg.seat.upper()} to use the seat's default "
-            f"({default.provider}/{default.model} on the api lane) — the "
-            f"claude -p subscription lane lands in B3."
+            f"({default.provider}/{default.model} on the {default.lane} lane) "
+            f"— note openai runs ONLY on the api lane."
         )
     return provider
 
@@ -474,14 +687,78 @@ def chat(req: LaneRequest) -> LaneResponse:
     return _select_provider(req.cfg)(req)
 
 
+def effective_seat(seat: str,
+                   env: Optional[Dict[str, str]] = None) -> Tuple[SeatConfig, Optional[str]]:
+    """The transport-ready seat config after the principal-armed SINGLE FALL
+    (B3-D2). Resolves the seat; if its lane is unavailable AT THE GATE
+    (check_lane class — an unregistered lane, or a subscription seat whose
+    `claude` binary won't resolve) AND NEWSLENS_LANE_FALLBACK=api is armed AND
+    the seat's api lane is actually available, returns (api_cfg, reason) — ONE
+    labeled fall. Otherwise raises LaneUnavailable (fail-loud preserved).
+
+    `reason` is a short machine tag for the ledger label 'api(fallback:<reason>)'
+    and the disclosed run-log warning. Rules (design transcript §5.1 failure
+    semantics): never silent; never a fall that isn't armed; never
+    api->subscription; and if BOTH the subscription lane AND the api lane are
+    dead, dies loud on the ORIGINAL (subscription) error. The fall is a
+    check_lane-class (availability/config) event only — a transport error
+    mid-call is NOT a fall, it retries the original bytes like any 5xx."""
+    env = os.environ if env is None else env
+    cfg = resolve_seat(seat, env)
+    try:
+        check_lane(cfg)
+        return cfg, None
+    except LaneUnavailable as sub_exc:
+        # Fall ONLY a GENUINE subscription lane — one whose subscription provider
+        # is registered but merely UNAVAILABLE (anthropic's claude -p with a
+        # missing/unresolvable binary) — and only when the principal armed it. An
+        # openai seat forced to 'subscription' (e.g. a global NEWSLENS_LANE=
+        # subscription hitting the writer/analyst/state seats) has NO subscription
+        # provider at all: that is a config error that must DIE LOUD, never be
+        # silently rescued onto openai:api (which would mask the misconfig and
+        # spend on openai while the operator believes they set subscription).
+        sub_registered = f"{cfg.provider}:subscription" in _PROVIDERS
+        if cfg.lane == "subscription" and sub_registered and fallback_armed(env):
+            api_cfg = replace(cfg, lane="api")
+            try:
+                check_lane(api_cfg)
+            except LaneUnavailable:
+                raise sub_exc      # both lanes dead -> die loud on the original
+            return api_cfg, "subscription_unavailable"
+        raise
+
+
+def fallback_lane_label(reason: Optional[str], lane: str) -> str:
+    """The ledger's lane label. A normal row is just the lane; a fallen row is
+    'api(fallback:<reason>)' so the durable record shows the fall provenance —
+    never a bare 'api' that hides real API spend the subscription lane avoided."""
+    return lane if not reason else f"{lane}(fallback:{reason})"
+
+
 def check_lane(cfg: SeatConfig) -> None:
     """Preflight: raise LaneUnavailable (fail-loud, named fix) if the seat's
     resolved lane has no registered provider. A caller runs this ONCE per step
     BEFORE any transport or retry, so a config error never sleeps, never
     retries, and — the D1 close — never lets one seat's transport run while a
     different seat's lane is what the ledger records: the preflighted seat is
-    the seat the ledger attributes and the lane the bytes ride."""
+    the seat the ledger attributes and the lane the bytes ride.
+
+    B3: for a subscription-lane seat the binary must ALSO resolve here (pure
+    filesystem check, no spawn) — a missing/misconfigured CLI is a config
+    error, not a transient one, so it dies at the gate naming the install fix
+    rather than being retried into a GenerateError inside the transport loop.
+    This is what makes the FIX-1 stage-boundary preflight (analyst/state) and
+    the per-step gate consistent: 'lane unavailable' for the subscription lane
+    means BOTH the provider is registered AND its binary is present."""
     _select_provider(cfg)
+    if cfg.lane == "subscription":
+        bin_path, reason = resolve_claude_bin()
+        if bin_path is None:
+            raise LaneUnavailable(
+                f"seat '{cfg.seat}' is on the claude -p subscription lane but "
+                f"{reason}. Or flip this seat to the api fall-over lane: set "
+                f"NEWSLENS_LANE_{cfg.seat.upper()}=api (needs ANTHROPIC_API_KEY)."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +801,8 @@ def fallback_armed(env: Optional[Dict[str, str]] = None) -> bool:
 # Cost attribution — the shadow ledger keys (JSON, additive, no migration)
 # ---------------------------------------------------------------------------
 
-def cost_fields(cfg: SeatConfig, usage: Optional[Dict]) -> Dict:
+def cost_fields(cfg: SeatConfig, usage: Optional[Dict], *,
+                fallback_reason: Optional[str] = None) -> Dict:
     """The lane/shadow ledger keys for one billed attempt, added ALONGSIDE the
     existing `{step, attempt, prompt_tokens, completion_tokens, usd}` entry
     (the legacy `usd` stays == usd_charged for back-compat).
@@ -549,12 +827,26 @@ def cost_fields(cfg: SeatConfig, usage: Optional[Dict]) -> Dict:
     shadow = round(
         pt / 1e6 * cfg.usd_per_mtok_in + ct / 1e6 * cfg.usd_per_mtok_out, 6
     )
+    # usd_charged == usd_shadow on the api lane; 0.0 on the subscription lane
+    # (flat-rate — no per-call bill). Budget caps bind on usd_shadow in BOTH
+    # lanes (Onna's law), so callers accumulate shadow, not charged.
     charged = shadow if cfg.lane == "api" else 0.0
-    return {
+    fields = {
         "model": cfg.model,
-        "lane": cfg.lane,
+        # B3-D2: a fallen row is labeled 'api(fallback:<reason>)' so the durable
+        # ledger shows the fall provenance (never a bare 'api' hiding real API
+        # spend the subscription lane avoided). fallback_reason is None on every
+        # normal row, so no existing ledger value moves.
+        "lane": fallback_lane_label(fallback_reason, cfg.lane),
         "cache_read_tokens": cached or 0,
         "cache_creation_tokens": creation,
         "usd_shadow": shadow,
         "usd_charged": round(charged, 6),
     }
+    # B3: the subscription provider LABELS a shadow computed from estimated
+    # (not CLI-reported) token counts — carry the label into the ledger so a
+    # reader never mistakes an estimate for a metered figure (never fake
+    # precision). Absent on every metered row.
+    if usage.get("_token_source") == "estimated":
+        fields["usd_shadow_estimated"] = True
+    return fields

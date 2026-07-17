@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -53,6 +54,11 @@ PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions"
 OPENAI_TIMEOUT_S = 15
 ANTHROPIC_TIMEOUT_S = 15
 PERPLEXITY_TIMEOUT_S = 20
+# B3: the `claude` CLI version floor for headless effort control (ADR-0014
+# spike #5 — /effort rides v2.1.205+). Below it, the subscription lane still
+# runs (rank/editor/script send no effort), but effort-bearing seats can't map.
+CLAUDE_VERSION_FLOOR = (2, 1, 205)
+CLAUDE_VERSION_TIMEOUT_S = 10
 FEED_TIMEOUT_S = 15  # WaPo's feeds measured 8-10s in the M2 sweep — headroom
 USER_AGENT = "NewsLens-doctor/0.1 (personal prototype; one-user health check)"
 
@@ -776,6 +782,104 @@ def check_tts() -> List[Result]:
 # Cost
 # ---------------------------------------------------------------------------
 
+def _parse_claude_version(text: str) -> Tuple[int, ...]:
+    """Extract the (major, minor, patch) tuple from `claude --version` output
+    (e.g. '2.1.212 (Claude Code)'). Returns () if unparseable."""
+    import re
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(g) for g in m.groups()) if m else ()
+
+
+def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
+    """The `claude -p` subscription lane (B3): binary resolution + version, for
+    the seats that resolve to the subscription lane under the current config
+    (rank/editor/script by default). subscription is ALWAYS the priority; the
+    api lane is the registered fall-over.
+
+    Resolution order is NEWSLENS_CLAUDE_BIN -> PATH -> ~/.local/bin/claude — the
+    doctor reports WHICH resolved. A missing binary is a FAIL naming the install
+    fix (those seats can't run their default lane). `claude --version` is
+    recorded (read-only: no prompt, no spend) and checked against the effort
+    floor. The AUTH state is NOT probed by default: a real `claude -p` ping
+    SPENDS the principal's subscription quota, so it is opt-in only (see the
+    NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE design note below), never auto-fired."""
+    sub_seats = sorted(
+        name for name in llm.SEATS
+        if llm.resolve_seat(name, env).lane == "subscription"
+    )
+    if not sub_seats:
+        return [Result(INFO, "no seat resolves to the claude -p subscription "
+                             "lane under the current config — nothing to check "
+                             "(the api lane covers the anthropic seats)")]
+    seats_txt = ", ".join(sub_seats)
+    bin_path, source = llm.resolve_claude_bin(env)
+    if bin_path is None:
+        return [Result(
+            FAIL,
+            f"claude CLI NOT found — the {seats_txt} seat(s) default to the "
+            f"subscription lane and cannot run: {source}. Install the CLI and "
+            "run `claude` once to log in (SETUP.md), or flip these seats to the "
+            "api fall-over (NEWSLENS_LANE_<SEAT>=api, needs ANTHROPIC_API_KEY)",
+        )]
+    out: List[Result] = [Result(
+        INFO,
+        f"claude CLI resolved via {source}: {bin_path} — powers the {seats_txt} "
+        "seat(s) on the subscription lane",
+    )]
+    # Record the version (read-only; no prompt, no spend). A stripped-ish env is
+    # unnecessary for --version, but a tight timeout + captured failure path is
+    # (ENGINEERING: every external call has a timeout + a visible failure path).
+    try:
+        proc = subprocess.run(
+            [bin_path, "--version"], capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,        # B3-D4: never inherit/block on the doctor's stdin
+            timeout=CLAUDE_VERSION_TIMEOUT_S,
+        )
+        ver_txt = (proc.stdout or proc.stderr or "").strip()
+        ver = _parse_claude_version(ver_txt)
+        if not ver:
+            out.append(Result(WARN, f"claude --version returned unparseable "
+                                    f"output ({ver_txt[:60]!r}) — CLI present "
+                                    "but version unknown"))
+        elif ver < CLAUDE_VERSION_FLOOR:
+            floor = ".".join(str(n) for n in CLAUDE_VERSION_FLOOR)
+            out.append(Result(WARN, f"claude {ver_txt} is below the v{floor} "
+                                    "effort-control floor — the subscription "
+                                    "lane runs, but effort-bearing seats can't "
+                                    "map effort (upgrade the CLI)"))
+        else:
+            out.append(Result(PASS, f"claude {ver_txt} (>= effort floor "
+                                    f"v{'.'.join(str(n) for n in CLAUDE_VERSION_FLOOR)})"))
+    except Exception as exc:  # timeout / OSError — CLI present but not runnable
+        out.append(Result(FAIL, f"claude --version failed ({type(exc).__name__}: "
+                                f"{exc}) — the CLI at {bin_path} is present but "
+                                "not runnable; re-install or fix permissions"))
+    # The OPTIONAL live auth probe — DESIGNED, not fired. A real `claude -p`
+    # single-token ping is the only way to prove the CLI is LOGGED IN (the
+    # binary + version pass without auth), but it SPENDS subscription quota, so
+    # it is opt-in and skippable, never part of the default run.
+    if (env.get("NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE") or "").strip() == "1":
+        out.append(Result(
+            WARN,
+            "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1 requested a LIVE probe — this "
+            "would spend subscription quota. The recommended shape: one "
+            "`claude -p --output-format json --model claude-haiku-4-5` with a "
+            "1-token prompt ('ok') on stdin, is_error=false => authed. NOT "
+            "fired here — the live smoke is the principal's to run manually "
+            "(SETUP.md), so the default doctor never spends. Unset the flag.",
+        ))
+    else:
+        out.append(Result(
+            INFO,
+            "auth NOT probed (a live `claude -p` ping spends subscription "
+            "quota) — the binary+version pass above does not prove the CLI is "
+            "logged in; run `claude` once interactively to confirm login "
+            "(SETUP.md). Opt into the probe design with "
+            "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1",
+        ))
+    return out
+
+
 def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     """The provider-seam lane map: one line per seat showing the resolved
     provider/model/lane + per-seat price, plus fallback state. B2: rank/editor/
@@ -797,20 +901,24 @@ def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     if llm.fallback_armed(env):
         out.append(Result(
             WARN,
-            "NEWSLENS_LANE_FALLBACK=api ARMED — an unavailable lane will fall "
-            "to the api lane once a second lane exists (B2/B3); labeled "
-            "lane=api(fallback:…) in the ledger",
+            "NEWSLENS_LANE_FALLBACK=api ARMED — a subscription-lane seat that "
+            "goes unavailable (missing/unauthed CLI, quota) falls ONCE to the "
+            "api lane, labeled lane=api(fallback:…) in the ledger. This spends "
+            "real API money the subscription lane would not — armed by you",
         ))
     else:
         out.append(Result(
             INFO,
-            "fallback unarmed (fail-loud default) — set NEWSLENS_LANE_FALLBACK"
-            "=api to opt in once a second lane exists",
+            "fallback unarmed (fail-loud default) — a subscription-lane seat "
+            "that goes unavailable KILLS the run naming the fix, rather than "
+            "silently spending API money. Set NEWSLENS_LANE_FALLBACK=api to opt "
+            "in (the ship checkpoint asks whether to arm it)",
         ))
     out.append(Result(
         INFO,
-        "the openai api lane and the Claude (anthropic) api lane are both "
-        "implemented (B2); the claude -p subscription lane lands in B3",
+        "registered lanes: openai/api, anthropic/api, anthropic/subscription "
+        "(the claude -p lane, B3) — anthropic seats DEFAULT to subscription, "
+        "the api lane is their registered fall-over",
     ))
     return out
 
@@ -861,6 +969,7 @@ def run_doctor() -> int:
     sections.append(("Sources & interests", check_sources()))
     sections.append(("TTS engine", check_tts()))
     sections.append(("LLM lanes", check_llm_lanes(env)))
+    sections.append(("Subscription lane (claude -p)", check_subscription_lane(env)))
     sections.append(("Cost", cost_estimate()))
 
     tally = {PASS: 0, FAIL: 0, WARN: 0, INFO: 0}

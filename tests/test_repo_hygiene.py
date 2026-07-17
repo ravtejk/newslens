@@ -50,8 +50,13 @@ def test_env_example_has_exactly_the_spec_vars_with_no_secret_values():
         # B2 (rank/editor/script on Haiku 4.5). Key-shaped, so it stays blank
         # here (agents maintain names only; the principal fills it).
         "ANTHROPIC_API_KEY": "",
-        # B1 lane selectors — optional; empty = the gpt-4o api default. Not
-        # secret-shaped. Selecting an unimplemented lane fails loud (B1).
+        # B3: the subscription lane's `claude` binary resolution override —
+        # optional (empty = NEWSLENS_CLAUDE_BIN -> PATH -> ~/.local/bin/claude).
+        # Not secret-shaped; a filesystem path, not a credential.
+        "NEWSLENS_CLAUDE_BIN": "",
+        # Lane selectors — optional; empty = the default seat map (rank/editor/
+        # script on the subscription lane since B3, gpt-4o/api for the rest). Not
+        # secret-shaped. Selecting an unavailable lane fails loud (naming the fix).
         "NEWSLENS_LANE": "",
         "NEWSLENS_LANE_FALLBACK": "",
         # Non-secret guard defaults, exactly as spec §D documents them:

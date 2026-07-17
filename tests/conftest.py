@@ -26,6 +26,53 @@ from newslens import db, paths
 
 PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
 
+# B3 subscription-lane safety: a DEFAULT stub `claude` shim, created ONCE and
+# pointed at by NEWSLENS_CLAUDE_BIN in sandbox_paths. It emits a canned
+# `claude -p --output-format json` success envelope and NEVER touches the
+# network or the real CLI — so (a) llm.check_lane's binary-resolution gate
+# passes for the subscription-default seats (rank/editor/script) exactly as the
+# api lane's key check passed in B2, and (b) if a test ever actually reaches the
+# subscription transport, it hits THIS shim, never the real `claude` installed
+# at ~/.local/bin/claude (which would make a live, billable call). Tests that
+# need a specific subprocess behaviour (env-strip proof, is_error, timeout,
+# recorded argv) override NEWSLENS_CLAUDE_BIN with their own shim; tests that
+# assert api-lane transport pin NEWSLENS_LANE_<SEAT>=api.
+_STUB_CLAUDE_SRC = (
+    "#!/usr/bin/env python3\n"
+    "import sys, json\n"
+    "# --version answers IMMEDIATELY, without touching stdin (B3 QA): the\n"
+    "# doctor's check_subscription_lane spawns `<bin> --version` with NO\n"
+    "# stdin pipe, so a stub that read stdin first would inherit pytest's\n"
+    "# fd0 — under a terminal run that read BLOCKS until the doctor's 10s\n"
+    "# timeout, flipping the section to FAIL and making suite results depend\n"
+    "# on how pytest was invoked. Version string mirrors the ADR-0015 pin.\n"
+    "if '--version' in sys.argv[1:]:\n"
+    "    print('2.1.212 (NewsLens QA stub, not the real CLI)')\n"
+    "    sys.exit(0)\n"
+    "sys.stdin.read()\n"
+    "print(json.dumps({'type': 'result', 'subtype': 'success', "
+    "'is_error': False, 'result': '{}', 'session_id': 'stub-session', "
+    "'total_cost_usd': 0.0, 'usage': {'input_tokens': 1, 'output_tokens': 1, "
+    "'cache_read_input_tokens': 0}}))\n"
+)
+
+
+def _default_stub_claude() -> Path:
+    """Create the canned-success stub `claude` shim once, in a stable temp dir
+    (not the repo, not real state), and return its path."""
+    import stat as _stat
+    import tempfile
+    d = Path(tempfile.gettempdir()) / "newslens-qa-stub-claude"
+    d.mkdir(exist_ok=True)
+    shim = d / "claude"
+    if not shim.exists() or shim.read_text() != _STUB_CLAUDE_SRC:
+        shim.write_text(_STUB_CLAUDE_SRC)
+        shim.chmod(shim.stat().st_mode | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
+    return shim
+
+
+_STUB_CLAUDE_BIN = _default_stub_claude()
+
 
 def anthropic_envelope(content, input_tokens: int = 1000, output_tokens: int = 200,
                        stop_reason: str = "end_turn", cache_creation: int = 0,
@@ -139,6 +186,17 @@ SCRUBBED_ENV_VARS = [
     "NEWSLENS_LANE_SCRIPT",
     "NEWSLENS_LANE_SYNTHESIS",
     "NEWSLENS_LANE_STATE",
+    # B3: the subscription lane's binary override. Scrubbed here, then pointed
+    # by sandbox_paths (below) at the canned-success STUB shim above — so no
+    # test can ever resolve, let alone SPAWN, the real `claude` on this machine
+    # (~/.local/bin/claude exists here and is the DEFAULT resolution leg). The
+    # non-existent-sentinel alternative was rejected (ADR-0015: it reddened the
+    # ~680 assertions that only need check_lane to pass); tests that need a
+    # specific subprocess behaviour override this with their own shim. NOTE:
+    # this env pin is process-inherited, NOT structural — a child spawned with
+    # a HAND-BUILT env must pin this var itself or resolution falls through to
+    # the real binary (the test_preinstall_doctor pinhole, fixed 2026-07-17).
+    "NEWSLENS_CLAUDE_BIN",
     "http_proxy",
     "https_proxy",
     "all_proxy",
@@ -222,6 +280,13 @@ def sandbox_paths(tmp_path, monkeypatch, scrub_env):
     # never read or write the real one.
     monkeypatch.setitem(vars(paths), "MEMORY_FILE", tmp_path / "memory.md")
     monkeypatch.setenv("NEWSLENS_MEMORY_FILE", str(tmp_path / "memory.md"))
+    # B3 subprocess safety: point the subscription lane's binary resolution at
+    # the DEFAULT canned-success stub shim (above), so the subscription-default
+    # seats resolve their lane at the gate WITHOUT ever reaching the real
+    # `claude` on this machine (a live, billable call — the thing the suite must
+    # never do). A test that exercises the subprocess overrides this with its
+    # own shim; a test asserting api-lane transport pins NEWSLENS_LANE_<SEAT>=api.
+    monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(_STUB_CLAUDE_BIN))
     return tmp_path
 
 

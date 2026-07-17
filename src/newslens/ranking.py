@@ -349,6 +349,29 @@ def usage_to_usd(usage: Dict) -> float:
     ) * USD_PER_MTOK_OUT
 
 
+# B3-D5 (the flap window): the rank seat is resolved through effective_seat
+# ONCE per rank operation and threaded to every reader — the cost_sink ledger,
+# _post_chat's TRANSPORT, the run-log disclosure, and the persisted token_cost —
+# via this request-scoped global (generate._ACTIVE_SEAT_CFG's pattern). Post-D2
+# effective_seat is filesystem-dependent (it resolves the `claude` binary), so
+# re-resolving per reader let a binary that vanished mid-run (a CLI reinstall/
+# upgrade) FORK the transport (fell to the metered api wire) from the ledger
+# (still says subscription/usd_charged=0.0) — the D1 lie via a new door. One
+# resolution closes the window: every reader rides the same (cfg, reason), so a
+# flap either dies loud or is labeled truthfully, never silently. Set by the
+# OUTERMOST of _run_rank_body / call_llm_validated; nested calls reuse it.
+_ACTIVE_RANK: Optional[Tuple["llm.SeatConfig", Optional[str]]] = None
+
+
+def _effective_rank() -> Tuple["llm.SeatConfig", Optional[str]]:
+    """The active (cfg, fallback_reason) for the current rank operation. Returns
+    the request-scoped resolution if one is set, else resolves fresh (a direct
+    _post_chat call outside call_llm_validated — the signature-test path)."""
+    if _ACTIVE_RANK is not None:
+        return _ACTIVE_RANK
+    return llm.effective_seat("rank")
+
+
 def _post_chat(key: str, prompt: str) -> Dict:
     # Transport delegates to the provider seam (llm.py). B2: the rank seat is now
     # claude-haiku-4-5 on the Claude API lane (llm.SEATS["rank"]), timeout 90s,
@@ -360,9 +383,13 @@ def _post_chat(key: str, prompt: str) -> Dict:
     # gpt-4o rode). The anthropic lane reads its own endpoint + credential, so the
     # url/key passed here are the (harmless) openai offline-test seam values. This
     # function keeps its signature: it is the suite's monkeypatch target.
+    # B3-D5: transport rides the SAME resolution the gate/ledger used (via
+    # _ACTIVE_RANK) — never a fresh effective_seat that a mid-run binary flap
+    # could resolve to a different lane than the ledger records.
+    _cfg, _ = _effective_rank()
     return llm.chat(
         llm.LaneRequest(
-            cfg=llm.resolve_seat("rank"),
+            cfg=_cfg,
             prompt=prompt,
             temperature=0,
             max_tokens=MAX_COMPLETION_TOKENS,
@@ -607,6 +634,36 @@ def call_llm_validated(
     dormant_topics: Optional[List[str]] = None,
     cost_sink: Optional[List[Dict]] = None,
 ) -> Tuple[List[Dict], Dict]:
+    """B3-D5: the request-scoped resolution boundary. Resolve the rank seat
+    through effective_seat EXACTLY ONCE for this call (if an outer scope —
+    _run_rank_body — has not already) and publish it on _ACTIVE_RANK so the
+    transport (_post_chat) and the cost_sink ledger ride the SAME (cfg, reason).
+    A `claude` binary that flaps mid-call can no longer fork the metered api
+    transport from a subscription/usd_charged=0.0 ledger row. The body is
+    _call_llm_validated; this thin wrapper owns the scope + its teardown."""
+    global _ACTIVE_RANK
+    _own_scope = _ACTIVE_RANK is None
+    if _own_scope:
+        _ACTIVE_RANK = llm.effective_seat("rank")
+    try:
+        return _call_llm_validated(
+            key, prompt, known_ids, tag_levels, memory_topics,
+            repairs=repairs, dormant_topics=dormant_topics, cost_sink=cost_sink)
+    finally:
+        if _own_scope:
+            _ACTIVE_RANK = None
+
+
+def _call_llm_validated(
+    key: str,
+    prompt: str,
+    known_ids: set,
+    tag_levels: Dict[str, str],
+    memory_topics: List[str],
+    repairs: Optional[Dict] = None,
+    dormant_topics: Optional[List[str]] = None,
+    cost_sink: Optional[List[Dict]] = None,
+) -> Tuple[List[Dict], Dict]:
     """One call + ONE retry total, then a visible RankingError.
 
     Between parse and validation, repair_duplicate_ids fixes (and counts) the
@@ -630,13 +687,14 @@ def call_llm_validated(
     failure the retry prompt carries RETRY_CORRECTION so attempt 2 is not a
     byte-identical re-POST (run 28 fix — see the constant). Transport retries
     (5xx/429/network) re-send the original prompt unchanged."""
-    # B1 fail-loud gate (D1 close): preflight the rank seat's lane ONCE before
-    # any transport or retry, so a NEWSLENS_LANE / NEWSLENS_LANE_RANK override
-    # to an unimplemented lane surfaces immediately (never after a pointless
-    # retry+sleep, never a silent wrong-lane call). The same resolution feeds
-    # the cost ledger below.
-    rank_cfg = llm.resolve_seat("rank")
-    llm.check_lane(rank_cfg)
+    # B1 fail-loud gate (D1 close) + B3-D5: read the ONE request-scoped rank
+    # resolution the wrapper published on _ACTIVE_RANK — the SAME (cfg, reason)
+    # _post_chat's transport rides, so the gate/ledger seat and the wire seat can
+    # never diverge (a NEWSLENS_LANE misconfig surfaces at the wrapper's
+    # effective_seat before any transport; a binary flap can't re-resolve a
+    # different lane here than the transport uses). B3-D2: _fb_reason labels the
+    # ledger when the principal-armed single-fall fired.
+    rank_cfg, _fb_reason = _effective_rank()
     last_error = "unknown"
     backoff = 1.0
     usage: Dict = {}
@@ -649,18 +707,20 @@ def call_llm_validated(
                 # Ledger BEFORE the truncation check: a truncated draw is a
                 # billed draw (generate.py cost_sink precedent — the property
                 # that made BUG-32's abort-path fold necessary there).
+                # B3-D1 (money record): legacy `usd` == usd_charged (ADR-0014
+                # §5), lane-aware — 0.0 on the subscription lane. usage_to_usd
+                # would FORK it (it always shadow-prices), so the durable record
+                # would show charged spend for a $0 subscription run. cost_fields
+                # is the single source: usd, usd_shadow, usd_charged, lane, model.
+                fields = llm.cost_fields(rank_cfg, usage, fallback_reason=_fb_reason)
                 entry = {
                     "step": "rank_select",
                     "attempt": attempt,
                     "prompt_tokens": usage.get("prompt_tokens"),
                     "completion_tokens": usage.get("completion_tokens"),
-                    "usd": round(usage_to_usd(usage), 6),
+                    "usd": fields["usd_charged"],
                 }
-                # B1: lane/shadow keys, additive, from the SAME resolution the
-                # gate preflighted. rank is gpt-4o/api, so usd_shadow ==
-                # usd_charged == usd; the keys let the cost dashboard stay
-                # lane-aware before B2 adds a second lane.
-                entry.update(llm.cost_fields(rank_cfg, usage))
+                entry.update(fields)
                 cost_sink.append(entry)
             choice = response["choices"][0]
             if choice.get("finish_reason") == "length":
@@ -1213,18 +1273,27 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
             ],
         }
     )
+    # B3-D1 (durable money record): price the persisted rank step through the
+    # seam's cost_fields so the briefings.token_cost row carries the full lane/
+    # shadow key set and its `usd`/`total_usd` are usd_charged — 0.0 on the
+    # subscription lane, never usage_to_usd (which always shadow-prices and would
+    # show charged spend for a $0 subscription run). B3-D2: the fall label rides
+    # too. Byte-identical on the api lane (charged == shadow == usage_to_usd).
+    _rank_cfg, _rank_fb = _effective_rank()   # B3-D5: the transport's resolution, not a fresh one
+    _rank_fields = llm.cost_fields(_rank_cfg, report.token_usage,
+                                   fallback_reason=_rank_fb)
     token_cost = json.dumps(
         {
             "steps": [
                 {
                     "step": "rank_select",
-                    "model": RANK_MODEL,
                     "prompt_tokens": report.token_usage.get("prompt_tokens"),
                     "completion_tokens": report.token_usage.get("completion_tokens"),
-                    "usd": round(usage_to_usd(report.token_usage), 6),
+                    "usd": _rank_fields["usd_charged"],
+                    **_rank_fields,
                 }
             ],
-            "total_usd": round(usage_to_usd(report.token_usage), 6),
+            "total_usd": _rank_fields["usd_charged"],
         }
     )
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -1370,6 +1439,11 @@ def run_rank(
             )
             raise
     finally:
+        # B3-D5: guaranteed teardown of the request-scoped rank resolution set by
+        # _run_rank_body (this try wraps that body 1:1) — always reset, so a
+        # raise mid-run never leaks a stale (cfg, reason) into the next rank op.
+        global _ACTIVE_RANK
+        _ACTIVE_RANK = None
         if own_con:
             con.close()
 
@@ -1446,6 +1520,15 @@ def _run_rank_body(
 
     repair_sink: Dict = {}
     attempt_ledger: List[Dict] = []
+    # B3-D5: resolve the rank seat ONCE for the whole rank operation, AFTER the
+    # cap pre-check (error precedence preserved) and publish it on _ACTIVE_RANK.
+    # call_llm_validated (its transport + ledger), the disclosure below, and
+    # persist's durable token_cost all read THIS one resolution via
+    # _effective_rank — so a `claude` binary that flaps mid-run can never fork
+    # the transport lane from the ledger/persisted lane. run_rank's finally is
+    # the guaranteed teardown (it wraps this whole body 1:1).
+    global _ACTIVE_RANK
+    _ACTIVE_RANK = llm.effective_seat("rank")
     clusters, usage = call_llm_validated(
         key, prompt, known_ids, tag_levels, memory_topics,
         repairs=repair_sink, dormant_topics=dormant, cost_sink=attempt_ledger,
@@ -1486,6 +1569,17 @@ def _run_rank_body(
     )
     report.override_fired = meta["override"]["fired"]
     report.override_pool_size = meta["override"]["pool_size"]
+    # B3-D2: disclose the armed single-fall in the run log (never silent). If
+    # rank ran the api fall-over because the subscription lane was unavailable
+    # and NEWSLENS_LANE_FALLBACK=api is armed, say so — this run spent real API
+    # money the subscription lane would not.
+    _, _rank_fb = _effective_rank()   # B3-D5: reuse the one resolution, no re-resolve
+    if _rank_fb:
+        report.warnings.append(
+            "rank ran the API fall-over lane (NEWSLENS_LANE_FALLBACK=api armed; "
+            f"subscription lane unavailable: {_rank_fb}) — this billed real API "
+            "money; ledger row labeled lane=api(fallback:…). Fix the CLI or "
+            "unset the fallback to fail loud instead")
     # Memory surfacing (spec §B: staleness is SURFACED, never silent; sync
     # edits are acknowledged so the principal knows the file was honored).
     report.warnings.extend(mem_sync.summary_lines())

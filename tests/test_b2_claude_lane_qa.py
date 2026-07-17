@@ -46,6 +46,17 @@ provider plumbing — full depth). Covers the seams their B2 tests leave open:
 Offline by construction: loopback fake server or scripted urlopen only; the
 autouse conftest guards (scrub_env, loopback_only_network, real_state_tripwire)
 stand under everything here. Zero live calls, $0.
+
+B3 CONSCIOUS FLIPS (2026-07-17, QA pass on the subscription lane): 15
+assertions here flipped when rank/editor/script's default lane went
+subscription. The api-PROVIDER contracts this file pins (request bytes,
+retry law, stop_reason map, 401/400 taxonomy, cache recording) are
+UNCHANGED — those tests now pin NEWSLENS_LANE_<SEAT>=api, the registered
+fall-over, to keep exercising the same wire. Teeth whose trigger was
+"subscription is unregistered" are re-expressed on genuinely-unavailable
+combos (unknown lanes, openai seats off api, or a subscription seat with an
+unresolvable binary). The subscription lane's OWN adversarial suite lives in
+test_b3_subscription_lane_qa.py.
 """
 
 from __future__ import annotations
@@ -165,8 +176,12 @@ def test_rank_hostile_json_reply_takes_one_corrected_retry_and_recovers(
     take the caller's CORRECTED retry (run-28 law), which recovers. Both
     attempts bill at the rank seat's Haiku prices; the json system nudge rides
     BOTH requests; the retry prompt (and only the retry) carries
-    RETRY_CORRECTION anchored to the original prompt."""
+    RETRY_CORRECTION anchored to the original prompt.
+    B3: pinned to the api fall-over lane (rank defaults to subscription now);
+    the corrected-retry law THROUGH the subprocess lane is proven in
+    test_b3_subscription_lane_qa."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     sent = _scripted(monkeypatch, [ant_native(first_reply), ant_native(_GOOD)])
     sink = []
@@ -194,8 +209,10 @@ def test_script_step_no_json_nudge_and_correction_echoes_the_validator(
         monkeypatch):
     """The non-json seats must NOT carry the json system nudge (the writer
     path never sent response_format; its Claude twin is 'no system'), and
-    generate's corrected retry echoes the validator's OWN ValueError text."""
+    generate's corrected retry echoes the validator's OWN ValueError text.
+    B3: script defaults to subscription — the api fall-over is pinned."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_SCRIPT", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     sent = _scripted(monkeypatch, [ant_native("draft one"),
                                    ant_native("draft two")])
@@ -241,8 +258,11 @@ def test_max_tokens_stop_reason_fires_the_rank_truncation_guard(monkeypatch):
     """Liveness of the load-bearing row end to end: stop_reason='max_tokens'
     must surface as finish_reason 'length' and take the named-truncation
     retry-then-fail path — if the map row breaks, a capped completion would
-    instead die as 'malformed LLM output' (the pre-M4 blindness)."""
+    instead die as 'malformed LLM output' (the pre-M4 blindness).
+    B3: api fall-over pinned — the length-guard is an api-lane-only property
+    (`claude -p` manages its own output cap; ADR-0015 known gap)."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     _scripted(monkeypatch, [ant_native('{"clusters": [', stop="max_tokens"),
                             ant_native('{"clusters": [', stop="max_tokens")])
@@ -308,8 +328,10 @@ def test_cache_fields_reach_the_rank_ledger_and_never_discount_shadow(
         fake_api, monkeypatch):
     """B4 reads these ledger fields to engineer caching; B2's law is
     record-don't-discount — a cache-read-heavy reply must not move usd_shadow
-    a microdollar off the undiscounted per-seat price."""
+    a microdollar off the undiscounted per-seat price.
+    B3: api fall-over pinned (rank defaults to subscription)."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL",
                         fake_api.base_url + "/v1/messages")
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
@@ -332,17 +354,28 @@ def test_cache_fields_reach_the_rank_ledger_and_never_discount_shadow(
 def test_per_seat_shadow_math_derives_from_the_seat_table():
     """Every seat's cost_fields math must come from ITS row: the three
     anthropic seats at Haiku 1.00/5.00, every openai seat at gpt-4o
-    2.50/10.00 — a re-hardcoded global constant on either side breaks here."""
+    2.50/10.00 — a re-hardcoded global constant on either side breaks here.
+    B3 (conscious flip): shadow is LANE-INDEPENDENT (always API-priced);
+    charged keys off the lane — equal to shadow on api seats, 0.0 on the
+    subscription-default anthropic seats, and back to equal when those seats
+    are pinned to the api fall-over."""
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
     for name, cfg in llm.SEATS.items():
         fields = llm.cost_fields(cfg, usage)
         if cfg.provider == "anthropic":
             assert fields["usd_shadow"] == pytest.approx(1.00 + 5.00), name
             assert cfg.model == "claude-haiku-4-5", name
+            # B3 default: subscription — charged 0.0, shadow intact
+            assert cfg.lane == "subscription", name
+            assert fields["usd_charged"] == 0.0, name
+            api_fields = llm.cost_fields(
+                dataclasses.replace(cfg, lane="api"), usage)
+            assert api_fields["usd_shadow"] == fields["usd_shadow"], name
+            assert api_fields["usd_charged"] == api_fields["usd_shadow"], name
         else:
             assert fields["usd_shadow"] == pytest.approx(2.50 + 10.00), name
             assert cfg.model == "gpt-4o", name
-        assert fields["usd_charged"] == fields["usd_shadow"], name  # api lane
+            assert fields["usd_charged"] == fields["usd_shadow"], name  # api
     assert {n for n, c in llm.SEATS.items() if c.provider == "anthropic"} \
         == {"rank", "editor", "script"}
     # ranking's module constants stay pure derivations (no fork):
@@ -370,8 +403,11 @@ def test_active_seat_cfg_disarmed_after_transport_generate_error(
         fake_api, monkeypatch):
     """GenerateError raised INSIDE the loop (401 fast-fail) must still walk
     the finally — a stuck editor seat would silently re-lane the next direct
-    _chat caller onto Haiku."""
+    _chat caller onto Haiku. B3: api fall-over pinned (the 401 is an
+    api-lane wire shape); the subscription-transport disarm twin lives in
+    test_b3_subscription_lane_qa."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL",
                         fake_api.base_url + "/v1/messages")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-wrong-key")
@@ -395,13 +431,26 @@ def test_active_seat_cfg_disarmed_after_validation_exhaustion(monkeypatch):
     assert generate._ACTIVE_SEAT_CFG is None
 
 
-def test_gate_block_never_arms_the_seat_and_never_transports(monkeypatch):
+def test_gate_block_never_arms_the_seat_and_never_transports(
+        monkeypatch, tmp_path):
+    # B3 re-expression: editor x subscription is registered now, so the gate
+    # block is the AVAILABILITY form — the editor's default subscription lane
+    # with an unresolvable binary. Same tooth: blocked at the gate, the seat
+    # never armed, zero HTTP AND zero subprocess spawns.
     _no_sleep(monkeypatch)
     calls = _tripwire(monkeypatch)
-    monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "subscription")
+    spawns = []
+
+    def _spawn_tripwire(*a, **k):
+        spawns.append(a)
+        raise AssertionError("spawned despite a gate block")
+
+    monkeypatch.setattr(llm.subprocess, "run", _spawn_tripwire)
+    monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     with pytest.raises(llm.LaneUnavailable):
         generate.call_llm("k", "p", "editor", 100, 0.5, False)
     assert calls == []
+    assert spawns == []
     assert generate._ACTIVE_SEAT_CFG is None
 
 
@@ -413,8 +462,13 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
     the inner call may not drag the outer retry onto the Claude lane, and the
     shared cost ledger must attribute each row to its own step's seat. This is
     the 'a step ledger row NEVER carries another step's seat' contract under
-    re-entrancy, plus the finally's restore-to-PREVIOUS (not to None)."""
+    re-entrancy, plus the finally's restore-to-PREVIOUS (not to None).
+    B3: the inner editor is pinned to the api fall-over so the wire-order
+    proof stays HTTP-observable end to end; the cross-TRANSPORT nesting twin
+    (openai HTTP outer, claude -p subprocess inner) lives in
+    test_b3_subscription_lane_qa."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
 
     def by_url(body, url):
@@ -457,15 +511,19 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
 def test_direct_chat_after_an_editor_call_rides_the_writer_seat(monkeypatch):
     """The disarm's observable consequence: a DIRECT _chat call (the
     signature-test/legacy path) after an editor call_llm must ride the
-    historical writer seat (gpt-4o -> openai endpoint), not a leaked Haiku."""
+    historical writer seat (gpt-4o -> openai endpoint), not a leaked seat.
+    B3 makes this a CROSS-TRANSPORT leak check: the editor call rides its
+    default subscription lane (the sandbox stub subprocess — zero HTTP), so
+    a leaked editor seat would drag the direct _chat into a subprocess and
+    the scripted HTTP recorder would see NOTHING. Exactly one openai POST,
+    model gpt-4o, proves the disarm."""
     _no_sleep(monkeypatch)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
-    sent = _scripted(monkeypatch, [ant_native("edit"), OPENAI_CANNED])
-    generate.call_llm("k", "p", "editor", 100, 0.5, False)
+    sent = _scripted(monkeypatch, [OPENAI_CANNED])
+    generate.call_llm("k", "p", "editor", 100, 0.5, False)   # stub subprocess
     generate._chat("k", "direct", 100, 0.5, False)
-    assert [s["url"] for s in sent] == [llm.ANTHROPIC_MESSAGES_URL,
-                                        ranking.OPENAI_CHAT_URL]
-    assert sent[1]["body"]["model"] == "gpt-4o"
+    assert [s["url"] for s in sent] == [ranking.OPENAI_CHAT_URL]
+    assert sent[0]["body"]["model"] == "gpt-4o"
+    assert generate._ACTIVE_SEAT_CFG is None
 
 
 # ===========================================================================
@@ -490,21 +548,30 @@ def test_state_cost_derives_from_the_seam_not_module_constants(monkeypatch):
                      "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1000, "completion_tokens": 500},
     }])
-    raw, cost = memory_core._default_state_chat("k", "prompt")
+    # R-B3a (conscious flip): the default state chat returns a 3-tuple now —
+    # (raw, usd_charged, usd_shadow) — so a $0-charged subscription state
+    # seat can still ledger its shadow. State is gpt-4o/api this milestone:
+    # charged == shadow exactly.
+    raw, cost, shadow = memory_core._default_state_chat("k", "prompt")
     assert raw == {"state": "S."}
-    expected = llm.cost_fields(
+    fields = llm.cost_fields(
         llm.resolve_seat("state"),
-        {"prompt_tokens": 1000, "completion_tokens": 500})["usd_charged"]
-    assert cost == pytest.approx(expected) == pytest.approx(0.0075)  # 2.50/10.00
+        {"prompt_tokens": 1000, "completion_tokens": 500})
+    assert cost == pytest.approx(fields["usd_charged"]) \
+        == pytest.approx(0.0075)  # 2.50/10.00
+    assert shadow == pytest.approx(fields["usd_shadow"]) == pytest.approx(cost)
 
 
 def test_state_lane_misconfig_degrades_stale_never_raises(
         migrated_con, monkeypatch):
-    """FIX-1 class, state side, AS BUILT: rewrite_state's broad except turns
+    """FIX-1 class, state side, UNIT level: rewrite_state's broad except turns
     the gate's LaneUnavailable into a returned 'stale' outcome — prior state
     kept, $0, disclosed detail naming the exception — with ZERO transport.
-    Degrade-not-death is today's contract; whether the state seat joins
-    gate-kills-run is the gate's FIX-1 ruling, not this suite's."""
+    B3 UPDATE (FIX-1 ruled and landed): this unit-level degrade now stands
+    BEHIND the stage-boundary preflight in generate (_run_generate_body
+    checks the state lane at entry and KILLS the run on a config error —
+    liveness-proven in test_b3_subscription_lane_qa), so this arm is reached
+    only by transient-shaped failures or direct rewrite_state calls."""
     calls = _tripwire(monkeypatch)
     monkeypatch.setenv("NEWSLENS_LANE_STATE", "subscription")
     con = migrated_con
@@ -583,13 +650,16 @@ def test_state_rewrites_step_row_carries_the_shadow_ledger_keys(
 
 def test_analyst_lane_misconfig_degrades_per_slot_not_run_killing(
         migrated_con, monkeypatch):
-    """FIX-1, analyst side, AS BUILT: NEWSLENS_LANE_ANALYST=subscription makes
-    call_analysis_model raise raw LaneUnavailable (kill-class at the wrapper —
-    the sweep pins that), but analyze_story's ladder catches it into a
-    disclosed $0 'failed' StoryAnalysis and the edition ships with depth
-    absent. Rank/writer misconfigs kill the run; the analyst's degrades. The
-    stage-preflight recommendation is on the gate's desk — this pin is the
-    asymmetry's characterization, not its endorsement. Zero transport."""
+    """FIX-1, analyst side, UNIT level: NEWSLENS_LANE_ANALYST=subscription
+    makes call_analysis_model raise raw LaneUnavailable (kill-class at the
+    wrapper — the sweep pins that), but analyze_story's ladder catches it
+    into a disclosed $0 'failed' StoryAnalysis. B3 UPDATE (FIX-1 ruled and
+    landed): the stage-boundary preflights — run_analysis entry and
+    _run_generate_body entry — now kill the run on this config error BEFORE
+    any per-slot ladder runs (born-red in test_b3_subscription_lane.py and
+    liveness-proven at generate level in test_b3_subscription_lane_qa), so
+    this per-slot arm is reached only by transient-shaped failures. The pin
+    stays: the ladder's containment behavior must not silently change."""
     calls = _tripwire(monkeypatch)
     monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "subscription")
     cfg = config.SourcesConfig(
@@ -716,8 +786,10 @@ def test_editor_401_from_anthropic_wire_names_the_anthropic_console(
     taxonomy now names the RIGHT console — 'Anthropic rejected the key ...
     console.anthropic.com/settings/keys' — not the OpenAI one. Right class
     (fast-fail, no retry, no sleep) AND right signpost. The wire target is
-    recorded to prove which lane failed."""
+    recorded to prove which lane failed. B3: api fall-over pinned (editor
+    defaults to subscription; a 401 is an api-lane wire shape)."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL",
                         fake_api.base_url + "/v1/messages")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-wrong-anthropic-key")
@@ -737,8 +809,11 @@ def test_editor_400_credit_exhaustion_from_anthropic_wire_names_billing(
     at the ANTHROPIC endpoint with 'credit balance is too low' (key valid, can't
     spend). call_llm's dedicated anthropic billing arm fires AHEAD of the generic
     4xx arm — immediate GenerateError, no retry, no sleep — and names the
-    anthropic billing console + the doctor blind-spot honesty line."""
+    anthropic billing console + the doctor blind-spot honesty line.
+    B3: api fall-over pinned — credit exhaustion is an api-lane failure mode
+    (the subscription lane bills nothing per call)."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     monkeypatch.setattr(llm, "ANTHROPIC_MESSAGES_URL",
                         fake_api.base_url + "/v1/messages")
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
@@ -761,19 +836,22 @@ def test_editor_400_credit_exhaustion_from_anthropic_wire_names_billing(
     assert [p["path"] for p in posts] == ["/v1/messages"]        # non-retryable: 1 post
 
 
-def test_lane_unavailable_message_names_the_seat_default_and_b3_not_b2():
-    """FIX A (gate, landed): the LaneUnavailable fix hint names the seat's ACTUAL
-    SEATS default (provider/model on the api lane) and points at B3 for the
-    claude -p subscription lane — it no longer claims 'the Claude API lane lands
-    in B2' (it landed) nor calls the default 'the gpt-4o api default' (rank/
-    editor/script are Haiku now). The sweep's 'no registered implementation'
-    anchor is preserved."""
-    cfg = llm.resolve_seat("rank", {"NEWSLENS_LANE_RANK": "subscription"})
+def test_lane_unavailable_message_names_the_seat_default_and_registered_lanes():
+    """FIX A's message-hygiene contract, re-expressed for B3 (conscious flip:
+    rank x subscription is registered now, so the probe moves to a combo that
+    is STILL unregistered — the openai state seat forced onto subscription).
+    The hint must name the seat's ACTUAL SEATS default, list the REAL
+    registered-lane roster including the landed subscription lane, and carry
+    no stale forward-pointer ('lands in B3' — it landed). The sweep's 'no
+    registered implementation' anchor is preserved."""
+    cfg = llm.resolve_seat("state", {"NEWSLENS_LANE_STATE": "subscription"})
     with pytest.raises(llm.LaneUnavailable) as excinfo:
         llm.chat(llm.LaneRequest(cfg, "p", 0, 10, True, "ua", "k"))
     msg = str(excinfo.value)
     assert "no registered implementation" in msg          # the sweep's stable anchor
-    assert "lands in B2" not in msg                        # the Claude lane already landed
-    assert "gpt-4o api default" not in msg                 # rank's default is Haiku now
-    assert "anthropic/claude-haiku-4-5 on the api lane" in msg  # the seat's ACTUAL default
-    assert "subscription lane lands in B3" in msg
+    assert "lands in B2" not in msg                        # landed
+    assert "lands in B3" not in msg                        # landed too (B3 flip)
+    assert "anthropic/subscription" in msg                 # the roster is current
+    assert "openai/gpt-4o on the api lane" in msg          # state's ACTUAL default
+    assert "openai runs ONLY on the api lane" in msg       # why the combo is dead
+    assert "NEWSLENS_LANE_STATE" in msg                    # names the fix var

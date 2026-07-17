@@ -235,6 +235,11 @@ def llm(fake_api, monkeypatch):
         llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
+    # B3: rank DEFAULTS to the claude -p subscription lane now. These tests
+    # exercise the anthropic API PROVIDER (its request bytes, retry law, cost) —
+    # the registered api FALL-OVER lane — so pin rank to it. Transport routes to
+    # the loopback /v1/messages above; the subscription subprocess is never hit.
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     sleeps = []
     monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
     fake_api.sleeps = sleeps

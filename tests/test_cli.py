@@ -382,6 +382,7 @@ def test_rank_happy_path_prints_window_caveat_override_and_cost(
         llm, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")  # B3: rank exercises the api fall-over here
     monkeypatch.setenv("OPENAI_API_KEY", "sk-qa-fake-cli")
     paths.SOURCES_FILE.write_text(INTERESTED_SOURCES, encoding="utf-8")
     db.migrate()

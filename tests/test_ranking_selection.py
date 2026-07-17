@@ -357,6 +357,9 @@ def _seed_and_route(con, fake_api, monkeypatch):
         llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages"
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
+    # B3: rank defaults to the subscription lane; pin it to the api fall-over so
+    # the transport routes to the loopback /v1/messages these tests scripted.
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     monkeypatch.setattr(_time, "sleep", lambda s: None)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     for i, (outlet, wire) in enumerate(
@@ -554,6 +557,7 @@ def test_dedup_disclosure_reaches_the_run_warnings(migrated_con, fake_api, monke
     monkeypatch.setattr(ranking, "OPENAI_CHAT_URL", fake_api.base_url + "/chat/completions")
     monkeypatch.setattr(llm_mod, "ANTHROPIC_MESSAGES_URL", fake_api.base_url + "/v1/messages")
     monkeypatch.setenv("ANTHROPIC_API_KEY", fake_api.good_key)
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")  # B3: pin the api fall-over lane
     monkeypatch.setattr(_time, "sleep", lambda s: None)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     for i in (1, 2):
