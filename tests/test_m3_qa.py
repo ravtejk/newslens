@@ -302,9 +302,10 @@ def test_quick_tier_never_carries_the_ladder_label():
 # ---------------------------------------------------------------------------
 
 def test_already_spent_rides_into_the_one_cap(tmp_paths):
-    """Cap 0.25 with 0.24 already spent: both money sentinels stay cold,
-    outcomes are the disclosed budget rungs, and total_usd reports only
-    the stage's OWN delta (0 here)."""
+    """Cap 1.50 (the B4 default) with 1.49 already spent: both money
+    sentinels stay cold, outcomes are the disclosed budget rungs, and
+    total_usd reports only the stage's OWN delta (0 here). B4 flip
+    (conscious): same tooth as the 0.25/0.24 original, at the raised cap."""
     db.migrate()
     con = db.connect()
     try:
@@ -319,7 +320,7 @@ def test_already_spent_rides_into_the_one_cap(tmp_paths):
         rep = analysis.run_analysis(
             date=DATE, con=con, env=dict(ENV), chat=chat_sentinel,
             sonar=sonar_sentinel, fetch=lambda *a, **k: b"",
-            sleep=lambda s: None, already_spent=0.24)
+            sleep=lambda s: None, already_spent=1.49)
         assert rep["per_story"][0]["outcome"] == "skipped-budget"
         assert rep["derating"] is True
         assert rep["total_usd"] == 0.0
@@ -514,10 +515,11 @@ def test_no_refresh_reuses_persisted_briefs_and_never_reruns_analysis(
 
 def test_cap_exhausted_by_analysis_aborts_the_writer_disclosed(
         tmp_paths, fake_chat, monkeypatch):
-    """Mid-writer cap probe: analysis legitimately spends 0.24 of the 0.25
-    cap; the narrative pre-call estimate no longer fits -> disclosed
-    budget abort (GenerateError, M5 :831 precedent) BEFORE any writer
-    spend. Money honesty on abort: the analysis stage self-logs its own
+    """Mid-writer cap probe, B4 arithmetic (conscious flip): analysis
+    legitimately spends 1.45 of the 1.50 cap; the narrative pre-call
+    estimate (~$0.40 at the 16k Opus ceiling) no longer fits the 0.05
+    remaining -> disclosed budget abort (GenerateError, M5 :831 precedent)
+    BEFORE any writer spend. Money honesty on abort: the analysis stage self-logs its own
     spend via its M2 stage entry, so the $0.24 is on the record even
     though the writer entry never happens."""
     db.migrate()
@@ -525,7 +527,7 @@ def test_cap_exhausted_by_analysis_aborts_the_writer_disclosed(
     try:
         slots = _stage_fakes(monkeypatch)
         monkeypatch.setattr(analysis, "run_analysis",
-                            lambda **kw: canned_report(total_usd=0.24,
+                            lambda **kw: canned_report(total_usd=1.45,
                                                        derating=False,
                                                        warnings=[]))
         fake_chat.narrative = stories_payload(slots)

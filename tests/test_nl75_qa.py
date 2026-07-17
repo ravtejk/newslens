@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from newslens import db, events, generate, memory_core, paths, server
+from newslens import config, db, events, generate, memory_core, paths, server
 
 EDITION = "2026-07-14"          # the live-exhibit date (HSR edition 5)
 PRIOR_EDITION = "2026-07-10"    # the edition that raised the Switzerland watch
@@ -1186,7 +1186,13 @@ def test_cap_gate_sees_the_enriched_prompt_and_aborts_loudly(
     the estimate) BEFORE any model call — the enrichment is exactly what
     tripped it, so the gate provably sees it. The failed run still lands in
     generation_log (money-honesty)."""
-    env = {"OPENAI_API_KEY": "sk-qa-fake", "BUDGET_CAP_USD_PER_RUN": "0.08"}
+    # B4 arithmetic (conscious re-pin): the narrative estimate now carries a
+    # fixed ~$0.40 output leg (16k Opus ceiling at $25/MTok), so the cap is
+    # DERIVED from the control arm's real estimate instead of a hardcoded
+    # 0.08: generous cap for the control run, then cap = control_est + $0.02
+    # so only the ~$0.057 enrichment delta (5 x 8k chars at Opus $5/MTok-in)
+    # crosses it. Same claim proven: the gate sees the enriched prompt.
+    env = {"OPENAI_API_KEY": "sk-qa-fake", "BUDGET_CAP_USD_PER_RUN": "9"}
     con = migrated_con
     slots = [_slot(1, mem=("Strait of Hormuz",)), _slot(2), _slot(3)]
     _seed_edition(con, EDITION, slots)
@@ -1198,6 +1204,11 @@ def test_cap_gate_sees_the_enriched_prompt_and_aborts_loudly(
     # control arm: no ledger — the run reaches the narrative call
     generate.run_generate(date=EDITION, con=con, env=env, refresh=False)
     assert any(c["json_mode"] for c in fake_model.calls)
+    control_prompt = next(c["prompt"] for c in fake_model.calls
+                          if c["json_mode"])
+    control_est = generate._est_cost(control_prompt,
+                                     generate.NARRATIVE_MAX_TOKENS)
+    env["BUDGET_CAP_USD_PER_RUN"] = f"{control_est + 0.02:.4f}"
     fake_model.calls.clear()
 
     # test arm: five bloated priors (~8k chars each) enter the writer context
@@ -1215,12 +1226,15 @@ def test_cap_gate_sees_the_enriched_prompt_and_aborts_loudly(
 
 
 def test_worst_case_19_thread_enrichment_stays_inside_the_default_cap():
-    """Dispatch item 11's arithmetic, pinned: 19 memory blocks at the REAL
-    DB's maxima (what_happened 192 ch, significance 158 ch, state 836 ch —
-    attested read-only this pass) plus a generous 30k-char base prompt cost
-    ~$0.048 input + $0.046 output ceiling ≈ $0.11 — inside the $0.25 default
-    cap with ~2.3x headroom. If block shapes or pricing constants grow enough
-    to threaten the cap, this pin fires before the principal's money does."""
+    """Dispatch item 11's arithmetic, re-pinned at B4 prices (conscious flip):
+    19 memory blocks at the REAL DB's maxima (what_happened 192 ch,
+    significance 158 ch, state 836 ch) plus a generous 30k-char base prompt
+    now cost ~$0.12 input (Opus $5/MTok-in) + $0.40 output ceiling (16k tok
+    at $25/MTok) ≈ $0.52 — inside the $1.50 B4 default cap with ~1.7x
+    headroom against the 60% line. If block shapes or pricing constants grow
+    enough to threaten the cap, this pin fires before the principal's money
+    does. The default itself is pinned at 1.50 in test_config_guards; this
+    derives so the two never fork."""
     block = ("MEMORY — the record for thread 'X' (edition history only; NEVER"
              " the reader's history):\n"
              + "standing state (as of Jul 10): " + "s" * 836 + "\n"
@@ -1229,7 +1243,7 @@ def test_worst_case_19_thread_enrichment_stays_inside_the_default_cap():
              + ("  * Jul 05: " + "w" * 192 + " — " + "g" * 158 + "\n") * 5)
     enriched = "b" * 30_000 + block * 19
     est = generate._est_cost(enriched, generate.NARRATIVE_MAX_TOKENS)
-    assert est < 0.25 * 0.6, (
+    assert est < config.DEFAULT_BUDGET_CAP_USD_PER_RUN * 0.6, (
         f"worst-case 19-thread narrative estimate ${est:.4f} eats >60% of the"
         " default cap — budget headroom assumption broken, escalate")
 

@@ -638,28 +638,103 @@ def _con(tmp_paths):
 
 
 def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths):
-    """Rung independence: remaining 0.0619 is under the Sonar line
-    (0.0619 - 0.012 < 0.05 probe) -> Sonar sentinel NEVER called, derating
-    disclosed — while the synthesis estimate still fits, so the brief is
-    built. Sonar degrades FIRST and alone."""
+    """Sonar-line half of the old rung-independence proof: remaining 0.0619
+    is under the Sonar line (0.0619 - 0.012 < 0.05 probe) -> Sonar sentinel
+    NEVER called, derating disclosed.
+
+    B4-D2 CLOSED (FIX-2, 2026-07-17 — the conscious flip this docstring's
+    fix contract demanded): the probe derives from the seat now (~$0.09), so
+    the Sonar line sits at remaining $0.102 and a witnessing band for 'Sonar
+    degrades FIRST and alone' EXISTS again — remaining ∈ [synthesis est,
+    0.102): Sonar skips while the brief still fits and is BUILT. Proven at
+    both remainings:
+      * 0.0619 (deep under everything): Sonar skipped AND brief skipped —
+        the disclosed double-derate, unchanged;
+      * 0.098 (the restored band): Sonar skipped, brief BUILT — outcome ok,
+        rung independence whole again."""
     con = _con(tmp_paths)
     try:
         seed_min(con)
         slot = json.loads(con.execute(
             "SELECT story_slots FROM briefings WHERE date=?",
             (DATE,)).fetchone()["story_slots"])[0]
+        chat_calls = []
+
+        def recording_chat(k, p):
+            chat_calls.append(p)
+            return (s_brief(), 0.01)
+
         sa = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
                 remaining_usd=0.0619, sonar=sonar_sentinel,
-                chat=lambda k, p: (s_brief(), 0.01)))
-        assert sa.outcome == "ok"
+                chat=recording_chat))
+        # the sonar half: never called below the line
         assert "budget ladder" in sa.sonar_status
         assert any(w.startswith("derating: Sonar") for w in sa.warnings)
+        # deep under the synthesis estimate too: disclosed double-derate
+        assert chat_calls == []
+        assert sa.outcome == "skipped-budget"
+        # the RESTORED band (FIX-2's whole point): sonar skips, brief builds.
+        # SELF-CALIBRATING: the band is [synthesis est, 0.102) and this
+        # fixture's prompt (~14k chars) puts est ~ $0.1006 — a hardcoded
+        # remaining would die on ±500 chars of fixture drift, so measure the
+        # est through the real estimator and aim for the band's midpoint.
+        seen = {}
+        orig_est = analysis.estimate_synthesis_usd
+
+        def spy(prompt):
+            est = orig_est(prompt)
+            seen["est"] = est
+            return est
+
+        analysis.estimate_synthesis_usd = spy
+        try:
+            analysis.analyze_story(
+                con, DATE, 1, slot, **story_kwargs(
+                    remaining_usd=9.0, sonar=lambda k, t, c: ([], 0.0, "ok"),
+                    chat=lambda k, p: (s_brief(), 0.01)))
+            est = seen["est"]
+            sonar_line = analysis.SONAR_EST_USD + (
+                analysis.ANALYSIS_MAX_TOKENS / 1e6
+                * analysis.ANALYSIS_USD_OUT_PER_MTOK)          # 0.012 + 0.09
+            assert est < sonar_line - 0.0005, (
+                f"fixture prompt grew past the sonar line (est ${est:.4f} >= "
+                f"${sonar_line:.4f}) — the restored band is unprovable at this "
+                "fixture size; slim the fixture")
+            band_mid = (est + sonar_line) / 2
+            chat_calls.clear()
+            sa_band = analysis.analyze_story(
+                con, DATE, 1, slot, **story_kwargs(
+                    remaining_usd=band_mid, sonar=sonar_sentinel,
+                    chat=recording_chat))
+        finally:
+            analysis.estimate_synthesis_usd = orig_est
+        assert "budget ladder" in sa_band.sonar_status   # sonar still skipped
+        assert chat_calls, "synthesis never ran inside the restored band"
+        assert sa_band.outcome == "ok"
     finally:
         con.close()
 
 
 def test_sonar_precheck_boundary_calls_just_above_the_line(tmp_paths):
+    """B4-D2 CLOSED (FIX-2, 2026-07-17 — the conscious re-pin this test's
+    as-is docstring demanded): est_synth_probe now DERIVES from the seat
+    (ANALYSIS_MAX_TOKENS x ANALYSIS_USD_OUT_PER_MTOK = 6,000 x $15/MTok =
+    $0.09), so the Sonar line sits at remaining = SONAR_EST_USD + probe =
+    $0.102. Pinned BEHAVIORALLY at both edges — a probe that stops deriving
+    (or a constant that moves without this boundary moving) fails here:
+
+      * remaining 0.1019 (line - epsilon) -> Sonar SKIPPED;
+      * remaining 0.1021 (line + epsilon) -> Sonar CALLED;
+      * remaining 0.0621 — the OLD boundary, inside the former inversion
+        band (old-probe remainders in (0.062, 0.102]) -> Sonar SKIPPED now:
+        the $0.012-wasted-then-brief-skipped inversion is CLOSED there.
+
+    Known residual, by construction: the probe is output-only (the map isn't
+    built at sonar time, so the input leg is unknowable) — a sliver of width
+    ~the input leg (~$0.002-0.009) remains just above the line where Sonar
+    runs and the brief still derates. Bounded and coarse-by-design; the
+    clean sonar-AND-brief arm is proven at 0.12 below."""
     con = _con(tmp_paths)
     try:
         seed_min(con)
@@ -672,12 +747,35 @@ def test_sonar_precheck_boundary_calls_just_above_the_line(tmp_paths):
             calls.append(title)
             return [], 0.0, "ok — 0 results"
 
+        # line - epsilon: skipped (the derived 0.09 probe holding the line)
         sa = analysis.analyze_story(
+            con, DATE, 1, slot, **story_kwargs(
+                remaining_usd=0.1019, sonar=sonar_recording,
+                chat=lambda k, p: (s_brief(), 0.01)))
+        assert calls == []
+        assert "budget ladder" in sa.sonar_status
+        # the old inversion band: skipped there too now
+        sa_old = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
                 remaining_usd=0.0621, sonar=sonar_recording,
                 chat=lambda k, p: (s_brief(), 0.01)))
+        assert calls == []
+        assert "budget ladder" in sa_old.sonar_status
+        # line + epsilon: called
+        analysis.analyze_story(
+            con, DATE, 1, slot, **story_kwargs(
+                remaining_usd=0.1021, sonar=sonar_recording,
+                chat=lambda k, p: (s_brief(), 0.01)))
         assert calls == ["Summit meetings"]
-        assert sa.outcome == "ok"
+        # comfortably above: Sonar runs AND the brief it feeds is BUILT —
+        # the ladder's intent, whole again.
+        calls.clear()
+        sa_ok = analysis.analyze_story(
+            con, DATE, 1, slot, **story_kwargs(
+                remaining_usd=0.12, sonar=sonar_recording,
+                chat=lambda k, p: (s_brief(), 0.01)))
+        assert calls == ["Summit meetings"]
+        assert sa_ok.outcome == "ok"
     finally:
         con.close()
 

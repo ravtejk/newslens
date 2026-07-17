@@ -59,8 +59,13 @@ def test_env_example_has_exactly_the_spec_vars_with_no_secret_values():
         # secret-shaped. Selecting an unavailable lane fails loud (naming the fix).
         "NEWSLENS_LANE": "",
         "NEWSLENS_LANE_FALLBACK": "",
+        # B4: the battery harness's per-seat MODEL override (documented as
+        # battery-only; unset in normal operation — a stray value silently
+        # re-models/re-prices an edition, which is why conftest scrubs the
+        # whole NEWSLENS_MODEL_<SEAT> family). Not secret-shaped.
+        "NEWSLENS_MODEL_WRITER": "",
         # Non-secret guard defaults, exactly as spec §D documents them:
-        "BUDGET_CAP_USD_PER_RUN": "0.25",  # M9 ruling 2026-07-06 (was 0.50)
+        "BUDGET_CAP_USD_PER_RUN": "1.50",  # B4 raise 2026-07-16 (0.25 at M9)
         "GENERATE_HOUR_LOCAL": "6",
     }
 

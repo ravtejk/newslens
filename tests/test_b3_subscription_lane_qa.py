@@ -638,12 +638,20 @@ def test_nested_cross_transport_call_restores_the_outer_http_seat(
         def __exit__(self, *a):
             return False
 
+    # B4 flip (conscious): the outer narrative rides the ANTHROPIC HTTP wire
+    # now (writer = Opus/api) — the fake serves the anthropic envelope; the
+    # cross-transport tooth (HTTP outer vs subprocess inner, outer retry
+    # restored to HTTP) is unchanged.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+
     def fake_urlopen(req, timeout=None):
         http.append(req.full_url)
         return _R(json.dumps({
-            "choices": [{"message": {"content": "outer"},
-                         "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1000, "completion_tokens": 200},
+            "id": "msg_b3qa", "type": "message", "role": "assistant",
+            "model": "claude-opus-4-8",
+            "content": [{"type": "text", "text": "outer"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1000, "output_tokens": 200},
         }).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -733,12 +741,15 @@ def test_memory_pass_cap_binds_on_shadow_not_charged(migrated_con):
 
 
 def _generate_harness(monkeypatch, con, editor_inp, editor_out=200):
-    """A full no-refresh generate run on the DEFAULT lane map: narrative on
-    the openai HTTP wire (scripted urlopen; any other HTTP target refuses so
-    audio degrades exactly like the fake_model harnesses), editor+script on a
-    per-call scripted stub (call 1: the edited payload; call 2: the compliant
+    """A full no-refresh generate run on the DEFAULT lane map. B4 flip
+    (conscious): the narrative rides the ANTHROPIC HTTP wire now (writer =
+    Opus 4.8 on the api lane) — the fake serves the anthropic envelope for
+    /v1/messages and refuses any other HTTP target (so audio degrades exactly
+    like the fake_model harnesses); editor+script stay on a per-call scripted
+    subscription stub (call 1: the edited payload; call 2: the compliant
     script)."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     slots = [slot(1)]
     seed_briefing(con, A_DAY, slots, narrative="Published.")
     narrative = stories_payload(slots)
@@ -757,11 +768,13 @@ def _generate_harness(monkeypatch, con, editor_inp, editor_out=200):
             return False
 
     def fake_urlopen(req, timeout=None):
-        if "/chat/completions" in req.full_url:
+        if req.full_url == llm.ANTHROPIC_MESSAGES_URL:
             return _R(json.dumps({
-                "choices": [{"message": {"content": json.dumps(narrative)},
-                             "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 900, "completion_tokens": 200},
+                "id": "msg_h", "type": "message", "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": json.dumps(narrative)}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 900, "output_tokens": 200},
             }).encode())
         raise OSError("offline: only the narrative wire is scripted")
 
@@ -783,7 +796,11 @@ def test_default_lane_generate_run_ships_with_charged_zero_editor_script(
         [{"result": json.dumps(narrative), "inp": 1000, "out": 200},
          {"result": compliant_script(slots), "inp": 1200, "out": 400}])
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(stub))
-    rep = run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="0.20"))
+    # B4: cap raised for the harness — the narrative pre-check prices the
+    # 16k-token Opus ceiling at ~$0.40, so the old 0.20 would abort at the
+    # gate before proving anything. 2.00 clears it; the $0-charged
+    # editor/script tooth is cap-independent.
+    rep = run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="2.00"))
     by_step = {s["step"]: s for s in rep.steps}
     narrative_row = by_step["narrative_A"]         # report names carry variant
     assert narrative_row["lane"] == "api"
@@ -822,8 +839,14 @@ def test_mid_run_cap_exhaustion_on_shadow_kills_the_run_before_the_script(
         [{"result": json.dumps(narrative), "inp": 1_000_000, "out": 200},
          {"result": compliant_script(slots), "inp": 1200, "out": 400}])
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(stub))
+    # B4 arithmetic (conscious re-pin): the cap must clear the narrative
+    # pre-check (~$0.40 at the 16k Opus ceiling) and still be exhausted by
+    # the editor's $1.001 SHADOW before the script's ~$0.015+ estimate:
+    # 1.02 - 0.0095 (narrative shadow) - 1.001 (editor shadow) = 0.0095
+    # remaining < script est -> the script guard trips on SHADOW, exactly
+    # the pre-B4 tooth at B4 prices.
     with pytest.raises(generate.GenerateError) as exc:
-        run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="0.20"))
+        run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="1.02"))
     assert "budget" in str(exc.value)
     # only editor spawned; the script guard fired BEFORE spawn #2
     assert len(stub_calls(tmp_path / "shim")) == 1
@@ -1318,24 +1341,32 @@ def test_generate_fall_discloses_editor_and_script_and_labels_the_ledger(
     monkeypatch.setenv("NEWSLENS_LANE_FALLBACK", "api")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fall")
+    # B4 flip (conscious): the narrative rides the anthropic wire too now
+    # (writer = Opus/api), so the fake routes by request-body MODEL — Opus ->
+    # the narrative envelope; Haiku (the fallen editor/script) -> the scripted
+    # replies in order. The fall tooth itself is unchanged.
     anthropic_replies = [_ant(narrative, inp=1000, out=200),          # editor
                          _ant(compliant_script(slots), inp=1200, out=400)]
     state = {"anthropic_served": 0}
 
     def fake_urlopen(req, timeout=None):
-        if "/chat/completions" in req.full_url:
-            return _RResp({
-                "choices": [{"message": {"content": json.dumps(narrative)},
-                             "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 900, "completion_tokens": 200}})
         if req.full_url == llm.ANTHROPIC_MESSAGES_URL:
+            body = json.loads(req.data.decode())
+            if body.get("model") == "claude-opus-4-8":
+                return _RResp({
+                    "id": "msg_fall", "type": "message", "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text",
+                                 "text": json.dumps(narrative)}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 900, "output_tokens": 200}})
             i = min(state["anthropic_served"], len(anthropic_replies) - 1)
             state["anthropic_served"] += 1
             return _RResp(anthropic_replies[i])
         raise OSError("offline: unscripted target " + req.full_url)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    rep = run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="0.20"))
+    rep = run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="2.00"))
     for seat in ("editor", "script"):
         matches = [w for w in rep.warnings
                    if f"{seat} ran the API fall-over lane" in w]
@@ -1377,14 +1408,18 @@ def test_D6_deferred_kill_unarmed_unavailable_editor_dies_at_its_own_stage(
     seed_briefing(migrated_con, A_DAY, slots, narrative="Published.")
     narrative = stories_payload(slots)
     http = []
+    # B4 flip (conscious): the narrative wire is the anthropic endpoint now.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
 
     def fake_urlopen(req, timeout=None):
-        if "/chat/completions" in req.full_url:
+        if req.full_url == llm.ANTHROPIC_MESSAGES_URL:
             http.append(req.full_url)
             return _RResp({
-                "choices": [{"message": {"content": json.dumps(narrative)},
-                             "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 900, "completion_tokens": 200}})
+                "id": "msg_d6", "type": "message", "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": json.dumps(narrative)}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 900, "output_tokens": 200}})
         raise OSError("offline: unscripted target " + req.full_url)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -1395,7 +1430,7 @@ def test_D6_deferred_kill_unarmed_unavailable_editor_dies_at_its_own_stage(
     assert "editor" in str(exc.value)
     assert len(http) == 1, (
         "deferred kill broken: expected the narrative to transport first "
-        f"(got {len(http)} openai calls before the editor-stage death)")
+        f"(got {len(http)} HTTP calls before the editor-stage death)")
     row = migrated_con.execute(
         "SELECT narrative_text FROM briefings WHERE date = ?", (A_DAY,)
     ).fetchone()

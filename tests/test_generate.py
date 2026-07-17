@@ -490,16 +490,21 @@ def test_writer_model_seam_and_rates():
     (narrative) seat stays gpt-4o at 2.50/10.00; the RANK seat flipped to the
     Claude API lane on claude-haiku-4-5 at 1.00/5.00, and ranking's module
     constants now DERIVE from llm.SEATS["rank"] (single source of truth)."""
-    assert generate.WRITER_MODEL == "gpt-4o"
+    # B4 flip (conscious, R-B4a): the writer constants DERIVE from
+    # SEATS["writer"] now (Opus 4.8, $5/$25) — both the literal and the
+    # derivation are pinned so neither a stale literal nor a broken seam
+    # can pass.
+    assert generate.WRITER_MODEL == "claude-opus-4-8"
+    assert generate.WRITER_MODEL == llm.SEATS["writer"].model
     assert ranking.RANK_MODEL == "claude-haiku-4-5"           # B2: Haiku
     assert ranking.RANK_MODEL == llm.SEATS["rank"].model      # derived from the seat
     assert ranking.RANK_USD_PER_MTOK_IN == 1.00
     assert ranking.RANK_USD_PER_MTOK_OUT == 5.00
     assert ranking.MODEL == "gpt-4o-mini"  # the fallback rung, kept documented
-    assert generate.WRITER_USD_PER_MTOK_IN == 2.50
-    assert generate.WRITER_USD_PER_MTOK_OUT == 10.00
+    assert generate.WRITER_USD_PER_MTOK_IN == llm.SEATS["writer"].usd_per_mtok_in == 5.00
+    assert generate.WRITER_USD_PER_MTOK_OUT == llm.SEATS["writer"].usd_per_mtok_out == 25.00
     usage = {"prompt_tokens": 1000, "completion_tokens": 200}
-    assert generate._step_cost(usage) == pytest.approx(0.0045)  # writer rates
+    assert generate._step_cost(usage) == pytest.approx(0.01)  # Opus rates
 
 
 def test_each_generate_step_logs_its_own_seat_model(migrated_con, fake_model):
@@ -511,11 +516,12 @@ def test_each_generate_step_logs_its_own_seat_model(migrated_con, fake_model):
     fake_model.narrative = stories_payload(slots)
     fake_model.script = compliant_script(slots)
     rep = run(migrated_con, date=A_DAY, refresh=False)
-    seat_model = {"gpt-4o", "claude-haiku-4-5"}
+    # B4 flip (conscious): the narrative rows name the Opus writer seat now.
+    seat_model = {"gpt-4o", "claude-haiku-4-5", "claude-opus-4-8"}
     for s in rep.steps:
         assert s["model"] in seat_model, s
     by_step = {s["step"]: s["model"] for s in rep.steps}
-    assert by_step.get("narrative_A", "gpt-4o") == "gpt-4o"
+    assert by_step.get("narrative_A", "claude-opus-4-8") == "claude-opus-4-8"
     for step, model in by_step.items():
         if step.startswith("script") or step.startswith("editor"):
             assert model == "claude-haiku-4-5", step
@@ -524,17 +530,36 @@ def test_each_generate_step_logs_its_own_seat_model(migrated_con, fake_model):
     ).fetchone()["token_cost"])
     for s in tc["steps"]:
         if s["step"].startswith("narrative"):
-            assert s["model"] == "gpt-4o", s
+            assert s["model"] == "claude-opus-4-8", s
         elif s["step"].startswith(("script", "editor")):
             assert s["model"] == "claude-haiku-4-5", s
 
 
 def test_doctor_cost_line_matches_the_measured_pipeline():
-    from newslens import doctor
+    # FIX-4 (B4, conscious flip): the prior prose pinned a gpt-4o-era measured
+    # figure ("$0.07-0.10") that became a lie of summary the moment the
+    # content seats flipped up to Opus/Sonnet. The line now DERIVES from
+    # llm.SEATS + the config default — pinned here BY DERIVATION (an f-string
+    # built from the same sources), so a future seat/cap change re-renders
+    # the prose and this test follows instead of rotting. The literals
+    # themselves are guarded once, in test_b1_llm_seam_qa's seat-table pin
+    # and test_config_guards' cap pin — never forked into prose pins again.
+    from newslens import config, doctor, llm
 
     (line,) = doctor.cost_estimate()
-    # Rank up-tier to gpt-4o: measured $0.086-0.091/full briefing.
-    assert "$0.07-0.10" in line.text
+    text = line.text
+    w, a = llm.SEATS["writer"], llm.SEATS["analyst"]
+    # derivation pins: the seats' own model strings and prices, rendered
+    assert w.model in text and a.model in text
+    assert f"${w.usd_per_mtok_in:.2f}/${w.usd_per_mtok_out:.2f}" in text
+    assert f"${a.usd_per_mtok_in:.2f}/${a.usd_per_mtok_out:.2f}" in text
+    assert f"${config.DEFAULT_BUDGET_CAP_USD_PER_RUN:.2f}/run" in text
+    # honesty anchors: the direction and the measurement posture
+    assert "ROSE" in text                      # never again claims a drop
+    assert "UNDISCOUNTED" in text              # the cap over-counts, said so
+    assert "MEASURED" in text                  # figures measured, not assumed
+    # the stale gpt-4o-era figure is gone
+    assert "$0.07-0.10" not in text
 
 
 def test_prompt_drift_guards_commit_or_null_and_mechanism_depth():
@@ -1458,14 +1483,23 @@ def llm_http(fake_api, monkeypatch):
 
 
 def test_call_llm_401_names_the_key(llm_http):
+    # B4 flip (conscious): the narrative rides the ANTHROPIC wire now (writer
+    # = Opus 4.8/api), so the 401 shape is the anthropic one and the taxonomy
+    # names the RIGHT console (FIX B, landed in B2 — same tooth: fast-fail,
+    # exactly one POST, the fix named).
     llm_http.add_route(
-        "/chat/completions", status=401,
-        body=json.dumps({"error": {"code": "invalid_api_key", "message": "bad"}}).encode(),
+        "/v1/messages", status=401,
+        body=json.dumps({"type": "error",
+                         "error": {"type": "authentication_error",
+                                   "message": "invalid x-api-key"}}).encode(),
         content_type="application/json",
     )
     with pytest.raises(generate.GenerateError) as excinfo:
         generate.call_llm("sk-x", "p", "narrative", 100, 0.3, True)
-    assert "regenerate at platform.openai.com" in str(excinfo.value)
+    msg = str(excinfo.value)
+    assert "Anthropic rejected the key" in msg
+    assert "console.anthropic.com/settings/keys" in msg
+    assert "platform.openai.com" not in msg          # never misdirects
     assert len([r for r in llm_http.recorded if r["method"] == "POST"]) == 1
 
 

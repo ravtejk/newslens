@@ -42,9 +42,14 @@ from . import llm  # B2 (gate ruling R1): the state seat joins the provider seam
 # days only). Behind a one-constant seam like ANALYSIS_MODEL / WRITER_MODEL —
 # documented one-diff fallback rung: gpt-4o-mini.
 # ---------------------------------------------------------------------------
-STATE_MODEL = "gpt-4o"
-STATE_USD_IN_PER_MTOK = 2.50
-STATE_USD_OUT_PER_MTOK = 10.00
+# B4 (R-B4a): the state seat's model + prices DERIVE from SEATS["state"] ("derive
+# from SEATS or die" — the ranking.RANK_MODEL:61-63 precedent). The state seat
+# STAYS gpt-4o/api this milestone (its own Claude flip is a later milestone), so
+# these values are unchanged — but the literal no longer forks from the seam, so
+# the seat's later flip re-prices this cost path in one diff (in llm.py).
+STATE_MODEL = llm.SEATS["state"].model
+STATE_USD_IN_PER_MTOK = llm.SEATS["state"].usd_per_mtok_in
+STATE_USD_OUT_PER_MTOK = llm.SEATS["state"].usd_per_mtok_out
 STATE_MAX_TOKENS = 400
 STATE_TIMEOUT_S = 60
 STATE_MAX_SENTENCES = 5           # Content write law: <=5 sentences

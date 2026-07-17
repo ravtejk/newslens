@@ -43,10 +43,20 @@ NO_INTERESTS_MSG = (
 #     shrink or skip first; (2) analysis briefs for LOWER-tier depth stories
 #     go before the lead's; (3) the writer's narrative/script/editor passes
 #     degrade LAST (they are the content) — and audio's default is local/$0.
-#   * ESCALATION CONDITION — routine derating at 0.25 (the ladder firing on
-#     normal news days) is a principal checkpoint, NEVER silently absorbed;
-#     real-run costs are measured and reported at every build checkpoint.
-DEFAULT_BUDGET_CAP_USD_PER_RUN = 0.25
+#   * ESCALATION CONDITION — routine derating (the ladder firing on normal news
+#     days) is a principal checkpoint, NEVER silently absorbed; real-run costs
+#     are measured and reported at every build checkpoint.
+#
+# B4 RAISE 0.25 -> 1.50 (PRINCIPAL MONEY CHECKPOINT — the gate presents it):
+# the writer flipped to Opus 4.8 ($5/$25, adaptive thinking billed as output)
+# and the analyst to Sonnet 5 ($3/$15). The GPT-4o-era 0.25 cap made every
+# Opus/Sonnet edition abort at the narrative pre-check (_est_cost prices the
+# 16k-token Opus ceiling pessimistically at $0.40 for the narrative step alone).
+# The approved shadow envelope is ~$0.90-1.30/edition (engineering-3 §1); 1.50
+# clears the pessimistic ceiling-based pre-check with margin for the lead retry.
+# usd_shadow stays UNDISCOUNTED (caching not yet assumed), so the cap over-counts
+# — the safe direction for a money guard. TUNE DOWN once measured spend lands.
+DEFAULT_BUDGET_CAP_USD_PER_RUN = 1.50
 DEFAULT_GENERATE_HOUR_LOCAL = 6
 
 _VALID_SOURCE_KEYS = {

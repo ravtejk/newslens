@@ -360,24 +360,28 @@ def test_per_seat_shadow_math_derives_from_the_seat_table():
     subscription-default anthropic seats, and back to equal when those seats
     are pinned to the api fall-over."""
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
+    # B4 flip (conscious): per-MODEL rates — Haiku 1+5 (subscription default,
+    # charged 0), Opus 5+25 and Sonnet 3+15 (api: charged == shadow), gpt-4o
+    # 2.50+10 for the still-openai seats. The tooth is unchanged: every
+    # seat's math comes from ITS row, never a re-hardcoded global.
+    per_model = {"claude-haiku-4-5": 1.00 + 5.00,
+                 "claude-opus-4-8": 5.00 + 25.00,
+                 "claude-sonnet-5": 3.00 + 15.00,
+                 "gpt-4o": 2.50 + 10.00}
     for name, cfg in llm.SEATS.items():
         fields = llm.cost_fields(cfg, usage)
-        if cfg.provider == "anthropic":
-            assert fields["usd_shadow"] == pytest.approx(1.00 + 5.00), name
+        assert fields["usd_shadow"] == pytest.approx(per_model[cfg.model]), name
+        if cfg.lane == "subscription":
             assert cfg.model == "claude-haiku-4-5", name
-            # B3 default: subscription — charged 0.0, shadow intact
-            assert cfg.lane == "subscription", name
             assert fields["usd_charged"] == 0.0, name
             api_fields = llm.cost_fields(
                 dataclasses.replace(cfg, lane="api"), usage)
             assert api_fields["usd_shadow"] == fields["usd_shadow"], name
             assert api_fields["usd_charged"] == api_fields["usd_shadow"], name
         else:
-            assert fields["usd_shadow"] == pytest.approx(2.50 + 10.00), name
-            assert cfg.model == "gpt-4o", name
             assert fields["usd_charged"] == fields["usd_shadow"], name  # api
     assert {n for n, c in llm.SEATS.items() if c.provider == "anthropic"} \
-        == {"rank", "editor", "script"}
+        == {"rank", "editor", "script", "writer", "analyst"}
     # ranking's module constants stay pure derivations (no fork):
     assert ranking.RANK_MODEL == llm.SEATS["rank"].model
     assert ranking.RANK_USD_PER_MTOK_IN == llm.SEATS["rank"].usd_per_mtok_in
@@ -471,12 +475,17 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
     monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
 
-    def by_url(body, url):
-        if url == llm.ANTHROPIC_MESSAGES_URL:
+    # B4 flip (conscious): BOTH seats ride the anthropic endpoint now (writer
+    # = Opus api, editor pinned to its api fall-over), so the wire-order
+    # proof keys on the request BODY's model instead of the URL. The tooth is
+    # unchanged: the inner editor call may not drag the outer retry onto the
+    # editor's seat, and every ledger row carries its own step's seat.
+    def by_body(body, url):
+        if body.get("model") == "claude-haiku-4-5":
             return ant_native("inner-edit", inp=10, out=20)
-        return OPENAI_CANNED
+        return ant_native("ok", inp=1000, out=200)
 
-    sent = _scripted(monkeypatch, [by_url, by_url, by_url])
+    sent = _scripted(monkeypatch, [by_body, by_body, by_body])
     sink = []
     state = {"inner_ran": False}
 
@@ -491,19 +500,20 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
     content, _ = generate.call_llm("k", "OUTER", "narrative", 100, 0.3, True,
                                    validate=validate, cost_sink=sink)
     assert content == "ok"
-    assert [s["url"] for s in sent] == [
-        ranking.OPENAI_CHAT_URL,        # outer attempt 1 (writer seat)
-        llm.ANTHROPIC_MESSAGES_URL,     # inner editor (Haiku seat)
-        ranking.OPENAI_CHAT_URL,        # outer attempt 2 — RESTORED, not Haiku
+    assert [s["url"] for s in sent] == [llm.ANTHROPIC_MESSAGES_URL] * 3
+    assert [s["body"]["model"] for s in sent] == [
+        "claude-opus-4-8",              # outer attempt 1 (writer seat)
+        "claude-haiku-4-5",             # inner editor
+        "claude-opus-4-8",              # outer attempt 2 — RESTORED, not Haiku
     ]
     rows = [(e["step"], e["attempt"], e["model"], e["lane"]) for e in sink]
     assert rows == [
-        ("narrative", 1, "gpt-4o", "api"),
+        ("narrative", 1, "claude-opus-4-8", "api"),
         ("editor", 1, "claude-haiku-4-5", "api"),
-        ("narrative", 2, "gpt-4o", "api"),
+        ("narrative", 2, "claude-opus-4-8", "api"),
     ]
-    # and the money followed each row's own seat:
-    assert sink[0]["usd"] == pytest.approx(1000 / 1e6 * 2.50 + 200 / 1e6 * 10.00)
+    # and the money followed each row's own seat (Opus 5/25, Haiku 1/5):
+    assert sink[0]["usd"] == pytest.approx(1000 / 1e6 * 5.00 + 200 / 1e6 * 25.00)
     assert sink[1]["usd"] == pytest.approx(10 / 1e6 * 1.00 + 20 / 1e6 * 5.00)
     assert generate._ACTIVE_SEAT_CFG is None
 
@@ -511,18 +521,19 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
 def test_direct_chat_after_an_editor_call_rides_the_writer_seat(monkeypatch):
     """The disarm's observable consequence: a DIRECT _chat call (the
     signature-test/legacy path) after an editor call_llm must ride the
-    historical writer seat (gpt-4o -> openai endpoint), not a leaked seat.
-    B3 makes this a CROSS-TRANSPORT leak check: the editor call rides its
+    writer seat (B4: Opus 4.8 -> the anthropic HTTP endpoint), not a leaked
+    seat. Still a CROSS-TRANSPORT leak check: the editor call rides its
     default subscription lane (the sandbox stub subprocess — zero HTTP), so
     a leaked editor seat would drag the direct _chat into a subprocess and
-    the scripted HTTP recorder would see NOTHING. Exactly one openai POST,
-    model gpt-4o, proves the disarm."""
+    the scripted HTTP recorder would see NOTHING. Exactly one HTTP POST,
+    model claude-opus-4-8, proves the disarm."""
     _no_sleep(monkeypatch)
-    sent = _scripted(monkeypatch, [OPENAI_CANNED])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+    sent = _scripted(monkeypatch, [ant_native("ok")])
     generate.call_llm("k", "p", "editor", 100, 0.5, False)   # stub subprocess
     generate._chat("k", "direct", 100, 0.5, False)
-    assert [s["url"] for s in sent] == [ranking.OPENAI_CHAT_URL]
-    assert sent[0]["body"]["model"] == "gpt-4o"
+    assert [s["url"] for s in sent] == [llm.ANTHROPIC_MESSAGES_URL]
+    assert sent[0]["body"]["model"] == "claude-opus-4-8"
     assert generate._ACTIVE_SEAT_CFG is None
 
 
@@ -650,10 +661,11 @@ def test_state_rewrites_step_row_carries_the_shadow_ledger_keys(
 
 def test_analyst_lane_misconfig_degrades_per_slot_not_run_killing(
         migrated_con, monkeypatch):
-    """FIX-1, analyst side, UNIT level: NEWSLENS_LANE_ANALYST=subscription
-    makes call_analysis_model raise raw LaneUnavailable (kill-class at the
-    wrapper — the sweep pins that), but analyze_story's ladder catches it
-    into a disclosed $0 'failed' StoryAnalysis. B3 UPDATE (FIX-1 ruled and
+    """FIX-1, analyst side, UNIT level. B4 flip (conscious): analyst x
+    subscription is a REGISTERED lane now (Sonnet is anthropic), so the
+    misconfig that proves the ladder's containment regrows on a junk lane —
+    same raw LaneUnavailable from call_analysis_model, same catch into a
+    disclosed $0 'failed' StoryAnalysis. B3 UPDATE (FIX-1 ruled and
     landed): the stage-boundary preflights — run_analysis entry and
     _run_generate_body entry — now kill the run on this config error BEFORE
     any per-slot ladder runs (born-red in test_b3_subscription_lane.py and
@@ -661,7 +673,7 @@ def test_analyst_lane_misconfig_degrades_per_slot_not_run_killing(
     this per-slot arm is reached only by transient-shaped failures. The pin
     stays: the ladder's containment behavior must not silently change."""
     calls = _tripwire(monkeypatch)
-    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "subscription")
+    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "junk")
     cfg = config.SourcesConfig(
         sources=[config.Source(name="Outlet A", rss_url="https://a.example/f")],
         interests_granular=["AI regulation"],

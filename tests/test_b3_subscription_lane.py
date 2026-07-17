@@ -379,17 +379,21 @@ def test_rB3a_two_tuple_state_chat_stays_backward_compatible(migrated_con):
 
 def test_fix1_analyst_subscription_misconfig_kills_the_analysis_stage(
         migrated_con, monkeypatch):
-    """BORN-RED (FIX-1, analyst side): NEWSLENS_LANE_ANALYST=subscription is a
-    config error for an openai seat (openai runs only on api). The STAGE
-    preflight in run_analysis raises LaneUnavailable — the run DIES rather than
-    degrading every slot to a disclosed $0 'failed' brief. Per-slot degrade
-    stays for transient failures; a misconfigured lane is not transient."""
+    """BORN-RED (FIX-1, analyst side), B4 flip (conscious): analyst x
+    subscription is REGISTERED now (Sonnet is anthropic), so the config error
+    that proves the stage preflight regrows on a junk lane — same tooth: the
+    STAGE preflight in run_analysis raises LaneUnavailable and the run DIES
+    rather than degrading every slot to a disclosed $0 'failed' brief.
+    Per-slot degrade stays for transient failures; a misconfigured lane is
+    not transient. (The registered-subscription analyst's own behavior — and
+    the B4-D1 gap that it cannot use the armed fall — is pinned in the b1_qa
+    sweep and test_b4_battery_qa.)"""
     from test_generate import seed_briefing, slot
 
     con = migrated_con
     seed_briefing(con, "2026-07-16", [slot(1)], narrative="")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
-    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "subscription")
+    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "junk")
     with pytest.raises(llm.LaneUnavailable):
         analysis.run_analysis(date="2026-07-16", con=con,
                               tiers_override=["full"])
@@ -463,15 +467,24 @@ def test_D2_both_lanes_dead_dies_on_the_original_subscription_error(monkeypatch)
 
 
 def test_D2_openai_seat_forced_to_subscription_dies_loud_even_when_armed(monkeypatch):
-    """BORN-RED (D2 correctness): an OPENAI seat forced onto 'subscription' (a
-    global NEWSLENS_LANE=subscription hitting writer/analyst/state) has NO
-    subscription provider — that is a config error that DIES LOUD even with the
-    fallback armed. The fall must never silently rescue it onto openai:api (which
-    would mask the misconfig and bill openai while the operator set subscription)."""
+    """BORN-RED (D2 correctness), B4 flip (conscious): the writer is ANTHROPIC
+    now, so the openai-seat example regrows on state (a global/per-seat
+    subscription flip hitting state/synthesis). The tooth is unchanged: an
+    OPENAI seat forced onto 'subscription' has NO subscription provider —
+    that config error DIES LOUD even with the fallback armed. The fall must
+    never silently rescue it onto openai:api (masking the misconfig and
+    billing openai while the operator set subscription). And the flip side,
+    stated positively: the writer's subscription combo is REGISTERED now —
+    with the stub binary resolvable, effective_seat returns it unfallen
+    (ADR-0016 §3: the principal's lane override works without a code change)."""
     monkeypatch.setenv("NEWSLENS_LANE_FALLBACK", "api")
-    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "subscription")
+    monkeypatch.setenv("NEWSLENS_LANE_STATE", "subscription")
     with pytest.raises(llm.LaneUnavailable):
-        llm.effective_seat("writer")   # openai -> openai:subscription: no rescue
+        llm.effective_seat("state")    # openai -> openai:subscription: no rescue
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "subscription")
+    cfg, reason = llm.effective_seat("writer")   # registered + stub binary
+    assert cfg.lane == "subscription" and reason is None
+    assert cfg.model == "claude-opus-4-8"
 
 
 def test_D2_api_default_seat_never_falls_and_is_unlabeled(monkeypatch):

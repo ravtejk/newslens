@@ -186,6 +186,20 @@ SCRUBBED_ENV_VARS = [
     "NEWSLENS_LANE_SCRIPT",
     "NEWSLENS_LANE_SYNTHESIS",
     "NEWSLENS_LANE_STATE",
+    # B4 (QA, the D2-hermeticity precedent): llm.resolve_seat now also reads
+    # NEWSLENS_MODEL_<SEAT> at call time — the battery harness surface. The
+    # principal's shell WILL export NEWSLENS_MODEL_WRITER around the ~07-24
+    # battery runs, and an ambient value silently re-models/re-prices every
+    # writer-seat request in the suite (proven to bite pre-fix:
+    # `NEWSLENS_MODEL_WRITER=claude-fable-5 pytest tests/test_b1_llm_seam*.py`
+    # failed 7 tests, QA run 2026-07-17). Scrub the whole seat family.
+    "NEWSLENS_MODEL_RANK",
+    "NEWSLENS_MODEL_ANALYST",
+    "NEWSLENS_MODEL_WRITER",
+    "NEWSLENS_MODEL_EDITOR",
+    "NEWSLENS_MODEL_SCRIPT",
+    "NEWSLENS_MODEL_SYNTHESIS",
+    "NEWSLENS_MODEL_STATE",
     # B3: the subscription lane's binary override. Scrubbed here, then pointed
     # by sandbox_paths (below) at the canned-success STUB shim above — so no
     # test can ever resolve, let alone SPAWN, the real `claude` on this machine

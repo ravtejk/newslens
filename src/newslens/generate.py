@@ -54,24 +54,32 @@ from . import config, db, llm, memory, paths, ranking
 # read-site's _repetition_subject_units keep resolving unchanged.
 from .memory_core import _REPETITION_RE, _repetition_subject_units
 
-# Writer model (principal amendment 2026-07-05, DECISIONS.md): the writer
-# passes (narrative A/B + script) run on GPT-4o — 4o-mini failed the content
-# contract's pre-registered register-holding trigger on day 1 ("quality of
-# analysis and prose was not good enough"). Ranking has its own seam
-# (ranking.RANK_MODEL — up-tiered to gpt-4o 2026-07-05, mini documented as
-# the fallback rung). One named constant per seam; the fallback ADR's next
-# rung (Claude-class) would be a one-line change here.
-WRITER_MODEL = "gpt-4o"
-WRITER_USD_PER_MTOK_IN = 2.50
-WRITER_USD_PER_MTOK_OUT = 10.00
+# Writer model — B4 (R-B4a): the writer/narrative seat flipped to Claude Opus
+# 4.8 on the Claude API lane (adaptive thinking, effort xhigh). These names now
+# DERIVE from the seam's SEATS["writer"] row (the ranking.RANK_MODEL:61-63
+# precedent — "derive from SEATS or die": llm.SEATS["writer"] KeyErrors loudly if
+# the seat ever disappears, never silently falling to a stale literal). So the
+# legacy `usd` ledger key, _step_cost, and any model label track the seat
+# automatically. REVERT to GPT-4o = flip SEATS["writer"] back to **_GPT4O_API in
+# llm.py, one clean diff. Historical: gpt-4o from 2026-07-05 (4o-mini failed the
+# register trigger day 1); Opus flip 2026-07-16 (B4, battery-judged).
+WRITER_MODEL = llm.SEATS["writer"].model
+WRITER_USD_PER_MTOK_IN = llm.SEATS["writer"].usd_per_mtok_in
+WRITER_USD_PER_MTOK_OUT = llm.SEATS["writer"].usd_per_mtok_out
 LLM_TIMEOUT_S = 120
-# NL-63 M2 (amended slot contract): the writer's completion cap grows with the
-# doubled Today-page depth — a 6-7 story edition at ~1,800-2,500 words is
-# ~3,300-3,600 completion tokens of prose plus the JSON scaffold. 2,800 truncated
-# it (a length-finish = a failed run + a paid retry, MORE spend than the headroom
-# costs). 4,600 fits the largest edition with margin; the per-step cap pre-check
-# still keeps the run under $0.25 (est output at 4,600 tok = $0.046).
-NARRATIVE_MAX_TOKENS = 4600
+# NL-63 M2 (amended slot contract): a 6-7 story edition at ~1,800-2,500 words is
+# ~3,300-3,600 completion tokens of prose plus the JSON scaffold. GPT-4o sized
+# this at 4,600 (prose + margin). B4 — the Opus 4.8 writer runs ADAPTIVE THINKING
+# at effort xhigh, and thinking BILLS AS OUTPUT and counts against max_tokens: a
+# ceiling sized only for prose would length-finish inside the thinking block (a
+# failed run + a paid retry — the expensive failure). 16,000 leaves ~11-12k of
+# thinking headroom above the ~4.6k prose ceiling. This is the on-the-wire
+# ceiling, NOT the expected bill: actual output = thinking + prose, whatever the
+# task earns (a short edition thinks less). The per-step pre-check (_est_cost)
+# prices this ceiling pessimistically at Opus $25/MTok-out = $0.40, so the run
+# budget cap MUST clear it (config.DEFAULT_BUDGET_CAP_USD_PER_RUN raised to $1.50
+# — a principal money checkpoint). Revert-to-GPT-4o would drop this to ~4,600.
+NARRATIVE_MAX_TOKENS = 16000
 # THE PODCAST CONTRACT (principal 2026-07-14, twice-amended: floor REMOVED same
 # day — "as long as it has to be"): a SHORTER digest, emergent length, ceiling
 # only. Size the cap to the "definitely <11 min" ≈ 1,650-word ceiling: ~2,230
@@ -351,6 +359,36 @@ def _resolve_step_seat(step: str) -> "tuple":
     return llm.effective_seat(seat)
 
 
+# B4 prompt caching: the narrative prompt is [stable law] then [volatile edition
+# data]. This sentinel is the boundary — everything before it (voice + the full
+# binding contract incl. the register-spec law) is byte-stable across a variant's
+# calls within an edition run (the corrected retry, an idempotent same-day
+# re-run); everything from it on (reader tags, threads, prior briefing, stories)
+# is the per-edition material. Split there so the law rides a cache_control
+# system block. The marker is unique to the narrative templates — editor_pass /
+# script_adapt do not carry it, so their (Haiku) prompts never split.
+_NARRATIVE_CACHE_SENTINEL = "\n=== THE READER'S TAGS"
+
+
+def _split_cache_prefix(cfg: "llm.SeatConfig", prompt: str):
+    """(system_prefix, user_body) for the anthropic api writer seat, else
+    (None, prompt) unchanged. Gated on provider=='anthropic' so a REVERT to the
+    gpt-4o writer sends the prompt as one user message exactly as pre-B4 (the
+    openai provider has no cached-prefix surface); gated on the sentinel so only
+    the narrative prompt splits. The law text is byte-preserved — only its ROLE
+    moves (user -> system), the standard caching shape; the split is applied
+    uniformly across the battery's model arms, so it never confounds the
+    comparison. cache_control on the system block gives a within-TTL reuse (the
+    retry / same-day re-run) its ~0.1x read; A/B do not share (variant B is
+    retired — one live writer call per edition)."""
+    if cfg.provider != "anthropic":
+        return None, prompt
+    idx = prompt.find(_NARRATIVE_CACHE_SENTINEL)
+    if idx <= 0:
+        return None, prompt
+    return prompt[:idx], prompt[idx:]
+
+
 def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
           json_mode: bool) -> Dict:
     # Transport delegates to the provider seam (llm.py) on _ACTIVE_SEAT_CFG (set
@@ -360,19 +398,22 @@ def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
     # gpt-4o seats; the anthropic provider synthesises the same shape for the
     # Claude lane) so call_llm's parse/retry law is untouched. Keeps its exact
     # signature: it is the suite's monkeypatch target.
+    cfg = _ACTIVE_SEAT_CFG or llm.resolve_seat("writer")
+    system, user = _split_cache_prefix(cfg, prompt)   # B4: narrative caching
     return llm.chat(
         llm.LaneRequest(
-            cfg=_ACTIVE_SEAT_CFG or llm.resolve_seat("writer"),
-            prompt=prompt,
+            cfg=cfg,
+            prompt=user,
             temperature=temperature,
             max_tokens=max_tokens,
             json_mode=json_mode,
             user_agent=WRITER_UA,
             api_key=key,
+            system=system,
             # openai offline-test seam: generate has always POSTed via
             # ranking.OPENAI_CHAT_URL (the suite patches that name). The
-            # anthropic lane (editor/script) reads its own endpoint + credential
-            # and ignores this url.
+            # anthropic lane (writer/editor/script) reads its own endpoint +
+            # credential and ignores this url.
             url=ranking.OPENAI_CHAT_URL,
         )
     ).raw
@@ -570,9 +611,11 @@ def _est_cost(prompt: str, max_tokens: int, step: str = "narrative") -> float:
 
 
 def _step_cost(usage: Dict) -> float:
-    # The writer-family (gpt-4o) rate — retained for the writer/narrative seat.
-    # The per-step display ledger uses _step_ledger below (seat-sourced); this
-    # helper stays writer-rate for the narrative path and its direct test.
+    # The writer/narrative seat's rate — WRITER_USD_* now DERIVE from
+    # SEATS["writer"] (B4: Opus 4.8 $5/$25), so this helper re-prices with the
+    # seat automatically. The per-step DURABLE ledger uses _step_ledger below
+    # (seat-sourced via llm.cost_fields); this helper stays for the narrative
+    # path's direct callers and their pinned test.
     return (usage.get("prompt_tokens", 0) / 1e6) * WRITER_USD_PER_MTOK_IN + (
         usage.get("completion_tokens", 0) / 1e6
     ) * WRITER_USD_PER_MTOK_OUT
@@ -2705,6 +2748,11 @@ def run_generate(
         # next run's steps.
         global _ACTIVE_STEP_SEATS
         _ACTIVE_STEP_SEATS = {}
+        # FIX-1 (B4-D1): clear the analysis stage's published analyst resolution
+        # (generate's stage-entry preflight publishes it; run_analysis reuses it)
+        # so a raise mid-run never leaks a stale (cfg, reason) into the next run.
+        from . import analysis as _analysis_td
+        _analysis_td._clear_analyst()
         if own_con:
             con.close()
 
@@ -2784,7 +2832,16 @@ def _run_generate_body(
     # seat) — no transport, no spend. LaneUnavailable propagates raw, the same
     # kill-class behavior a rank/writer misconfig already has.
     if refresh and not no_threads:
-        llm.check_lane(llm.resolve_seat("analyst"))   # analysis stage
+        # FIX-1 (B4-D1): PUBLISH the analyst's ONE resolution at stage entry
+        # (effective_seat gates + applies the armed fall, replacing the bare
+        # check_lane) OUTSIDE the swallowing analysis try below — a raw
+        # LaneUnavailable still KILLS the run here. run_analysis (which generate
+        # hosts) REUSES this published resolution instead of re-resolving, so the
+        # early kill-gate and the stage's transport/ledger/report ride the SAME
+        # (cfg, reason) — no fork on a mid-run `claude` flap. Torn down in
+        # generate()'s outer finally.
+        from . import analysis as _analysis_pf
+        _analysis_pf._publish_analyst()
     if not no_threads:
         llm.check_lane(llm.resolve_seat("state"))     # memory (state-rewrite) stage
 

@@ -155,53 +155,76 @@ def test_rank_request_bytes_are_the_anthropic_messages_shape(monkeypatch):
 
 
 def test_writer_request_bytes_identical_json_mode_on(monkeypatch):
+    # B4 flip (conscious, QA re-pin): the writer rides Opus 4.8 on the Claude
+    # API lane. Same exact-bytes law (dict insertion order and all), re-pinned
+    # to the anthropic Messages body the provider builds: model, max_tokens,
+    # messages, NO temperature (sampling=False — Opus 4.8 rejects it with a
+    # 400), the json nudge as a PLAIN-STRING system (no cache prefix on a
+    # sentinel-less prompt), thinking adaptive, output_config effort xhigh.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     seen = _capture(monkeypatch)
     generate._chat("sk-qa", "PROMPT-W", 333, 0.7, True)
     expected = json.dumps({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "PROMPT-W"}],
-        "temperature": 0.7,
+        "model": "claude-opus-4-8",
         "max_tokens": 333,
-        "response_format": {"type": "json_object"},
+        "messages": [{"role": "user", "content": "PROMPT-W"}],
+        "system": llm._ANTHROPIC_JSON_SYSTEM,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "xhigh"},
     }).encode("utf-8")
     assert seen["data"] == expected
-    assert seen["url"] == ranking.OPENAI_CHAT_URL   # historical offline seam
-    assert seen["timeout"] == 120
-    assert _hdr(seen["req"], "Authorization") == "Bearer sk-qa"
+    assert b"temperature" not in seen["data"]
+    assert b"budget_tokens" not in seen["data"]
+    assert seen["url"] == llm.ANTHROPIC_MESSAGES_URL   # lane's own endpoint
+    assert seen["timeout"] == 600
+    assert _hdr(seen["req"], "x-api-key") == "sk-ant-qa"
     assert _hdr(seen["req"], "User-Agent") == generate.WRITER_UA
 
 
 def test_writer_request_bytes_identical_json_mode_off(monkeypatch):
-    """response_format OMITTED entirely when json_mode is off (the writer
-    script path never sent it; its presence would be a behavior change)."""
+    """system OMITTED entirely when json_mode is off and no cache prefix is
+    present (the script-shaped call never sent a nudge; its presence would be
+    a behavior change). temperature stays omitted — sampling=False."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     seen = _capture(monkeypatch)
     generate._chat("sk-qa", "PROMPT-S", 512, 0.4, False)
     expected = json.dumps({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "PROMPT-S"}],
-        "temperature": 0.4,
+        "model": "claude-opus-4-8",
         "max_tokens": 512,
+        "messages": [{"role": "user", "content": "PROMPT-S"}],
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "xhigh"},
     }).encode("utf-8")
     assert seen["data"] == expected
     assert b"response_format" not in seen["data"]
+    assert b"temperature" not in seen["data"]
+    assert b"system" not in seen["data"]
 
 
 def test_analysis_request_bytes_identical_and_historical_url(monkeypatch):
+    # B4 flip (conscious, QA re-pin): analyst -> Sonnet 5 on the Claude API
+    # lane. Exact bytes: no temperature (400 on Sonnet 5), json nudge as the
+    # plain-string system (no sentinel in this prompt), adaptive thinking at
+    # effort high, ANALYSIS_MAX_TOKENS = 6000 on the wire.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     seen = _capture(monkeypatch)
     analysis._analysis_chat("sk-qa", "PROMPT-A")
     expected = json.dumps({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "PROMPT-A"}],
-        "temperature": 0.2,
+        "model": "claude-sonnet-5",
         "max_tokens": analysis.ANALYSIS_MAX_TOKENS,
-        "response_format": {"type": "json_object"},
+        "messages": [{"role": "user", "content": "PROMPT-A"}],
+        "system": llm._ANTHROPIC_JSON_SYSTEM,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
     }).encode("utf-8")
     assert seen["data"] == expected
-    # analysis historically POSTed the inline literal; the seam default must
-    # be the same string.
-    assert seen["url"] == "https://api.openai.com/v1/chat/completions"
-    assert llm.OPENAI_CHAT_URL == ranking.OPENAI_CHAT_URL == seen["url"]
-    assert seen["timeout"] == 90
+    assert b"temperature" not in seen["data"]
+    # the anthropic lane reads its own endpoint; the historical openai seam
+    # string is still what the openai seats resolve (pinned in the rank test).
+    assert seen["url"] == llm.ANTHROPIC_MESSAGES_URL
+    assert llm.OPENAI_CHAT_URL == ranking.OPENAI_CHAT_URL \
+        == "https://api.openai.com/v1/chat/completions"
+    assert seen["timeout"] == 240
     assert _hdr(seen["req"], "User-Agent") == analysis.ANALYSIS_UA
 
 
@@ -280,8 +303,12 @@ def test_lane_matrix_rows_follow_the_default_map(env, seat, expect_lane):
     ({"NEWSLENS_LANE": "claude"}, "rank"),          # unknown string
     ({"NEWSLENS_LANE": "API"}, "rank"),             # case-sensitive: unknown
     ({"NEWSLENS_LANE": "   "}, "rank"),             # whitespace-only -> "" lane
-    ({"NEWSLENS_LANE": "subscription"}, "writer"),  # openai seat, global flip
-    ({"NEWSLENS_LANE_ANALYST": "subscription"}, "analyst"),
+    # B4 flip (conscious): writer/analyst are ANTHROPIC seats now — their
+    # subscription combos are REGISTERED and moved out of this fail-loud
+    # matrix (positive pins live in test_b1_llm_seam + test_b4_battery_qa).
+    # The openai-seat-off-api tooth regrows on the still-openai seats.
+    ({"NEWSLENS_LANE": "subscription"}, "state"),   # openai seat, global flip
+    ({"NEWSLENS_LANE_SYNTHESIS": "subscription"}, "synthesis"),
     ({"NEWSLENS_LANE_STATE": "subscription"}, "state"),
     ({"NEWSLENS_LANE_WRITER": "nonsense"}, "writer"),
     ({"NEWSLENS_LANE_RANK": "junk", "NEWSLENS_LANE": "api"}, "rank"),
@@ -337,14 +364,16 @@ def test_per_seat_override_beats_global_and_only_that_seat(monkeypatch):
 
 
 @pytest.mark.parametrize("caller,msg_anchor", [
-    # generate (narrative -> writer seat) and analysis (analyst) are OPENAI
-    # seats: a global subscription flip is still an unregistered combo.
-    ("generate", "no registered implementation"),
-    ("analysis", "no registered implementation"),
-    # B3 flip (conscious): rank/subscription is registered now, so ranking's
-    # config-error row is the AVAILABILITY form — the same global flip PLUS a
-    # binary that does not resolve. Same gate (check_lane), same raw class,
-    # same zero-everything; the message names the binary problem instead.
+    # B4 flip (conscious): writer and analyst are ANTHROPIC seats now, so a
+    # global subscription flip is a REGISTERED lane for all three callers —
+    # every row moves to the AVAILABILITY form ranking already used (the same
+    # global flip PLUS a binary that does not resolve). Same gate
+    # (check_lane), same raw class, same zero-everything; the message names
+    # the binary problem. The unregistered form ("no registered
+    # implementation") keeps its own teeth on the still-openai seats via the
+    # lane-matrix rows above and the state/synthesis wrapper pins elsewhere.
+    ("generate", "NEWSLENS_CLAUDE_BIN"),
+    ("analysis", "NEWSLENS_CLAUDE_BIN"),
     ("ranking", "NEWSLENS_CLAUDE_BIN"),
 ])
 def test_runtime_env_lane_fails_loud_through_all_three_wrappers(
@@ -364,8 +393,7 @@ def test_runtime_env_lane_fails_loud_through_all_three_wrappers(
     monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
     calls = _transport_tripwire(monkeypatch)
     monkeypatch.setenv("NEWSLENS_LANE", "subscription")
-    if caller == "ranking":
-        monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
+    monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     sink = []
     if caller == "generate":
         raiser = lambda: generate.call_llm(
@@ -476,8 +504,13 @@ def test_generate_steps_default_env_transport_and_ledger_agree(monkeypatch):
         return _Resp(_CANNED)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    expect = {"narrative": ("gpt-4o", "api"),
-              "narrative_retry": ("gpt-4o", "api"),
+    # B4 flip (conscious): narrative rows ride the Opus writer seat on the
+    # anthropic api lane now (still HTTP — charged == shadow); editor/script
+    # stay on the $0 subscription stub. The D1 tooth is unchanged: the ledger
+    # names the transport that actually carried the bytes, both directions.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+    expect = {"narrative": ("claude-opus-4-8", "api"),
+              "narrative_retry": ("claude-opus-4-8", "api"),
               "editor": ("claude-haiku-4-5", "subscription"),
               "script": ("claude-haiku-4-5", "subscription"),
               "script_retry": ("claude-haiku-4-5", "subscription")}
@@ -546,14 +579,24 @@ def test_armed_fallback_never_falls_below_the_effective_seat_seam(
     cfg, reason = llm.effective_seat("rank")
     assert cfg.lane == "api" and reason == "subscription_unavailable"
     # armed + unregistered combo (openai seat off the api lane): loud at
-    # EVERY layer including effective_seat (the no-rescue guard)
+    # EVERY layer including effective_seat (the no-rescue guard). B4 flip
+    # (conscious): writer is anthropic now — its subscription combo is
+    # registered and FALLS here instead (asserted below); the no-rescue
+    # tooth regrows on the still-openai state seat.
     with pytest.raises(llm.LaneUnavailable):
         llm.chat(llm.LaneRequest(
-            llm.resolve_seat("writer", {"NEWSLENS_LANE": "subscription"}),
+            llm.resolve_seat("state", {"NEWSLENS_LANE": "subscription"}),
             "p", 0, 10, True, "ua", "k"))
-    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "subscription")
+    monkeypatch.setenv("NEWSLENS_LANE_STATE", "subscription")
     with pytest.raises(llm.LaneUnavailable):
-        llm.effective_seat("writer")
+        llm.effective_seat("state")
+    # and the regrown positive: the writer's registered subscription combo,
+    # armed + binary absent, falls ONCE at the seam, labeled — the writer is
+    # fall-capable now (its caller resolves via effective_seat).
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "subscription")
+    w_cfg, w_reason = llm.effective_seat("writer")
+    assert w_cfg.lane == "api" and w_reason == "subscription_unavailable"
+    assert w_cfg.model == "claude-opus-4-8"
     assert calls == []
 
 
@@ -714,11 +757,13 @@ def test_generate_sink_entry_full_shape_legacy_usd_untouched(monkeypatch):
     assert set(e) == {"step", "attempt", "prompt_tokens", "completion_tokens",
                       "usd", "model", "lane", "cache_read_tokens",
                       "cache_creation_tokens", "usd_shadow", "usd_charged"}
-    # narrative rides the writer seat (still gpt-4o), so legacy `usd` == the
-    # writer-rate _step_cost == usd_charged == usd_shadow.
+    # narrative rides the writer seat (B4: Opus 4.8 — WRITER_USD_* derive from
+    # the seat), so legacy `usd` == the writer-rate _step_cost == usd_charged
+    # == usd_shadow, all at Opus $5/$25 now.
     assert e["usd"] == round(generate._step_cost(resp["usage"]), 6)
     assert e["usd"] == e["usd_shadow"] == e["usd_charged"]
-    assert e["model"] == "gpt-4o" and e["lane"] == "api"
+    assert e["usd"] == round(4321 / 1e6 * 5.00 + 765 / 1e6 * 25.00, 6)
+    assert e["model"] == "claude-opus-4-8" and e["lane"] == "api"
 
 
 # ---------------------------------------------------------------------------
@@ -726,33 +771,56 @@ def test_generate_sink_entry_full_shape_legacy_usd_untouched(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_seat_table_pins_the_b3_stack_exactly():
-    # B3 (conscious flip of the B2 pin): rank/editor/script -> anthropic/
-    # claude-haiku-4-5 ($1.00/$5.00) on the SUBSCRIPTION lane (the mandate:
-    # subscription is ALWAYS the priority; api is the registered fall-over);
-    # the rest stay openai/gpt-4o ($2.50/$10.00) on the api lane. Timeouts
-    # unchanged since B1; thinking/effort stay None everywhere. This guard is
-    # what makes the NEXT lane/model flip deliberate, never accidental.
+    # B4 (conscious flip of the B3 pin — QA re-pinned against ADR-0016):
+    #   writer  -> anthropic/claude-opus-4-8 on the API lane, $5.00/$25.00,
+    #              adaptive thinking, effort xhigh, sampling OFF (Opus 4.8
+    #              400s on temperature), timeout 600s;
+    #   analyst -> anthropic/claude-sonnet-5 on the API lane, $3.00/$15.00
+    #              (the STANDARD price, not the 2026-08-31 intro — a money
+    #              guard never under-prices), adaptive thinking, effort high,
+    #              sampling OFF, timeout 240s;
+    #   rank/editor/script stay Haiku/subscription ($1.00/$5.00, sampling ON,
+    #   no thinking — mechanical seats); state/synthesis stay openai/gpt-4o
+    #   ($2.50/$10.00, sampling ON). This guard is what makes the NEXT
+    #   model/lane/knob flip deliberate, never accidental.
     assert set(llm.SEATS) == {"rank", "analyst", "writer", "editor", "script",
                               "synthesis", "state"}
     haiku_sub = {"rank", "editor", "script"}
-    timeouts = {"rank": 90, "analyst": 90, "writer": 120, "editor": 120,
+    timeouts = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
                 "script": 120, "synthesis": 120, "state": 60}
     for name, cfg in llm.SEATS.items():
         assert cfg.seat == name
         assert cfg.timeout_s == timeouts[name]
-        assert cfg.thinking is None and cfg.effort is None
-        if name in haiku_sub:
+        if name == "writer":
+            assert (cfg.provider, cfg.model, cfg.lane) == \
+                ("anthropic", "claude-opus-4-8", "api")
+            assert cfg.usd_per_mtok_in == 5.00
+            assert cfg.usd_per_mtok_out == 25.00
+            assert cfg.thinking == "adaptive" and cfg.effort == "xhigh"
+            assert cfg.sampling is False
+        elif name == "analyst":
+            assert (cfg.provider, cfg.model, cfg.lane) == \
+                ("anthropic", "claude-sonnet-5", "api")
+            assert cfg.usd_per_mtok_in == 3.00
+            assert cfg.usd_per_mtok_out == 15.00
+            assert cfg.thinking == "adaptive" and cfg.effort == "high"
+            assert cfg.sampling is False
+        elif name in haiku_sub:
             assert cfg.lane == "subscription", name
             assert cfg.provider == "anthropic"
             assert cfg.model == "claude-haiku-4-5"
             assert cfg.usd_per_mtok_in == 1.00
             assert cfg.usd_per_mtok_out == 5.00
+            assert cfg.thinking is None and cfg.effort is None
+            assert cfg.sampling is True, name    # Haiku still sends temperature
         else:
             assert cfg.lane == "api", name
             assert cfg.provider == "openai"
             assert cfg.model == "gpt-4o"
             assert cfg.usd_per_mtok_in == 2.50
             assert cfg.usd_per_mtok_out == 10.00
+            assert cfg.thinking is None and cfg.effort is None
+            assert cfg.sampling is True, name    # gpt-4o still sends temperature
 
 
 def test_seat_for_step_covers_every_live_generate_step():
@@ -763,9 +831,21 @@ def test_seat_for_step_covers_every_live_generate_step():
     assert llm.seat_for_step("script") == "script"
     assert llm.seat_for_step("script_retry") == "script"
     assert llm.seat_for_step("rank_select") == "rank"
-    # unknown steps default to writer — value-neutral in B1 (identical seat),
-    # revisit at B4 when the writer family forks models.
-    assert llm.seat_for_step("mystery_step") == "writer"
+    # FIX-6 (B4, conscious flip of the B1 default): an unknown step RAISES —
+    # the old silent default-to-writer was value-neutral when the whole
+    # writer family was gpt-4o, but post-B4 it would bill the Opus seat (the
+    # priciest, thinking-on) AND mislabel the ledger under a typo'd/new
+    # step. The error must name the fix (the prefix table) so the next new
+    # step is a deliberate row, never an accident.
+    with pytest.raises(ValueError) as exc:
+        llm.seat_for_step("mystery_step")
+    msg = str(exc.value)
+    assert "mystery_step" in msg
+    assert "_STEP_PREFIX_SEAT" in msg
+    for prefix in ("rank", "narrative", "editor", "script"):
+        assert prefix in msg                       # the known rows, named
+    with pytest.raises(ValueError):
+        llm.seat_for_step("")                      # empty string is unknown too
 
 
 # ---------------------------------------------------------------------------
@@ -842,15 +922,16 @@ def test_doctor_lanes_bad_lane_fails_every_seat_naming_the_fix():
 
 
 def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
-    """The B3 shape of the old every-seat test: a global subscription flip is
-    a config error ONLY for the openai seats (openai runs api-only); the three
-    anthropic seats render INFO on their now-registered lane."""
+    """The B3 shape of the old every-seat test, B4-flipped (conscious): the
+    writer/analyst joined the anthropic family, so a global subscription flip
+    is a config error ONLY for the two still-openai seats (state/synthesis);
+    the five anthropic seats render INFO on their registered lane."""
     results = doctor.check_llm_lanes({"NEWSLENS_LANE": "subscription"})
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
     infos = [r for r in seat_results if r.status == doctor.INFO]
-    assert len(fails) == 4                           # analyst/writer/synthesis/state
-    assert len(infos) == 3                           # rank/editor/script
+    assert len(fails) == 2                           # synthesis/state
+    assert len(infos) == 5                # rank/editor/script + writer/analyst
     for r in fails:
         assert "no registered implementation" in r.text
     for r in infos:
@@ -921,6 +1002,12 @@ def test_conftest_scrubs_the_b1_lane_env_vars():
                 # would re-aim every subscription spawn in the suite)
                 "NEWSLENS_CLAUDE_BIN"}
     required |= {f"NEWSLENS_LANE_{s.upper()}" for s in llm.SEATS}
+    # B4: resolve_seat reads NEWSLENS_MODEL_<SEAT> too (the battery override
+    # surface). Same law, same bite (an ambient NEWSLENS_MODEL_WRITER export
+    # — exactly what the ~07-24 battery workflow sets — failed 7 seam tests
+    # pre-fix). Derived from llm.SEATS so a NEW seat grows its scrub
+    # requirement automatically.
+    required |= {f"NEWSLENS_MODEL_{s.upper()}" for s in llm.SEATS}
     missing = required - scrubbed
     assert not missing, (
         f"B1 env vars not scrubbed (ambient exports leak into the suite): "
@@ -1256,6 +1343,17 @@ def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
                                       gate_cfg.lane) in _REGISTERED_LANES
                         sub_dead = (gate_cfg.lane == "subscription"
                                     and bin_absent)
+                        # B4-D1 CLOSED (FIX-1, 2026-07-17 — the conscious
+                        # flip this oracle's as-is pin demanded): the
+                        # analyst caller now resolves ONCE via the published
+                        # _ACTIVE_ANALYST holder (effective_seat under it),
+                        # so an analyst-on-subscription outage with the
+                        # fallback armed COMPLETES as a labeled fall exactly
+                        # like the generate/rank callers — `can_fall` is
+                        # deleted and every fall-capable caller shares one
+                        # oracle arm again. The analyst's fallen ledger rows
+                        # carry lane='api(fallback:subscription_unavailable)'
+                        # through cost_fields(fallback_reason=...).
                         if not registered:
                             expect = "blocked"
                         elif sub_dead:
@@ -1376,8 +1474,11 @@ def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
     assert tallies["api"] > 0
     assert tallies["subscription"] > 0
     assert tallies["fallback"] > 0                 # the D2 arm actually ran
-    # the armed axis splits the absent-bin combos exactly in half: armed
-    # falls (labeled), unarmed dies — nothing in between
+    # B4-D1 closed (FIX-1): EVERY caller is fall-capable again — generate
+    # steps and rank via their published step seats, the analyst via the
+    # _ACTIVE_ANALYST holder — so the armed axis splits the absent-bin
+    # combos exactly in half: armed falls (labeled), unarmed dies. Nothing
+    # in between; a caller losing its fall seam breaks this arithmetic.
     assert sub_axis_runs == 2 * tallies["fallback"]
     assert tallies["blocked"] >= sub_axis_runs - tallies["fallback"]
     # B3-D1's acceptance arm (see the collector note above): every completed

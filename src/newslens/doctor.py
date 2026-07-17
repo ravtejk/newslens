@@ -882,9 +882,10 @@ def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
 
 def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     """The provider-seam lane map: one line per seat showing the resolved
-    provider/model/lane + per-seat price, plus fallback state. B2: rank/editor/
-    script now show the Claude API lane on Haiku 4.5; writer/analyst/synthesis/
-    state stay gpt-4o on the api lane. A seat resolved (via NEWSLENS_LANE /
+    provider/model/lane + per-seat price, plus fallback state. B4 stack:
+    rank/editor/script run Haiku 4.5 on the SUBSCRIPTION lane; the writer runs
+    Opus 4.8 and the analyst Sonnet 5 on the api lane; synthesis/state stay
+    gpt-4o on the api lane. A seat resolved (via NEWSLENS_LANE /
     NEWSLENS_LANE_<SEAT>) to a lane with no registered provider is flagged
     FAIL here — the same fail-loud condition the run itself hits."""
     out: List[Result] = []
@@ -917,27 +918,39 @@ def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     out.append(Result(
         INFO,
         "registered lanes: openai/api, anthropic/api, anthropic/subscription "
-        "(the claude -p lane, B3) — anthropic seats DEFAULT to subscription, "
-        "the api lane is their registered fall-over",
+        "(the claude -p lane, B3) — the Haiku seats (rank/editor/script) DEFAULT "
+        "to subscription with api as their fall-over; the writer (Opus) and "
+        "analyst (Sonnet) DEFAULT to api (B4: effort maps exactly and the "
+        "truncation guard fires there)",
     ))
     return out
 
 
 def cost_estimate() -> List[Result]:
+    # FIX-4 (B4, NEW-1): the figures DERIVE from llm.SEATS so this prose can never
+    # drift from the seat table again (the prior text claimed cost was DROPPING —
+    # a lie of summary once the content seats flipped up to Opus/Sonnet).
+    w = llm.SEATS["writer"]
+    a = llm.SEATS["analyst"]
+    cap = config.DEFAULT_BUDGET_CAP_USD_PER_RUN
     return [
         Result(
             INFO,
-            "estimated cost-per-run is DROPPING with the B2 Claude-lane flip: "
-            "rank + editor + script now run Haiku 4.5 ($1.00/$5.00 per MTok, "
-            "~5x cheaper in / 2x cheaper out than GPT-4o), narrative stays "
-            "GPT-4o ($2.50/$10.00). The prior all-GPT-4o text pipeline ran "
-            "~$0.07-0.10/run; the new mixed map is lower — the exact figure is "
-            "a B2 budget re-baseline the principal's first real generate will "
-            "measure. Plus ~$0.07/run audio on the default TTS — gpt-4o-mini-tts "
-            "(~$0.015/min; the 2026-07-06 ear-test ruling; measured $0.067 on a "
-            "4.4-min episode). Pin settings.tts_engine: kokoro for the $0 local "
-            "fallback. Real per-step costs are logged to briefings.token_cost "
-            "on every generate (now with per-seat model/lane/shadow keys)",
+            "estimated cost-per-run ROSE with the B4 content-seat flip: the "
+            f"writer is {w.model} (${w.usd_per_mtok_in:.2f}/"
+            f"${w.usd_per_mtok_out:.2f} per MTok, adaptive thinking billed as "
+            f"output) and the analyst is {a.model} (${a.usd_per_mtok_in:.2f}/"
+            f"${a.usd_per_mtok_out:.2f}); rank/editor/script stay Haiku 4.5 on "
+            "the subscription lane (usd_charged 0.0, shadow-counted). Approved "
+            f"envelope ~$0.90-1.30/edition; the budget cap defaults to "
+            f"${cap:.2f}/run (the shadow is UNDISCOUNTED — the cap OVER-counts, "
+            "the safe direction for a money guard). The exact figure is MEASURED "
+            "at the first real edition + the ~07-24 battery, never assumed. Plus "
+            "~$0.07/run audio on the default TTS — gpt-4o-mini-tts (~$0.015/min; "
+            "the 2026-07-06 ear-test ruling; measured $0.067 on a 4.4-min "
+            "episode). Pin settings.tts_engine: kokoro for the $0 local "
+            "fallback. Real per-step costs land in briefings.token_cost on every "
+            "generate (per-seat model/lane/shadow keys)",
         )
     ]
 

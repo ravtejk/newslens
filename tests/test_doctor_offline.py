@@ -70,7 +70,7 @@ def test_keyless_template_run_exits_1_with_fix_hints_and_zero_network(
     # GNews stays informational, never a required failure.
     assert "○ GNEWS_API_KEY not set" in out
     # Unset guards report their documented defaults.
-    assert "default 0.25" in out  # M9 ruling 2026-07-06
+    assert "default 1.50" in out  # B4 raise 2026-07-16 (0.25 at M9 before)
     assert "default 6" in out
 
 

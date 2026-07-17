@@ -102,16 +102,30 @@ def test_post_chat_routes_through_seam_as_rank_seat(monkeypatch):
 
 
 def test_generate_chat_routes_through_seam_as_writer_seat(monkeypatch):
+    # B4 flip (conscious, QA re-pin): the writer seat rides the Claude API lane
+    # on Opus 4.8 now. Same proof as before — _chat routes through the seam and
+    # the request is shaped by the SEAT row — re-pinned to the anthropic
+    # Messages body: temperature OMITTED (sampling=False; Opus 4.8 400s on it),
+    # thinking adaptive + effort xhigh present, max_tokens passed through,
+    # POSTed to the anthropic endpoint (req.url ignored), timeout 600s.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
     seen = _capture(monkeypatch)
     generate._chat("sk-x", "hello", 512, 0.7, True)
-    assert seen["body"]["model"] == "gpt-4o"
-    assert seen["body"]["temperature"] == 0.7
-    assert seen["body"]["max_tokens"] == 512
-    assert seen["body"]["response_format"] == {"type": "json_object"}
+    body = seen["body"]
+    assert body["model"] == "claude-opus-4-8"
+    assert "temperature" not in body            # sampling=False — never a 400
+    assert body["max_tokens"] == 512
+    assert body["thinking"] == {"type": "adaptive"}
+    assert body["output_config"] == {"effort": "xhigh"}
+    assert "budget_tokens" not in json.dumps(body)
+    assert body["system"] == llm._ANTHROPIC_JSON_SYSTEM  # json nudge, no prefix
+    assert "response_format" not in body        # anthropic body, not openai
     assert _hdr(seen["req"], "User-Agent") == generate.WRITER_UA
-    # generate has always POSTed via ranking.OPENAI_CHAT_URL (the offline seam)
-    assert seen["url"] == ranking.OPENAI_CHAT_URL
-    assert seen["timeout"] == llm.SEATS["writer"].timeout_s == 120
+    assert _hdr(seen["req"], "x-api-key") == "sk-ant-fake"
+    # the anthropic lane reads its own endpoint; the openai offline-seam url
+    # the caller still passes is ignored.
+    assert seen["url"] == llm.ANTHROPIC_MESSAGES_URL
+    assert seen["timeout"] == llm.SEATS["writer"].timeout_s == 600
 
 
 def test_generate_chat_omits_response_format_when_not_json_mode(monkeypatch):
@@ -121,14 +135,24 @@ def test_generate_chat_omits_response_format_when_not_json_mode(monkeypatch):
 
 
 def test_analysis_chat_routes_through_seam_as_analyst_seat(monkeypatch):
+    # B4 flip (conscious, QA re-pin): analyst seat -> Claude Sonnet 5 on the
+    # api lane. Same routing proof, re-pinned to the anthropic body: no
+    # temperature (Sonnet 5 400s on it), adaptive thinking at effort high,
+    # ANALYSIS_MAX_TOKENS (6000 — thinking headroom) on the wire, timeout 240s.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
     seen = _capture(monkeypatch)
     analysis._analysis_chat("sk-x", "hello")
-    assert seen["body"]["model"] == "gpt-4o"
-    assert seen["body"]["temperature"] == 0.2
-    assert seen["body"]["max_tokens"] == analysis.ANALYSIS_MAX_TOKENS
-    assert seen["body"]["response_format"] == {"type": "json_object"}
+    body = seen["body"]
+    assert body["model"] == "claude-sonnet-5"
+    assert "temperature" not in body            # sampling=False — never a 400
+    assert body["max_tokens"] == analysis.ANALYSIS_MAX_TOKENS == 6000
+    assert body["thinking"] == {"type": "adaptive"}
+    assert body["output_config"] == {"effort": "high"}
+    assert "budget_tokens" not in json.dumps(body)
+    assert "response_format" not in body
     assert _hdr(seen["req"], "User-Agent") == analysis.ANALYSIS_UA
-    assert seen["timeout"] == llm.SEATS["analyst"].timeout_s == 90
+    assert seen["url"] == llm.ANTHROPIC_MESSAGES_URL
+    assert seen["timeout"] == llm.SEATS["analyst"].timeout_s == 240
 
 
 # ---------------------------------------------------------------------------
@@ -137,16 +161,24 @@ def test_analysis_chat_routes_through_seam_as_analyst_seat(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_unavailable_lane_fails_loud_naming_the_fix():
-    # B3: rank/subscription is now a REGISTERED lane, so the fail-loud case moves
-    # to a genuinely unavailable combo — an OPENAI seat forced onto a non-api
-    # lane (openai runs ONLY on the api lane). Still fail-loud, still names the
-    # fix (unchanged intent). The subscription-lane's own unavailability (missing
-    # binary) is proven in test_b3_subscription_lane.py.
-    cfg = llm.resolve_seat("writer", {"NEWSLENS_LANE": "subscription"})
+    # B4 flip (conscious, QA re-pin): the writer is ANTHROPIC now, so
+    # writer x subscription is a REGISTERED lane (the gate/principal's
+    # override path — see the resolve assert below). The fail-loud case moves
+    # to a still-openai seat forced off the api lane (state; openai runs ONLY
+    # on api). Still fail-loud, still names the fix — unchanged intent.
+    cfg = llm.resolve_seat("state", {"NEWSLENS_LANE": "subscription"})
     assert cfg.lane == "subscription" and cfg.provider == "openai"
     with pytest.raises(llm.LaneUnavailable) as exc:
         llm.chat(llm.LaneRequest(cfg, "p", 0, 10, True, "ua", "k"))
     assert "NEWSLENS_LANE" in str(exc.value)
+    # the conscious regrow, stated positively: NEWSLENS_LANE_WRITER=subscription
+    # is now a valid registered anthropic lane (ADR-0016 §3 — the lane-ruling
+    # override must work without a code change). resolve keeps everything but
+    # the lane; the provider registry has a row for it.
+    w = llm.resolve_seat("writer", {"NEWSLENS_LANE_WRITER": "subscription"})
+    assert w.provider == "anthropic" and w.lane == "subscription"
+    assert w.model == "claude-opus-4-8"          # only the lane moved
+    llm._select_provider(w)                      # registered — does NOT raise
 
 
 def test_per_seat_lane_override_wins_over_global():
@@ -161,17 +193,25 @@ def test_per_seat_lane_override_wins_over_global():
 # ---------------------------------------------------------------------------
 
 def test_seat_map_after_b2_haiku_flip():
-    # B3 (subscription-lane mandate): rank/editor/script run Haiku 4.5 and DEFAULT
-    # to the claude -p SUBSCRIPTION lane (the api lane is their registered
-    # fall-over); analyst/writer/synthesis + the state seat stay gpt-4o on the
-    # api lane. This guard makes both the model flip (B2) and the lane flip (B3)
-    # deliberate, never accidental.
+    # B4 (conscious flip of the B3 pin): the two content seats the ~07-24
+    # battery judges flip — WRITER -> Opus 4.8 and ANALYST -> Sonnet 5, both on
+    # the Claude API lane (ADR-0016 §3 Option C: effort maps exactly and the
+    # truncation guard fires there; the seam still allows a subscription
+    # override per seat). rank/editor/script stay Haiku on subscription;
+    # state/synthesis stay gpt-4o on api. This guard makes every model/lane
+    # flip deliberate, never accidental.
     haiku_sub = {"rank", "editor", "script"}
     for name, cfg in llm.SEATS.items():
         if name in haiku_sub:
             assert cfg.provider == "anthropic", name
             assert cfg.model == "claude-haiku-4-5", name
             assert cfg.lane == "subscription", name
+        elif name == "writer":
+            assert cfg.provider == "anthropic" and cfg.lane == "api"
+            assert cfg.model == "claude-opus-4-8"
+        elif name == "analyst":
+            assert cfg.provider == "anthropic" and cfg.lane == "api"
+            assert cfg.model == "claude-sonnet-5"
         else:
             assert cfg.provider == "openai", name
             assert cfg.model == "gpt-4o", name
@@ -263,6 +303,7 @@ def test_generate_cost_sink_gains_lane_and_shadow_keys(monkeypatch):
     assert sink, "cost_sink recorded no attempt"
     e = sink[0]
     assert e["step"] == "narrative"
-    assert e["lane"] == "api" and e["model"] == "gpt-4o"
+    # B4 flip (conscious): the narrative row names the Opus writer seat now.
+    assert e["lane"] == "api" and e["model"] == "claude-opus-4-8"
     assert "usd_shadow" in e and "usd_charged" in e
     assert e["usd"] == e["usd_charged"]        # legacy key preserved

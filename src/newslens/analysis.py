@@ -503,12 +503,24 @@ def fetch_stats(records: List[FetchRecord]) -> Dict:
 import sqlite3
 from datetime import datetime, timezone
 
-ANALYSIS_MODEL = "gpt-4o"          # strongest available on the held key
-                                   # (engineering 2026-07-06 §4); fallback
-                                   # rung: gpt-4o-mini (one-diff revert)
-ANALYSIS_USD_IN_PER_MTOK = 2.50
-ANALYSIS_USD_OUT_PER_MTOK = 10.00
-ANALYSIS_MAX_TOKENS = 1400
+# B4 (R-B4a): the analyst seat flipped to Claude Sonnet 5 on the Claude API lane
+# (adaptive thinking, effort high). These names DERIVE from SEATS["analyst"]
+# ("derive from SEATS or die" — the ranking.RANK_MODEL:61-63 precedent;
+# llm.SEATS["analyst"] KeyErrors loudly if the seat vanishes) so the persisted
+# `model` label, estimate_synthesis_usd, and the shadow all track the seat.
+# REVERT to GPT-4o = flip SEATS["analyst"] back to **_GPT4O_API in llm.py.
+ANALYSIS_MODEL = llm.SEATS["analyst"].model
+ANALYSIS_USD_IN_PER_MTOK = llm.SEATS["analyst"].usd_per_mtok_in
+ANALYSIS_USD_OUT_PER_MTOK = llm.SEATS["analyst"].usd_per_mtok_out
+# B4: Sonnet 5 runs adaptive thinking (effort high) and thinking BILLS AS OUTPUT
+# and counts against max_tokens — 1,400 (a ~700-word brief on GPT-4o) would
+# length-finish inside the thinking block, tripping validate_brief's truncation
+# retry on every slot. 6,000 leaves ~5k of thinking headroom above the ~950-token
+# brief. On-the-wire ceiling, not the bill (output = thinking + brief). The
+# finish_reason=="length" guard still fires here (an api-lane property the
+# subscription lane lacks) so a genuine over-run is a caught retry, never a
+# silently truncated brief. Revert-to-GPT-4o would drop this to ~1,400.
+ANALYSIS_MAX_TOKENS = 6000
 ANALYSIS_TIMEOUT_S = 90
 SONAR_EST_USD = 0.012              # measured spike ~$0.007 + headroom
 WORD_BUDGETS = {"full": 700, "medium": 400}
@@ -1373,25 +1385,89 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
 # The call, the loop, the ladder
 # ---------------------------------------------------------------------------
 
+# B4 prompt caching: analysis_brief.txt is [static instructions] then [per-slot
+# data]. Everything before this line is byte-identical across EVERY analyst call
+# (every slot, every edition) — the cleanest "shared-briefs prefix" the transcript
+# names: an edition's 6-7 slot calls run seconds apart, so slots 2..N read the
+# cached instruction block within the 5-minute TTL. Split there for the anthropic
+# seat; caching engages only once the prefix clears Sonnet's 2,048-token cache
+# minimum (measured on live/battery runs, per "measured, not assumed").
+_ANALYST_CACHE_SENTINEL = "\nWord budget for all prose fields combined:"
+
+
+# FIX-1 (B4-D1, the ranking._ACTIVE_RANK twin): the analyst seat is resolved
+# through effective_seat ONCE per analysis operation and threaded to EVERY
+# reader — _analysis_chat's TRANSPORT, call_analysis_model's cost_fields ledger,
+# and run_analysis's report-lane label — via this stage-scoped global. Before
+# this, _analysis_chat re-resolved (resolve_seat) independently of the gate/
+# cost_fields resolution: a `claude` binary that flapped mid-stage (a CLI
+# reinstall/upgrade) could FORK the transport lane from the ledger/report lane —
+# the D1 lie via a new door, now that the analyst is a Claude seat (B4). One
+# resolution closes it: every reader rides the same (cfg, reason), so a flap
+# dies loud or is labeled truthfully, never silently. Published by the OUTERMOST
+# of generate's stage-entry preflight / run_analysis / call_analysis_model;
+# nested calls reuse it (own-scope teardown).
+_ACTIVE_ANALYST: Optional[Tuple["llm.SeatConfig", Optional[str]]] = None
+
+
+def _effective_analyst() -> Tuple["llm.SeatConfig", Optional[str]]:
+    """The active (cfg, fallback_reason) for the current analysis operation —
+    the stage-scoped resolution if one is published, else a fresh effective_seat
+    (a direct _analysis_chat outside call_analysis_model — the signature-test
+    path; ranking._effective_rank's twin)."""
+    if _ACTIVE_ANALYST is not None:
+        return _ACTIVE_ANALYST
+    return llm.effective_seat("analyst")
+
+
+def _publish_analyst() -> Tuple["llm.SeatConfig", Optional[str]]:
+    """Resolve the analyst seat ONCE (effective_seat = gate + the principal-armed
+    fall) and publish it for the whole stage. Raises LaneUnavailable on a
+    misconfig — the stage-entry kill FIX-1 (B3) preserved, now via the SAME
+    resolution the transport rides. The caller owns teardown (_clear_analyst)."""
+    global _ACTIVE_ANALYST
+    _ACTIVE_ANALYST = llm.effective_seat("analyst")
+    return _ACTIVE_ANALYST
+
+
+def _clear_analyst() -> None:
+    global _ACTIVE_ANALYST
+    _ACTIVE_ANALYST = None
+
+
 def _analysis_chat(key: str, prompt: str) -> Dict:
     """One-retry synthesis call on the ANALYSIS_MODEL seam. Transport delegates
-    to the provider seam (llm.py, B1): analyst seat = gpt-4o / api / timeout
-    90s (llm.SEATS["analyst"]), temperature 0.2, json_mode on — the request is
-    byte-identical to the historical POST. Returns the native OpenAI dict so
-    call_analysis_model's parse/retry law is untouched. Keeps its signature:
-    it is the suite's monkeypatch target.
+    to the provider seam (llm.py): analyst seat = Claude Sonnet 5 / api / timeout
+    240s (llm.SEATS["analyst"]), adaptive thinking at effort high. temperature is
+    OMITTED by the provider (Sonnet 5 rejects it — sampling=False; the 0.2 passed
+    here is ignored). Returns the OpenAI-shaped .raw so call_analysis_model's
+    parse/retry law is untouched. Keeps its signature: it is a monkeypatch
+    target.
 
-    The analyst seat STAYS gpt-4o/api in B2 (its flip to Sonnet is B4); only the
-    cost PATH migrates onto the seam's shadow ledger — see call_analysis_model."""
+    B4: the static instruction block rides a cache_control system prefix (the
+    per-slot data stays the volatile user prompt); openai (a revert) sends the
+    whole prompt as one user message unchanged (provider-gated split).
+
+    FIX-1 (B4-D1): the cfg is the stage's ONE published resolution
+    (_effective_analyst), never a fresh resolve_seat — so the transport rides the
+    SAME seat the gate checked and the ledger/report lane record."""
+    cfg, _ = _effective_analyst()
+    system = None
+    prompt_body = prompt
+    if cfg.provider == "anthropic":
+        idx = prompt.find(_ANALYST_CACHE_SENTINEL)
+        if idx > 0:
+            system, prompt_body = prompt[:idx], prompt[idx:]
     return llm.chat(
         llm.LaneRequest(
-            cfg=llm.resolve_seat("analyst"),
-            prompt=prompt,
+            cfg=cfg,
+            prompt=prompt_body,
             temperature=0.2,
             max_tokens=ANALYSIS_MAX_TOKENS,
             json_mode=True,
             user_agent=ANALYSIS_UA,
             api_key=key,
+            system=system,
         )
     ).raw
 
@@ -1405,37 +1481,48 @@ def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float]:
     truncation/parse still spent real money against the $0.25 cap, and the
     log must carry real spend (BUG-6 money-honesty class).
 
-    B2 (dispatch item 4): the float accumulator now DERIVES from the seam's
-    shadow ledger — llm.cost_fields(analyst_cfg, usage)["usd_charged"] — rather
-    than the module ANALYSIS_USD_* constants, so the analyst cost path speaks the
-    seat's lane/shadow language and re-prices automatically when B4 flips analyst
-    -> Sonnet. The analyst seat stays gpt-4o/api this milestone, so the value is
-    unchanged. The signature is preserved (ADR-0014 §2, pinned by
-    test_signatures_preserved: this is a suite monkeypatch target); the
-    lane/model are surfaced on run_analysis's report."""
-    # D1 fail-loud gate: preflight the analyst seat's lane ONCE, before any
-    # transport or retry, so a NEWSLENS_LANE / NEWSLENS_LANE_ANALYST override to
-    # an unimplemented lane surfaces immediately, never after a pointless
-    # retry+sleep. The SAME resolution feeds cost_fields (transport-seat ==
-    # ledger-seat — the D1 close).
-    analyst_cfg = llm.resolve_seat("analyst")
-    llm.check_lane(analyst_cfg)
+    B2 (dispatch item 4): the float accumulator DERIVES from the seam's shadow
+    ledger — llm.cost_fields(cfg, usage)["usd_charged"] — not the module
+    ANALYSIS_USD_* constants, so the analyst cost path re-prices automatically.
+    B4: the analyst is Claude Sonnet 5 on the api lane (SEATS["analyst"]).
+
+    FIX-1 (B4-D1): the ONE resolution the transport, this cost_fields ledger, and
+    run_analysis's report lane all ride is published on _ACTIVE_ANALYST
+    (effective_seat = gate + armed fall). When a stage (generate/run_analysis)
+    already published it, this reuses it; a direct call owns + tears down its own
+    scope. The fallback_reason rides cost_fields so a fallen row is labeled
+    api(fallback:…). Signature preserved (ADR-0014 §2, test_signatures_preserved
+    pins it — a monkeypatch target)."""
+    global _ACTIVE_ANALYST
+    _own = _ACTIVE_ANALYST is None
+    if _own:
+        # Direct call (no stage scope): resolve ONCE here — the fail-loud gate
+        # (effective_seat raises LaneUnavailable on a misconfig, before any
+        # transport/retry) and the published resolution both attempts + the
+        # cost ledger ride (transport-seat == ledger-seat, the D1 close).
+        _publish_analyst()
+    analyst_cfg, analyst_fb = _ACTIVE_ANALYST
     last: Exception = RuntimeError("unreachable")
     total_cost = 0.0
-    for attempt in (1, 2):
-        try:
-            payload = _analysis_chat(key, prompt)
-            usage = payload.get("usage") or {}
-            total_cost += llm.cost_fields(analyst_cfg, usage)["usd_charged"]
-            choice = payload["choices"][0]
-            if choice.get("finish_reason") == "length":
-                raise ValueError(f"truncated at {ANALYSIS_MAX_TOKENS} tokens")
-            return json.loads(choice["message"]["content"]), total_cost
-        except Exception as exc:  # noqa: BLE001 — one retry for the whole class
-            last = exc
-            if attempt == 1:
-                time.sleep(1.0)
-    raise last
+    try:
+        for attempt in (1, 2):
+            try:
+                payload = _analysis_chat(key, prompt)
+                usage = payload.get("usage") or {}
+                total_cost += llm.cost_fields(
+                    analyst_cfg, usage, fallback_reason=analyst_fb)["usd_charged"]
+                choice = payload["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise ValueError(f"truncated at {ANALYSIS_MAX_TOKENS} tokens")
+                return json.loads(choice["message"]["content"]), total_cost
+            except Exception as exc:  # noqa: BLE001 — one retry for the whole class
+                last = exc
+                if attempt == 1:
+                    time.sleep(1.0)
+        raise last
+    finally:
+        if _own:
+            _clear_analyst()
 
 
 def estimate_synthesis_usd(prompt: str) -> float:
@@ -1561,7 +1648,12 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
 
     # Ladder rung 1 (cheapest first): Sonar goes before synthesis money
     sonar_results: List[Dict] = []
-    est_synth_probe = 0.05  # coarse pre-map probe; the real estimate follows
+    # FIX-2 (B4-D2): the coarse pre-map probe DERIVES from the analyst seat's
+    # output ceiling (Sonnet 5's ANALYSIS_MAX_TOKENS at its out-rate = $0.09), not
+    # a stale $0.05 hardcode — so the Sonar-degrades-first ladder is calibrated to
+    # the ACTUAL synthesis cost, not the GPT-4o-era figure. The real per-slot
+    # estimate still follows once the source map is built.
+    est_synth_probe = ANALYSIS_MAX_TOKENS / 1e6 * ANALYSIS_USD_OUT_PER_MTOK
     if remaining_usd - SONAR_EST_USD < est_synth_probe:
         sa.sonar_status = "skipped — budget ladder (Sonar degrades first)"
         sa.warnings.append("derating: Sonar verification skipped under the cap")
@@ -1706,6 +1798,7 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
     pplx_key = (src_env.get("PERPLEXITY_API_KEY") or "").strip()
     own_con = con is None
     con = con or db.connect()
+    _own_analyst = False
     try:
         date = date or ranking.local_today()
         row = con.execute("SELECT * FROM briefings WHERE date = ?", (date,)).fetchone()
@@ -1729,22 +1822,28 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
         spent = float(already_spent)
         memory_lines = memory_mod.active_context(con)
         prior = _prior_briefing_material(con, date)
+        # FIX-1 (B4-D1): publish the analyst's ONE resolution for the whole stage
+        # BEFORE building the report. effective_seat GATES — a raw LaneUnavailable
+        # (unregistered lane / missing subscription binary) KILLS the stage here,
+        # once, before the per-slot loop whose analyze_story broad except would
+        # otherwise swallow it into $0 'failed' briefs (the FIX-1 (B3) stage-kill,
+        # preserved) — AND applies the armed fall. When generate hosts the stage
+        # it already published; this reuses it (own-scope). The report lane,
+        # cost_fields, and _analysis_chat's transport all ride THIS (cfg, reason):
+        # a mid-stage `claude` flap can no longer fork the transport from the
+        # ledger/report — the D1 close.
+        _own_analyst = _ACTIVE_ANALYST is None
+        if _own_analyst:
+            _publish_analyst()
+        analyst_cfg, analyst_fb = _ACTIVE_ANALYST
         report = {"ts": datetime.now(timezone.utc).isoformat(),
                   "stage": "analysis", "date": date, "status": "ok",
                   "model": ANALYSIS_MODEL,
-                  # B2: the analyst spend is lane-attributed off the seam so the
-                  # cost dashboard stays coherent when analyst flips lanes (B4+).
-                  "lane": llm.resolve_seat("analyst").lane,
+                  # the analyst spend is lane-attributed off the ONE resolution;
+                  # a fallen stage records lane=api(fallback:…), never bare 'api'.
+                  "lane": llm.fallback_lane_label(analyst_fb, analyst_cfg.lane),
                   "per_story": [], "total_usd": 0.0,
                   "derating": False, "warnings": []}
-        # FIX-1 (B3): stage-boundary lane preflight for the STANDALONE analyze
-        # path (`newslens analyze`). A config error (unregistered lane / missing
-        # subscription binary) KILLS the stage here, once, before the per-slot
-        # loop whose analyze_story broad except would otherwise swallow it into
-        # a disclosed $0 'failed' brief per slot. Transport-level per-slot
-        # degrade stays for TRANSIENT failures. When generate hosts this stage
-        # its own entry preflight fires first, so this is the standalone guard.
-        llm.check_lane(llm.resolve_seat("analyst"))
         for i, (slot, tier) in enumerate(zip(slots, tiers), start=1):
             if tier not in ("full", "medium"):
                 continue
@@ -1777,6 +1876,8 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
     finally:
         if own_con:
             con.close()
+        if _own_analyst:      # FIX-1 (B4-D1): teardown the stage's published seat
+            _clear_analyst()
 
 
 def _render_prompt(template: str, mapping: Dict[str, str]) -> str:

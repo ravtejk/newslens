@@ -99,6 +99,20 @@ GPT4O_USD_PER_MTOK_OUT = 10.00
 HAIKU_USD_PER_MTOK_IN = 1.00
 HAIKU_USD_PER_MTOK_OUT = 5.00
 
+# Claude Opus 4.8 pricing (USD per MTok) — B4: the writer seat flips to Opus on
+# the Claude API lane. Thinking tokens BILL AS OUTPUT (adaptive thinking on the
+# writer), so the shadow's out-rate covers thinking + prose. QA-pinned; a lane
+# flip never forks the cost dashboard.
+OPUS_USD_PER_MTOK_IN = 5.00
+OPUS_USD_PER_MTOK_OUT = 25.00
+
+# Claude Sonnet 5 pricing (USD per MTok) — B4: the analyst seat flips to Sonnet.
+# The shadow uses the STANDARD $3/$15 (a conservative upper bound), NOT the
+# temporary intro $2/$10 (through 2026-08-31) — never under-price the cap's
+# figure. Document the intro so the cross-check to real billing is honest.
+SONNET_USD_PER_MTOK_IN = 3.00
+SONNET_USD_PER_MTOK_OUT = 15.00
+
 
 # ---------------------------------------------------------------------------
 # Config schema: a seat is data (providers as plugins, seats as a table)
@@ -122,6 +136,13 @@ class SeatConfig:
     timeout_s: int
     thinking: Optional[str] = None   # None | "adaptive"                (B2)
     effort: Optional[str] = None     # None | low|medium|high|xhigh|max  (B2)
+    # B4: whether the model accepts sampling params (temperature/top_p/top_k).
+    # The Claude 4.6+ family — Opus 4.8 (writer) and Sonnet 5 (analyst) — REJECTS
+    # them with a 400; Haiku 4.5 and GPT-4o still accept them. False => the
+    # anthropic api provider OMITS temperature (never a 400 on the flipped
+    # seats); the Haiku/openai seats keep sampling=True so their request bytes
+    # are byte-unchanged from B2/B1 (the pinned body tests do not move).
+    sampling: bool = True
 
 
 # The seat table — code constants (the one-constant-seam precedent, one row
@@ -159,10 +180,46 @@ _HAIKU_SUB = dict(
     usd_per_mtok_out=HAIKU_USD_PER_MTOK_OUT,
 )
 
+# B4 (Option C, gate/principal ratifies the lane at checkpoint): the writer seat
+# flips to Opus 4.8 on the Claude API LANE — NOT the subscription lane. Why the
+# api lane and not subscription (the B3 default for the Haiku seats):
+#   * effort maps EXACTLY on the api (`output_config:{effort:"xhigh"}`); on the
+#     `claude -p` subscription lane it is a best-effort `/effort`-style arg that
+#     may not hold (ADR-0015 §2 spike, "the wobbliest part of lane (b)");
+#   * max_tokens is REQUIRED on the api lane and its finish_reason=="length"
+#     truncation guard fires — the subscription lane has NO max_tokens and cannot
+#     see a truncation (ADR-0015 known gap), and a truncated ~2,500-word edition
+#     is a failed run + paid retry, the expensive failure this seat must avoid.
+# adaptive thinking on (`thinking:{type:"adaptive"}`) — thinking BILLS AS OUTPUT
+# and counts against max_tokens (NARRATIVE_MAX_TOKENS carries the headroom).
+# sampling=False: Opus 4.8 rejects temperature with a 400 (the caller's
+# NARRATIVE_TEMPERATURE is ignored by the provider). timeout 600s: Opus xhigh
+# thinking can run minutes (§5.1 per-seat timeout: Opus 600s). REVERT = flip this
+# row back to **_GPT4O_API in one clean diff (WRITER_MODEL derives from it).
+_OPUS_WRITER_API = dict(
+    provider="anthropic", model="claude-opus-4-8", lane="api",
+    usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
+    usd_per_mtok_out=OPUS_USD_PER_MTOK_OUT,
+    thinking="adaptive", effort="xhigh", sampling=False,
+)
+
+# B4: the analyst seat flips to Sonnet 5 on the Claude API lane. Same lane
+# rationale as the writer (effort maps exactly; the truncation guard fires — the
+# analyst has hard validate_brief teeth, so a truncated brief must be a caught
+# length-finish, not silent). adaptive thinking on, effort "high" (dispatch item
+# 2). sampling=False: Sonnet 5 rejects temperature (the caller's 0.2 is ignored).
+# timeout 240s (§5.1 per-seat: Sonnet 240s). Shadow uses standard $3/$15.
+_SONNET_ANALYST_API = dict(
+    provider="anthropic", model="claude-sonnet-5", lane="api",
+    usd_per_mtok_in=SONNET_USD_PER_MTOK_IN,
+    usd_per_mtok_out=SONNET_USD_PER_MTOK_OUT,
+    thinking="adaptive", effort="high", sampling=False,
+)
+
 SEATS: Dict[str, SeatConfig] = {
     "rank":      SeatConfig("rank",      timeout_s=90,  **_HAIKU_SUB),
-    "analyst":   SeatConfig("analyst",   timeout_s=90,  **_GPT4O_API),
-    "writer":    SeatConfig("writer",    timeout_s=120, **_GPT4O_API),
+    "analyst":   SeatConfig("analyst",   timeout_s=240, **_SONNET_ANALYST_API),
+    "writer":    SeatConfig("writer",    timeout_s=600, **_OPUS_WRITER_API),
     "editor":    SeatConfig("editor",    timeout_s=120, **_HAIKU_SUB),
     "script":    SeatConfig("script",    timeout_s=120, **_HAIKU_SUB),
     # synthesis has no live call site yet (B6 builds it); it is declared here
@@ -190,13 +247,23 @@ _STEP_PREFIX_SEAT = (
 
 
 def seat_for_step(step: str) -> str:
-    """The seat a generate step's ledger entry is labelled with. Defaults to
-    the writer seat for any unrecognised step (all writer-family seats are
-    identical gpt-4o in B1, so a default is behaviour-neutral)."""
+    """The seat a generate step's ledger entry is labelled with. Every live step
+    enumerates in _STEP_PREFIX_SEAT (rank / narrative* / editor* / script*).
+
+    FIX-6 (B4): an unknown step RAISES — it no longer silently defaults to the
+    writer seat. The default was behaviour-neutral when the writer was gpt-4o (B1)
+    and identical to the other writer-family seats; post-B4 the writer is Opus 4.8
+    (the PRICIEST seat), so a silent default would bill Opus AND mislabel the
+    ledger under a typo'd/new step. Add a _STEP_PREFIX_SEAT row instead."""
     for prefix, seat in _STEP_PREFIX_SEAT:
         if step.startswith(prefix):
             return seat
-    return "writer"
+    raise ValueError(
+        f"seat_for_step: unknown step {step!r} — no seat prefix matches. Known "
+        f"prefixes: {', '.join(p for p, _ in _STEP_PREFIX_SEAT)}. Add a "
+        "_STEP_PREFIX_SEAT row (a silent default would bill the Opus writer seat "
+        "and mislabel the ledger)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +301,16 @@ class LaneRequest:
     # endpoint name it historically used. None => the provider's default
     # (OPENAI_CHAT_URL). B2's anthropic lane reads its own endpoint.
     url: Optional[str] = None
+    # B4 prompt caching: the STABLE prefix (the seat's law/instructions, byte-
+    # stable within an edition run), split OUT of the volatile per-call `prompt`
+    # by the caller. The anthropic api provider emits it as a `system` block
+    # marked cache_control:{type:"ephemeral"} so a reuse within the 5-minute TTL
+    # (the analyst's static brief instructions across an edition's slots; a
+    # writer/analyst corrected retry; a same-day idempotent re-run) is served at
+    # ~0.1x. None (the Haiku/openai seats never set it) => the request bytes are
+    # byte-unchanged. The subscription lane has NO cache_control surface, so its
+    # provider folds this prefix inline (never dropped); documented per dispatch.
+    system: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -430,9 +507,26 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
         "model": cfg.model,
         "max_tokens": req.max_tokens,          # REQUIRED by the Messages API
         "messages": [{"role": "user", "content": req.prompt}],
-        "temperature": req.temperature,
     }
-    if req.json_mode:
+    # B4: the Claude 4.6+ family (Opus 4.8 writer, Sonnet 5 analyst) REJECTS
+    # temperature with a 400 — omit it when the seat says so. The Haiku/openai
+    # seats keep sampling=True, so `temperature` stays where it was (right after
+    # `messages`), and their pinned request bytes do not move.
+    if cfg.sampling:
+        body["temperature"] = req.temperature
+    # B4 prompt caching + json nudge. `system` is a list when a cacheable prefix
+    # is present (cache_control:{ephemeral} on the big stable block, the json
+    # nudge appended after it as its own volatile-free block); a plain STRING for
+    # a Haiku json_mode seat with no prefix (byte-unchanged from B2). Render
+    # order is tools -> system -> messages, so the cache breakpoint on the system
+    # block covers everything up to the volatile user `prompt`.
+    if req.system:
+        blocks = [{"type": "text", "text": req.system,
+                   "cache_control": {"type": "ephemeral"}}]
+        if req.json_mode:
+            blocks.append({"type": "text", "text": _ANTHROPIC_JSON_SYSTEM})
+        body["system"] = blocks
+    elif req.json_mode:
         body["system"] = _ANTHROPIC_JSON_SYSTEM
     if cfg.thinking:                            # None on the Haiku seats -> omitted
         body["thinking"] = {"type": cfg.thinking}
@@ -588,6 +682,13 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
         args += ["--effort", cfg.effort]
     if req.json_mode:                           # the same JSON nudge the api lane uses
         args += ["--append-system-prompt", _ANTHROPIC_JSON_SYSTEM]
+    # B4: the subscription lane has NO cache_control surface (dispatch). A
+    # cacheable prefix (req.system) is not DROPPED here — it rides inline as the
+    # system prompt, so a writer/analyst seat pinned to this lane (a gate/
+    # principal lane-ruling choice) still sees its law. No cache benefit; the
+    # ledger's usd_shadow is the same either way.
+    if req.system:
+        args += ["--append-system-prompt", req.system]
     scratch = tempfile.mkdtemp(prefix="newslens-claude-lane-")
     try:
         proc = subprocess.run(
@@ -772,6 +873,15 @@ def resolve_seat(seat: str, env: Optional[Dict[str, str]] = None) -> SeatConfig:
     Overrides (all optional; documented in .env.example):
       NEWSLENS_LANE          global lane override (api | subscription)
       NEWSLENS_LANE_<SEAT>   per-seat lane override (wins over the global)
+      NEWSLENS_MODEL_<SEAT>  per-seat MODEL override — the BATTERY HARNESS surface
+                             (§5.1): the ~07-24 blind battery A/Bs the writer seat
+                             across Opus / Fable 5 / Sonnet by setting
+                             NEWSLENS_MODEL_WRITER; unset in normal operation. Only
+                             the model string is swapped — provider/lane/thinking/
+                             effort/sampling/prices stay the seat's, so the arm is
+                             a controlled single-variable change. usd_shadow then
+                             prices at the SEAT's table (a battery arm's real
+                             billing lives in the CLI/api usage, cross-checked).
 
     A lane override to a lane with no registered provider does NOT fail here —
     it fails loud at call time (chat -> LaneUnavailable) — so the doctor can
@@ -784,9 +894,10 @@ def resolve_seat(seat: str, env: Optional[Dict[str, str]] = None) -> SeatConfig:
         or env.get("NEWSLENS_LANE")
         or base.lane
     ).strip()
-    if lane == base.lane:
+    model = (env.get(f"NEWSLENS_MODEL_{seat.upper()}") or "").strip() or base.model
+    if lane == base.lane and model == base.model:
         return base
-    return replace(base, lane=lane)
+    return replace(base, lane=lane, model=model)
 
 
 def fallback_armed(env: Optional[Dict[str, str]] = None) -> bool:
@@ -814,9 +925,16 @@ def cost_fields(cfg: SeatConfig, usage: Optional[Dict], *,
     usd_shadow on the api lane and 0.0 on the subscription lane (B3).
 
     Cache tokens are RECORDED (both cache_read and, for the Claude lane,
-    cache_creation) but NOT discounted from usd_shadow in B2 — the value equals
-    the undiscounted charge so no existing cost test moves; B4 applies the cache
-    discount when prompt caching is engineered and reads these fields.
+    cache_creation) but DELIBERATELY NOT discounted from usd_shadow — even in
+    B4, where cache_control lands (see LaneRequest.system / _anthropic_provider).
+    The transcript's law is "the ~0.1x cache-read assumption is MEASURED, not
+    assumed": B4 WIRES the cache surface and lets cache_read go nonzero so the
+    hit rate is measured on live/battery runs, but a MONEY GUARD must never
+    under-count on an unverified hit — at current prefix sizes some prefixes sit
+    below the model cache minimum (Opus 4096 / Sonnet 2048 tokens) and may not
+    cache at all. So usd_shadow stays the conservative undiscounted figure (the
+    budget cap over-counts, the safe direction) and no cost test moves; the
+    discount is a follow-up once the measured hit rate justifies it.
     """
     usage = usage or {}
     pt = usage.get("prompt_tokens") or 0
