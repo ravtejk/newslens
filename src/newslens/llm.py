@@ -222,6 +222,20 @@ SEATS: Dict[str, SeatConfig] = {
     "writer":    SeatConfig("writer",    timeout_s=600, **_OPUS_WRITER_API),
     "editor":    SeatConfig("editor",    timeout_s=120, **_HAIKU_SUB),
     "script":    SeatConfig("script",    timeout_s=120, **_HAIKU_SUB),
+    # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver
+    # seat. A cheap mechanical single-turn classification (given a followed
+    # thread, pick entity|storyline + the primary entity + a disclosure line) —
+    # the same seat class as rank/editor/script, so it takes the SAME Haiku
+    # subscription-default row (subscription-first mandate; the api lane is the
+    # registered fall-over via NEWSLENS_LANE_FOLLOW_ALTITUDE=api or the armed
+    # NEWSLENS_LANE_FALLBACK=api). thinking/effort stay None — it is not
+    # reasoning work; the caller's parse+validate+corrected-retry law is the
+    # backstop for the prompt-shaped JSON (follow_altitude.py, rank's twin).
+    # DELIBERATELY NOT in _STEP_PREFIX_SEAT: it is not a `generate` edition step
+    # (its output is a REPORT, never edition state or a selection weight), so it
+    # is reached only through follow_altitude.resolve_altitude, never
+    # seat_for_step / generate.call_llm. 60s timeout: a ~4-field JSON object.
+    "follow_altitude": SeatConfig("follow_altitude", timeout_s=60, **_HAIKU_SUB),
     # synthesis has no live call site yet (B6 builds it); it is declared here
     # so the seat table is the whole roster the design named, not a subset.
     "synthesis": SeatConfig("synthesis", timeout_s=120, **_GPT4O_API),

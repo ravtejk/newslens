@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""NewsLens follow-altitude falsifier launcher.
+
+Thin on purpose (the scripts/doctor + scripts/battery pattern): bootstraps
+sys.path so the runner works from a fresh checkout, then delegates to
+src/newslens/follow_altitude.py. All logic lives there and is offline-testable.
+
+    scripts/follow-altitude              # DRY RUN: thread list + cost estimate only
+    scripts/follow-altitude --run        # LIVE: resolve every followed thread + write report
+
+Dry-run is the default and makes ZERO calls and ZERO writes. --run makes the
+live resolver calls (bounded by BUDGET_CAP_USD_PER_RUN), opens the record
+READ-ONLY (never mutates it), and writes the per-thread report under
+<DATA_DIR>/follow_altitude/. The report is the input to Kass's pre-registered
+>1-in-5 primary-entity-miss verdict (product-4).
+"""
+
+import sys
+from pathlib import Path
+
+PROTOTYPE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
+
+from newslens.follow_altitude import main  # noqa: E402  (path bootstrap first)
+
+if __name__ == "__main__":
+    sys.exit(main())

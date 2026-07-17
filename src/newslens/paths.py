@@ -28,7 +28,8 @@ _REAL_PATHS_ALLOWED = False
 
 def allow_real_paths() -> None:
     """Sanction real DATA_DIR/DB_PATH for this process. Called ONLY by the
-    two real entrypoints (cli.main, doctor.main)."""
+    real principal-run entrypoints (cli.main, doctor.main, battery.main,
+    follow_altitude.main)."""
     global _REAL_PATHS_ALLOWED
     _REAL_PATHS_ALLOWED = True
 

@@ -381,7 +381,7 @@ def test_per_seat_shadow_math_derives_from_the_seat_table():
         else:
             assert fields["usd_charged"] == fields["usd_shadow"], name  # api
     assert {n for n, c in llm.SEATS.items() if c.provider == "anthropic"} \
-        == {"rank", "editor", "script", "writer", "analyst"}
+        == {"rank", "editor", "script", "writer", "analyst", "follow_altitude"}
     # ranking's module constants stay pure derivations (no fork):
     assert ranking.RANK_MODEL == llm.SEATS["rank"].model
     assert ranking.RANK_USD_PER_MTOK_IN == llm.SEATS["rank"].usd_per_mtok_in

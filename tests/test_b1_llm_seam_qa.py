@@ -783,11 +783,14 @@ def test_seat_table_pins_the_b3_stack_exactly():
     #   no thinking — mechanical seats); state/synthesis stay openai/gpt-4o
     #   ($2.50/$10.00, sampling ON). This guard is what makes the NEXT
     #   model/lane/knob flip deliberate, never accidental.
+    # NL-17-M1: follow_altitude joined as a fourth Haiku/subscription seat (the
+    # resolver seat) — the roster grew, so this exact-set guard grows with it.
     assert set(llm.SEATS) == {"rank", "analyst", "writer", "editor", "script",
-                              "synthesis", "state"}
-    haiku_sub = {"rank", "editor", "script"}
+                              "synthesis", "state", "follow_altitude"}
+    haiku_sub = {"rank", "editor", "script", "follow_altitude"}
     timeouts = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
-                "script": 120, "synthesis": 120, "state": 60}
+                "script": 120, "synthesis": 120, "state": 60,
+                "follow_altitude": 60}
     for name, cfg in llm.SEATS.items():
         assert cfg.seat == name
         assert cfg.timeout_s == timeouts[name]
@@ -905,7 +908,7 @@ def test_doctor_lanes_default_env_renders_all_seats_no_fail():
                             f"lane={cfg.lane}")
             for line in seat_lines), name
     sub_lines = [l for l in seat_lines if "lane=subscription" in l]
-    assert len(sub_lines) == 3                       # rank/editor/script
+    assert len(sub_lines) == 4              # rank/editor/script/follow_altitude
     assert "fallback unarmed" in results[len(llm.SEATS)].text
 
 
@@ -931,7 +934,7 @@ def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
     fails = [r for r in seat_results if r.status == doctor.FAIL]
     infos = [r for r in seat_results if r.status == doctor.INFO]
     assert len(fails) == 2                           # synthesis/state
-    assert len(infos) == 5                # rank/editor/script + writer/analyst
+    assert len(infos) == 6   # rank/editor/script/follow_altitude + writer/analyst
     for r in fails:
         assert "no registered implementation" in r.text
     for r in infos:
@@ -941,13 +944,14 @@ def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
 def test_doctor_lanes_missing_binary_fails_the_subscription_seats(
         monkeypatch, tmp_path):
     """The doctor's fail-loud twin of check_lane's binary gate: with the
-    binary unresolvable (check_lane reads os.environ), the three
-    subscription-default seats FAIL naming the fix; the api seats stay INFO."""
+    binary unresolvable (check_lane reads os.environ), the four
+    subscription-default seats FAIL naming the fix; the api seats stay INFO.
+    (NL-17-M1 added follow_altitude as a fourth subscription-default seat.)"""
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     results = doctor.check_llm_lanes({})
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
-    assert len(fails) == 3
+    assert len(fails) == 4          # rank/editor/script/follow_altitude
     for r in fails:
         assert "NEWSLENS_CLAUDE_BIN" in r.text
     assert len([r for r in seat_results if r.status == doctor.INFO]) == 4

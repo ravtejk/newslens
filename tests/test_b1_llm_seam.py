@@ -200,7 +200,7 @@ def test_seat_map_after_b2_haiku_flip():
     # override per seat). rank/editor/script stay Haiku on subscription;
     # state/synthesis stay gpt-4o on api. This guard makes every model/lane
     # flip deliberate, never accidental.
-    haiku_sub = {"rank", "editor", "script"}
+    haiku_sub = {"rank", "editor", "script", "follow_altitude"}  # NL-17-M1 resolver
     for name, cfg in llm.SEATS.items():
         if name in haiku_sub:
             assert cfg.provider == "anthropic", name
