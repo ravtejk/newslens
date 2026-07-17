@@ -102,6 +102,20 @@ SCRUBBED_ENV_VARS = [
     "GNEWS_API_KEY",
     "BUDGET_CAP_USD_PER_RUN",
     "GENERATE_HOUR_LOCAL",
+    # B1 provider seam (ADR-0014): llm.resolve_seat / llm.fallback_armed read
+    # these at call time, so an ambient shell export must not leak into the
+    # suite (a stray NEWSLENS_LANE=subscription would fail-loud real-path
+    # tests). ANTHROPIC_API_KEY is unread in B1 but credential-shaped — scrub
+    # it now, before B2 makes it live.
+    "ANTHROPIC_API_KEY",
+    "NEWSLENS_LANE",
+    "NEWSLENS_LANE_FALLBACK",
+    "NEWSLENS_LANE_RANK",
+    "NEWSLENS_LANE_ANALYST",
+    "NEWSLENS_LANE_WRITER",
+    "NEWSLENS_LANE_EDITOR",
+    "NEWSLENS_LANE_SCRIPT",
+    "NEWSLENS_LANE_SYNTHESIS",
     "http_proxy",
     "https_proxy",
     "all_proxy",

@@ -40,7 +40,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from . import config, paths  # config is stdlib-only at import time (lazy yaml)
+from . import config, llm, paths  # config/llm stdlib-only at import time
 
 PASS = "✓"
 FAIL = "✗"
@@ -708,6 +708,45 @@ def check_tts() -> List[Result]:
 # Cost
 # ---------------------------------------------------------------------------
 
+def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
+    """The provider-seam lane map (B1): one line per seat showing the resolved
+    provider/model/lane, plus fallback state. In B1 every seat is gpt-4o on
+    the api lane; this section is where B2's Claude API lane and B3's
+    subscription lane become visible. A seat resolved (via NEWSLENS_LANE /
+    NEWSLENS_LANE_<SEAT>) to a lane with no registered provider is flagged
+    FAIL here — the same fail-loud condition the run itself hits."""
+    out: List[Result] = []
+    for name in llm.SEATS:
+        cfg = llm.resolve_seat(name, env)
+        line = (f"{name}: {cfg.provider}/{cfg.model} · lane={cfg.lane} · "
+                f"timeout {cfg.timeout_s}s · "
+                f"${cfg.usd_per_mtok_in:.2f}/${cfg.usd_per_mtok_out:.2f} per MTok")
+        try:
+            llm.check_lane(cfg)  # preflight only — no live call
+            out.append(Result(INFO, line))
+        except llm.LaneUnavailable as exc:
+            out.append(Result(FAIL, f"{line} — {exc}"))
+    if llm.fallback_armed(env):
+        out.append(Result(
+            WARN,
+            "NEWSLENS_LANE_FALLBACK=api ARMED — an unavailable lane will fall "
+            "to the api lane once a second lane exists (B2/B3); labeled "
+            "lane=api(fallback:…) in the ledger",
+        ))
+    else:
+        out.append(Result(
+            INFO,
+            "fallback unarmed (fail-loud default) — set NEWSLENS_LANE_FALLBACK"
+            "=api to opt in once a second lane exists",
+        ))
+    out.append(Result(
+        INFO,
+        "only the openai api lane is implemented this milestone (B1); the "
+        "Claude API lane lands in B2, the claude -p subscription lane in B3",
+    ))
+    return out
+
+
 def cost_estimate() -> List[Result]:
     return [
         Result(
@@ -749,6 +788,7 @@ def run_doctor() -> int:
     sections.append(("Database", check_database()))
     sections.append(("Sources & interests", check_sources()))
     sections.append(("TTS engine", check_tts()))
+    sections.append(("LLM lanes", check_llm_lanes(env)))
     sections.append(("Cost", cost_estimate()))
 
     tally = {PASS: 0, FAIL: 0, WARN: 0, INFO: 0}

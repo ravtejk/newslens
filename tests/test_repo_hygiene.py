@@ -1,8 +1,9 @@
 """Repo hygiene contract (ENGINEERING.md secrets rules; spec §D).
 
-Covers: .env.example carries exactly the five spec §D vars — key-shaped vars
-EMPTY, guard vars only their documented non-secret defaults, nothing
-secret-shaped anywhere; .gitignore actually protects .env / data/ / .venv /
+Covers: .env.example carries exactly the spec §D vars plus the B1 provider-
+seam vars (ADR-0014) — key-shaped vars EMPTY, guard vars only their documented
+non-secret defaults, lane selectors empty, nothing secret-shaped anywhere;
+.gitignore actually protects .env / data/ / .venv /
 memory.md / audio/ (verified with `git check-ignore`, not by reading the
 file); nothing sensitive is git-tracked; scripts/doctor is executable; the
 sonar ping prompt is versioned; the test run command is documented.
@@ -39,12 +40,19 @@ def _env_example_entries():
     return entries
 
 
-def test_env_example_has_exactly_the_five_spec_vars_with_no_secret_values():
+def test_env_example_has_exactly_the_spec_vars_with_no_secret_values():
     entries = _env_example_entries()
     assert entries == {
         "OPENAI_API_KEY": "",
         "PERPLEXITY_API_KEY": "",
         "GNEWS_API_KEY": "",
+        # B1 provider seam (ADR-0014): the Claude API-lane credential — empty,
+        # unread until B2. Key-shaped, so it stays blank like the others.
+        "ANTHROPIC_API_KEY": "",
+        # B1 lane selectors — optional; empty = the gpt-4o api default. Not
+        # secret-shaped. Selecting an unimplemented lane fails loud (B1).
+        "NEWSLENS_LANE": "",
+        "NEWSLENS_LANE_FALLBACK": "",
         # Non-secret guard defaults, exactly as spec §D documents them:
         "BUDGET_CAP_USD_PER_RUN": "0.25",  # M9 ruling 2026-07-06 (was 0.50)
         "GENERATE_HOUR_LOCAL": "6",

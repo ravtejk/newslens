@@ -47,7 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import config, db, memory, paths, ranking
+from . import config, db, llm, memory, paths, ranking
 # NL-69: the repetition-word machinery moved to its home beside
 # has_predating_antecedent (single source of truth; the write-side self-mark in
 # migration 0014 shares it). Imported here so generate._REPETITION_RE and the
@@ -302,27 +302,36 @@ def _time_of_day() -> str:
 # LLM call (same error taxonomy as ranking's, different knobs per pass)
 # ---------------------------------------------------------------------------
 
+# The writer family's User-Agent (narrative/editor/script all POST as this);
+# lifted to a constant so the seam delegation keeps the exact bytes.
+WRITER_UA = "NewsLens/0.1 (personal news briefing prototype; writer)"
+
+
 def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
           json_mode: bool) -> Dict:
-    body = {
-        "model": WRITER_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if json_mode:
-        body["response_format"] = {"type": "json_object"}
-    req = urllib.request.Request(
-        ranking.OPENAI_CHAT_URL,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "User-Agent": "NewsLens/0.1 (personal news briefing prototype; writer)",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as resp:
-        return json.load(resp)
+    # Transport delegates to the provider seam (llm.py, B1). The request is
+    # byte-identical to the historical POST: writer seat = gpt-4o / api /
+    # timeout 120s (llm.SEATS["writer"]); temperature/max_tokens/json_mode
+    # are the caller's per-call knobs, passed through unchanged. Returns the
+    # native OpenAI dict (.raw) so call_llm's parse/retry law is untouched.
+    # This function keeps its signature: it is the suite's monkeypatch target.
+    # B4 (writer -> Opus) must thread the per-step seat through here; in B1
+    # narrative/editor/script are the identical gpt-4o writer-family seat, so
+    # transporting all three as "writer" is behaviour-neutral.
+    return llm.chat(
+        llm.LaneRequest(
+            cfg=llm.resolve_seat("writer"),
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=json_mode,
+            user_agent=WRITER_UA,
+            api_key=key,
+            # offline-test seam: generate has always POSTed via
+            # ranking.OPENAI_CHAT_URL (the suite patches that name).
+            url=ranking.OPENAI_CHAT_URL,
+        )
+    ).raw
 
 
 # The validation/truncation retry is CORRECTED, not blind (rank-side twin —
@@ -366,6 +375,17 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
     validation (and still billed) is never lost from a failed run's money
     record. The OK-path caller keeps billing report.steps from the returned
     usage; this sink is a separate, complete per-attempt ledger."""
+    # B1 fail-loud gate (D1 close): resolve THIS step's seat ONCE and preflight
+    # its lane BEFORE any transport or retry. This makes the seat that the
+    # ledger attributes the same seat whose lane must be transportable — so a
+    # per-seat override (NEWSLENS_LANE_EDITOR=subscription) can never let the
+    # writer transport charge while the ledger files a different lane. A config
+    # error surfaces immediately, never after a pointless retry+sleep. (B4:
+    # when the writer family forks models, _chat must transport on seat_cfg
+    # itself; in B1 writer/editor/script are the identical gpt-4o/api seat, so
+    # the gate is exact and the transport bytes match.)
+    seat_cfg = llm.resolve_seat(llm.seat_for_step(step))
+    llm.check_lane(seat_cfg)
     last_error = "unknown"
     backoff = 1.0
     next_prompt = prompt  # augmented below only after a validation/malformed miss
@@ -374,12 +394,18 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
             response = _chat(key, next_prompt, max_tokens, temperature, json_mode)
             usage = response.get("usage") or {}
             if cost_sink is not None:
-                cost_sink.append({
+                entry = {
                     "step": step, "attempt": attempt,
                     "prompt_tokens": usage.get("prompt_tokens"),
                     "completion_tokens": usage.get("completion_tokens"),
                     "usd": round(_step_cost(usage), 6),
-                })
+                }
+                # B1: lane/shadow keys, additive, from the SAME resolution the
+                # gate preflighted. The writer family is gpt-4o/api, so
+                # usd_shadow == usd_charged == usd; the keys keep the cost
+                # dashboard lane-aware before B2's second lane.
+                entry.update(llm.cost_fields(seat_cfg, usage))
+                cost_sink.append(entry)
             choice = response["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise ValueError(

@@ -44,7 +44,7 @@ from html.parser import HTMLParser
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from . import net
+from . import llm, net
 
 ANALYSIS_UA = "NewsLens/0.1 (personal news briefing prototype; single-user analyst fetch)"
 MAX_ARTICLE_BYTES = 2_000_000
@@ -1374,24 +1374,28 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
 # ---------------------------------------------------------------------------
 
 def _analysis_chat(key: str, prompt: str) -> Dict:
-    """One-retry synthesis call on the ANALYSIS_MODEL seam (mirrors
-    generate._chat's shape; separate so the writer path stays untouched
-    until M3)."""
-    body = {
-        "model": ANALYSIS_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-        "max_tokens": ANALYSIS_MAX_TOKENS,
-        "response_format": {"type": "json_object"},
-    }
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json",
-                 "User-Agent": ANALYSIS_UA})
-    with urllib.request.urlopen(req, timeout=ANALYSIS_TIMEOUT_S) as resp:
-        return json.load(resp)
+    """One-retry synthesis call on the ANALYSIS_MODEL seam. Transport delegates
+    to the provider seam (llm.py, B1): analyst seat = gpt-4o / api / timeout
+    90s (llm.SEATS["analyst"]), temperature 0.2, json_mode on — the request is
+    byte-identical to the historical POST. Returns the native OpenAI dict so
+    call_analysis_model's parse/retry law is untouched. Keeps its signature:
+    it is the suite's monkeypatch target.
+
+    NOTE (B2 hand-off): call_analysis_model accumulates a float cost (not a
+    cost_sink ledger), so the analyst path does NOT yet carry the lane/shadow
+    keys. B2 flips analyst -> Haiku and migrates this path onto llm.cost_fields
+    then; until then the analyst ledger is gpt-4o/api implicitly."""
+    return llm.chat(
+        llm.LaneRequest(
+            cfg=llm.resolve_seat("analyst"),
+            prompt=prompt,
+            temperature=0.2,
+            max_tokens=ANALYSIS_MAX_TOKENS,
+            json_mode=True,
+            user_agent=ANALYSIS_UA,
+            api_key=key,
+        )
+    ).raw
 
 
 def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float]:
@@ -1402,6 +1406,11 @@ def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float]:
     — attempt 1 that completed HTTP (tokens paid) and then failed
     truncation/parse still spent real money against the $0.25 cap, and the
     log must carry real spend (BUG-6 money-honesty class)."""
+    # B1 fail-loud gate (D1 close): preflight the analyst seat's lane ONCE
+    # before any transport or retry, so a NEWSLENS_LANE / NEWSLENS_LANE_ANALYST
+    # override to an unimplemented lane surfaces immediately, never after a
+    # pointless retry+sleep.
+    llm.check_lane(llm.resolve_seat("analyst"))
     last: Exception = RuntimeError("unreachable")
     total_cost = 0.0
     for attempt in (1, 2):

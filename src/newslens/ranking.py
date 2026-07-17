@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-from . import config, db, memory, paths
+from . import config, db, llm, memory, paths
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 # Active ranking model (CoS recommendation on the principal's own question,
@@ -347,26 +347,25 @@ def usage_to_usd(usage: Dict) -> float:
 
 
 def _post_chat(key: str, prompt: str) -> Dict:
-    body = json.dumps(
-        {
-            "model": RANK_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,  # exact-copy discipline for ids/tag names (M4 live finding)
-            "max_tokens": MAX_COMPLETION_TOKENS,
-            "response_format": {"type": "json_object"},
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        OPENAI_CHAT_URL,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-        },
-    )
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as resp:
-        return json.load(resp)
+    # Transport delegates to the provider seam (llm.py, B1). The request is
+    # byte-identical to the historical POST: rank seat = gpt-4o / api /
+    # timeout 90s (llm.SEATS["rank"]), temperature 0 (exact-copy discipline
+    # for ids/tag names — M4 live finding), json_mode on. Returns the native
+    # OpenAI dict (.raw), so call_llm_validated's parse/retry law is
+    # untouched. This function keeps its signature: it is the suite's
+    # monkeypatch target.
+    return llm.chat(
+        llm.LaneRequest(
+            cfg=llm.resolve_seat("rank"),
+            prompt=prompt,
+            temperature=0,
+            max_tokens=MAX_COMPLETION_TOKENS,
+            json_mode=True,
+            user_agent=USER_AGENT,
+            api_key=key,
+            url=OPENAI_CHAT_URL,  # offline-test seam (patched by the suite)
+        )
+    ).raw
 
 
 def validate_payload(
@@ -625,6 +624,13 @@ def call_llm_validated(
     failure the retry prompt carries RETRY_CORRECTION so attempt 2 is not a
     byte-identical re-POST (run 28 fix — see the constant). Transport retries
     (5xx/429/network) re-send the original prompt unchanged."""
+    # B1 fail-loud gate (D1 close): preflight the rank seat's lane ONCE before
+    # any transport or retry, so a NEWSLENS_LANE / NEWSLENS_LANE_RANK override
+    # to an unimplemented lane surfaces immediately (never after a pointless
+    # retry+sleep, never a silent wrong-lane call). The same resolution feeds
+    # the cost ledger below.
+    rank_cfg = llm.resolve_seat("rank")
+    llm.check_lane(rank_cfg)
     last_error = "unknown"
     backoff = 1.0
     usage: Dict = {}
@@ -637,15 +643,19 @@ def call_llm_validated(
                 # Ledger BEFORE the truncation check: a truncated draw is a
                 # billed draw (generate.py cost_sink precedent — the property
                 # that made BUG-32's abort-path fold necessary there).
-                cost_sink.append(
-                    {
-                        "step": "rank_select",
-                        "attempt": attempt,
-                        "prompt_tokens": usage.get("prompt_tokens"),
-                        "completion_tokens": usage.get("completion_tokens"),
-                        "usd": round(usage_to_usd(usage), 6),
-                    }
-                )
+                entry = {
+                    "step": "rank_select",
+                    "attempt": attempt,
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                    "usd": round(usage_to_usd(usage), 6),
+                }
+                # B1: lane/shadow keys, additive, from the SAME resolution the
+                # gate preflighted. rank is gpt-4o/api, so usd_shadow ==
+                # usd_charged == usd; the keys let the cost dashboard stay
+                # lane-aware before B2 adds a second lane.
+                entry.update(llm.cost_fields(rank_cfg, usage))
+                cost_sink.append(entry)
             choice = response["choices"][0]
             if choice.get("finish_reason") == "length":
                 # Name truncation precisely — "malformed JSON" hides the real
