@@ -267,8 +267,11 @@ def test_timeout_leaves_no_orphan_child_and_no_scratch_dir(
     runs on the timeout path too)."""
     stub = make_scripted_stub(tmp_path / "shim", [{"mode": "hang"}])
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(stub))
+    # 2026-07-17: shrink BOTH timeouts — the subscription provider uses
+    # (timeout_sub_s or timeout_s), and rank's timeout_sub_s (300) would win.
     monkeypatch.setitem(llm.SEATS, "rank",
-                        dataclasses.replace(llm.SEATS["rank"], timeout_s=1))
+                        dataclasses.replace(llm.SEATS["rank"],
+                                            timeout_s=1, timeout_sub_s=1))
     req = llm.LaneRequest(cfg=llm.resolve_seat("rank"), prompt="p",
                           temperature=0, max_tokens=10, json_mode=True,
                           user_agent="ua", api_key="k")
@@ -1341,6 +1344,11 @@ def test_generate_fall_discloses_editor_and_script_and_labels_the_ledger(
     monkeypatch.setenv("NEWSLENS_LANE_FALLBACK", "api")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fall")
+    # 2026-07-17: state is a subscription seat now, but its stage-entry preflight
+    # is a raw check_lane (FIX-1, unweakened) that does NOT apply the armed fall,
+    # so an absent binary would kill it at entry. This test is about editor/script
+    # falling — pin state to api (no memory threads here, so no state transport).
+    monkeypatch.setenv("NEWSLENS_LANE_STATE", "api")
     # B4 flip (conscious): the narrative rides the anthropic wire too now
     # (writer = Opus/api), so the fake routes by request-body MODEL — Opus ->
     # the narrative envelope; Haiku (the fallen editor/script) -> the scripted
@@ -1424,6 +1432,11 @@ def test_D6_deferred_kill_unarmed_unavailable_editor_dies_at_its_own_stage(
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
+    # 2026-07-17: state is a subscription seat now, so its raw stage-entry
+    # preflight (FIX-1) would kill on the absent binary BEFORE the narrative —
+    # not this test's subject. Pin state to the api lane (no binary needed) so
+    # the deferred-kill tooth stays about the EDITOR at its own stage.
+    monkeypatch.setenv("NEWSLENS_LANE_STATE", "api")
     # fallback UNARMED: the editor's gate at its own stage must fail loud
     with pytest.raises(llm.LaneUnavailable) as exc:
         run(migrated_con)

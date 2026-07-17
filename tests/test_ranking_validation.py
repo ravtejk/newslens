@@ -509,13 +509,17 @@ def rank_cfg():
     )
 
 
-def test_keyless_rank_refuses_before_any_request(migrated_con, llm):
+def test_keyless_openai_rank_rides_the_anthropic_seat(migrated_con, llm):
+    """A″ (2026-07-17, CONSCIOUS FLIP of the stale keyless-refusal pin): rank is
+    anthropic (Haiku) since B2, so a keyless-OpenAI run does NOT refuse on the
+    (inert) OpenAI key — it rides the anthropic seat. Here it reaches the loopback
+    api transport and fails on the fake's non-JSON default reply ('ok'), NOT on
+    OPENAI_API_KEY (which used to refuse before any request was built)."""
     seed_items(migrated_con)
     with pytest.raises(ranking.RankingError) as excinfo:
         ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(), env={})
-    assert "OPENAI_API_KEY not set" in str(excinfo.value)
-    assert "no keyless mode" in str(excinfo.value)
-    assert _posts(llm) == []  # spend-proof: no request was ever built
+    assert "OPENAI_API_KEY" not in str(excinfo.value)   # the stale refusal is gone
+    assert _posts(llm) != []  # it DID build a request — on the anthropic seat
 
 
 def test_no_interests_refuses_before_any_request(migrated_con, llm):

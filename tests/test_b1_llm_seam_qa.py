@@ -278,9 +278,11 @@ def test_call_llm_and_call_llm_validated_signatures_preserved():
     ({"NEWSLENS_LANE": "api"}, "rank", "api"),               # explicit fall-over
     ({"NEWSLENS_LANE": " api "}, "rank", "api"),             # whitespace strip
     ({"NEWSLENS_LANE": "api", "NEWSLENS_LANE_RANK": "api"}, "rank", "api"),
-    # the openai seats' default map is UNTOUCHED by B3
+    # writer defaults api (anthropic); state defaults subscription after the
+    # 2026-07-17 flip (Haiku); synthesis is the lone openai seat left on api.
     ({}, "writer", "api"),
-    ({}, "state", "api"),
+    ({}, "state", "subscription"),
+    ({}, "synthesis", "api"),
 ])
 def test_lane_matrix_rows_follow_the_default_map(env, seat, expect_lane):
     import dataclasses
@@ -306,10 +308,12 @@ def test_lane_matrix_rows_follow_the_default_map(env, seat, expect_lane):
     # B4 flip (conscious): writer/analyst are ANTHROPIC seats now — their
     # subscription combos are REGISTERED and moved out of this fail-loud
     # matrix (positive pins live in test_b1_llm_seam + test_b4_battery_qa).
-    # The openai-seat-off-api tooth regrows on the still-openai seats.
-    ({"NEWSLENS_LANE": "subscription"}, "state"),   # openai seat, global flip
+    # 2026-07-17 flip (conscious): state is ANTHROPIC now too, so its
+    # subscription combos are REGISTERED and also left this matrix. The
+    # openai-seat-off-api tooth regrows on synthesis — the LONE openai seat —
+    # both ways: a global flip and a per-seat flip.
+    ({"NEWSLENS_LANE": "subscription"}, "synthesis"),   # openai seat, global flip
     ({"NEWSLENS_LANE_SYNTHESIS": "subscription"}, "synthesis"),
-    ({"NEWSLENS_LANE_STATE": "subscription"}, "state"),
     ({"NEWSLENS_LANE_WRITER": "nonsense"}, "writer"),
     ({"NEWSLENS_LANE_RANK": "junk", "NEWSLENS_LANE": "api"}, "rank"),
     # empty per-seat does NOT rescue a bad global (empty == unset)
@@ -581,15 +585,16 @@ def test_armed_fallback_never_falls_below_the_effective_seat_seam(
     # armed + unregistered combo (openai seat off the api lane): loud at
     # EVERY layer including effective_seat (the no-rescue guard). B4 flip
     # (conscious): writer is anthropic now — its subscription combo is
-    # registered and FALLS here instead (asserted below); the no-rescue
-    # tooth regrows on the still-openai state seat.
+    # registered and FALLS here instead (asserted below). 2026-07-17 flip:
+    # state is anthropic too, so the no-rescue tooth regrows on synthesis —
+    # the LONE still-openai seat.
     with pytest.raises(llm.LaneUnavailable):
         llm.chat(llm.LaneRequest(
-            llm.resolve_seat("state", {"NEWSLENS_LANE": "subscription"}),
+            llm.resolve_seat("synthesis", {"NEWSLENS_LANE": "subscription"}),
             "p", 0, 10, True, "ua", "k"))
-    monkeypatch.setenv("NEWSLENS_LANE_STATE", "subscription")
+    monkeypatch.setenv("NEWSLENS_LANE_SYNTHESIS", "subscription")
     with pytest.raises(llm.LaneUnavailable):
-        llm.effective_seat("state")
+        llm.effective_seat("synthesis")
     # and the regrown positive: the writer's registered subscription combo,
     # armed + binary absent, falls ONCE at the seam, labeled — the writer is
     # fall-capable now (its caller resolves via effective_seat).
@@ -779,15 +784,16 @@ def test_seat_table_pins_the_b3_stack_exactly():
     #              (the STANDARD price, not the 2026-08-31 intro — a money
     #              guard never under-prices), adaptive thinking, effort high,
     #              sampling OFF, timeout 240s;
-    #   rank/editor/script stay Haiku/subscription ($1.00/$5.00, sampling ON,
-    #   no thinking — mechanical seats); state/synthesis stay openai/gpt-4o
-    #   ($2.50/$10.00, sampling ON). This guard is what makes the NEXT
-    #   model/lane/knob flip deliberate, never accidental.
+    #   rank/editor/script/state are Haiku/subscription ($1.00/$5.00, sampling
+    #   ON, no thinking — mechanical seats; state flipped 2026-07-17, option a);
+    #   synthesis is the LONE remaining gpt-4o/api seat ($2.50/$10.00,
+    #   sampling ON). This guard is what makes the NEXT model/lane/knob flip
+    #   deliberate, never accidental.
     # NL-17-M1: follow_altitude joined as a fourth Haiku/subscription seat (the
     # resolver seat) — the roster grew, so this exact-set guard grows with it.
     assert set(llm.SEATS) == {"rank", "analyst", "writer", "editor", "script",
                               "synthesis", "state", "follow_altitude"}
-    haiku_sub = {"rank", "editor", "script", "follow_altitude"}
+    haiku_sub = {"rank", "editor", "script", "follow_altitude", "state"}
     timeouts = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
                 "script": 120, "synthesis": 120, "state": 60,
                 "follow_altitude": 60}
@@ -908,7 +914,7 @@ def test_doctor_lanes_default_env_renders_all_seats_no_fail():
                             f"lane={cfg.lane}")
             for line in seat_lines), name
     sub_lines = [l for l in seat_lines if "lane=subscription" in l]
-    assert len(sub_lines) == 4              # rank/editor/script/follow_altitude
+    assert len(sub_lines) == 5        # rank/editor/script/follow_altitude/state
     assert "fallback unarmed" in results[len(llm.SEATS)].text
 
 
@@ -925,16 +931,17 @@ def test_doctor_lanes_bad_lane_fails_every_seat_naming_the_fix():
 
 
 def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
-    """The B3 shape of the old every-seat test, B4-flipped (conscious): the
-    writer/analyst joined the anthropic family, so a global subscription flip
-    is a config error ONLY for the two still-openai seats (state/synthesis);
-    the five anthropic seats render INFO on their registered lane."""
+    """The B3 shape of the old every-seat test, B4- then 07-17-flipped
+    (conscious): writer/analyst joined the anthropic family in B4, and state
+    joined it 2026-07-17 (option a), so a global subscription flip is a config
+    error ONLY for the LONE still-openai seat (synthesis); the six anthropic
+    seats render INFO on their registered lane."""
     results = doctor.check_llm_lanes({"NEWSLENS_LANE": "subscription"})
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
     infos = [r for r in seat_results if r.status == doctor.INFO]
-    assert len(fails) == 2                           # synthesis/state
-    assert len(infos) == 6   # rank/editor/script/follow_altitude + writer/analyst
+    assert len(fails) == 1                           # synthesis
+    assert len(infos) == 7   # rank/editor/script/follow_altitude/state + writer/analyst
     for r in fails:
         assert "no registered implementation" in r.text
     for r in infos:
@@ -944,17 +951,17 @@ def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
 def test_doctor_lanes_missing_binary_fails_the_subscription_seats(
         monkeypatch, tmp_path):
     """The doctor's fail-loud twin of check_lane's binary gate: with the
-    binary unresolvable (check_lane reads os.environ), the four
+    binary unresolvable (check_lane reads os.environ), the five
     subscription-default seats FAIL naming the fix; the api seats stay INFO.
-    (NL-17-M1 added follow_altitude as a fourth subscription-default seat.)"""
+    (NL-17-M1 added follow_altitude; 2026-07-17 added state — five sub seats.)"""
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     results = doctor.check_llm_lanes({})
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
-    assert len(fails) == 4          # rank/editor/script/follow_altitude
+    assert len(fails) == 5          # rank/editor/script/follow_altitude/state
     for r in fails:
         assert "NEWSLENS_CLAUDE_BIN" in r.text
-    assert len([r for r in seat_results if r.status == doctor.INFO]) == 4
+    assert len([r for r in seat_results if r.status == doctor.INFO]) == 3  # writer/analyst/synthesis
 
 
 def test_doctor_lanes_armed_fallback_warns():

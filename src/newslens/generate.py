@@ -2763,12 +2763,14 @@ def _run_generate_body(
 ) -> GenReport:
     from . import ingest
 
-    if not key:
-        # inside the logged region — see the NOTES 28a note at the caller
-        raise GenerateError(
-            "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
-            "then add to .env (generation is an LLM step; there is no keyless mode)"
-        )
+    # A″ (2026-07-17, keyless-OpenAI audit): the blanket "OPENAI_API_KEY not set
+    # -> refuse the whole run" check is GONE — it was written when every seat was
+    # gpt-4o. Post-B4 rank/editor/script/writer/analyst are anthropic and the
+    # OpenAI key is inert for them, so a keyless-OpenAI generate runs the full
+    # content path on the anthropic lanes. The ONLY seat that still needs the
+    # OpenAI key is `state` (gpt-4o); its keyless requirement is enforced,
+    # provider-aware and fail-loud, at the state stage preflight below (not as a
+    # blanket that pre-empts every anthropic stage).
 
     if refresh:
         try:
@@ -2844,6 +2846,26 @@ def _run_generate_body(
         _analysis_pf._publish_analyst()
     if not no_threads:
         llm.check_lane(llm.resolve_seat("state"))     # memory (state-rewrite) stage
+        # A″: check_lane gates provider registration + a subscription binary, but
+        # NOT the api key. 2026-07-17 (option a) the state seat flipped to
+        # Haiku/subscription, so seat_is_openai("state") is now False and this
+        # keyless-OpenAI arm goes QUIET — a keyless-OpenAI generate completes fully
+        # (the state rewrite rides the claude -p subscription lane like rank/editor/
+        # script). The arm stays PROVIDER-AWARE and in place: it fires again the
+        # instant any future ruling puts an openai model back on the state seat, so
+        # a keyless run can never quietly degrade its state rewrites to stale
+        # (run_memory_pass would otherwise turn the 401 into a warning and ship a
+        # stale moat) — a missing key for a resolving-openai seat is a CONFIG error
+        # that must kill LOUD here at the stage boundary (FIX-1 semantics), before
+        # the analysis/writer spend.
+        if llm.seat_is_openai("state", src_env) and not key:
+            raise GenerateError(
+                "OPENAI_API_KEY not set, and the state/memory seat resolves to "
+                "OpenAI (gpt-4o) — the state rewrite cannot run without it. Every "
+                "other generate stage runs keyless-OpenAI on the anthropic lanes; "
+                "set OPENAI_API_KEY in .env, or (pending the state-seat ruling) "
+                "flip the state seat to an anthropic model/lane."
+            )
 
     # B3-D6: resolve each writer-family seat ONCE for this run and publish it on
     # _ACTIVE_STEP_SEATS, so call_llm's gate/transport/cost_sink AND _step_ledger's

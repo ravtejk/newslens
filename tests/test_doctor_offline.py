@@ -19,6 +19,7 @@ report line, never a traceback" contract.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sqlite3
 import sys
@@ -26,12 +27,22 @@ import types
 
 import pytest
 
-from newslens import config, db, doctor, paths
+from newslens import config, db, doctor, llm, paths
 
-OPENAI_HINT = (
-    "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
-    "then add to .env"
-)
+# Gate ruling 2 (2026-07-17): after the state-seat flip NO live seat resolves to
+# OpenAI by default (synthesis is dormant — no live call site), so the OpenAI key
+# check renders INFO, not FAIL, and never probes. To keep the LIVE probe paths
+# (PASS / 401 / 5xx / unreachable) exercised, tests patch a live openai seat by
+# pinning state to gpt-4o for the duration (teardown-safe via monkeypatch.setitem).
+_GPT4O_STATE_ROW = dict(provider="openai", model="gpt-4o", lane="api",
+                        usd_per_mtok_in=2.50, usd_per_mtok_out=10.00)
+
+
+def _pin_live_openai_state(monkeypatch):
+    monkeypatch.setitem(
+        llm.SEATS, "state",
+        dataclasses.replace(llm.SEATS["state"], **_GPT4O_STATE_ROW))
+
 PERPLEXITY_HINT = (
     "PERPLEXITY_API_KEY not set — deferred by choice; ingest runs RSS-only "
     "and says so. To add discovery later: perplexity.ai/settings/api → .env"
@@ -55,7 +66,13 @@ def test_keyless_template_run_exits_1_with_fix_hints_and_zero_network(
     code, out = run_doctor_captured(capsys)
 
     assert code == 1
-    assert OPENAI_HINT in out
+    # Gate ruling 2 (2026-07-17): keyless-OpenAI is no longer a required FAIL —
+    # after the state flip no live seat routes to gpt-4o, so the OpenAI key renders
+    # INFO "not needed". The exit-1 now rests on the genuinely-required key: the
+    # anthropic content seats (analyst/editor/rank/script/state/writer/…) make
+    # ANTHROPIC_API_KEY the required one.
+    assert "OPENAI_API_KEY not needed — no live seat routes to OpenAI" in out
+    assert "ANTHROPIC_API_KEY not set" in out          # the real required failure
     assert PERPLEXITY_HINT in out
     assert ".env not found — run: cp .env.example .env" in out
     assert config.NO_ACTIVE_SOURCES_MSG in out
@@ -144,6 +161,10 @@ def test_scratch_migration_failure_is_reported_as_broken_schema(monkeypatch):
 # --- key checks against the local fake API ---------------------------------------
 
 def test_openai_check_passes_with_a_valid_key(fake_api, monkeypatch):
+    """Gate ruling 2 (2026-07-17): the live GET-/v1/models probe fires only when
+    a LIVE seat routes to OpenAI — pin state to gpt-4o so the PASS path stays
+    exercised now that the default seat map is all-anthropic."""
+    _pin_live_openai_state(monkeypatch)
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.base_url + "/v1/models")
     results = doctor.check_openai_key({"OPENAI_API_KEY": fake_api.good_key})
     assert [r.status for r in results] == [doctor.PASS]
@@ -154,6 +175,9 @@ def test_openai_check_passes_with_a_valid_key(fake_api, monkeypatch):
 
 
 def test_openai_check_401_names_the_fix(fake_api, monkeypatch):
+    """Gate ruling 2 (2026-07-17): pin a live openai seat so the 401 probe path
+    fires (the default all-anthropic map would render INFO, no probe)."""
+    _pin_live_openai_state(monkeypatch)
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.base_url + "/v1/models")
     results = doctor.check_openai_key({"OPENAI_API_KEY": "sk-wrong"})
     assert [r.status for r in results] == [doctor.FAIL]
@@ -162,6 +186,9 @@ def test_openai_check_401_names_the_fix(fake_api, monkeypatch):
 
 
 def test_openai_check_5xx_is_a_distinct_friendly_failure(fake_api, monkeypatch):
+    """Gate ruling 2 (2026-07-17): pin a live openai seat so the 5xx probe path
+    fires (the default all-anthropic map would render INFO, no probe)."""
+    _pin_live_openai_state(monkeypatch)
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.base_url + "/boom")
     results = doctor.check_openai_key({"OPENAI_API_KEY": "sk-any"})
     assert [r.status for r in results] == [doctor.FAIL]
@@ -169,6 +196,9 @@ def test_openai_check_5xx_is_a_distinct_friendly_failure(fake_api, monkeypatch):
 
 
 def test_openai_check_unreachable_is_network_shaped_not_a_crash(fake_api, monkeypatch):
+    """Gate ruling 2 (2026-07-17): pin a live openai seat so the unreachable-
+    network probe path fires (the default all-anthropic map renders INFO)."""
+    _pin_live_openai_state(monkeypatch)
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.dead_url("/v1/models"))
     results = doctor.check_openai_key({"OPENAI_API_KEY": "sk-any"})
     assert [r.status for r in results] == [doctor.FAIL]
@@ -222,7 +252,10 @@ def test_exit_0_with_warnings_once_everything_required_passes(
 ):
     """Exit 0 = ready for a real run, warnings allowed: keys validate against
     the (fake) endpoints, DB migrated, guards defaulted — while the template
-    sources still produce ⚠ lines."""
+    sources still produce ⚠ lines. Gate ruling 2 (2026-07-17): after the state
+    flip the OpenAI key is INERT (no live seat routes to gpt-4o), so a set key
+    renders INFO 'unused' and is NEVER probed — the required-pass set is the
+    anthropic + perplexity keys, and only those two hit the network."""
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.base_url + "/v1/models")
     # B2: the Claude API lane (rank/editor/script on Haiku) makes
     # ANTHROPIC_API_KEY required; validate it against the same fake /v1/models.
@@ -261,11 +294,13 @@ def test_exit_0_with_warnings_once_everything_required_passes(
     assert "Doctor exit 0 — everything required passes; the ⚠ lines are worth a look." in out
     assert "0 required failing" in out
     assert config.NO_ACTIVE_SOURCES_MSG in out  # warnings present, not blocking
-    # Exactly the three key validations hit the network — nothing else. B2 adds
-    # the anthropic GET /v1/models (the Claude API lane's read-only key check)
-    # alongside the openai GET /v1/models and the perplexity POST.
+    # Gate ruling 2 (2026-07-17): the set OpenAI key is INERT — no live seat routes
+    # to gpt-4o, so it renders INFO 'unused' and is never probed.
+    assert "OPENAI_API_KEY set but no live seat currently routes to OpenAI" in out
+    # Exactly the two required key validations hit the network — nothing else. The
+    # anthropic GET /v1/models (the Claude API lane's read-only key check) and the
+    # perplexity POST; the openai key is unused and probe-free (ruling 2).
     assert [(r["method"], r["path"]) for r in fake_api.recorded] == [
-        ("GET", "/v1/models"),      # openai key check
         ("GET", "/v1/models"),      # anthropic key check (B2)
         ("POST", "/chat/completions"),  # perplexity key check
     ]

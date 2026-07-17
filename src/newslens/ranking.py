@@ -1413,10 +1413,16 @@ def run_rank(
             "(the personal-impact axis has nothing to match without them)"
         )
     key = (src_env.get("OPENAI_API_KEY") or "").strip()
-    if not key:
+    # A″ (2026-07-17): rank is anthropic (Haiku on subscription, api the fall-over)
+    # since B2 — the OpenAI key is the INERT offline-test seam value the seam
+    # passes through and the anthropic providers ignore. Require it ONLY if the
+    # rank seat ever resolves to openai (it never does today; the anthropic seat's
+    # own gate — check_lane in the seam — handles availability). A keyless-OpenAI
+    # rank with the anthropic seat is HEALTHY (was a stale blanket refusal).
+    if llm.seat_is_openai("rank", src_env) and not key:
         raise RankingError(
-            "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
-            "then add to .env (ranking is an LLM step; there is no keyless mode)"
+            "the rank seat resolves to OpenAI (gpt-4o) but OPENAI_API_KEY is not "
+            "set — get one at platform.openai.com/api-keys, then add to .env"
         )
 
     own_con = con is None

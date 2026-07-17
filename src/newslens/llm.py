@@ -143,6 +143,15 @@ class SeatConfig:
     # seats); the Haiku/openai seats keep sampling=True so their request bytes
     # are byte-unchanged from B2/B1 (the pinned body tests do not move).
     sampling: bool = True
+    # 2026-07-17 (field-charged): the `claude -p` subscription lane pays process
+    # startup + agentic-harness overhead on top of generation, so the API-lane-
+    # calibrated timeout is too tight there (his first post-B4 generate FAILED at
+    # rank: claude -p exceeded the 90s API-calibrated cap on BOTH attempts, no
+    # briefing row). timeout_sub_s is the per-seat SUBSCRIPTION-lane timeout; the
+    # subscription provider uses (timeout_sub_s or timeout_s), so a seat that
+    # never sets it keeps its api timeout on both lanes. api-lane timeouts are
+    # unchanged (timeout_s), so the api pinned paths do not move.
+    timeout_sub_s: Optional[int] = None
 
 
 # The seat table — code constants (the one-constant-seam precedent, one row
@@ -196,6 +205,18 @@ _HAIKU_SUB = dict(
 # NARRATIVE_TEMPERATURE is ignored by the provider). timeout 600s: Opus xhigh
 # thinking can run minutes (§5.1 per-seat timeout: Opus 600s). REVERT = flip this
 # row back to **_GPT4O_API in one clean diff (WRITER_MODEL derives from it).
+#
+# 2026-07-17 (field batch): the principal RULED writer + analyst onto the
+# subscription lane (DECISIONS "B4-era lane & cost rulings"). That lane flip is
+# IMPLEMENTED-AND-HELD by the implementer: it is a large, coupled test surgery
+# (~38 api-lane wire/transport/battery tests re-lane, plus the battery must go
+# lane-aware — item E) that shouldn't ride the tail of the field-fix batch. It is
+# handed off as a scoped follow-up (DECISIONS 2026-07-17 "B4-era lane & cost
+# rulings" carries the ruling). The cap stayed at the shipped 1.50 default — the
+# C-cap item DISSOLVED when the principal set his .env to 1.50 himself (DECISIONS
+# 2026-07-17 "cap amended to $1.50; OpenAI key pulled"); config.py is untouched.
+# The JSON-extraction fix (item A) and the lane-aware timeouts (item B) do NOT
+# depend on it and ship now. The seat stays api here until that follow-up lands.
 _OPUS_WRITER_API = dict(
     provider="anthropic", model="claude-opus-4-8", lane="api",
     usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
@@ -209,6 +230,7 @@ _OPUS_WRITER_API = dict(
 # length-finish, not silent). adaptive thinking on, effort "high" (dispatch item
 # 2). sampling=False: Sonnet 5 rejects temperature (the caller's 0.2 is ignored).
 # timeout 240s (§5.1 per-seat: Sonnet 240s). Shadow uses standard $3/$15.
+# 2026-07-17: subscription-lane flip HELD with the writer's (see above).
 _SONNET_ANALYST_API = dict(
     provider="anthropic", model="claude-sonnet-5", lane="api",
     usd_per_mtok_in=SONNET_USD_PER_MTOK_IN,
@@ -217,11 +239,11 @@ _SONNET_ANALYST_API = dict(
 )
 
 SEATS: Dict[str, SeatConfig] = {
-    "rank":      SeatConfig("rank",      timeout_s=90,  **_HAIKU_SUB),
+    "rank":      SeatConfig("rank",      timeout_s=90,  timeout_sub_s=300, **_HAIKU_SUB),
     "analyst":   SeatConfig("analyst",   timeout_s=240, **_SONNET_ANALYST_API),
     "writer":    SeatConfig("writer",    timeout_s=600, **_OPUS_WRITER_API),
-    "editor":    SeatConfig("editor",    timeout_s=120, **_HAIKU_SUB),
-    "script":    SeatConfig("script",    timeout_s=120, **_HAIKU_SUB),
+    "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=300, **_HAIKU_SUB),
+    "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=300, **_HAIKU_SUB),
     # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver
     # seat. A cheap mechanical single-turn classification (given a followed
     # thread, pick entity|storyline + the primary entity + a disclosure line) —
@@ -235,17 +257,33 @@ SEATS: Dict[str, SeatConfig] = {
     # (its output is a REPORT, never edition state or a selection weight), so it
     # is reached only through follow_altitude.resolve_altitude, never
     # seat_for_step / generate.call_llm. 60s timeout: a ~4-field JSON object.
-    "follow_altitude": SeatConfig("follow_altitude", timeout_s=60, **_HAIKU_SUB),
+    "follow_altitude": SeatConfig("follow_altitude", timeout_s=60, timeout_sub_s=180, **_HAIKU_SUB),
     # synthesis has no live call site yet (B6 builds it); it is declared here
     # so the seat table is the whole roster the design named, not a subset.
     "synthesis": SeatConfig("synthesis", timeout_s=120, **_GPT4O_API),
-    # BINDING gate ruling R1 (2026-07-16): memory_core's state/memory seat JOINS
-    # the seam in B2. Model stays gpt-4o/api this milestone (its own flip is a
-    # later milestone); the row exists so the state seat's spend rides the same
-    # check_lane gate + shadow ledger as every other seat — "memory_core
-    # byte-unchanged" is no longer an acceptance property.
-    "state":     SeatConfig("state",     timeout_s=60,  **_GPT4O_API),
+    # The state/memory seat joined the seam in B2 (gate ruling R1). 2026-07-17 the
+    # PRINCIPAL RULED it onto Haiku 4.5 / the subscription lane (option (a)) —
+    # state was the last gpt-4o *content* seat, so this flip completes the
+    # keyless-OpenAI migration: a keyless-OpenAI generate now runs end-to-end on
+    # the anthropic lanes (the only remaining gpt-4o seat, synthesis, has no live
+    # call site in the generate path). STATE_MODEL + the STATE_USD_* price
+    # constants derive from this row (memory_core R-B4a), so model/price/transport
+    # follow with no other module edit. timeout_sub_s=300 matches the other
+    # mechanical Haiku seats (subprocess startup overhead). Ships with a MANDATORY
+    # spot-check + pre-registered revert-if (DECISIONS 2026-07-17 "state seat
+    # flips to Haiku/subscription; audio held" — the durable record): any
+    # validate_state trip / photocopy-suspect flag / quality miss -> revert this
+    # row to **_GPT4O_API in one clean diff (needs the OpenAI key restored) or
+    # escalate to the battery's state arm.
+    "state":     SeatConfig("state",     timeout_s=60,  timeout_sub_s=300, **_HAIKU_SUB),
 }
+
+# Seats DECLARED in the roster but with no live call site anywhere in the product
+# (B6 builds synthesis's). The doctor treats a dormant seat's provider-key
+# requirement as informational, never a FAIL — there is no run for the key to
+# protect (gate ruling 2, 2026-07-17). B6 REMOVES synthesis from this set in the
+# same diff that lands its call site, re-arming the hard key requirement.
+DORMANT_SEATS = frozenset({"synthesis"})
 
 # generate._chat is shared by the narrative/editor/script steps; in B1 all
 # three are the identical gpt-4o/120s writer-family seat, so this map only
@@ -559,6 +597,19 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
     with urllib.request.urlopen(request, timeout=cfg.timeout_s) as resp:
         native = json.load(resp)
     content = _anthropic_content(native)
+    # DEF-A′ (2026-07-17, field-charged): apply the SAME json_mode extraction on
+    # the api lane. First scoped subscription-only on the theory the api lane's
+    # corrected-retry recovers fenced JSON — the field refuted it: rank on the api
+    # lane (NEWSLENS_LANE_RANK=api) FAILED char-0 on BOTH attempts against the real
+    # 17,446-token prompt (ranking_runs 36; both attempts fenced/preambled, neither
+    # truncated — completion 2549/2480 < the 3000 cap; $0.0602 charged for
+    # nothing). Real Haiku fences regardless of lane; the B2 pins only proved a
+    # SINGLE synthetic reply recovers. Extraction-FIRST as presentation cleanup;
+    # the corrected retry stays the second line for genuinely malformed shapes
+    # (see _extract_json_result — never a repair, so validation is unchanged and a
+    # no-object / invalid reply still fails through to the retry).
+    if req.json_mode:
+        content = _extract_json_result(content)
     usage = _anthropic_usage(native)
     finish = _anthropic_finish_reason(native)
     return LaneResponse(
@@ -672,6 +723,103 @@ def _subscription_usage(payload: Dict, prompt: str,
                  completion_tokens=int(len(content) / 3.5)), True
 
 
+def _balanced_objects(s: str) -> "list":
+    """Every top-level balanced {...} substring in `s`, in order (string-literal
+    aware, so a brace inside a JSON string is not miscounted). A pure scan."""
+    out = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, c in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    out.append(s[start:i + 1])
+    return out
+
+
+def _extract_json_result(text: str) -> str:
+    """Pull the JSON object out of a possibly fenced / preambled / verbose result.
+
+    FIELD DEFECT (2026-07-17 falsifier real run, DEF-A): `claude -p` runs the
+    model inside the Claude Code agentic harness (a large built-in system prompt
+    even under --safe-mode; ~4.2k cache_creation tokens/call), so on the
+    SUBSCRIPTION lane it emits conversational prose ± a fenced ```json block, NOT
+    reliably bare JSON — the `--append-system-prompt` nudge is swamped. Every
+    first attempt failed json.loads at char 0 (a leading backtick/letter); the
+    corrected retry recovered only 13/24.
+
+    PRESENTATION cleanup ONLY (the hard constraint: extraction never weakens
+    VALIDATION). This returns a SUBSTRING of the model's output — it never
+    repairs invalid JSON, coerces values, or synthesises fields — so the caller's
+    json.loads + shape validation are UNCHANGED: a result with no JSON object, or
+    a fenced-but-shape-invalid one, still fails the caller exactly as before.
+    Extraction also never OVERRULES the shape validator (gate ruling 3,
+    2026-07-17): whole-result JSON that parses as a non-dict (an array or a
+    scalar), bare or fenced, passes through intact for the validator to referee
+    — silently picking one member of an array is a choice the validator used to
+    make, and keeps making. Extraction only ever digs an object out of non-JSON
+    prose or a fence. Applied only on json_mode requests; bare-JSON output is a
+    no-op (so the api-lane fakes, which return bare JSON, never move)."""
+    s = (text or "").strip()
+    if s.startswith("{") and s.endswith("}"):
+        return s                                    # already bare — the common case
+    # Gate ruling 3: whole-result JSON that is NOT a dict passes through
+    # untouched — pre-extraction it parsed fine and the SHAPE validator rejected
+    # it; that outcome is the validator's to referee, not extraction's to dodge.
+    try:
+        if not isinstance(json.loads(s), dict):
+            return s
+    except ValueError:
+        pass
+    # unwrap a whole-string markdown fence: ```json\n ... \n```
+    if s.startswith("```"):
+        nl = s.find("\n")
+        if nl != -1:
+            body = s[nl + 1:]
+            end = body.rfind("```")
+            if end != -1:
+                inner = body[:end].strip()
+                if inner.startswith("{") and inner.endswith("}"):
+                    return inner
+                # Same non-dict guard for the fence body: a fenced array/scalar
+                # returns the BODY (the validator must see the payload, not the
+                # fence) — never a silently-chosen member.
+                try:
+                    if not isinstance(json.loads(inner), dict):
+                        return inner
+                except ValueError:
+                    pass
+                s = inner                           # scan the fence body below
+    # otherwise scan for balanced {...} objects and prefer the LAST that parses to
+    # a dict (the answer follows any reasoning); else the last balanced object;
+    # else the original (a non-object result — the caller's json.loads rejects it).
+    candidates = _balanced_objects(s)
+    for cand in reversed(candidates):
+        try:
+            if isinstance(json.loads(cand), dict):
+                return cand
+        except ValueError:
+            continue
+    return candidates[-1] if candidates else s
+
+
 def _subscription_provider(req: LaneRequest) -> LaneResponse:
     """Claude subscription lane: a `claude -p --output-format json` subprocess.
     The prompt rides on STDIN (immune to ARG_MAX at 24k-char material budgets);
@@ -704,16 +852,21 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
     if req.system:
         args += ["--append-system-prompt", req.system]
     scratch = tempfile.mkdtemp(prefix="newslens-claude-lane-")
+    # Lane-aware timeout (2026-07-17 field fix): the subscription lane pays CLI
+    # startup + agentic-harness overhead, so the api-calibrated timeout_s is too
+    # tight (rank's live 90s double-timeout). Use the seat's subscription timeout
+    # when set, else fall back to timeout_s. api-lane timeouts are untouched.
+    timeout = cfg.timeout_sub_s or cfg.timeout_s
     try:
         proc = subprocess.run(
             args, input=req.prompt, cwd=scratch,
             env=_subscription_env(dict(os.environ)),
-            capture_output=True, text=True, timeout=cfg.timeout_s,
+            capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         # subprocess.run has already killed the child; surface transport-shaped.
         raise TimeoutError(
-            f"claude -p ({cfg.seat}/{cfg.model}) exceeded {cfg.timeout_s}s "
+            f"claude -p ({cfg.seat}/{cfg.model}) exceeded {timeout}s "
             "— the child was killed"
         ) from exc
     finally:
@@ -735,8 +888,15 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
             f"claude -p ({cfg.seat}) reported an error result: "
             f"{str(payload.get('result') if isinstance(payload, dict) else payload)[:200]}"
         )
-    content = payload.get("result") or ""
-    usage, estimated = _subscription_usage(payload, req.prompt, content)
+    result = payload.get("result") or ""
+    # DEF-A (2026-07-17): on json_mode requests, extract the JSON object from the
+    # `claude -p` agentic-harness output (fenced / preambled / verbose prose) so
+    # the caller parses clean JSON. Estimate usage from the FULL `result` (what
+    # the model generated), not the extracted substring. Non-json_mode results
+    # (prose seats) pass through untouched. Validation is unchanged (see
+    # _extract_json_result: presentation cleanup only, never a JSON repair).
+    content = _extract_json_result(result) if req.json_mode else result
+    usage, estimated = _subscription_usage(payload, req.prompt, result)
     # Forensics: the CLI's own fields (total_cost_usd is the API-equivalent, kept
     # as a CROSS-CHECK only — usd_charged is 0.0 on this lane, set by cost_fields
     # off cfg.lane, never off this number). session_id aids log correlation.
@@ -912,6 +1072,20 @@ def resolve_seat(seat: str, env: Optional[Dict[str, str]] = None) -> SeatConfig:
     if lane == base.lane and model == base.model:
         return base
     return replace(base, lane=lane, model=model)
+
+
+def seat_is_openai(seat: str, env: Optional[Dict[str, str]] = None) -> bool:
+    """True iff `seat` resolves to the OpenAI provider (gpt-4o) — i.e. it needs
+    OPENAI_API_KEY. A″ (2026-07-17, keyless-OpenAI audit): the legacy per-stage
+    'OPENAI_API_KEY not set -> refuse' checks were written when every seat was
+    gpt-4o. Post-B4 only `state` (and `synthesis`, no live call site yet) is
+    openai; rank/editor/script/analyst/writer/follow_altitude are anthropic and
+    the OpenAI key is INERT for them (passed as the openai offline-test seam value,
+    ignored by the anthropic providers). So a caller requires the key ONLY when
+    `seat_is_openai(seat)` — a keyless-OpenAI run with all-anthropic seats is
+    healthy. Provider is fixed per seat (env overrides change only lane/model), so
+    this is False for the anthropic seats regardless of NEWSLENS_MODEL_/LANE_."""
+    return resolve_seat(seat, env).provider == "openai"
 
 
 def fallback_armed(env: Optional[Dict[str, str]] = None) -> bool:

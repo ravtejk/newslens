@@ -22,10 +22,6 @@ from conftest import PROTOTYPE_ROOT
 
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 
-OPENAI_HINT = (
-    "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
-    "then add to .env"
-)
 PERPLEXITY_HINT = (
     "PERPLEXITY_API_KEY not set — deferred by choice; ingest runs RSS-only "
     "and says so. To add discovery later: perplexity.ai/settings/api → .env"
@@ -110,9 +106,13 @@ def test_preinstall_doctor_is_friendly_exit_1_with_zero_network(tmp_path):
     assert proc.returncode == 1, combined
     assert "Traceback" not in combined
 
-    # Friendly, specific fix hints for the pre-install state:
+    # Friendly, specific fix hints for the pre-install state. Gate ruling 2
+    # (2026-07-17): the pre-install exit-1 rests on the genuinely-missing
+    # requirements (Python deps, the absent claude CLI for the subscription
+    # seats) — NOT the OpenAI key, which is now INFO 'not needed' since no live
+    # seat routes to gpt-4o after the state flip.
     assert "missing Python deps: PyYAML, python-dotenv" in proc.stdout
-    assert OPENAI_HINT in proc.stdout
+    assert "OPENAI_API_KEY not needed — no live seat routes to OpenAI" in proc.stdout
     assert PERPLEXITY_HINT in proc.stdout
     assert "sources.yaml validation skipped (PyYAML not installed" in proc.stdout
     # A real .env may or may not exist in the checkout; both states must

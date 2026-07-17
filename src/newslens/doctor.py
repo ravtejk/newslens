@@ -201,15 +201,49 @@ def load_effective_env() -> Tuple[Dict[str, str], List[Result]]:
 
 
 def check_openai_key(env: Dict[str, str]) -> List[Result]:
+    """A″ (2026-07-17): required precisely when — under the current seat map + lane
+    env — some seat resolves to the OpenAI provider (gpt-4o). Post-B4 that is only
+    the state/memory seat (and synthesis, which has no live call site yet);
+    rank/editor/script/analyst/writer/follow_altitude are anthropic and the OpenAI
+    key is INERT for them. So a keyless install with all-anthropic content seats is
+    HEALTHY — reported plainly, not as a failure (the prior blanket FAIL was stale
+    once the content seats flipped off gpt-4o). Gate ruling 2 (2026-07-17): a
+    DORMANT seat (declared, no live call site — llm.DORMANT_SEATS) never forces
+    the key requirement; there is no run for the key to protect. B6 re-arms it by
+    removing synthesis from that set. The value is never echoed."""
+    openai_seats = sorted(
+        name for name in llm.SEATS
+        if name not in llm.DORMANT_SEATS
+        and llm.resolve_seat(name, env).provider == "openai"
+    )
+    dormant_openai = sorted(
+        name for name in llm.DORMANT_SEATS
+        if llm.resolve_seat(name, env).provider == "openai"
+    )
     key = (env.get("OPENAI_API_KEY") or "").strip()
+    if not openai_seats:
+        # No LIVE seat routes to OpenAI — the key is not needed;
+        # keyless-with-all-anthropic is healthy (dormant declarations don't
+        # force a purchase; gate ruling 2, 2026-07-17).
+        dormant_txt = (
+            f" ({', '.join(dormant_openai)} declares gpt-4o but has no live "
+            "call site until B6)" if dormant_openai else ""
+        )
+        if key:
+            return [Result(INFO, "OPENAI_API_KEY set but no live seat currently "
+                                 f"routes to OpenAI (gpt-4o) — unused{dormant_txt}")]
+        return [Result(INFO, "OPENAI_API_KEY not needed — no live seat routes to "
+                             f"OpenAI under the current seat map{dormant_txt}; "
+                             "the anthropic content seats run keyless-OpenAI")]
+    seats_txt = ", ".join(openai_seats)
     if not key:
-        return [
-            Result(
-                FAIL,
-                "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
-                "then add to .env",
-            )
-        ]
+        return [Result(
+            FAIL,
+            "OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, "
+            f"then add to .env. Required because the {seats_txt} seat(s) run "
+            "gpt-4o (every anthropic content seat runs keyless-OpenAI — the key "
+            "is needed ONLY for the openai seat(s)).",
+        )]
     req = urllib.request.Request(
         OPENAI_MODELS_URL,
         headers={"Authorization": f"Bearer {key}", "User-Agent": USER_AGENT},
@@ -224,7 +258,8 @@ def check_openai_key(env: Dict[str, str]) -> List[Result]:
             Result(
                 PASS,
                 f"OPENAI_API_KEY valid — read-only GET /v1/models OK "
-                f"({count} models visible, {elapsed:.1f}s)",
+                f"({count} models visible, {elapsed:.1f}s); powers the {seats_txt} "
+                "seat(s)",
             )
         ]
     except urllib.error.HTTPError as exc:

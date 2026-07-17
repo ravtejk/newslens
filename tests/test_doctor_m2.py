@@ -116,10 +116,13 @@ def test_sources_section_is_tier_aware_and_checks_only_fetchable_feeds(
 def test_keyless_doctor_with_active_sources_fetches_feeds_but_never_the_apis(
     tmp_paths, fake_api, monkeypatch, capsys
 ):
-    """The M2-sharpened invariant: RSS checks need no key and may run; the
-    OpenAI/Perplexity endpoints must not see a single request when keyless.
-    Verified by pointing BOTH API constants at the local fake and asserting
-    it recorded only feed GETs."""
+    """The M2-sharpened invariant (the test's spine, unchanged): RSS checks need
+    no key and may run; the OpenAI/Perplexity endpoints must not see a single
+    request when keyless. Verified by pointing BOTH API constants at the local
+    fake and asserting it recorded only feed GETs. Gate ruling 2 (2026-07-17):
+    keyless-OpenAI is no longer an API-key FAIL — after the state flip no live
+    seat routes to gpt-4o, so the OpenAI line renders INFO 'not needed'; the
+    honest exit-1 rests on the required ANTHROPIC key instead."""
     _write_tiered(fake_api)
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.base_url + "/v1/models")
     monkeypatch.setattr(
@@ -128,7 +131,8 @@ def test_keyless_doctor_with_active_sources_fetches_feeds_but_never_the_apis(
     code = doctor.run_doctor()
     out = capsys.readouterr().out
     assert code == 1  # keys still missing — honest exit
-    assert "OPENAI_API_KEY not set" in out
+    assert "OPENAI_API_KEY not needed — no live seat routes to OpenAI" in out  # ruling 2: INFO
+    assert "ANTHROPIC_API_KEY not set" in out                                  # the real required failure
     hit = {(r["method"], r["path"]) for r in fake_api.recorded}
     assert ("GET", "/v1/models") not in hit
     assert ("POST", "/chat/completions") not in hit

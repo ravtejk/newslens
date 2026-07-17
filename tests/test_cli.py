@@ -350,9 +350,14 @@ def test_gatefix1b_memory_add_revival_survives_the_next_sync(tmp_paths, capsys):
     assert status == "active"
 
 
-def test_rank_keyless_is_a_polite_exit_1_with_no_request(
+def test_rank_keyless_openai_rides_the_anthropic_seat_exit_1(
     tmp_paths, fake_api, monkeypatch, capsys
 ):
+    """A″ (2026-07-17, CONSCIOUS FLIP): rank is anthropic since B2 — keyless-OpenAI
+    does NOT refuse on the inert OpenAI key. It rides the anthropic seat (the
+    sandbox stub `claude` on the subscription lane) and exits 1 for a real reason,
+    NOT OPENAI_API_KEY. No POST to the OpenAI endpoint is ever built (the
+    subscription lane is a subprocess)."""
     from newslens import ranking
 
     monkeypatch.setattr(
@@ -362,7 +367,7 @@ def test_rank_keyless_is_a_polite_exit_1_with_no_request(
     rc = cli.main(["rank"])
     err = capsys.readouterr().err
     assert rc == 1
-    assert "OPENAI_API_KEY not set" in err
+    assert "OPENAI_API_KEY" not in err          # the stale OpenAI refusal is gone
     assert [r for r in fake_api.recorded if r["method"] == "POST"] == []
 
 

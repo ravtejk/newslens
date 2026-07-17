@@ -134,14 +134,27 @@ def test_LIVENESS_tts_safe_pass_reaches_the_persisted_script(
 
 # --- Backlog-minors batch: NOTES 28a/28c liveness pins ----------------------
 
-def test_28a_keyless_refusal_lands_in_the_generation_log(tmp_paths):
-    """The one failure the record never saw: a keyless run now logs a failed
-    entry exactly like every other GenerateError (fails without the check
-    living inside the logged region)."""
-    from newslens import paths
+def test_28a_keyless_openai_refusal_lands_in_the_generation_log(tmp_paths, monkeypatch):
+    """The one failure the record never saw: when a seat resolves to OpenAI and
+    the key is absent, the refusal is a GenerateError that lands in the log
+    exactly like every other one (the check lives INSIDE the logged region, not
+    before it). A″ (2026-07-17) moved that check off the blanket guard onto the
+    state-stage preflight. The state seat then flipped to Haiku/subscription, so
+    by default NO content seat resolves openai and a keyless generate COMPLETES
+    (proven in test_generate). To keep this logging invariant honest, pin state
+    back to gpt-4o/openai — the exact scenario the guard exists for — and prove
+    the refusal still lands in the log."""
+    import dataclasses
+    from newslens import paths, llm
+    monkeypatch.setitem(
+        llm.SEATS, "state",
+        dataclasses.replace(llm.SEATS["state"], provider="openai",
+                            model="gpt-4o", lane="api",
+                            usd_per_mtok_in=2.50, usd_per_mtok_out=10.00))
     db.migrate()
     con = db.connect()
     try:
+        seed_briefing(con, DATE, [slot(1)])
         with pytest.raises(generate.GenerateError, match="OPENAI_API_KEY"):
             generate.run_generate(date=DATE, con=con, env={}, refresh=False)
         log = (paths.DATA_DIR / "generation_log.jsonl").read_text(encoding="utf-8")

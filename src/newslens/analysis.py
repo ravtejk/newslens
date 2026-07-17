@@ -1792,9 +1792,15 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
     config.load_env()  # .env before reading keys (analyze runs standalone)
     src_env = env if env is not None else os.environ
     openai_key = (src_env.get("OPENAI_API_KEY") or "").strip()
-    if not openai_key:
-        raise RuntimeError("OPENAI_API_KEY not set — the analysis call is an "
-                           "LLM step; there is no keyless mode")
+    # A″ (2026-07-17): the analyst seat is Sonnet 5 (anthropic) since B4 — the
+    # OpenAI key passed into analyze_story is INERT (the anthropic analyst seam
+    # ignores it). Require it ONLY if the analyst seat resolves to openai (it never
+    # does today); a keyless-OpenAI analysis with the anthropic analyst is HEALTHY
+    # (was a stale blanket refusal). Perplexity (pplx_key, below) is a separate
+    # credential the discovery/full-text paths gate on themselves.
+    if llm.seat_is_openai("analyst", src_env) and not openai_key:
+        raise RuntimeError("the analyst seat resolves to OpenAI (gpt-4o) but "
+                           "OPENAI_API_KEY is not set — add it to .env")
     pplx_key = (src_env.get("PERPLEXITY_API_KEY") or "").strip()
     own_con = con is None
     con = con or db.connect()

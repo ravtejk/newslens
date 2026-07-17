@@ -164,9 +164,10 @@ def test_unavailable_lane_fails_loud_naming_the_fix():
     # B4 flip (conscious, QA re-pin): the writer is ANTHROPIC now, so
     # writer x subscription is a REGISTERED lane (the gate/principal's
     # override path — see the resolve assert below). The fail-loud case moves
-    # to a still-openai seat forced off the api lane (state; openai runs ONLY
-    # on api). Still fail-loud, still names the fix — unchanged intent.
-    cfg = llm.resolve_seat("state", {"NEWSLENS_LANE": "subscription"})
+    # to a still-openai seat forced off the api lane. 2026-07-17 the state seat
+    # flipped to anthropic (option a), so synthesis is the LONE remaining openai
+    # seat (openai runs ONLY on api). Still fail-loud, still names the fix.
+    cfg = llm.resolve_seat("synthesis", {"NEWSLENS_LANE": "subscription"})
     assert cfg.lane == "subscription" and cfg.provider == "openai"
     with pytest.raises(llm.LaneUnavailable) as exc:
         llm.chat(llm.LaneRequest(cfg, "p", 0, 10, True, "ua", "k"))
@@ -198,8 +199,9 @@ def test_seat_map_after_b2_haiku_flip():
     # the Claude API lane (ADR-0016 §3 Option C: effort maps exactly and the
     # truncation guard fires there; the seam still allows a subscription
     # override per seat). rank/editor/script stay Haiku on subscription;
-    # state/synthesis stay gpt-4o on api. This guard makes every model/lane
-    # flip deliberate, never accidental.
+    # 2026-07-17 the principal RULED state -> Haiku/subscription too (option a),
+    # so synthesis is the LONE remaining gpt-4o/api seat. This guard makes every
+    # model/lane flip deliberate, never accidental.
     haiku_sub = {"rank", "editor", "script", "follow_altitude"}  # NL-17-M1 resolver
     for name, cfg in llm.SEATS.items():
         if name in haiku_sub:
@@ -212,6 +214,12 @@ def test_seat_map_after_b2_haiku_flip():
         elif name == "analyst":
             assert cfg.provider == "anthropic" and cfg.lane == "api"
             assert cfg.model == "claude-sonnet-5"
+        elif name == "state":
+            # 2026-07-17 ruling (option a): the memory/state seat is now Haiku on
+            # the subscription lane — the last content seat off gpt-4o.
+            assert cfg.provider == "anthropic", name
+            assert cfg.model == "claude-haiku-4-5", name
+            assert cfg.lane == "subscription", name
         else:
             assert cfg.provider == "openai", name
             assert cfg.model == "gpt-4o", name

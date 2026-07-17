@@ -452,14 +452,19 @@ class TestCliSurface:
         assert "deltas written: 1" in out and "threads moved: 1" in out
         con.close()
 
-    def test_cli_keyless_offline_backfill_bills_zero_and_degrades_stale(
-            self, tmp_paths, capsys):
-        """Mechanical spend-proof for the new command: NO key, NO injected seam
-        — the REAL _default_state_chat runs and the autouse loopback guard
-        refuses its connect. The command must complete rc 0, write the $0
-        ledger, keep the state stale-but-honest, print $0.0000, and fold
-        nothing."""
+    def test_offline_backfill_bills_zero_and_degrades_stale(
+            self, tmp_paths, capsys, monkeypatch):
+        """Mechanical spend-proof for the new command: the REAL
+        _default_state_chat runs but the state seat cannot transport, so the
+        command completes rc 0, writes the $0 ledger, keeps the state stale-but-
+        honest, prints $0.0000, and folds nothing. 2026-07-17 (option a): the
+        state seat is Haiku/subscription now (keyless-OpenAI no longer starves
+        it), so 'offline' means the claude binary is unavailable — check_lane
+        raises LaneUnavailable BEFORE any attempt, rewrite_state degrades stale,
+        and with no attempt billed the ledger folds nothing (exactly as the old
+        keyless-OpenAI connect-refused path did)."""
         from newslens import cli
+        monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", "/nonexistent/claude-absent-xyz")
         con = self._seed_sandbox_db()
         tc_before = _token_cost(con, A_DAY)
         rc = cli.main(["memory-backfill", "--date", A_DAY])

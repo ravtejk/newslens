@@ -181,8 +181,10 @@ def test_sampling_omitted_for_claude46_seats_kept_for_haiku_and_gpt4o(
     """One test, both directions: the flipped seats OMIT temperature (Opus
     4.8 / Sonnet 5 reject it with a 400 — this is the correctness tooth, not
     style), while the Haiku api fall-over KEEPS temperature (byte-unchanged
-    B2 body) and the gpt-4o state seat keeps its openai temperature. A
-    sampling regression in either direction fails here by name."""
+    B2 body). 2026-07-17 (option a): the state seat is Haiku now, so the LONE
+    gpt-4o seat is synthesis (no live call site) — the sampling knob that would
+    keep gpt-4o's temperature is pinned directly on both remaining sampling-on
+    seats. A sampling regression in either direction fails here by name."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
     openai_shape = json.dumps({
         "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
@@ -199,23 +201,20 @@ def test_sampling_omitted_for_claude46_seats_kept_for_haiku_and_gpt4o(
     # rank pinned to its api fall-over (Haiku): temperature RIDES, int 0
     monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     ranking._post_chat("sk-x", "R")
-    # state (gpt-4o, openai): temperature rides the openai body
-    memory_core._default_state_chat("sk-openai", "S")
 
-    writer_b, analyst_b, rank_b, state_b = (s["body"] for s in seen)
+    writer_b, analyst_b, rank_b = (s["body"] for s in seen)
     assert writer_b["model"] == "claude-opus-4-8"
     assert analyst_b["model"] == "claude-sonnet-5"
     assert rank_b["model"] == "claude-haiku-4-5"
-    assert state_b["model"] == "gpt-4o"
     assert "temperature" not in writer_b
     assert "temperature" not in analyst_b
     assert rank_b["temperature"] == 0            # Haiku: byte-unchanged from B2
-    assert "temperature" in state_b              # openai body unchanged
-    # the schema knob that drives it, pinned per seat:
+    # the schema knob that drives it, pinned per seat — both directions:
     assert llm.SEATS["writer"].sampling is False
     assert llm.SEATS["analyst"].sampling is False
     assert llm.SEATS["rank"].sampling is True
-    assert llm.SEATS["state"].sampling is True
+    assert llm.SEATS["state"].sampling is True       # Haiku now — keeps temperature
+    assert llm.SEATS["synthesis"].sampling is True   # the lone gpt-4o seat keeps it
 
 
 def test_no_anthropic_body_ever_carries_budget_tokens_or_top_p(monkeypatch):
@@ -474,9 +473,11 @@ def test_model_constants_equal_their_seat_rows_exactly():
     assert analysis.ANALYSIS_MODEL == a.model == "claude-sonnet-5"
     assert analysis.ANALYSIS_USD_IN_PER_MTOK == a.usd_per_mtok_in == 3.00
     assert analysis.ANALYSIS_USD_OUT_PER_MTOK == a.usd_per_mtok_out == 15.00
-    assert memory_core.STATE_MODEL == st.model == "gpt-4o"
-    assert memory_core.STATE_USD_IN_PER_MTOK == st.usd_per_mtok_in == 2.50
-    assert memory_core.STATE_USD_OUT_PER_MTOK == st.usd_per_mtok_out == 10.00
+    # 2026-07-17 (option a): state flipped to Haiku/subscription — the derived
+    # STATE_* constants follow the seat row (R-B4a), never a stale literal.
+    assert memory_core.STATE_MODEL == st.model == "claude-haiku-4-5"
+    assert memory_core.STATE_USD_IN_PER_MTOK == st.usd_per_mtok_in == 1.00
+    assert memory_core.STATE_USD_OUT_PER_MTOK == st.usd_per_mtok_out == 5.00
 
 
 @pytest.mark.parametrize("seat,module", [

@@ -1294,7 +1294,21 @@ class TestStateChatMoneyHonesty:
 
         Fix contract: the raised exception carries the paid total (e.g.
         exc.usd_spent), and rewrite_state adds it to res.cost_usd on the
-        stale path — every paid attempt is recorded even when the call fails."""
+        stale path — every paid attempt is recorded even when the call fails.
+
+        2026-07-17 (option a): BUG-32 is about PAID (charged) money accounting,
+        which only exists on an openai/api seat — the subscription lane never
+        truncates (finish_reason is always 'stop') and always charges $0. The
+        state seat now defaults to Haiku/subscription, so pin it back to
+        gpt-4o/openai to exercise the paid truncation-retry path the guard
+        protects."""
+        import dataclasses
+        from newslens import llm
+        monkeypatch.setitem(
+            llm.SEATS, "state",
+            dataclasses.replace(llm.SEATS["state"], provider="openai",
+                                model="gpt-4o", lane="api",
+                                usd_per_mtok_in=2.50, usd_per_mtok_out=10.00))
         responses = []
 
         class FakeResp:

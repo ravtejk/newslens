@@ -955,11 +955,19 @@ def test_estimate_formula_is_conservative_chars_over_four_plus_full_output():
     assert est == pytest.approx(expected)
 
 
-def test_run_analysis_is_keyless_hard_stop(tmp_paths, no_network):
-    """No OPENAI key -> RuntimeError before any work; with no_network armed
-    the failure is provably socket-free."""
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+def test_keyless_openai_analysis_does_not_hard_stop_on_the_inert_key(
+        tmp_paths, no_network):
+    """A″ (2026-07-17, CONSCIOUS FLIP): the analyst seat is Sonnet 5 (anthropic)
+    since B4, so a keyless-OpenAI analysis does NOT hard-stop on the (inert) OpenAI
+    key — it proceeds past the key check and stops for a REAL reason (no ranked
+    briefing to analyze), NOT OPENAI_API_KEY. no_network proves it stays
+    socket-free (it fails before any transport)."""
+    from newslens import db
+    db.migrate()   # reach the 'no ranked briefing' stop, past the (gone) key check
+    with pytest.raises(RuntimeError) as excinfo:
         analysis.run_analysis(env={})
+    assert "OPENAI_API_KEY" not in str(excinfo.value)   # stale hard-stop gone
+    assert "no ranked briefing" in str(excinfo.value)
 
 
 def test_story_cost_accumulates_sonar_plus_synthesis(tmp_paths):
@@ -1412,10 +1420,13 @@ def test_missing_date_falls_back_to_newest_briefing_and_discloses_it(tmp_paths):
 # 12. CLI verb + diagnose section
 # ---------------------------------------------------------------------------
 
-def test_cli_analyze_keyless_is_exit_1_with_the_reason_on_stderr(tmp_paths, capsys):
+def test_cli_analyze_keyless_openai_exit_1_no_openai_refusal(tmp_paths, capsys):
+    """A″ (2026-07-17, CONSCIOUS FLIP): keyless-OpenAI `analyze` does NOT refuse on
+    the inert key (analyst is anthropic); it exits 1 for a real reason (no ranked
+    briefing), on stderr, NOT OPENAI_API_KEY."""
     rc = cli.main(["analyze"])
     err = capsys.readouterr().err
-    assert rc == 1 and "OPENAI_API_KEY" in err
+    assert rc == 1 and "OPENAI_API_KEY" not in err
 
 
 def test_cli_analyze_prints_per_story_lines_and_the_derating_banner(

@@ -1355,11 +1355,26 @@ def test_first_briefing_and_ok_continuity_are_distinct(migrated_con, fake_model)
 
 # --- money paths (§5.9 / ADR-0007 §8) ------------------------------------------------------
 
-def test_keyless_generate_refuses_before_anything(migrated_con, fake_model):
-    with pytest.raises(generate.GenerateError) as excinfo:
-        run(migrated_con, env={})
-    assert "OPENAI_API_KEY not set" in str(excinfo.value)
-    assert fake_model.calls == []
+def test_keyless_openai_generate_completes_end_to_end_after_the_state_flip(
+        migrated_con, fake_model):
+    """A″ + state flip (2026-07-17, option a, CONSCIOUS RE-EXPRESSION of the A″
+    born-red): with the state seat on Haiku/subscription, NO content stage
+    resolves to OpenAI (synthesis, the lone gpt-4o seat, has no live call site),
+    so the A″ 'refuses only at the state stage' exception is GONE. A keyless-
+    OpenAI generate (env={}) now drives writer/editor/script to completion on the
+    anthropic lanes and the edition ships — the whole point of the flip."""
+    slots = [slot(1)]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    rep = run(migrated_con, env={})                        # keyless-OpenAI
+    assert rep is not None
+    assert any(c["json_mode"] for c in fake_model.calls)       # writer/editor ran keyless
+    assert any(not c["json_mode"] for c in fake_model.calls)   # script ran keyless
+    row = migrated_con.execute(
+        "SELECT narrative_text, script_text FROM briefings WHERE date = ?",
+        (A_DAY,)).fetchone()
+    assert row["narrative_text"] and row["script_text"]        # the edition shipped keyless
 
 
 def test_narrative_budget_abort_before_any_call(migrated_con, fake_model, monkeypatch):
@@ -1545,13 +1560,20 @@ def test_date_spoken_forms_ordinals():
 def test_generate_cli_is_keyless_safe_inside_the_suite(capsys):
     """The M5 escape, pinned dead: `newslens generate` from inside the suite
     is keyless (autouse sandbox redirects .env) and exits 1 politely — it can
-    never again reach a real key, real state, or the network from a test."""
+    never again reach a real key, real state, or the network from a test. A″
+    (2026-07-17): the blanket OpenAI refusal is gone, so it now exits at the
+    ingest gate (the sandbox's zero-active-sources template) instead — still a
+    clean exit-1, still no real call. After the state-seat flip the keyless-
+    OpenAI/all-anthropic path runs end to end
+    (test_keyless_openai_generate_completes_end_to_end_after_the_state_flip);
+    the refusal-still-logs proof, when a seat resolves openai, lives in
+    test_p3_script.test_28a_keyless_openai_refusal_lands_in_the_generation_log."""
     from newslens import cli
 
     rc = cli.main(["generate"])
     err = capsys.readouterr().err
-    assert rc == 1
-    assert "OPENAI_API_KEY not set" in err
+    assert rc == 1                              # still a polite exit
+    assert "OPENAI_API_KEY not set" not in err  # no stale blanket refusal
 # --- Editorial-review package A1-A6 (2026-07-05) — closing pins -----------------------
 
 def test_A1_record_is_always_voice_A_parity_never_consulted(migrated_con, fake_model):

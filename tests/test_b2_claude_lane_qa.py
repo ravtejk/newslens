@@ -169,34 +169,61 @@ _HOSTILE_FIRST_REPLIES = [
 
 
 @pytest.mark.parametrize("first_reply", _HOSTILE_FIRST_REPLIES)
-def test_rank_hostile_json_reply_takes_one_corrected_retry_and_recovers(
+def test_rank_wrapped_json_recovers_on_the_first_attempt_via_extraction(
         monkeypatch, first_reply):
-    """The documented B2 choice: no native json mode, no silent post-hoc
-    repair — a fenced/preambled/trailing-prose reply must fail json.loads and
-    take the caller's CORRECTED retry (run-28 law), which recovers. Both
-    attempts bill at the rank seat's Haiku prices; the json system nudge rides
-    BOTH requests; the retry prompt (and only the retry) carries
-    RETRY_CORRECTION anchored to the original prompt.
-    B3: pinned to the api fall-over lane (rank defaults to subscription now);
-    the corrected-retry law THROUGH the subprocess lane is proven in
-    test_b3_subscription_lane_qa."""
+    """CONSCIOUS FLIP (A′, 2026-07-17, field-charged) of the old
+    takes-one-corrected-retry pin. The field refuted the assumption behind it:
+    real Haiku fences/preambles the 17k rank prompt on the API lane too, and the
+    corrected retry does NOT recover (ranking_runs 36 — char-0 on BOTH attempts,
+    $0.0602 charged for nothing). So the anthropic provider now EXTRACTS the JSON
+    object (json_mode) BEFORE the caller parses: a fenced/preambled/trailing-prose
+    reply recovers on ATTEMPT 1 — no retry, no double-spend. Extraction is
+    presentation cleanup, never a repair (the extraction-proof test below still
+    takes the retry), so the validation teeth are unchanged. The json system
+    nudge still rides the request; api fall-over lane pinned."""
     _no_sleep(monkeypatch)
     monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
-    sent = _scripted(monkeypatch, [ant_native(first_reply), ant_native(_GOOD)])
+    sent = _scripted(monkeypatch, [ant_native(first_reply)])   # ONE reply — no retry
     sink = []
     clusters, usage = ranking.call_llm_validated(
         "sk-openai-unused", "BASE-PROMPT", KNOWN_IDS, TAGS, [], cost_sink=sink)
-    assert [c["item_ids"] for c in clusters] == [[1]]      # recovered
-    assert len(sent) == 2
-    assert all(s["url"] == llm.ANTHROPIC_MESSAGES_URL for s in sent)
-    assert all(s["body"]["system"] == llm._ANTHROPIC_JSON_SYSTEM for s in sent)
+    assert [c["item_ids"] for c in clusters] == [[1]]      # recovered on attempt 1
+    assert len(sent) == 1                                   # NO retry — extracted
+    assert sent[0]["url"] == llm.ANTHROPIC_MESSAGES_URL
+    assert sent[0]["body"]["system"] == llm._ANTHROPIC_JSON_SYSTEM
+    assert sent[0]["body"]["messages"][0]["content"] == "BASE-PROMPT"
+    # money honesty: ONE Haiku-priced attempt, no double-spend on the wrapper
+    assert [(e["step"], e["attempt"]) for e in sink] == [("rank_select", 1)]
+    e = sink[0]
+    assert e["model"] == "claude-haiku-4-5" and e["lane"] == "api"
+    assert e["usd"] == e["usd_charged"] == e["usd_shadow"] \
+        == pytest.approx(HAIKU_1000_200)
+
+
+def test_rank_extraction_proof_malformation_still_takes_the_corrected_retry(
+        monkeypatch):
+    """The corrected-retry law SURVIVES extraction: a reply with no parseable
+    JSON object (extraction can't repair it) still fails json.loads and takes the
+    caller's CORRECTED retry (run-28 law), which recovers. Both attempts bill at
+    Haiku; the retry (and only it) carries RETRY_CORRECTION anchored to the
+    original prompt. This is the second line extraction never displaces."""
+    _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+    sent = _scripted(monkeypatch,
+                     [ant_native("I could not identify any clusters."),
+                      ant_native(_GOOD)])
+    sink = []
+    clusters, usage = ranking.call_llm_validated(
+        "sk-openai-unused", "BASE-PROMPT", KNOWN_IDS, TAGS, [], cost_sink=sink)
+    assert [c["item_ids"] for c in clusters] == [[1]]      # recovered on the retry
+    assert len(sent) == 2                                   # the retry law fired
     p1 = sent[0]["body"]["messages"][0]["content"]
     p2 = sent[1]["body"]["messages"][0]["content"]
     assert p1 == "BASE-PROMPT"
     assert p2.startswith("BASE-PROMPT") and ranking.RETRY_CORRECTION in p2
     assert p2 != p1
-    # money honesty: the hostile first draw still billed, at HAIKU prices
     assert [(e["step"], e["attempt"]) for e in sink] == [
         ("rank_select", 1), ("rank_select", 2)]
     for e in sink:
@@ -352,9 +379,9 @@ def test_cache_fields_reach_the_rank_ledger_and_never_discount_shadow(
 
 
 def test_per_seat_shadow_math_derives_from_the_seat_table():
-    """Every seat's cost_fields math must come from ITS row: the three
-    anthropic seats at Haiku 1.00/5.00, every openai seat at gpt-4o
-    2.50/10.00 — a re-hardcoded global constant on either side breaks here.
+    """Every seat's cost_fields math must come from ITS row: the Haiku seats at
+    1.00/5.00, Opus/Sonnet at their API rates, the lone gpt-4o seat at
+    2.50/10.00 — a re-hardcoded global constant on any side breaks here.
     B3 (conscious flip): shadow is LANE-INDEPENDENT (always API-priced);
     charged keys off the lane — equal to shadow on api seats, 0.0 on the
     subscription-default anthropic seats, and back to equal when those seats
@@ -362,7 +389,8 @@ def test_per_seat_shadow_math_derives_from_the_seat_table():
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
     # B4 flip (conscious): per-MODEL rates — Haiku 1+5 (subscription default,
     # charged 0), Opus 5+25 and Sonnet 3+15 (api: charged == shadow), gpt-4o
-    # 2.50+10 for the still-openai seats. The tooth is unchanged: every
+    # 2.50+10 for the lone still-openai seat (synthesis). 2026-07-17: state
+    # joined the Haiku/subscription seats. The tooth is unchanged: every
     # seat's math comes from ITS row, never a re-hardcoded global.
     per_model = {"claude-haiku-4-5": 1.00 + 5.00,
                  "claude-opus-4-8": 5.00 + 25.00,
@@ -381,7 +409,8 @@ def test_per_seat_shadow_math_derives_from_the_seat_table():
         else:
             assert fields["usd_charged"] == fields["usd_shadow"], name  # api
     assert {n for n, c in llm.SEATS.items() if c.provider == "anthropic"} \
-        == {"rank", "editor", "script", "writer", "analyst", "follow_altitude"}
+        == {"rank", "editor", "script", "writer", "analyst", "follow_altitude",
+            "state"}
     # ranking's module constants stay pure derivations (no fork):
     assert ranking.RANK_MODEL == llm.SEATS["rank"].model
     assert ranking.RANK_USD_PER_MTOK_IN == llm.SEATS["rank"].usd_per_mtok_in
@@ -543,7 +572,10 @@ def test_direct_chat_after_an_editor_call_rides_the_writer_seat(monkeypatch):
 
 def test_state_chat_gate_blocks_before_any_transport(monkeypatch):
     calls = _tripwire(monkeypatch)
-    monkeypatch.setenv("NEWSLENS_LANE_STATE", "subscription")
+    # 2026-07-17: state is anthropic/subscription now, so 'subscription' is a
+    # REGISTERED lane — a junk lane is the config error that must still block at
+    # the gate (check_lane) before any transport spawn.
+    monkeypatch.setenv("NEWSLENS_LANE_STATE", "junk")
     with pytest.raises(llm.LaneUnavailable) as excinfo:
         memory_core._default_state_chat("k", "prompt")
     assert "NEWSLENS_LANE_STATE" in str(excinfo.value).replace("_\n", "_") or \
@@ -551,26 +583,26 @@ def test_state_chat_gate_blocks_before_any_transport(monkeypatch):
     assert calls == []
 
 
-def test_state_cost_derives_from_the_seam_not_module_constants(monkeypatch):
-    """cost == cost_fields(state seat)['usd_charged'] — gpt-4o prices via the
-    seam. If a future seat flip re-prices state, this math follows the table."""
-    _scripted(monkeypatch, [{
-        "choices": [{"message": {"content": json.dumps({"state": "S."})},
-                     "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 1000, "completion_tokens": 500},
-    }])
-    # R-B3a (conscious flip): the default state chat returns a 3-tuple now —
-    # (raw, usd_charged, usd_shadow) — so a $0-charged subscription state
-    # seat can still ledger its shadow. State is gpt-4o/api this milestone:
-    # charged == shadow exactly.
+def test_state_cost_derives_from_the_seam_not_module_constants(monkeypatch, tmp_path):
+    """cost == cost_fields(state seat) via the seam, never a module constant.
+    2026-07-17 (option a): state is Haiku on the subscription lane, so
+    usd_charged is 0.0 while usd_shadow stays API-priced (Haiku 1.00/5.00) —
+    the shadow ledger survives the $0-charged lane. If a future flip re-prices
+    state, this math follows the table."""
+    from test_b3_subscription_lane import _make_stub
+    stub = _make_stub(tmp_path, result=json.dumps({"state": "S."}),
+                      inp=1000, out=500)
+    monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(stub))
+    # R-B3a: the default state chat returns a 3-tuple — (raw, usd_charged,
+    # usd_shadow) — so the $0-charged subscription seat still ledgers its shadow.
     raw, cost, shadow = memory_core._default_state_chat("k", "prompt")
     assert raw == {"state": "S."}
     fields = llm.cost_fields(
         llm.resolve_seat("state"),
         {"prompt_tokens": 1000, "completion_tokens": 500})
-    assert cost == pytest.approx(fields["usd_charged"]) \
-        == pytest.approx(0.0075)  # 2.50/10.00
-    assert shadow == pytest.approx(fields["usd_shadow"]) == pytest.approx(cost)
+    assert cost == pytest.approx(fields["usd_charged"]) == pytest.approx(0.0)
+    assert shadow == pytest.approx(fields["usd_shadow"]) \
+        == pytest.approx(0.0035)   # Haiku 1.00/5.00 on 1000in / 500out
 
 
 def test_state_lane_misconfig_degrades_stale_never_raises(
@@ -582,9 +614,11 @@ def test_state_lane_misconfig_degrades_stale_never_raises(
     BEHIND the stage-boundary preflight in generate (_run_generate_body
     checks the state lane at entry and KILLS the run on a config error —
     liveness-proven in test_b3_subscription_lane_qa), so this arm is reached
-    only by transient-shaped failures or direct rewrite_state calls."""
+    only by transient-shaped failures or direct rewrite_state calls.
+    2026-07-17: state is anthropic/subscription now, so a junk lane (not
+    'subscription') is the config error that trips the gate."""
     calls = _tripwire(monkeypatch)
-    monkeypatch.setenv("NEWSLENS_LANE_STATE", "subscription")
+    monkeypatch.setenv("NEWSLENS_LANE_STATE", "junk")
     con = migrated_con
     now = "2026-07-01T00:00:00.000Z"
     cur = con.execute(
@@ -610,10 +644,12 @@ def test_state_lane_misconfig_degrades_stale_never_raises(
 def test_state_rewrites_step_row_carries_the_shadow_ledger_keys(
         migrated_con, monkeypatch):
     """Gate ruling R1's ledger half: the aggregate state_rewrites row in
-    report.steps carries model/lane/usd_shadow/usd_charged off the seam (state
-    = gpt-4o/api this milestone, so shadow == charged == the accumulated
-    spend). Without these keys the cost dashboard forks the moment the state
-    seat's lane flips."""
+    report.steps carries model/lane/usd_shadow/usd_charged off the seam. The
+    2026-07-17 flip (option a) is exactly the lane flip this row was built to
+    survive: model/lane now read claude-haiku-4-5/subscription off the seam,
+    while the injected chat still supplies the usd (2-tuple, shadow==charged).
+    Without these keys the cost dashboard forks the moment the seat's lane
+    flips."""
     from test_generate import seed_briefing, slot
 
     con = migrated_con
@@ -649,8 +685,8 @@ def test_state_rewrites_step_row_carries_the_shadow_ledger_keys(
     assert len(rows) == 1
     row = rows[0]
     state_cfg = llm.resolve_seat("state")
-    assert row["model"] == state_cfg.model == "gpt-4o"
-    assert row["lane"] == state_cfg.lane == "api"
+    assert row["model"] == state_cfg.model == "claude-haiku-4-5"
+    assert row["lane"] == state_cfg.lane == "subscription"
     assert row["usd"] == row["usd_shadow"] == row["usd_charged"] \
         == pytest.approx(0.02)
 
@@ -851,12 +887,13 @@ def test_editor_400_credit_exhaustion_from_anthropic_wire_names_billing(
 def test_lane_unavailable_message_names_the_seat_default_and_registered_lanes():
     """FIX A's message-hygiene contract, re-expressed for B3 (conscious flip:
     rank x subscription is registered now, so the probe moves to a combo that
-    is STILL unregistered — the openai state seat forced onto subscription).
-    The hint must name the seat's ACTUAL SEATS default, list the REAL
+    is STILL unregistered — an openai seat forced onto subscription). 2026-07-17:
+    state flipped to anthropic, so synthesis is the LONE openai seat and carries
+    this probe. The hint must name the seat's ACTUAL SEATS default, list the REAL
     registered-lane roster including the landed subscription lane, and carry
     no stale forward-pointer ('lands in B3' — it landed). The sweep's 'no
     registered implementation' anchor is preserved."""
-    cfg = llm.resolve_seat("state", {"NEWSLENS_LANE_STATE": "subscription"})
+    cfg = llm.resolve_seat("synthesis", {"NEWSLENS_LANE_SYNTHESIS": "subscription"})
     with pytest.raises(llm.LaneUnavailable) as excinfo:
         llm.chat(llm.LaneRequest(cfg, "p", 0, 10, True, "ua", "k"))
     msg = str(excinfo.value)
@@ -864,6 +901,6 @@ def test_lane_unavailable_message_names_the_seat_default_and_registered_lanes():
     assert "lands in B2" not in msg                        # landed
     assert "lands in B3" not in msg                        # landed too (B3 flip)
     assert "anthropic/subscription" in msg                 # the roster is current
-    assert "openai/gpt-4o on the api lane" in msg          # state's ACTUAL default
+    assert "openai/gpt-4o on the api lane" in msg          # synthesis's ACTUAL default
     assert "openai runs ONLY on the api lane" in msg       # why the combo is dead
-    assert "NEWSLENS_LANE_STATE" in msg                    # names the fix var
+    assert "NEWSLENS_LANE_SYNTHESIS" in msg                # names the fix var

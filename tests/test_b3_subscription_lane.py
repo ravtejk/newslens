@@ -101,14 +101,15 @@ def _rank_req(json_mode: bool = True, prompt: str = "cluster these stories"):
 # ---------------------------------------------------------------------------
 
 def test_haiku_seats_default_to_the_subscription_lane():
-    for seat in ("rank", "editor", "script"):
+    # 2026-07-17 (option a): state joined the Haiku/subscription seats.
+    for seat in ("rank", "editor", "script", "state"):
         cfg = llm.resolve_seat(seat, {})
         assert cfg.provider == "anthropic" and cfg.model == "claude-haiku-4-5"
         assert cfg.lane == "subscription", seat
     # the api lane is the registered alternative, reachable per-seat
     assert llm.resolve_seat("rank", {"NEWSLENS_LANE_RANK": "api"}).lane == "api"
-    # the openai seats are untouched
-    for seat in ("writer", "analyst", "synthesis", "state"):
+    # the api-default seats are untouched (synthesis is the lone openai one)
+    for seat in ("writer", "analyst", "synthesis"):
         assert llm.resolve_seat(seat, {}).lane == "api"
 
 
@@ -282,10 +283,13 @@ def test_error_shapes_are_transport_shaped_runtime_errors(mode, tmp_path, monkey
 def test_timeout_kills_the_child_and_is_transport_shaped(tmp_path, monkeypatch):
     stub = _make_stub(tmp_path, mode="hang")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(stub))
-    # shrink the seat timeout so the test is fast
+    # shrink the seat timeout so the test is fast. 2026-07-17: the subscription
+    # provider now uses (timeout_sub_s or timeout_s), so shrink BOTH — rank's
+    # timeout_sub_s (300) would otherwise win and hang the test.
     monkeypatch.setitem(
         llm.SEATS, "rank",
-        __import__("dataclasses").replace(llm.SEATS["rank"], timeout_s=1))
+        __import__("dataclasses").replace(
+            llm.SEATS["rank"], timeout_s=1, timeout_sub_s=1))
     with pytest.raises(TimeoutError):
         llm.chat(_rank_req())
 
@@ -467,20 +471,20 @@ def test_D2_both_lanes_dead_dies_on_the_original_subscription_error(monkeypatch)
 
 
 def test_D2_openai_seat_forced_to_subscription_dies_loud_even_when_armed(monkeypatch):
-    """BORN-RED (D2 correctness), B4 flip (conscious): the writer is ANTHROPIC
-    now, so the openai-seat example regrows on state (a global/per-seat
-    subscription flip hitting state/synthesis). The tooth is unchanged: an
-    OPENAI seat forced onto 'subscription' has NO subscription provider —
-    that config error DIES LOUD even with the fallback armed. The fall must
-    never silently rescue it onto openai:api (masking the misconfig and
-    billing openai while the operator set subscription). And the flip side,
-    stated positively: the writer's subscription combo is REGISTERED now —
-    with the stub binary resolvable, effective_seat returns it unfallen
+    """BORN-RED (D2 correctness), B4 then 07-17 flip (conscious): writer went
+    ANTHROPIC in B4 and state went ANTHROPIC on 2026-07-17 (option a), so the
+    openai-seat example regrows on synthesis — the LONE remaining openai seat.
+    The tooth is unchanged: an OPENAI seat forced onto 'subscription' has NO
+    subscription provider — that config error DIES LOUD even with the fallback
+    armed. The fall must never silently rescue it onto openai:api (masking the
+    misconfig and billing openai while the operator set subscription). And the
+    flip side, stated positively: the writer's subscription combo is REGISTERED
+    now — with the stub binary resolvable, effective_seat returns it unfallen
     (ADR-0016 §3: the principal's lane override works without a code change)."""
     monkeypatch.setenv("NEWSLENS_LANE_FALLBACK", "api")
-    monkeypatch.setenv("NEWSLENS_LANE_STATE", "subscription")
+    monkeypatch.setenv("NEWSLENS_LANE_SYNTHESIS", "subscription")
     with pytest.raises(llm.LaneUnavailable):
-        llm.effective_seat("state")    # openai -> openai:subscription: no rescue
+        llm.effective_seat("synthesis")  # openai -> openai:subscription: no rescue
     monkeypatch.setenv("NEWSLENS_LANE_WRITER", "subscription")
     cfg, reason = llm.effective_seat("writer")   # registered + stub binary
     assert cfg.lane == "subscription" and reason is None
