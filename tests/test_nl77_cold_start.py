@@ -192,14 +192,20 @@ def test_generate_call_failure_records_failed_with_spend(migrated_con):
 
 # --- the anti-obligation invariant: a baseline is not a delta ---------------
 
-def test_baseline_never_feeds_today_arc(migrated_con):
+def test_baseline_never_feeds_today_memory_stamp(migrated_con):
+    """The anti-obligation invariant, repointed to the SURVIVING furniture
+    surface (the deterministic Today-arc render was DELETED in the arc-line
+    batch, 2026-07-18): a day-one thread (empty ledger) with a baseline STILL
+    gets NO memory stamp — the stamp's gate is PRIOR COVERAGE, and a baseline is
+    external-synthesis, never a ledger entry. Same day-one silence the deep-view
+    arc line now keeps by construction (thread_state.arc_line is authored only
+    with prior edition-cited coverage). WAS test_baseline_never_feeds_today_arc."""
     con = migrated_con
     tid = _thread(con, "Blockade")
     mc.record_baseline(con, tid, "2026-07-14", "ready",
                        backgrounder="Ships were blocked in March 2026.")
-    # day-one thread (empty ledger) with a baseline STILL gets no arc, ever
-    arc = mc.render_today_arc(con, tid, "Blockade", "Ships moved today.", "2026-07-20")
-    assert arc is None
+    # day-one thread (empty ledger) with a baseline STILL gets no stamp, ever
+    assert mc.today_memory_stamp(con, tid, "2026-07-20") is None
 
 
 def test_baseline_never_enters_story_so_far_timeline(migrated_con):

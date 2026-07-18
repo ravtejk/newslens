@@ -16,11 +16,13 @@ NOT enter memory.md's sync surface — engineering ruling 2026-07-10):
     material, NEVER from the prior state text (Kass/Nova's anti-photocopier
     construction); diff-logged; stale-but-honest on failure.
 
-Three renders, all fed from here:
-  * the Today arc line (then -> now -> difference), gated by Sten's kill-test
-    AS CODE and Kass's reversion law AS CODE;
+Renders fed from here:
+  * the deep view's authored continuity line (thread_state.arc_line, the arc-line
+    contract v1, 2026-07-18 — a separately-validated delta sentence, rendered
+    verbatim; it REPLACED the deterministic Today-arc render, retired at v8-M2);
   * the deep view's "story so far" timeline (deterministic from the ledger);
-  * the Following dossier state card (standing state + last-delta line).
+  * the Following dossier state card (standing state + last-delta line);
+  * the slim Today memory STAMP (pure furniture — ordinal + last-covered date).
 
 This module owns the mechanics. The renders live in server.py; the write path
 is wired from generate.py after the analysis pass.
@@ -129,6 +131,17 @@ _WS_RE = re.compile(r"\s+")
 class StateRejected(ValueError):
     """Hard-reject class for a state rewrite (fabrication surface). The prior
     state stays, rendered stale-but-honest — never a fabricated regeneration."""
+
+
+class ArcLineRejected(ValueError):
+    """Hard-reject class for the deep-view arc line (the arc-line contract v1,
+    2026-07-18). The teeth are on STRUCTURE, never phrasing (Clash-1): anchor
+    date present, length, overlap tripwire vs the state summary, banned lexicon.
+    (The §D strip test is spot-check grade, NOT enforced here — see the block
+    header above validate_arc_line.) A rejected line degrades to ABSENCE (empty
+    arc_line + a logged warn), NEVER a shipped bad line and NEVER a blocked
+    state row — the arc is a byproduct field, the state stands on its own
+    validation."""
 
 
 # ---------------------------------------------------------------------------
@@ -682,9 +695,10 @@ def _live_entries(entries: List[Dict]) -> List[Dict]:
 
 
 def _ledger_integrity(entries: List[Dict]) -> Tuple[bool, str]:
-    """Kass's reversion law, checkable: an entry is corrupt if it lacks a
-    real edition date, an event clause, or a parseable cite list. A single
-    corrupt entry reverts the thread's arc to a bare citation line."""
+    """Ledger integrity, checkable: an entry is corrupt if it lacks a real
+    edition date, an event clause, or a parseable cite list. Consumed by
+    diagnose as an operator signal (the bare-citation reversion RENDER retired
+    with the arc-line contract, 2026-07-18 — the served degrade is absence)."""
     for e in entries:
         if not is_calendar_date(e.get("edition_date", "")):
             return False, f"entry has a non-calendar edition date {e.get('edition_date')!r}"
@@ -702,7 +716,7 @@ def _ledger_integrity(entries: List[Dict]) -> Tuple[bool, str]:
 def today_memory_stamp(con: sqlite3.Connection, thread_id: int,
                        today_date: str) -> Optional[Tuple[int, str]]:
     """The slim Today memory stamp's data (v8-M2 item 2) — PURE FURNITURE: no
-    prose, no LLM, no kill-test. Returns (ordinal, last_covered_date) for a
+    prose, no LLM. Returns (ordinal, last_covered_date) for a
     followed thread that MOVED this edition and has prior coverage; None
     otherwise. Reuses ledger_for_thread (the ledger is the one source of truth).
 
@@ -739,7 +753,11 @@ def today_memory_stamp(con: sqlite3.Connection, thread_id: int,
 
 
 # ---------------------------------------------------------------------------
-# 4. The Today arc render — then -> now -> difference + kill-test + reversion
+# 4. Salient-unit helpers — numbers + distinctive content words of a clause.
+# (Originally the Today-arc kill-test's units; that deterministic render was
+# retired at v8-M2 for the slim furniture stamp and DELETED with the arc-line
+# batch, 2026-07-18. These helpers survive because other passes reuse them:
+# delta-hijack detection and observable-subject extraction below.)
 # ---------------------------------------------------------------------------
 
 _STOPWORDS = frozenset("""
@@ -751,12 +769,15 @@ her their our your they them then today than more most much very just also so
 
 
 def _salient_units(text: str) -> List[str]:
-    """The kill-test's checkable units of a past fact: numbers, and distinctive
-    content words (len>=5, not stopwords). Deterministic and conservative —
-    under-counts (misses a fact) rather than over-claims (fabricates memory).
+    """The checkable units of a clause: numbers, and distinctive content words
+    (len>=5, not stopwords). Deterministic and conservative — under-counts
+    (misses a fact) rather than over-claims. Reused by delta-hijack detection and
+    observable-subject extraction (the Today-arc kill-test that first needed it is
+    gone as of the arc-line batch, 2026-07-18).
 
-    BUG-22: units are normalized on their EDGES symmetrically with the haystack
-    (see _absent_from) — a sentence-final period fused onto a number ('12.') and
+    BUG-22: units are normalized on their EDGES symmetrically with any haystack
+    they are compared against — a sentence-final period fused onto a number
+    ('12.') and
     a possessive suffix ('khamenei's') are tokenizer artifacts, never distinct
     facts, and must not read as 'absent' when today's story states the bare form.
     Internal punctuation (a decimal point) is preserved."""
@@ -776,103 +797,6 @@ def _salient_units(text: str) -> List[str]:
             seen.add(u)
             out.append(u)
     return out
-
-
-def _absent_from(units: List[str], today_text: str) -> List[str]:
-    # BUG-22: normalize the haystack on the same edges the units were normalized
-    # on (commas and apostrophes stripped) so the comparison is symmetric —
-    # 'khamenei' (from 'khamenei's') matches today's 'Khamenei's' either way.
-    hay = (today_text or "").lower().replace(",", "").replace("'", "")
-    return [u for u in units if u not in hay]
-
-
-@dataclass
-class ArcLine:
-    kind: str                 # "arc" | "reverted" | None-never (absent -> None returned)
-    text: str
-    prior_date: str = ""      # navigable prior edition (openEdition), when present
-    disclosure: str = ""      # reversion / integrity note
-
-
-def render_today_arc(con: sqlite3.Connection, thread_id: int, topic: str,
-                     today_text: str, today_date: str) -> Optional[ArcLine]:
-    """Sten's kill-test AS CODE, then -> now -> difference, moving-day fix
-    (lead with the then-sentences), Kass's reversion law AS CODE.
-
-    Returns None (renders NOTHING) when the thread is day-one, has no prior
-    coverage, or the line would tell you nothing (every past unit already in
-    today's story). Returns a reverted bare-citation ArcLine on a ledger-
-    integrity failure. Otherwise the composed arc line.
-    """
-    all_entries = ledger_for_thread(con, thread_id)
-    prior = [e for e in all_entries if e["edition_date"] < today_date]
-    today_entries = [e for e in all_entries if e["edition_date"] == today_date]
-    if not prior:
-        return None                       # day-one thread gets NO arc, ever
-    # BUG-24: integrity examines the ENTIRE ledger, not just the lexically-prior
-    # slice — a corrupt edition_date that sorts AFTER today ('garbage-date')
-    # otherwise lands in neither prior nor today and never gets checked, letting
-    # a normal arc render over a corrupt record. The reversion verdict must not
-    # depend on where the garbage happens to sort.
-    ok, why = _ledger_integrity(all_entries)
-    if not ok:
-        last = prior[-1]["edition_date"]
-        return ArcLine(
-            kind="reverted",
-            text=f"Still following {topic} — last covered {human_date(last)}.",
-            prior_date=last if is_calendar_date(last) else "",
-            disclosure=f"the thread's continuity line is showing a bare citation "
-                       f"because its record failed an integrity check ({why})")
-    # Kill-test: the line must carry >=1 concrete past fact ABSENT from today.
-    # BUG-23: the units are those of the clause the line will actually RENDER
-    # (the 'then' — significance when present, else what_happened), never the
-    # union of both clauses. A novel fact in an unrendered clause must never
-    # license a rendered clause the reader already read in today's story.
-    last_prior = prior[-1]
-    then = last_prior.get("significance") or last_prior["what_happened"]
-    absent = _absent_from(_salient_units(then), today_text)
-    if not absent:
-        return None                       # tells-me-nothing: suppress
-
-    prior_hd = human_date(last_prior["edition_date"])
-    now = today_entries[0]["what_happened"] if today_entries else ""
-    diff = today_entries[0].get("significance", "") if today_entries else ""
-    n = len([e for e in all_entries if e["edition_date"] <= today_date])
-    texture = f"{_ordinal(n)} entry on this thread." if n >= 2 else ""
-
-    # Moving-day fix (retro-mock §4): lead with the then (the state's past)
-    # before today's turn. Deterministic then -> now -> difference.
-    line = f"When we last covered this ({prior_hd}), {_decap_article(then).rstrip('.')}."
-    if now:
-        line += f" Today, {_decap_article(now).rstrip('.')}"
-        line += f" — {_decap_article(diff).rstrip('.')}." if diff else "."
-    if texture:
-        line += f" {texture}"
-    return ArcLine(kind="arc", text=line,
-                   prior_date=last_prior["edition_date"]
-                   if is_calendar_date(last_prior["edition_date"]) else "")
-
-
-_LEAD_ARTICLES = frozenset((
-    "The", "A", "An", "This", "That", "These", "Those", "It", "One", "Some"))
-
-
-def _decap_article(s: str) -> str:
-    """Lowercase the leading word ONLY when it is a determiner/article — so a
-    clause folds mid-sentence ('The dispute' -> 'the dispute') without ever
-    lowercasing a proper noun ('Iran', 'U.S.' stay capitalized)."""
-    s = (s or "").strip()
-    if not s:
-        return s
-    first = s.split(None, 1)[0]
-    if first in _LEAD_ARTICLES:
-        return s[0].lower() + s[1:]
-    return s
-
-
-def _ordinal(n: int) -> str:
-    return {1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth",
-            6: "Sixth", 7: "Seventh"}.get(n, f"{n}th")
 
 
 # ---------------------------------------------------------------------------
@@ -1093,6 +1017,280 @@ def validate_state(state_text: str, ledger_dates: set) -> Tuple[str, List[str]]:
     return text, warnings
 
 
+# ===========================================================================
+# THE ARC-LINE CONTRACT v1 (deep view) — the memory pass authors a separately-
+# contracted DELTA sentence bridging the thread's last-covered state to today's
+# entry (workspace/debates/2026-07-18--newslens--content.md). The defect it
+# kills by construction: state-summary text reused as arc prose (principal's
+# 2026-07-17 served review item 2 — a past anchor clause governing a NOW-state
+# clause). The line is authored HERE, in the state rewrite, because only the
+# memory pass reads prior state + today's deltas at the moment of comparison
+# (Q3); the deep view renders the stored field verbatim.
+#
+# The validator enforces the MECHANICAL ANATOMY ONLY (Clash-1: teeth on
+# STRUCTURE, never phrasing): anchor date present-and-correct, length, the
+# overlap tripwire vs the CURRENT state summary, and the banned lexicon. Phrasing
+# and skeleton order stay free — a validator that constrains wording rebuilds the
+# Today furniture stamp in prose clothing (Vera's veto).
+#
+# THE STRIP TEST (§D) STAYS QA-RED-TEST / SPOT-CHECK GRADE, NOT A GENERATION-TIME
+# HARD REJECT — documented precisely (dispatch item 2, "else document why"). The
+# honest mechanization "remove the anchor clause, does the remainder read as a
+# today-state summary?" has no faithful structural form: an overlap-of-remainder-
+# vs-state proxy FALSE-REJECTS the valid REFRAME class, whose delta endpoint
+# ("has become the markets — shipping and insurance restructuring") legitimately
+# shares the current state's tokens (§A licenses the now-as-endpoint); and a
+# tense classifier (past anchor governing a present-state predicate) is teeth on
+# PHRASING, which Clash-1 bars. The mechanical anti-paste teeth are the §F.1
+# whole-line overlap tripwire below (which catches the defect specimen: its
+# payload IS the reused state text — ≥6-word run and ~0.5 token overlap). The
+# tense-splice-by-paraphrase residual is the state spot-check's job, backed by
+# the pre-registered writer-seat revert (contract Q3/Q4, falsifier #1).
+# ===========================================================================
+
+ARC_MAX_WORDS = 35                      # §E: one sentence, ≤35 words
+ARC_OVERLAP_RUN = 6                     # §F.1: a shared contiguous run this long rejects
+ARC_OVERLAP_TOKEN_FRAC = 0.40           # §F.1: >this fraction of the ARC's tokens shared
+#   with the state summary rejects. STARTER thresholds (§F.1 "QA tunes"); the
+#   fraction is DIRECTED (arc∩state)/|arc| to catch the paste-INTO-arc direction
+#   the defect took, and is bounded away from valid reframes (~0.2 measured).
+
+# §F banned lexicon — word-boundary anchored so a ban never fires inside an
+# innocent longer word. Structure, not phrasing (Clash-1).
+_ARC_BAN_WE = re.compile(               # §F.4 newsroom "we" — name the RECORD, not us.
+    r"\b(we|we'\w+|our|ours|ourselves|(?-i:us))\b", re.I)  # (?-i:us) = the lowercase
+    # pronoun only (gate R5): 'US'/'U.S.'/'Us' == United States stay lawful.
+_ARC_BAN_FORWARD = re.compile(          # §F.3 forward promises live in the promise register.
+    r"\b(watch (?:for|out)|expect(?:ed)?|look(?:ing)? (?:for|ahead)|"
+    r"keep an eye|in the (?:days|weeks) (?:ahead|to come)|going forward|"
+    r"will likely|likely to)\b", re.I)
+_ARC_BAN_MIRROR = re.compile(           # §F.2 mirror-facing / ordinal-count / self-reference.
+    r"\b(newslens|this briefing|this edition|calibrat\w*|"
+    r"(?:\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth|sixth|seventh|"
+    r"eighth|ninth|tenth)\s+entry|entr(?:y|ies) on this thread)\b", re.I)
+#   NB: "the Jul 16 entry" is LAWFUL anchor diction (§F.4) — it carries no
+#   ordinal and is not "entry on this thread", so it does not match.
+
+
+def _arc_word_seq(text: str) -> List[str]:
+    """Case/punctuation-normalized ORDERED word list — the run check needs order;
+    the token-fraction check derives its set from the same seq (one normalizer)."""
+    return _PHOTOCOPY_PUNCT_RE.sub(" ", (text or "").lower()).split()
+
+
+def _shared_contiguous_run(a_seq: List[str], b_seq: List[str], n: int) -> bool:
+    """True when some length-n window of a_seq appears contiguously in b_seq."""
+    if len(a_seq) < n or len(b_seq) < n:
+        return False
+    b_grams = {tuple(b_seq[i:i + n]) for i in range(len(b_seq) - n + 1)}
+    return any(tuple(a_seq[i:i + n]) in b_grams
+               for i in range(len(a_seq) - n + 1))
+
+
+def arc_overlap_trips(arc_line: str, state_text: str) -> bool:
+    """§F.1 the state-text reuse tripwire: True when the arc line shares a
+    ≥ARC_OVERLAP_RUN-word contiguous run with the state summary, OR more than
+    ARC_OVERLAP_TOKEN_FRAC of the arc's tokens appear in it. Deterministic; the
+    same normalized-token machinery the photocopy detector uses."""
+    a_seq, s_seq = _arc_word_seq(arc_line), _arc_word_seq(state_text)
+    if _shared_contiguous_run(a_seq, s_seq, ARC_OVERLAP_RUN):
+        return True
+    a_set = set(a_seq)
+    if not a_set:
+        return False
+    shared = len(a_set & set(s_seq))
+    return (shared / len(a_set)) > ARC_OVERLAP_TOKEN_FRAC
+
+
+def arc_names_anchor(text: str, anchor_iso: str) -> bool:
+    """§C.1: the arc line names the thread's LAST-COVERED edition date (the
+    anchor) explicitly and CORRECTLY — in any accepted form ('Jul 16', 'July 16',
+    or '2026-07-16'). Human forms carry no year and match on month+day (the
+    anchor, this thread's single last-covered date, supplies the year); an ISO
+    form matches the full Y-M-D. A DIFFERENT date does not satisfy the anchor —
+    the check binds it to the ledger's last-covered date, never the previous
+    calendar day. Mirrors _baseline_cite_matches_asof's resolution."""
+    if len(anchor_iso or "") < 10:
+        return False
+    ay, am, ad = anchor_iso[:4], anchor_iso[5:7], anchor_iso[8:10]
+    for m in _ISO_RE.finditer(text or ""):
+        if (m.group(1), m.group(2), m.group(3)) == (ay, am, ad):
+            return True
+    for m in _MONTH_DAY_RE.finditer(text or ""):
+        mon = _MONTH_NUM.get(m.group(1).lower())
+        if mon and (f"{mon:02d}", f"{int(m.group(2)):02d}") == (am, ad):
+            return True
+    return False
+
+
+def validate_arc_line(arc_line: str, state_text: str,
+                      anchor_iso: str) -> Tuple[str, List[str]]:
+    """The arc-line contract's MECHANICAL anatomy, checkable. HARD-REJECT
+    (ArcLineRejected) on: empty, anchor date absent/incorrect (§C.1), over the
+    ≤35-word / one-sentence length (§E), banned lexicon (§F.2/3/4), or the
+    state-text overlap tripwire (§F.1). Returns (clean, warnings). Teeth on
+    STRUCTURE only — never rewrites the model's output, never constrains its
+    wording (Clash-1). The strip test (§D) is NOT enforced here (see the block
+    header): its honest mechanization false-rejects valid reframes."""
+    text = (arc_line or "").strip()
+    if not text:
+        raise ArcLineRejected("empty arc line")
+    if not arc_names_anchor(text, anchor_iso):
+        raise ArcLineRejected(
+            f"arc line names no correct anchor date — the thread's last-covered "
+            f"edition ({human_date(anchor_iso)}) must appear explicitly (§C.1); "
+            "the anchor is the ledger's last-covered date, not the previous day")
+    words = text.split()
+    if len(words) > ARC_MAX_WORDS:
+        raise ArcLineRejected(
+            f"arc line runs {len(words)} words over the {ARC_MAX_WORDS}-word cap (§E)")
+    n_sent = len(_sentences(text))
+    if n_sent > 1:
+        raise ArcLineRejected(
+            f"arc line is {n_sent} sentences — the contract is ONE (§E)")
+    for rx, why in (
+        (_ARC_BAN_WE, "newsroom 'we' — name the record, not us (§F.4)"),
+        (_ARC_BAN_FORWARD, "a forward promise — it belongs in the promise register (§F.3)"),
+        (_ARC_BAN_MIRROR, "mirror-facing / ordinal-count diction — the stamp's job (§F.2)"),
+    ):
+        m = rx.search(text)
+        if m:
+            raise ArcLineRejected(f"arc line uses banned {why}: {m.group(0)!r}")
+    if arc_overlap_trips(text, state_text):
+        raise ArcLineRejected(
+            "arc line reproduces the state summary (≥6-word run or >40% shared "
+            "tokens) — the state-text reuse ban, the defect's own signature (§F.1)")
+    warnings: List[str] = []
+    if text.count(";") > 1:
+        warnings.append(
+            "arc line joins more than two clauses by semicolon — the §E target is "
+            "one wrapping line (Editor's eye)")
+    return text, warnings
+
+
+# The ONE corrected retry (the ranking/script house pattern — a focused
+# correction turn, not a blind re-POST). Code-level correction constant like
+# ranking.RETRY_CORRECTION; the retry keeps the ACCEPTED state and re-asks ONLY
+# for the arc line, steered at the exact rule that failed. `{anchor}` is
+# .replace()'d (never .format — the JSON braces are literal).
+ARC_RETRY_CORRECTION = (
+    "CORRECTION — your arc_line was rejected on a MECHANICAL rule, not on taste. "
+    "Re-author ONLY the arc_line; keep the standing state above unchanged. The "
+    "hard rules:\n"
+    "1. ANCHOR: name the thread's last-covered edition date ({anchor}) explicitly "
+    "in the sentence.\n"
+    "2. It is a DELTA sentence — past tense at the anchor, then the NAMED change "
+    "since. Do NOT restate the standing state or reuse its wording (no shared "
+    "6-word run; under 40% shared words).\n"
+    "3. One sentence, at most 35 words. No 'we' (name the record). No forward "
+    "promises ('watch for', 'expect'). No ordinals or entry counts.\n"
+    'Return ONLY a JSON object: {"arc_line": "..."}'
+)
+
+
+def _arc_retry_prompt(topic: str, date: str, anchor_iso: str,
+                      state_text: str, then_leg: str, reason: str) -> str:
+    anchor_h = human_date(anchor_iso)
+    return (
+        f"You are correcting one continuity sentence for the ongoing story "
+        f"{topic!r}. Today is {date}. The thread's last-covered edition date (the "
+        f"ANCHOR) is {anchor_h}.\n\n"
+        f"THE STANDING STATE (where this stands NOW — do NOT reproduce its "
+        f"wording in the arc line):\n{state_text}\n\n"
+        f"THE THEN-LEG MATERIAL (the thread's state as of {anchor_h}; draw the "
+        f"past-tense then-clause from here, never from outside the record):\n"
+        f"{then_leg or '(no prior state on record — use the dated ledger above)'}\n\n"
+        f"REJECTION REASON: {reason}\n\n"
+        + ARC_RETRY_CORRECTION.replace("{anchor}", anchor_h)
+    )
+
+
+def _unpack_chat(result) -> Tuple[object, float, float]:
+    """Normalize a state-seat chat return to (raw, usd_charged, usd_shadow):
+    the default seam returns a 3-tuple; injected/test 2-tuple chats default
+    shadow to charged (api-lane invariant)."""
+    if isinstance(result, tuple):
+        raw = result[0]
+        charged = float(result[1]) if len(result) > 1 and result[1] is not None else 0.0
+        shadow = float(result[2]) if len(result) > 2 and result[2] is not None else charged
+        return raw, charged, shadow
+    return result, 0.0, 0.0
+
+
+def _arc_then_leg_material(entries: List[Dict], date: str) -> str:
+    """The then-leg fallback material when there is no prior thread_state row —
+    the last PRIOR live ledger entry's clause (§C.2: edition-cited ledger content
+    only, never entry-zero/baseline). Empty when there is no prior entry."""
+    prior = [e for e in entries if e.get("edition_date", "")[:10] < date]
+    if not prior:
+        return ""
+    last = prior[-1]
+    sig = (last.get("significance") or "").strip()
+    what = (last.get("what_happened") or "").strip()
+    dated = f"({human_date(last['edition_date'])}) "
+    return dated + (sig or what)
+
+
+def _author_arc_line(raw, state_text: str, anchor_iso: str, chat, openai_key: str,
+                     topic: str, date: str, then_leg: str
+                     ) -> Tuple[str, str, float, float]:
+    """Finalize the arc line for storage: validate the model's first-pass
+    arc_line; on a MECHANICAL rejection do ONE corrected retry (house pattern);
+    then degrade to ABSENCE ('' + a disclosed warn). Returns (arc_line, warn,
+    retry_charged, retry_shadow). NEVER raises — the state row must land
+    regardless (the arc is a byproduct field; validator-rejection semantics:
+    dispatch item 1, CoS lean = one informed retry then absence)."""
+    candidate = raw.get("arc_line") if isinstance(raw, dict) else None
+    if not isinstance(candidate, str) or not candidate.strip():
+        # Lawful absence (§B) but OBSERVABLE (gate FIX-2): this function only
+        # runs on arc-ELIGIBLE threads, so a missing field is a quiet contract
+        # miss worth a warn — no retry (the paid retry stays reserved for the
+        # garbage case), never a block.
+        return "", ("model authored no arc_line for an arc-eligible thread — "
+                    "arc omitted this edition (absence, §B)"), 0.0, 0.0
+    try:
+        arc, _w = validate_arc_line(candidate, state_text, anchor_iso)
+        return arc, "", 0.0, 0.0
+    except ArcLineRejected as first:
+        first_reason = str(first)
+    charged = shadow = 0.0
+    try:
+        prompt = _arc_retry_prompt(topic, date, anchor_iso, state_text, then_leg,
+                                   first_reason)
+        raw2, charged, shadow = _unpack_chat(chat(openai_key, prompt))
+        cand2 = raw2.get("arc_line") if isinstance(raw2, dict) else None
+        if not isinstance(cand2, str) or not cand2.strip():
+            raise ArcLineRejected("corrected retry returned no arc_line")
+        arc, _w = validate_arc_line(cand2, state_text, anchor_iso)
+        return arc, "", charged, shadow
+    except Exception as second:  # noqa: BLE001 — validation OR transport; absence, disclosed
+        # BUG-32 money-honesty parity: a transport failure may have BILLED before
+        # raising (the retry never assigned `charged`); the seam attaches the
+        # accrued spend to the exception, so carry it rather than lose it. A
+        # validation raise has no such attribute and keeps the successful chat's
+        # already-assigned charged/shadow.
+        billed = getattr(second, "usd_spent", None)
+        if billed is not None:
+            charged = float(billed or 0.0)
+            shadow = float(getattr(second, "usd_shadow", charged) or charged)
+        return ("", f"arc line rejected ({first_reason}); corrected retry did not "
+                    f"recover ({type(second).__name__}: {second}) — arc omitted "
+                    "this edition (absence, §B)", charged, shadow)
+
+
+def state_for_edition(con: sqlite3.Connection, thread_id: int,
+                      edition_date: str) -> Optional[Dict]:
+    """The thread_state row THIS edition produced (as_of_date == edition_date),
+    newest wins on a same-day regeneration. None when the thread did not move
+    this edition. The deep view reads it to render the edition's AUTHORED arc
+    line VERBATIM — versioned by edition, so a historical deep view shows THAT
+    edition's line, never the newest."""
+    row = con.execute(
+        "SELECT * FROM thread_state WHERE thread_id = ? AND as_of_date = ?"
+        " ORDER BY id DESC LIMIT 1", (thread_id, edition_date)).fetchone()
+    return dict(row) if row else None
+
+
 def _state_diff(prior_text: str, new_text: str, prior_as_of: str) -> Dict:
     """Write law (c): diff-logged. Sentence-set diff vs the prior state."""
     prior = set(_sentences(prior_text))
@@ -1295,16 +1493,40 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
                            (prior or {}).get("as_of_date", ""))
         # Store the RESOLVED ISO cites (year-agnostic against this thread's ledger).
         cites = sorted(_resolve_cites(clean, ledger_dates)[0])
+        # THE ARC-LINE CONTRACT v1 (2026-07-18): author the deep view's continuity
+        # line HERE, where prior state (`clean`) and today's deltas are both in
+        # hand (Q3). Render condition §B: ONLY when the thread has ≥1 prior
+        # edition-cited entry — a day-one thread authors NO arc line, ever (the
+        # anchor is that prior last-covered date). A rejected line degrades to
+        # absence + a warn (never blocks this state row; the arc is a byproduct).
+        arc_line, arc_warn = "", ""
+        prior_dates = sorted({e["edition_date"][:10] for e in entries
+                              if is_calendar_date(e.get("edition_date", ""))
+                              and e["edition_date"][:10] < date})
+        if prior_dates:
+            anchor_iso = prior_dates[-1]
+            then_leg = ((prior or {}).get("state_text", "")
+                        or _arc_then_leg_material(entries, date))
+            arc_line, arc_warn, arc_charged, arc_shadow = _author_arc_line(
+                raw, clean, anchor_iso, chat, openai_key, topic, date, then_leg)
+            res.cost_usd += arc_charged        # money-honesty: the retry billed too
+            res.shadow_usd += arc_shadow
         with con:
             con.execute(
                 "INSERT INTO thread_state (thread_id, briefing_id, as_of_date,"
-                " state_text, cites_json, diff_json, model, cost_usd)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " state_text, cites_json, diff_json, model, cost_usd, arc_line)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (thread_id, briefing_id, date, clean, json.dumps(cites),
-                 json.dumps(diff, ensure_ascii=False), STATE_MODEL, round(cost, 6)))
+                 json.dumps(diff, ensure_ascii=False), STATE_MODEL,
+                 round(res.cost_usd, 6), arc_line))
         res.outcome = "written"
-        res.detail = ("; ".join(warnings) if warnings else
-                      f"{len(_sentences(clean))} sentence(s), {len(cites)} edition cite(s)")
+        detail = ("; ".join(warnings) if warnings else
+                  f"{len(_sentences(clean))} sentence(s), {len(cites)} edition cite(s)")
+        if arc_line:
+            detail += "; arc line authored"
+        elif arc_warn:
+            detail += f"; {arc_warn}"
+        res.detail = detail
         return res
     except Exception as exc:  # noqa: BLE001 — never lose a paid rewrite's spend
         res.outcome = "failed"
@@ -1396,8 +1618,8 @@ def writer_thread_context(con: sqlite3.Connection, topic: str,
     PRIOR coverage; today's own delta is written after generation, never fed
     back — the same before_date discipline the analyst path uses). Superseded
     deltas are excluded (Rook's gate). Returns '' when the thread has no prior
-    record so the caller renders nothing (day-one threads get no history block,
-    matching render_today_arc's day-one silence)."""
+    record so the caller renders nothing (day-one threads get no history block —
+    the same day-one silence the arc line and the memory stamp both keep)."""
     tid = resolve_thread_id(con, topic)
     if tid is None:
         return ""

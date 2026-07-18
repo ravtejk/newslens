@@ -157,8 +157,14 @@ class SyncResult:
         return out
 
 
+def _utc_now() -> datetime:
+    """Single clock for every stamp and staleness decision in this module —
+    tests patch this one seam to freeze time."""
+    return datetime.now(timezone.utc)
+
+
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return _utc_now().strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:
@@ -324,7 +330,7 @@ def apply_dormancy(
     status_changed_at == created_at (no behavior change); auto-revived rows
     get a fresh reference anyway. Principal note edits still do NOT reset the
     clock (they move updated_at, which is deliberately not in the basis)."""
-    now_utc = now_utc or datetime.now(timezone.utc)
+    now_utc = now_utc or _utc_now()
     cutoff = now_utc - timedelta(days=DORMANT_AFTER_DAYS)
     rows = con.execute(
         "SELECT m.id, m.topic, m.created_at, m.status_changed_at,"

@@ -868,61 +868,6 @@ def _js_str(v: str) -> str:
     return json.dumps(str(v or ""))
 
 
-def _today_arc_html(con, slot: Dict, st: Dict, date: str,
-                    seen: Optional[set] = None) -> str:
-    """NL-63 item 4: the then -> now -> difference continuity line under the
-    lead, gated by Sten's kill-test AS CODE (renders ONLY when it carries a
-    dated past fact absent from today's story) and Kass's reversion law AS CODE
-    (a ledger-integrity failure shows a bare citation line, disclosed). Day-one
-    threads get NO arc, ever. Deterministic — no LLM, computed from the ledger.
-    The kill-test runs against today's RENDERED story text (headline + lede +
-    movements).
-
-    BUG-35: `seen` is the caller's per-EDITION dedup set. On a sanctioned-split
-    day (two same-thread slots in one edition) the ledger composes the IDENTICAL
-    arc text for both — the prominent (earliest-rendered) slot wins and the
-    sibling suppresses its duplicate. The per-story kill-test is unchanged (it
-    runs above, against each story's own text); this dedups only the rendered
-    line. Passed None (standalone) it falls back to a per-slot set."""
-    if con is None or not _is_calendar_date(date):
-        return ""
-    from . import memory_core
-    today_text = " ".join(
-        [st.get("headline", ""), st.get("lede", "")]
-        + [m.get("text", "") for m in (st.get("movements") or [])
-           if isinstance(m, dict)])
-    # NL-60 never-a-dead-link law (M1 gate F): the arc line's prior-edition link
-    # must point at an edition that EXISTS. A seeded ledger (the A′ Hormuz seed)
-    # or a corrupt date can cite an edition with no briefing row; rendering a
-    # link to it is a dead link. Guard on real briefing rows, exactly as the
-    # deep-view timeline does.
-    have_edition = {r["date"] for r in con.execute("SELECT date FROM briefings")}
-    if seen is None:                           # standalone: per-slot fallback
-        seen = set()
-    out: List[str] = []
-    for topic in slot.get("matched_memory") or []:
-        tid = memory_core.resolve_thread_id(con, topic)
-        if tid is None:
-            continue
-        arc = memory_core.render_today_arc(con, tid, topic, today_text, date)
-        if arc is None or arc.text in seen:
-            continue
-        seen.add(arc.text)
-        link = ""
-        if arc.prior_date and _is_calendar_date(arc.prior_date) \
-                and arc.prior_date in have_edition:
-            link = (
-                f' <a class="today-arc-link" '
-                f'href={_e_attr("/?date=" + arc.prior_date)} '
-                f'onclick="return openEdition(\'{_e(arc.prior_date)}\', event)">'
-                f'· from the {_e(_human_date(arc.prior_date))} edition</a>')
-        disc = (f'<span class="today-arc-disclosure"> — {_e(arc.disclosure)}</span>'
-                if arc.disclosure else "")
-        cls = "today-arc-line" + (" reverted" if arc.kind == "reverted" else "")
-        out.append(f'<p class="{cls}">{_e(arc.text)}{disc}{link}</p>')
-    return "".join(out)
-
-
 def _ordinal_num(n: int) -> str:
     """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 11 -> '11th'. Natural case: the
     memline's CSS text-transform does the visual uppercasing, so screen readers
@@ -2032,7 +1977,8 @@ def _render_archive(con: sqlite3.Connection) -> str:
 # thread page ... standing state + full timeline + open question/next fixed
 # point + verbs, composed from M1's components"). Renders from thread_state +
 # thread_deltas + memory ONLY — persisted, honest empty states, no invented
-# fields (the kill-test law: a day-one thread gets no arc/story-so-far, ever).
+# fields (day-one silence — render condition §B / contract Clash-3: a day-one
+# thread gets no arc/story-so-far, ever).
 # Reached from a Following row (the name is the single action, openThread); a
 # sibling .view like the deep views, switched client-side.
 # ---------------------------------------------------------------------------
@@ -2231,7 +2177,8 @@ def _render_thread_page(con: sqlite3.Connection, mrow) -> str:
     out.append(_thread_baseline_html(con, tid, anchor))
 
     # The story so far — full ledger; day-one (no ledger) is an honest empty
-    # state, never a fabricated arc (the kill-test law).
+    # state, never a fabricated arc (day-one silence — render condition §B /
+    # contract Clash-3).
     ledger = memory_core.ledger_for_thread(con, tid)
     if ledger:
         out.append(_thread_timeline_html(con, tid, anchor))
@@ -2584,6 +2531,32 @@ def _facts_outlet_count(cites: List[str], src_by_key: Dict[str, Dict]) -> str:
     return f'<span class="cite">({n} outlet{"s" if n != 1 else ""})</span>'
 
 
+def _deep_arc_line_html(con, slot: Optional[Dict], date: str) -> str:
+    """The deep-view continuity line (arc-line contract v1, 2026-07-18): the
+    memory pass's AUTHORED arc_line, rendered VERBATIM (Q3: the render stays dumb
+    — the deep view is a record surface). Renders iff the EDITION's thread entry
+    carries a non-empty arc_line; the memory pass authors one ONLY when the thread
+    moved this edition AND has prior edition-cited coverage (render condition §B),
+    so a non-empty stored field IS the render condition — the render never
+    recomputes it. Absence renders NOTHING (no placeholder). Model text is escaped.
+    Resolves the slot's first thread CARRYING an arc (iteration mirrors
+    _deep_timeline_html, but selection can diverge from the timeline's
+    first-with-rows thread on multi-thread stories — see the QA divergence pin,
+    tests/test_arc_line_qa.py; unification is design's call)."""
+    if con is None or not slot or not _is_calendar_date(date):
+        return ""
+    from . import memory_core
+    for topic in slot.get("matched_memory") or []:
+        tid = memory_core.resolve_thread_id(con, topic)
+        if tid is None:
+            continue
+        row = memory_core.state_for_edition(con, tid, date)
+        arc = (row or {}).get("arc_line", "") or ""
+        if arc.strip():
+            return f'<p class="deep-arc-line">{_e(arc)}</p>'
+    return ""
+
+
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       date: str, back_label: Optional[str] = None,
                       return_view: str = "view-today", con=None,
@@ -2606,41 +2579,17 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     ret = "" if return_view == "view-today" else f", '{_e(return_view)}'"
     out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
                f'{_e(back_label)}</a>')
-    # Arc is no longer a section (NL-12): it renders as a cited continuity line
-    # in the title block, carrying the last edition that picked up this thread
-    # and navigating there in-place (reuses NL-11's openEdition; the href is the
-    # no-JS fallback). Zero content loss; the continuity job moves to the top,
-    # where orientation lives.
-    arc = brief.get("arc")
-    arc_line = ""
-    if arc:
-        verdict = {"advances": labels.ARC_ADVANCES,
-                   "reverses": labels.ARC_REVERSES,
-                   "merely-matches": labels.ARC_MATCHES}.get(
-                       arc.get("delta", ""), _e(str(arc.get("delta", ""))))
-        prior_date = None
-        for c in _cites_list(arc):
-            s = src_by_key.get(c)
-            if s and s.get("kind") == "prior-briefing":
-                rd = str(s.get("retrieved_at", ""))[:10]
-                # NL-60: only a real calendar date becomes a navigable edition
-                # (the arc line had no guard at all); a bad date renders the
-                # continuity line with no link rather than a dead one.
-                if _is_calendar_date(rd):
-                    prior_date = rd
-                break
-        cite_html = ""
-        if prior_date:
-            cite_html = (
-                f' <a class="deep-arc-link" href={_e_attr("/?date=" + prior_date)} '
-                f'onclick="return openEdition(\'{_e(prior_date)}\', event)">'
-                f'· from the {_e(_human_date(prior_date))} edition</a>')
-        # NL-63: the two-clause significance shape, legacy what_changed fallback.
-        arc_body = (arc.get("significance") or arc.get("what_changed")
-                    or arc.get("what_happened") or "")
-        arc_line = (f'<p class="deep-arc-line">'
-                    f'<span class="deep-arc-verdict">{_e(verdict)}</span> — '
-                    f'{_e(arc_body)}{cite_html}</p>')
+    # THE ARC-LINE CONTRACT v1 (2026-07-18): the deep-view continuity line is the
+    # memory pass's AUTHORED, contracted arc_line, rendered VERBATIM under render
+    # condition §B (the deep view is a record surface — Q3: the render stays dumb).
+    # This REPLACES the old render-time derivation from the analyst's arc object
+    # (arc.significance), which reused state-summary-grade text as arc prose — the
+    # tense-splice defect (principal's 2026-07-17 served review item 2). brief['arc']
+    # still feeds the LEDGER (memory_core.write_deltas_for_edition) and the analyst
+    # prompt; only THIS render stops deriving prose from it. Absence renders
+    # nothing (no placeholder); the anchor date is navigable via the story-so-far
+    # timeline below, which carries every prior entry's openEdition link.
+    arc_line = _deep_arc_line_html(con, slot, date)
     out.append(f'<div class="deep-title-block"><p class="deep-eyebrow">'
                f'{_e(labels.DEEP_EYEBROW)}</p>'
                f'<h1 class="deep-title">{_e(headline)}</h1>'

@@ -32,12 +32,13 @@ MIGRATION_0014 = "0014_thread_delta_provenance.sql"   # NL-69: the poisoned-ante
 MIGRATION_0015 = "0015_thread_closures.sql"           # collect-now (ruling C): closure register + `memory close`
 MIGRATION_0016 = "0016_concept_explanations.sql"      # collect-now (ruling C): explained-once registry (schema only)
 MIGRATION_0017 = "0017_thread_baselines.sql"          # NL-77: the cold-start backgrounder (entry-zero baseline)
+MIGRATION_0018 = "0018_thread_state_arc_line.sql"     # arc-line contract v1: authored arc_line column on thread_state
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
     MIGRATION_0008, MIGRATION_0009, MIGRATION_0010,
     MIGRATION_0011, MIGRATION_0012, MIGRATION_0013, MIGRATION_0014,
-    MIGRATION_0015, MIGRATION_0016, MIGRATION_0017,
+    MIGRATION_0015, MIGRATION_0016, MIGRATION_0017, MIGRATION_0018,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",

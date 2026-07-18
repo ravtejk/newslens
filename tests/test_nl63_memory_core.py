@@ -154,57 +154,6 @@ def test_fresh_ledger_is_empty_no_backfill(migrated_con):
     assert memory_core.ledger_for_thread(con, tid) == []
 
 
-# --- 4. the arc render: kill-test + reversion + day-one ---------------------
-
-def test_day_one_thread_gets_no_arc_ever(migrated_con):
-    con = migrated_con
-    tid = _seed_thread(con, "T")
-    _write_delta(con, tid, "2026-07-10")     # only today's entry, no prior
-    assert memory_core.render_today_arc(
-        con, tid, "T", "today's story text", "2026-07-10") is None
-
-
-def test_kill_test_suppresses_when_past_is_in_todays_story(migrated_con):
-    con = migrated_con
-    tid = _seed_thread(con, "T")
-    # every salient unit of the past entry ALSO appears in today's story
-    _write_delta(con, tid, "2026-07-05", what="Shipping traffic slowed.",
-                 signif="Traffic slowed.")
-    _write_delta(con, tid, "2026-07-10", what="Shipping traffic slowed again.",
-                 signif="Traffic slowed further.")
-    # today's story ALREADY contains every past unit -> tells-me-nothing -> None
-    today = "Shipping traffic slowed again today; traffic slowed across the strait."
-    assert memory_core.render_today_arc(con, tid, "T", today, "2026-07-10") is None
-
-
-def test_kill_test_passes_when_a_past_fact_is_absent(migrated_con):
-    con = migrated_con
-    tid = _seed_thread(con, "T")
-    _write_delta(con, tid, "2026-07-05", what="Transit fees imposed on shipping.",
-                 signif="A pricing dispute over passage.")
-    _write_delta(con, tid, "2026-07-10", what="Strikes were exchanged overnight.",
-                 signif="Now a shooting war.")
-    today = "Strikes were exchanged overnight, and the strait closed."
-    arc = memory_core.render_today_arc(con, tid, "T", today, "2026-07-10")
-    assert arc is not None and arc.kind == "arc"
-    assert "Jul 5" in arc.text and "Today," in arc.text
-    assert arc.prior_date == "2026-07-05"
-
-
-def test_reversion_law_on_ledger_integrity_failure(migrated_con):
-    con = migrated_con
-    tid = _seed_thread(con, "T")
-    # a corrupt prior entry (empty what_happened bypassed via direct insert)
-    con.execute("INSERT INTO thread_deltas (thread_id, edition_date, verdict,"
-                " what_happened, significance, cites_json) VALUES"
-                " (?, '2026-07-05', 'advances', '', 's', '[]')", (tid,))
-    _write_delta(con, tid, "2026-07-10", what="Strikes exchanged.")
-    con.commit()
-    arc = memory_core.render_today_arc(con, tid, "T", "strikes today", "2026-07-10")
-    assert arc is not None and arc.kind == "reverted"
-    assert "Still following" in arc.text and arc.disclosure
-
-
 # --- 2. the standing state: write law + anti-photocopier + stale-honest -----
 
 def test_state_hard_rejects_a_cite_to_a_non_edition_date(migrated_con):
@@ -304,19 +253,6 @@ def test_p_only_provenance_is_prior_coverage_not_background():
 
 # --- server renders (item 4/5/6 wiring) -------------------------------------
 
-def test_today_arc_html_renders_the_line(migrated_con):
-    con = migrated_con
-    tid = _seed_thread(con, "Strait of Hormuz")
-    _write_delta(con, tid, "2026-07-05", what="Transit fees imposed.",
-                 signif="A pricing dispute.")
-    _write_delta(con, tid, "2026-07-10", what="Strikes exchanged.", signif="A war.")
-    st = {"headline": "Strikes exchanged", "lede": "The strait closed today.",
-          "movements": []}
-    slot = {"matched_memory": ["Strait of Hormuz"]}
-    html = server._today_arc_html(con, slot, st, "2026-07-10")
-    assert 'class="today-arc-line"' in html and "When we last covered this" in html
-
-
 def test_deep_timeline_html_renders_from_the_ledger(migrated_con):
     con = migrated_con
     tid = _seed_thread(con, "Strait of Hormuz")
@@ -377,14 +313,29 @@ def test_run_memory_pass_wires_ledger_and_state(tmp_paths):
 
 def test_wiring_call_sites_present():
     """Grep-proof (team/ENGINEERING.md): the render surfaces call the memory
-    core — the Today arc line, the deep timeline, and the dossier state card."""
+    core — the slim Today stamp, the deep-view arc line, the deep timeline, the
+    dossier state card.
+
+    ANTI-RESURRECTION TRIPWIRE, strengthened (arc-line batch, 2026-07-18): the
+    Today arc carries NO generated prose — furniture only. v8-M2 pinned the
+    absence of the CALL; this batch DELETED the render itself, so the tripwire now
+    pins the FUNCTIONS gone (_today_arc_html in server, render_today_arc in the
+    memory core) AND the new stored-field render wired. If a future edit revives
+    Today-arc prose, or wires arc prose anywhere but the deep view's stored field,
+    this fails."""
     import inspect
     ssrc = inspect.getsource(server)
-    # v8-M2: the Today arc PROSE is gone; the slim memory STAMP is wired into
-    # _render_story instead (the full arc register lives in the deep view only).
+    msrc = inspect.getsource(memory_core)
+    # the deterministic Today-arc render is gone at the ROOT (not just uncalled):
     assert "_today_arc_html(con, slot, st, date, arc_seen)" not in ssrc
-    assert "_memory_stamp_inner(con, slot, date, degraded=" in ssrc  # the stamp is wired into _render_story
-    assert "_deep_timeline_html(con, slot, date, story_anchor)" in ssrc  # item 5 wired into deep view
-    assert "_thread_state_card(t)" in ssrc                         # item 6 wired into Following
+    assert "def _today_arc_html" not in ssrc            # the whole render is deleted
+    assert "def render_today_arc" not in msrc           # its memory-core producer too
+    # Today carries FURNITURE only — the slim stamp, no prose:
+    assert "_memory_stamp_inner(con, slot, date, degraded=" in ssrc  # stamp wired into _render_story
+    # the ONLY generated arc prose is the deep view's stored, authored arc_line:
+    assert "_deep_arc_line_html(con, slot, date)" in ssrc            # render swap wired (item 3)
+    assert "def state_for_edition" in msrc                           # the reader it renders from
+    assert "_deep_timeline_html(con, slot, date, story_anchor)" in ssrc  # deep-view timeline
+    assert "_thread_state_card(t)" in ssrc                         # dossier state card (Following)
     asrc = inspect.getsource(analysis.analyze_story)
-    assert "prior_for_slot" in asrc                                # item 3 wired into the analyst
+    assert "prior_for_slot" in asrc                                # analyst prior wired

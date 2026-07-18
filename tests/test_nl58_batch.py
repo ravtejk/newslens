@@ -99,27 +99,14 @@ def test_prior_edition_source_link_requires_a_real_calendar_date():
     assert "NewsLens — " not in src2           # the linked-title form never renders
 
 
-def test_arc_prior_date_link_requires_a_real_calendar_date():
-    """NL-60 hardening: the arc continuity line had NO date guard at all — any
-    non-empty prior-briefing retrieved_at became a live link, so '2026-13-45'
-    rendered a dead-end edition link. strptime must accept the date first; a
-    calendar-invalid date renders the continuity line with no edition link. Fix
-    contract: _is_calendar_date gates prior_date in the arc branch."""
-    # valid date -> arc line links
-    html = server._render_deep_view("story-0", "H", _deep_doc(), "2026-07-10",
-                                    back_label="B", return_view="view-today")
-    tb = html.split('deep-title-block')[1].split("</div>")[0]
-    assert 'class="deep-arc-line"' in tb
-    assert "openEdition('2026-07-06'" in tb
-    # calendar-invalid date -> continuity line still renders, but with no link
-    bad = _deep_doc()
-    bad["brief"]["sources"][2]["retrieved_at"] = "2026-13-45"   # P1, impossible
-    html2 = server._render_deep_view("story-0", "H", bad, "2026-07-10",
-                                     back_label="B", return_view="view-today")
-    tb2 = html2.split('deep-title-block')[1].split("</div>")[0]
-    assert 'class="deep-arc-line"' in tb2      # continuity line survives
-    assert "deep-arc-link" not in tb2          # but carries no navigable edition
-    assert "openEdition(" not in tb2
+# CONSCIOUS FLIP (arc-line contract v1, 2026-07-18): the NL-60 arc-link
+# dead-link guard is DELETED with its subject. The deep-view arc line no longer
+# derives from brief['arc'] nor builds a prior-edition link from its cites (render
+# swap, item 3) — it renders the memory pass's stored, authored thread_state.arc_line
+# VERBATIM, with NO inline edition link. The NL-60 "no dead edition link"
+# invariant survives on the story-so-far TIMELINE, whose calendar guard is pinned
+# by test_nl63_memory_qa.py::TestServerRenders::test_timeline_calendar_guard_links_only_real_editions.
+# (WAS test_arc_prior_date_link_requires_a_real_calendar_date.)
 
 
 # --- P3a / P4b: the merged control lives in one row under the title ----------

@@ -80,33 +80,30 @@ def test_the_facts_is_pinned_only_and_discrepancies_fold_into_open():
 # 2. Arc -> cited, clickable context line in the title block
 # ---------------------------------------------------------------------------
 
-def test_arc_is_a_cited_clickable_title_block_line_not_a_section():
+def test_deep_arc_is_the_stored_field_not_derived_from_brief_arc():
+    """CONSCIOUS FLIP (arc-line contract v1, 2026-07-18): the deep-view arc line
+    is now the memory pass's AUTHORED thread_state.arc_line, rendered verbatim —
+    no longer render-time-derived from brief['arc'] (arc.significance), the
+    tense-splice defect path (principal's 2026-07-17 review item 2). Here, with
+    no thread_state (con=None on this brief-only fixture), the title block carries
+    NO arc line even though brief['arc'] is present: the derivation is dead. The
+    positive render (stored field -> verbatim) is pinned in test_arc_line.py; the
+    'arc is not a section' invariant survives. WAS
+    test_arc_is_a_cited_clickable_title_block_line_not_a_section /
+    test_arc_line_without_a_prior_edition_cite_carries_no_link (both brief-derived)."""
     brief = m3_brief(with_arc=True)
     brief["arc"]["cites"] = ["P1"]
     brief["sources"].append(
         {"key": "P1", "kind": "prior-briefing", "outlet": "NewsLens",
          "title": "prior", "url": "", "retrieved_at": "2026-07-05"})
-    html = _deep(brief)
+    html = _deep(brief)                                 # con=None -> no stored arc line
     tb = html.split('deep-title-block')[1].split("</div>")[0]
-    assert 'class="deep-arc-line"' in tb
-    assert "Advances the thread" in tb
-    # clickable -> navigates to that briefing via NL-11's openEdition mechanism
-    assert "openEdition('2026-07-05', event)" in tb
-    assert 'href="/?date=2026-07-05"' in tb             # no-JS graceful fallback
-    assert "July 5" in tb                               # the last edition's date
-    # arc is no longer a section
+    assert 'class="deep-arc-line"' not in tb            # brief['arc'] no longer derives prose
+    assert "Advances the thread" not in tb              # the verdict label is gone
+    assert "deep-arc-verdict" not in html and "deep-arc-link" not in html
+    # arc is still not a section (the surviving NL-12 invariant)
     assert 'id="story-0-arc"' not in html
     assert '<p class="deep-section-label">Arc</p>' not in html
-
-
-def test_arc_line_without_a_prior_edition_cite_carries_no_link():
-    """arc citing only same-day sources (no prior-briefing P#) still renders
-    the continuity line, but with no navigable date — never a dead link."""
-    brief = m3_brief(with_arc=True)                     # arc cites ["S1"]
-    html = _deep(brief)
-    tb = html.split('deep-title-block')[1].split("</div>")[0]
-    assert 'class="deep-arc-line"' in tb and "Advances the thread" in tb
-    assert "deep-arc-link" not in tb and "openEdition(" not in html
 
 
 # ---------------------------------------------------------------------------

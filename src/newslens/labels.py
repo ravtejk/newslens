@@ -82,10 +82,10 @@ THREAD_NO_STATE = "No standing summary yet — the thread hasn’t been rewritte
 THREAD_NO_LEDGER = "No dated entries yet."
 THREAD_EDITIONS_LABEL = "In these editions"  # the edition back-links group label
 
-# --- Arc verdicts (carries "Advances the thread") ----------------------------
-ARC_ADVANCES = "Advances the thread"
-ARC_REVERSES = "Reverses the thread"
-ARC_MATCHES = "Merely matches the thread"
+# (Arc verdict labels ARC_ADVANCES/REVERSES/MATCHES removed with the arc-line
+# batch, 2026-07-18: the deep-view arc no longer renders a derived verdict from
+# brief['arc'] — it renders the memory pass's authored thread_state.arc_line
+# verbatim. No other surface consumed these labels.)
 
 # --- Still-tracking strip (Today surface; retro-mock idiom) -------------------
 # Composed as: "Still tracking {thread} — {note}. {fixed_point}."

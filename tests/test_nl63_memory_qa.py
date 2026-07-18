@@ -68,35 +68,6 @@ def _arc_brief(delta="advances", what_happened="X happened today.",
     return {"brief": {"arc": arc}}
 
 
-# The tells-me-nothing invariant, assertable: the salient units of the
-# rendered line, minus render boilerplate, minus today's story units, must be
-# non-empty — i.e. the line carries at least one substantive token the reader
-# did not just read in today's story. This is Inez's QA proxy verbatim
-# ("strip the line; if every proposition in it survives in today's story,
-# fail"), applied to what actually renders.
-#
-# Deliberately an INDEPENDENT reference implementation — it must not inherit
-# the tokenizer defects it audits (BUG-22's possessive/trailing-period
-# artifacts). Tokens are plain alphanumeric runs; membership is exact token
-# membership; the parenthetical cite is stripped first (the DATE is the
-# line's dated reference, never its "concrete past fact").
-_ARC_BOILERPLATE = {"covered", "entry", "thread", "first", "second", "third",
-                    "fourth", "fifth", "sixth", "seventh", "still",
-                    "following"}
-
-
-def _line_tells_something(arc_text: str, today_text: str) -> bool:
-    import re as _re
-    stripped = _re.sub(r"\([^)]*\)", " ", arc_text)
-    toks = _re.findall(r"[a-z0-9]+", stripped.lower())
-    today_toks = set(_re.findall(r"[a-z0-9]+", (today_text or "").lower()))
-    units = [t for t in toks
-             if (t.isdigit() or len(t) >= 5)
-             and t not in memory_core._STOPWORDS
-             and t not in _ARC_BOILERPLATE]
-    return any(t not in today_toks for t in units)
-
-
 # =============================================================================
 # 1. THE STATE FABRICATION SURFACE (validate_state + cites + sentences)
 # =============================================================================
@@ -293,142 +264,6 @@ class TestSentenceSplitAbbreviations:
             chat=lambda k, p: ({"state": six}, 0.001))
         assert r.outcome == "written"
         assert "cap" in r.detail
-
-
-# =============================================================================
-# 2. KILL-TEST DETERMINISM (Sten's law is a gate, not a vibe)
-# =============================================================================
-
-class TestKillTestDeterminism:
-    def test_BUG22_possessive_artifact_defeats_tells_me_nothing(self, migrated_con):
-        """KNOWN-RED (BUG-22, half 1): tokenization artifacts create phantom
-        'absent' units. Past entry: "Khamenei's funeral procession ran through
-        Tehran." Today's story contains khamenei, funeral, procession, tehran
-        — every proposition. But the unit is the raw token "khamenei's", the
-        apostrophe never matches, the unit reads as ABSENT, and the arc line
-        renders a past the reader is already reading. This is the exact
-        defect class Sten named the moat-ender ('a single fabricated
-        [continuity line] is the defect'). Observed: arc renders; its
-        substantive units are all present in today's text.
-
-        Fix contract: unit/haystack normalization strips possessives and
-        terminal punctuation symmetrically (e.g. compare on letters+digits
-        only), so a token differing from today's text by 's or '.' is
-        PRESENT. The line for this input does not render."""
-        con = migrated_con
-        tid = _seed_thread(con, "Iran leadership")
-        _delta(con, tid, "2026-07-06",
-               "Khamenei's funeral procession ran through Tehran.")
-        today = ("Khamenei funeral procession concluded in Tehran as mourners"
-                 " gathered again, running through the capital.")
-        arc = memory_core.render_today_arc(
-            con, tid, "Iran leadership", today, "2026-07-10")
-        assert arc is None or _line_tells_something(arc.text, today), (
-            f"tells-me-nothing violated: rendered {arc.text!r} whose every "
-            "substantive unit already appears in today's story")
-
-    def test_BUG22_trailing_period_number_defeats_tells_me_nothing(self, migrated_con):
-        """KNOWN-RED (BUG-22, half 2): the number regex swallows a sentence-
-        final period ('12.'), which never substring-matches today's mid-
-        sentence '12', so a toll today's story states verbatim reads as
-        'absent' and the arc renders it as remembered news. Same fix
-        contract as half 1 (normalize trailing punctuation off number units)."""
-        con = migrated_con
-        tid = _seed_thread(con, "Casualty toll")
-        _delta(con, tid, "2026-07-05", "The confirmed toll rose to 12.")
-        today = "Officials say the confirmed toll rose to 12 in new reporting."
-        arc = memory_core.render_today_arc(
-            con, tid, "Casualty toll", today, "2026-07-10")
-        assert arc is None or _line_tells_something(arc.text, today)
-
-    def test_BUG23_kill_test_units_are_not_the_rendered_units(self, migrated_con):
-        """KNOWN-RED (BUG-23): the gate tests the UNION of both clauses
-        (what_happened + significance) but renders ONLY ONE (significance
-        when present). A genuinely-new fact in the unrendered clause licenses
-        a rendered clause that is 100% present in today's story — the line
-        passes the gate and tells the reader nothing. Sten's invariant binds
-        THE LINE ('it must contain at least one concrete fact ... ABSENT from
-        today's story').
-
-        Fix contract: the kill-test's units come from the text the line will
-        actually render (equivalently: render the clause that carries the
-        absent fact). Either resolution turns this green."""
-        con = migrated_con
-        tid = _seed_thread(con, "Border tariffs")
-        _delta(con, tid, "2026-07-05",
-               "Tariff receipts doubled at the border.",     # genuinely absent today
-               "The dispute became about money.")            # fully present today
-        today = ("The dispute became about money for both governments, "
-                 "officials acknowledged.")
-        arc = memory_core.render_today_arc(
-            con, tid, "Border tariffs", today, "2026-07-10")
-        assert arc is None or _line_tells_something(arc.text, today), (
-            f"rendered {arc.text!r}: the absent fact (tariff receipts) is not "
-            "in the line; every rendered unit is in today's story")
-
-    def test_substring_number_collision_suppresses_conservatively(self, migrated_con):
-        """Pinned actual (documented limitation, NOT a red): '90' hides inside
-        today's unrelated '1,902' (comma-stripped substring match), so a
-        genuinely new past can be suppressed. Failure direction is the safe
-        one — no arc, never a fabricated one ('fewer arc lines is right; a
-        single fabricated one is the defect' — Sten). Carried in the report."""
-        con = migrated_con
-        tid = _seed_thread(con, "Strike sites")
-        _delta(con, tid, "2026-07-05", "90 sites were struck.")
-        today = "Officials struck a deal on sites as 1,902 vessels waited."
-        assert memory_core.render_today_arc(
-            con, tid, "Strike sites", today, "2026-07-10") is None
-
-    def test_short_token_past_is_invisible_and_suppresses(self, migrated_con):
-        """Pinned actual: a past clause whose distinctive tokens are all under
-        5 letters (Iran, oil, EU...) yields NO salient units, so the arc can
-        never render for it. Suppress direction — honest; report carries the
-        limitation (4-letter entities: Iran, Gaza, OPEC, NATO are invisible
-        to the gate)."""
-        con = migrated_con
-        tid = _seed_thread(con, "Oil flows")
-        _delta(con, tid, "2026-07-05", "Iran cut oil to the EU.")
-        assert memory_core.render_today_arc(
-            con, tid, "Oil flows", "A completely unrelated story.",
-            "2026-07-10") is None
-
-    def test_case_and_comma_normalization_both_directions(self, migrated_con):
-        """UPPER past vs lower today and '90,000' vs '90000' both read as
-        PRESENT (suppress) — the deterministic normalizations that do exist,
-        pinned so a refactor cannot silently drop them."""
-        con = migrated_con
-        tid = _seed_thread(con, "Convoy")
-        _delta(con, tid, "2026-07-05", "CONVOY ESCORTS RESUMED WITH 90,000 BARRELS.")
-        today = "convoy escorts resumed today with 90000 barrels moving."
-        assert memory_core.render_today_arc(
-            con, tid, "Convoy", today, "2026-07-10") is None
-
-    def test_kill_test_is_deterministic_across_calls(self, migrated_con):
-        """Sten's gate must be boring: identical inputs, identical output,
-        byte for byte, across repeated calls."""
-        con = migrated_con
-        tid = _seed_thread(con, "T")
-        _delta(con, tid, "2026-07-05", "Transit fees imposed on shipping.",
-               "A pricing dispute over passage.")
-        _delta(con, tid, "2026-07-10", "Strikes exchanged.", "Now a war.")
-        today = "Strikes were exchanged overnight, and the strait closed."
-        a = memory_core.render_today_arc(con, tid, "T", today, "2026-07-10")
-        b = memory_core.render_today_arc(con, tid, "T", today, "2026-07-10")
-        assert a is not None and b is not None and a.text == b.text
-        assert "When we last covered this (Jul 5)" in a.text
-        assert a.text.index("When we last covered") < a.text.index("Today,")
-
-    def test_texture_counts_match_the_record(self, migrated_con):
-        """'Third entry on this thread.' is ledger arithmetic (retro-mock §4
-        variant S), never prose — pinned against the record."""
-        con = migrated_con
-        tid = _seed_thread(con, "T")
-        _delta(con, tid, "2026-07-05", "Transit fees imposed on carriers.")
-        _delta(con, tid, "2026-07-06", "Succession opened in Tehran quietly.")
-        _delta(con, tid, "2026-07-10", "Strikes exchanged.", "Now a war.")
-        arc = memory_core.render_today_arc(
-            con, tid, "T", "Unrelated story text entirely.", "2026-07-10")
-        assert arc is not None and "Third entry on this thread." in arc.text
 
 
 # =============================================================================
@@ -679,89 +514,6 @@ class TestLedgerWriteGates:
 
 
 # =============================================================================
-# 4. KASS'S REVERSION LAW (corrupt record -> bare citation, disclosed)
-# =============================================================================
-
-class TestReversionLaw:
-    def test_BUG24_corrupt_entry_sorting_after_today_is_invisible(self, migrated_con):
-        """KNOWN-RED (BUG-24): _ledger_integrity runs on PRIOR entries only,
-        where 'prior' is a lexical string compare — a corrupt edition_date
-        that sorts after today ('garbage-date', 'TBD', '9999-...') lands in
-        neither prior nor today and is never examined. The thread renders a
-        normal arc over a corrupt record: Kass's law ('a single corrupt entry
-        reverts the arc') bypassed by sort order. The gate is supposed to be
-        boring; this one depends on the first byte of the garbage. Observed:
-        kind == 'arc', no disclosure.
-
-        Fix contract: integrity examines the thread's ENTIRE ledger (any
-        entry failing calendar-date/clause/cites checks reverts), so the
-        verdict no longer depends on where garbage happens to sort."""
-        con = migrated_con
-        tid = _seed_thread(con, "Corrupt future")
-        _delta(con, tid, "2026-07-05", "A clean dated fact about tariffs happened.")
-        _delta(con, tid, "garbage-date", "", "")   # empty clause AND non-date
-        arc = memory_core.render_today_arc(
-            con, tid, "Corrupt future", "totally unrelated story text",
-            "2026-07-10")
-        assert arc is not None and arc.kind == "reverted", (
-            f"corrupt entry escaped the integrity gate (got {arc and arc.kind!r})"
-            " because 'garbage-date' > '2026-07-10' lexically")
-
-    def test_corrupt_date_sorting_before_today_reverts(self, migrated_con):
-        """The lexically-early corruption IS caught today — pinned so the
-        BUG-24 fix widens the gate rather than moving it."""
-        con = migrated_con
-        tid = _seed_thread(con, "Corrupt early")
-        _delta(con, tid, "07/05/2026", "A slash-dated fact.")
-        _delta(con, tid, "2026-07-05", "A clean fact about tariffs.")
-        arc = memory_core.render_today_arc(
-            con, tid, "Corrupt early", "unrelated text", "2026-07-10")
-        assert arc is not None and arc.kind == "reverted"
-        assert "integrity" in arc.disclosure
-        assert "Still following Corrupt early" in arc.text
-
-    def test_unparseable_cites_json_reverts_with_disclosure(self, migrated_con):
-        con = migrated_con
-        tid = _seed_thread(con, "T")
-        con.execute("INSERT INTO thread_deltas (thread_id, edition_date, verdict,"
-                    " what_happened, significance, cites_json) VALUES"
-                    " (?, '2026-07-05', 'advances', 'A fact.', '', 'not json')",
-                    (tid,))
-        con.commit()
-        arc = memory_core.render_today_arc(con, tid, "T", "unrelated", "2026-07-10")
-        assert arc is not None and arc.kind == "reverted"
-        assert "cites are unparseable" in arc.disclosure
-
-    def test_non_list_cites_json_reverts(self, migrated_con):
-        """cites_json='{}' parses but is not a list — same corruption class,
-        same reversion, never a crash."""
-        con = migrated_con
-        tid = _seed_thread(con, "T")
-        con.execute("INSERT INTO thread_deltas (thread_id, edition_date, verdict,"
-                    " what_happened, significance, cites_json) VALUES"
-                    " (?, '2026-07-05', 'advances', 'A fact.', '', '{}')", (tid,))
-        con.commit()
-        arc = memory_core.render_today_arc(con, tid, "T", "unrelated", "2026-07-10")
-        assert arc is not None and arc.kind == "reverted"
-
-    def test_reverted_line_is_bare_citation_shape(self, migrated_con):
-        """Kass's reversion renders a BARE CITATION — topic + last covered
-        date — never clauses from the corrupt record, and always discloses."""
-        con = migrated_con
-        tid = _seed_thread(con, "Hormuz")
-        con.execute("INSERT INTO thread_deltas (thread_id, edition_date, verdict,"
-                    " what_happened, significance, cites_json) VALUES"
-                    " (?, '2026-07-05', 'advances', '', 'poisoned clause', '[]')",
-                    (tid,))
-        con.commit()
-        arc = memory_core.render_today_arc(con, tid, "Hormuz", "x", "2026-07-10")
-        assert arc.kind == "reverted"
-        assert arc.text == "Still following Hormuz — last covered Jul 5."
-        assert "poisoned clause" not in arc.text
-        assert arc.disclosure and "integrity" in arc.disclosure
-
-
-# =============================================================================
 # 5. ANTI-PHOTOCOPIER (the prior state is provably NOT in the prompt)
 # =============================================================================
 
@@ -814,55 +566,6 @@ class TestAntiPhotocopier:
             "RealTopic", "2026-07-10", entries, "{topic}\n{ledger}")
         assert "A clause naming {topic} literally." in prompt
         assert prompt.startswith("RealTopic")
-
-
-# =============================================================================
-# 6. THE BOUNDARY SEAM: matched-but-no-delta (hands off to M2 still-tracking)
-# =============================================================================
-
-class TestMatchedNoDeltaSeam:
-    def test_then_only_line_renders_and_is_kill_test_gated(self, migrated_con):
-        """Pinned ACTUAL (implementer-flagged seam): a thread with prior
-        coverage that did NOT move today renders a then-only continuity line
-        ('When we last covered this (Jul 5), ...' — no 'Today,' clause, no
-        texture at one entry), still gated by the kill-test. M2's
-        still-tracking register ('state + no movement since <date> + next
-        fixed point') REPLACES this line; when it does, this pin flips
-        consciously. Carried in the report: on merely-matches days the
-        retro-mock's lawful register is still-tracking, not an arc line —
-        this is the M1/M2 boundary, pinned not blessed."""
-        con = migrated_con
-        tid = _seed_thread(con, "Hormuz")
-        _delta(con, tid, "2026-07-05", "Transit fees imposed on shipping.",
-               "A pricing dispute over passage.")
-        today = "An unrelated development elsewhere entirely."
-        arc = memory_core.render_today_arc(con, tid, "Hormuz", today, "2026-07-10")
-        assert arc is not None and arc.kind == "arc"
-        assert arc.text == ("When we last covered this (Jul 5), a pricing "
-                            "dispute over passage.")
-        assert "Today," not in arc.text and "entry on this thread" not in arc.text
-        assert arc.prior_date == "2026-07-05"
-
-    def test_then_only_line_suppressed_when_past_is_present_today(self, migrated_con):
-        con = migrated_con
-        tid = _seed_thread(con, "Hormuz")
-        _delta(con, tid, "2026-07-05", "Transit fees imposed on shipping.",
-               "A pricing dispute over passage.")
-        today = ("Transit fees imposed on shipping remain the pricing dispute"
-                 " over passage.")
-        assert memory_core.render_today_arc(
-            con, tid, "Hormuz", today, "2026-07-10") is None
-
-    def test_day_one_renders_nothing_even_with_state(self, migrated_con):
-        """No prior LEDGER entry -> no arc, even if a state row exists (a
-        state alone is not prior coverage the arc can cite)."""
-        con = migrated_con
-        tid = _seed_thread(con, "T")
-        con.execute("INSERT INTO thread_state (thread_id, as_of_date, state_text)"
-                    " VALUES (?, '2026-07-10', 's (Jul 10).')", (tid,))
-        con.commit()
-        assert memory_core.render_today_arc(
-            con, tid, "T", "anything", "2026-07-10") is None
 
 
 # =============================================================================
@@ -1136,21 +839,6 @@ class TestThreadScopedPrior:
 # =============================================================================
 
 class TestServerRenders:
-    def test_arc_line_html_escapes_model_and_topic_text(self, migrated_con):
-        """The ledger's clauses are model output rendered into HTML — a
-        script tag in a clause must render inert."""
-        con = migrated_con
-        _seed_thread(con, "Hormuz")
-        tid = memory_core.resolve_thread_id(con, "Hormuz")
-        _delta(con, tid, "2026-07-05",
-               "Fees imposed <script>alert(1)</script> on carriers.",
-               "A pricing <b>dispute</b> over passage.")
-        st = {"headline": "Strikes", "lede": "The strait closed.", "movements": []}
-        html = server._today_arc_html(
-            con, {"matched_memory": ["Hormuz"]}, st, "2026-07-10")
-        assert html and "<script>" not in html and "<b>" not in html
-        assert "&lt;b&gt;dispute&lt;/b&gt;" in html
-
     def test_state_card_escapes_and_discloses_staleness(self):
         today_iso = datetime.now().strftime("%Y-%m-%d")
         t = {"topic": "T",
@@ -1214,33 +902,6 @@ class TestServerRenders:
             con, {"matched_memory": ["Alpha", "Beta"]}, "2026-07-10", "s0")
         assert "Alpha fact." in html and "Beta fact." not in html
 
-    def test_day_one_and_empty_threads_render_no_arc_html(self, migrated_con):
-        con = migrated_con
-        _seed_thread(con, "Fresh")
-        st = {"headline": "H", "lede": "L", "movements": []}
-        assert server._today_arc_html(
-            con, {"matched_memory": ["Fresh"]}, st, "2026-07-10") == ""
-        assert server._today_arc_html(
-            con, {"matched_memory": []}, st, "2026-07-10") == ""
-        assert server._today_arc_html(None, {"matched_memory": ["Fresh"]},
-                                      st, "2026-07-10") == ""
-
-    def test_reverted_arc_renders_disclosure_class(self, migrated_con):
-        """Kass's reversion reaches the reader with its disclosure attached
-        and the .reverted class for the visual register."""
-        con = migrated_con
-        tid = _seed_thread(con, "Hormuz")
-        con.execute("INSERT INTO thread_deltas (thread_id, edition_date, verdict,"
-                    " what_happened, significance, cites_json) VALUES"
-                    " (?, '2026-07-05', 'advances', '', '', '[]')", (tid,))
-        con.commit()
-        st = {"headline": "H", "lede": "L", "movements": []}
-        html = server._today_arc_html(
-            con, {"matched_memory": ["Hormuz"]}, st, "2026-07-10")
-        assert "reverted" in html and "integrity check" in html
-        assert "Still following Hormuz" in html
-
-
 # =============================================================================
 # 10. DIAGNOSE — the MEMORY section reads honestly
 # =============================================================================
@@ -1260,7 +921,12 @@ class TestDiagnoseMemory:
         assert "THE MEMORY CORE" in joined
         assert "no-backfill: it fills forward from here" in joined
 
-    def test_counts_reversion_risk_and_log_outcomes(self, tmp_paths):
+    def test_counts_ledger_integrity_and_log_outcomes(self, tmp_paths):
+        """CONSCIOUS FLIP (arc-line batch gate FIX-1, 2026-07-18): the diagnose
+        metric renamed 'reversion risk' → 'ledger integrity' when the
+        bare-citation reversion RENDER retired with the arc-line contract —
+        the count is an operator signal now (served arc degrades to absence).
+        The counting behavior pinned here is unchanged."""
         db.migrate()
         con = db.connect()
         tid = _seed_thread(con, "Hormuz")
@@ -1276,7 +942,8 @@ class TestDiagnoseMemory:
             {"outcome": "written"}]}}]
         joined = "\n".join(diagnose._memory_readout(entries))
         assert "2 delta(s) across 2 thread(s)" in joined
-        assert "reversion risk: 1 thread(s)" in joined
+        assert "ledger integrity: 1 thread(s)" in joined
+        assert "operator signal" in joined          # never a reader-visible claim
         assert "rejected 1" in joined and "written 2" in joined
 
 

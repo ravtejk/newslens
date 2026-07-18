@@ -95,7 +95,7 @@ def _fmt_usd(v: float) -> str:
 
 def _memory_readout(entries: List[Dict]) -> List[str]:
     """NL-63 item 7: the MEMORY section — ledger growth, standing-state
-    rewrites, reversion risk, arc-eligible population. Read-only ($0, offline):
+    rewrites, ledger integrity, arc-eligible population. Read-only ($0, offline):
     the ledger/state counts come from the DB; the rewrite outcomes come from
     the generation log's `memory` field. Absent tables read as an honest empty
     (a pre-migration DB simply has no memory core yet)."""
@@ -132,27 +132,29 @@ def _memory_readout(entries: List[Dict]) -> List[str]:
             for r in rows[:8]:
                 out.append(f"    {r['topic']}: {r['n']} entr"
                            f"{'y' if r['n'] == 1 else 'ies'}, last {r['last']}")
-            # reversion risk: a thread whose ledger currently fails integrity
-            # would show a bare citation line (Kass's reversion law).
-            reverting = 0
+            # ledger integrity: an OPERATOR signal only (the bare-citation
+            # reversion render retired with the arc-line contract, 2026-07-18 —
+            # the served degrade is absence; a failing ledger is a data-repair
+            # item, not a reader-visible state).
+            failing = 0
             for tid in thread_ids:
                 ok, _ = memory_core._ledger_integrity(
                     memory_core.ledger_for_thread(con, tid))
                 if not ok:
-                    reverting += 1
-            out.append(f"  reversion risk: {reverting} thread(s) whose ledger "
-                       "currently fails integrity (would show a bare citation line)")
-            # arc-eligible (M1 gate F, comment/code aligned): a thread with >=2
-            # ledger entries carries >=1 entry PRIOR to its latest, so an arc CAN
-            # render on some edition (the kill-test then decides per story at
-            # render). The metric counts >=2-entry threads; the first entry of
-            # any thread has no prior and can never front an arc.
+                    failing += 1
+            out.append(f"  ledger integrity: {failing} thread(s) whose ledger "
+                       "currently fails integrity (operator signal — served "
+                       "arc degrades to absence)")
+            # arc-eligible: a PROXY count. The render condition (§B) is "moved
+            # this edition AND >=1 prior LIVE edition-cited entry"; this counts
+            # threads with >=2 total ledger entries (supersedes included), i.e.
+            # threads that CAN front an arc on some edition. The first entry of
+            # any thread has no prior and can never front one.
             eligible = sum(1 for tid in thread_ids
                            if len(memory_core.ledger_for_thread(con, tid)) >= 2)
             out.append(f"  arc-eligible: {eligible} thread(s) carry >=2 entries "
-                       "(>=1 prior to the latest) — kill-test suppressions are a "
-                       "render-time measure (the arc line suppresses per story), "
-                       "counted at read time")
+                       "(a proxy for the §B render condition — moved this "
+                       "edition + a prior live entry — counted at read time)")
         try:
             srows = con.execute(
                 "SELECT COUNT(*) n, COUNT(DISTINCT thread_id) t,"

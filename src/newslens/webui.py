@@ -200,12 +200,6 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
 .still-tracking .st-line { font-size: 0.82rem; color: var(--ink-soft); margin: 0 0 0.5rem; line-height: 1.5; }
 .still-tracking .st-thread { font-family: var(--font-display); font-weight: 700; color: var(--ink); }
 
-/* Today arc continuity line (deterministic then→now line under a story). */
-.today-arc-line { font-size: 0.9rem; color: var(--ink-soft); margin: 0.6rem 0 0; line-height: 1.5; }
-.today-arc-line.reverted { color: var(--danger); }
-.today-arc-link { color: var(--moved); font-weight: 700; text-decoration: none; white-space: nowrap; }
-.today-arc-link:hover { color: var(--terra-deep); }
-.today-arc-disclosure { color: var(--ink-faint); font-style: italic; }
 
 .footer-tag { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); }
 .footer-tag button.disclosure-trigger { background: transparent; border: none; padding: 0;
@@ -426,9 +420,6 @@ h1.view-title { font-family: var(--font-display); font-size: 1.5rem; margin: 1.5
 /* Arc continuity line — a cited context line in the title block. */
 .deep-arc-line { font-size: 0.95rem; color: var(--ink-soft); max-width: 44rem;
   margin: 0 0 1rem; line-height: 1.5; }
-.deep-arc-verdict { font-weight: 700; color: var(--moved); }
-.deep-arc-link { color: var(--ink-faint); text-decoration: none; white-space: nowrap; }
-.deep-arc-link:hover { color: var(--terra); }
 .deep-jumplist { font-size: 0.85rem; color: var(--ink-faint); margin: 0 0 2rem;
   padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule); max-width: 44rem; line-height: 1.9; }
 .deep-jumplist a { color: var(--ink-soft); text-decoration: none; }

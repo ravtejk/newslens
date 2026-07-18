@@ -27,6 +27,15 @@ from conftest import PROTOTYPE_ROOT
 NOW = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch):
+    """Every date-relative seed in this file is written against the frozen
+    NOW, so the module's clock must be frozen too — otherwise sync_memory's
+    internal dormancy pass drifts against the seeds (the suite started
+    failing 14 real days after add_row's default created_at)."""
+    monkeypatch.setattr(memory, "_utc_now", lambda: NOW)
+
+
 @pytest.fixture
 def memfile(tmp_path, monkeypatch):
     f = tmp_path / "memory.md"

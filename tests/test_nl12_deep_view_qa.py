@@ -451,41 +451,16 @@ def _arc_brief(cites, sources_extra):
     return b
 
 
-def test_arc_p_cite_with_blank_date_renders_line_but_no_link():
-    """A prior-briefing source whose retrieved_at is blank cannot name an
-    edition: the continuity line still renders whole, with no link and no
-    broken text — never a dead affordance."""
-    b = _arc_brief(["P1"], [{"key": "P1", "kind": "prior-briefing",
-                             "outlet": "NewsLens", "title": "prior",
-                             "url": "", "retrieved_at": ""}])
-    html = _deep(b)
-    tb = html.split("deep-title-block")[1].split("</div>")[0]
-    assert 'class="deep-arc-line"' in tb
-    assert "Advances the thread" in tb and "staging became" in tb
-    assert "deep-arc-link" not in tb and "openEdition(" not in html
-
-
-def test_arc_p_cite_behind_non_prior_cites_still_links():
-    """The link derives from the first PRIOR-BRIEFING cite, not the first
-    cite: ['S1', 'P1'] must still produce the dated link."""
-    b = _arc_brief(["S1", "P1"], [{"key": "P1", "kind": "prior-briefing",
-                                   "outlet": "NewsLens", "title": "prior",
-                                   "url": "",
-                                   "retrieved_at": "2026-07-05T08:00:00Z"}])
-    html = _deep(b)
-    tb = html.split("deep-title-block")[1].split("</div>")[0]
-    assert "openEdition('2026-07-05', event)" in tb
-    assert 'href="/?date=2026-07-05"' in tb
-
-
-def test_arc_dangling_p_cite_never_crashes_and_never_links():
-    """An arc citing a key absent from the source table (legacy/degraded
-    rows) renders the line unlinked — no KeyError, no dead link."""
-    b = _arc_brief(["P9"], [])
-    html = _deep(b)
-    tb = html.split("deep-title-block")[1].split("</div>")[0]
-    assert 'class="deep-arc-line"' in tb
-    assert "deep-arc-link" not in tb
+# CONSCIOUS FLIP (arc-line contract v1, 2026-07-18): the three brief['arc']
+# LINK-DERIVATION edge-case tests — blank-date P-cite, P-cite behind non-prior
+# cites, dangling P-cite — are DELETED with their subject. The deep-view arc line
+# no longer derives from brief['arc'] nor builds a prior-edition link from its
+# cites (render swap, item 3); it renders the memory pass's stored, authored
+# thread_state.arc_line VERBATIM, absence-by-default. The stored-field render and
+# its absence are pinned in tests/test_arc_line.py. (WAS
+# test_arc_p_cite_with_blank_date_renders_line_but_no_link,
+# test_arc_p_cite_behind_non_prior_cites_still_links,
+# test_arc_dangling_p_cite_never_crashes_and_never_links.)
 
 
 def test_arc_line_inside_archived_edition_fragment_scoped_and_navigable(ui):
