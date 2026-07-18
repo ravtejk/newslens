@@ -5,19 +5,21 @@ rewrite (workspace/debates/2026-07-18--newslens--content.md), killing the
 tense-splice defect by construction (state-summary text reused as arc prose —
 principal's 2026-07-17 served review item 2).
 
-Each test here is born red against v8-M2 (HEAD 1472008): the validator
-(memory_core.validate_arc_line), the authored field (thread_state.arc_line +
-memory_core._author_arc_line), and the render swap (server._deep_arc_line_html)
-do not exist there — the tests fail on AttributeError / 'no such column' /
-absent render. They pass only with the landed batch. Offline, deterministic,
-$0 (the state seam is injected; no paid calls).
+Each test in Sections 1–7 is born red against v8-M2 (HEAD 1472008): the
+validator (memory_core.validate_arc_line), the authored field
+(thread_state.arc_line + memory_core._author_arc_line), and the render swap
+(server._deep_arc_line_html) do not exist there — the tests fail on
+AttributeError / 'no such column' / absent render. They pass only with the
+landed batch. Section 8 (2026-07-18 observability mini) carries its own
+provenance: born red vs c1d5322, except the one labeled carried-invariant.
+Offline, deterministic, $0 (the state seam is injected; no paid calls).
 """
 
 import json
 
 import pytest
 
-from newslens import db, memory_core, server
+from newslens import db, generate, memory_core, paths, server
 
 
 # --- fixtures ---------------------------------------------------------------
@@ -359,3 +361,146 @@ def test_render_deep_view_swaps_arc_into_title_block(migrated_con):
     tb = html.split("deep-title-block")[1].split("</div>")[0]
     assert _GOOD in tb                              # stored field, verbatim
     assert "SHOULD NOT RENDER" not in html          # brief['arc'] no longer derived
+
+
+# ===========================================================================
+# 8. OBSERVABILITY MINI (2026-07-18) — the rejected candidate TEXT rides the
+#    warn into generation_log's state_rewrites detail, so a §F.1 double
+#    rejection is DIAGNOSABLE (was the model pasting state text, or writing a
+#    decent line that trips on shared proper nouns?). Log-only: absence (§B),
+#    retry, money, and render semantics are all unchanged. Born red vs HEAD
+#    c1d5322 EXCEPT the one explicitly-labeled carried-invariant (R4 org law).
+# ===========================================================================
+
+# Two DISTINCT lines that each trip the validator (newsroom 'we', §F.4), so the
+# first attempt AND the corrected retry are both rejected — the exact live
+# edition-8 shape (both attempts rejected), forced offline and deterministic.
+_BAD_A1 = ("When we last covered the strait (Jul 5), transit fees were the "
+           "dispute; a shooting war has since broken out.")
+_BAD_A2 = ("As we reported on Jul 5, the fees still ruled; the strait has "
+           "since closed to all traffic.")
+
+
+def test_first_attempt_rejected_candidate_text_reaches_the_detail(migrated_con):
+    """CONTRACT (a), BORN RED: on a double rejection the FIRST attempt's
+    candidate is carried VERBATIM and attempt-labeled in res.detail. At HEAD
+    the detail holds only the reason strings (the matched banned token, never
+    the whole line), so the full-line assertion fails there."""
+    con = migrated_con
+    tid = _seed_thread(con, "Strait")
+    _write_delta(con, tid, "2026-07-05", what="Fees imposed.", signif="Dispute.")
+    _write_delta(con, tid, "2026-07-10", what="Strikes.", signif="War.")
+    res = memory_core.rewrite_state(
+        con, tid, "Strait", "2026-07-10", None, "k", _TEMPLATE, 1.0,
+        chat=_retry_chat(_BAD_A1, _BAD_A2))
+    assert res.outcome == "written"                 # the state row still lands
+    assert memory_core.state_for_edition(con, tid, "2026-07-10")["arc_line"] == ""
+    assert "attempt-1 candidate:" in res.detail
+    assert _BAD_A1 in res.detail                    # VERBATIM, the whole line
+    assert "arc line rejected" in res.detail        # reason string still present
+
+
+def test_retry_rejected_candidate_text_is_attempt_labeled(migrated_con):
+    """CONTRACT (b), BORN RED: the corrected RETRY's candidate is carried
+    VERBATIM under a distinct 'retry candidate:' label, ordered after
+    attempt-1 — the diagnosis 'did the retry paste too, or trip elsewhere?'
+    needs both lines side by side."""
+    con = migrated_con
+    tid = _seed_thread(con, "Strait")
+    _write_delta(con, tid, "2026-07-05", what="Fees imposed.", signif="Dispute.")
+    _write_delta(con, tid, "2026-07-10", what="Strikes.", signif="War.")
+    res = memory_core.rewrite_state(
+        con, tid, "Strait", "2026-07-10", None, "k", _TEMPLATE, 1.0,
+        chat=_retry_chat(_BAD_A1, _BAD_A2))
+    assert "retry candidate:" in res.detail
+    assert _BAD_A2 in res.detail                    # the retry line, verbatim
+    assert (res.detail.index("attempt-1 candidate:")
+            < res.detail.index("retry candidate:"))     # attempt-labeled, ordered
+
+
+def test_no_candidate_path_detail_is_unchanged_CARRIED_INVARIANT(migrated_con):
+    """CONTRACT (c), CARRIED-INVARIANT (born GREEN — labeled per the R4 org
+    law): the model-authored-no-arc_line path (§B absence + gate FIX-2 warn) is
+    NOT a rejection and must stay byte-for-byte as it was — no candidate labels,
+    no retry. This passes at HEAD too; it pins that the observability change
+    left the absence path untouched."""
+    con = migrated_con
+    tid = _seed_thread(con, "Strait")
+    _write_delta(con, tid, "2026-07-05", what="Fees imposed.", signif="Dispute.")
+    _write_delta(con, tid, "2026-07-10", what="Strikes.", signif="War.")
+    res = memory_core.rewrite_state(         # chat returns state only, no arc_line
+        con, tid, "Strait", "2026-07-10", None, "k", _TEMPLATE, 1.0,
+        chat=lambda k, p: ({"state": _STATE_NOW}, 0.001))
+    assert res.detail.endswith(
+        "model authored no arc_line for an arc-eligible thread — arc omitted "
+        "this edition (absence, §B)")
+    assert "candidate:" not in res.detail           # no attempt-1/retry labels leak
+    assert "rejected" not in res.detail             # not a rejection
+
+
+def test_rejected_candidate_is_truncated_defensively_in_the_warn(migrated_con):
+    """CONTRACT (3), BORN RED: a runaway candidate (far over the ≤35-word law)
+    is truncated at ~400 chars with an honest marker so it cannot bloat the
+    append-only generation log — the verbatim PREFIX is kept, the tail is not."""
+    con = migrated_con
+    tid = _seed_thread(con, "Strait")
+    _write_delta(con, tid, "2026-07-05", what="Fees imposed.", signif="Dispute.")
+    _write_delta(con, tid, "2026-07-10", what="Strikes.", signif="War.")
+    runaway = ("When we last covered the strait (Jul 5), "
+               + "fees ruled the dispute and shipping rerouted again " * 20)
+    assert len(runaway) > 400
+    res = memory_core.rewrite_state(
+        con, tid, "Strait", "2026-07-10", None, "k", _TEMPLATE, 1.0,
+        chat=_retry_chat(runaway, runaway))
+    assert "…[truncated," in res.detail             # honest truncation marker
+    assert runaway not in res.detail                # the full runaway is NOT logged
+    assert runaway[:120] in res.detail              # the verbatim prefix IS
+
+
+def test_rejected_candidate_text_reaches_the_generation_log_record(tmp_paths):
+    """WIRING PROOF (BORN RED): the composed candidate text rides res.detail ->
+    run_memory_pass state_results -> report.memory['state_rewrites'] ->
+    log_generation's 'memory' block, landing in the persisted (sandboxed)
+    generation_log.jsonl. A red test only the candidate-logging wiring flips —
+    at HEAD the record carries reason strings alone. Offline, $0 (state seam
+    injected); sacred state untouched (NEWSLENS_DATA_DIR sandbox)."""
+    db.migrate()
+    con = db.connect()
+    now = "2026-07-01T00:00:00.000Z"
+    con.execute("INSERT INTO memory (topic, status, status_changed_at,"
+                " created_at, updated_at) VALUES ('Strait','active',?,?,?)",
+                (now, now, now))
+    tid = con.execute("SELECT id FROM memory").fetchone()["id"]
+    # A PRIOR edition-cited delta makes today's move arc-ELIGIBLE (an anchor
+    # exists), so the arc author actually runs and can reject:
+    _write_delta(con, tid, "2026-07-05", what="Fees imposed.", signif="Dispute.")
+    slots = [{"slot": "1", "matched_memory": ["Strait"]}]
+    con.execute("INSERT INTO briefings (date, story_slots) VALUES ('2026-07-10', ?)",
+                (json.dumps(slots),))
+    con.commit()
+    report = generate.GenReport(date="2026-07-10", variant="A")
+    brief = {"brief": {"arc": {"delta": "advances",
+                               "what_happened": "Strikes broke out overnight.",
+                               "significance": "A shooting war began.",
+                               "cites": ["S9"]}}}
+
+    def state_chat(key, prompt):
+        if "CORRECTION" in prompt:
+            return ({"arc_line": _BAD_A2}, 0.0005)
+        return ({"state": _STATE_NOW, "arc_line": _BAD_A1}, 0.001)
+
+    generate.run_memory_pass(
+        con, "2026-07-10", "k", cap=1.0, spent=0.0,
+        briefs_by_slot={1: brief}, slots=slots, report=report,
+        state_chat=state_chat)
+
+    detail = report.memory["state_rewrites"][0]["detail"]
+    assert _BAD_A1 in detail and "attempt-1 candidate:" in detail
+    assert _BAD_A2 in detail and "retry candidate:" in detail
+
+    # ...and it survives serialization into the ACTUAL sandboxed log file:
+    generate.log_generation({"date": "2026-07-10", "memory": report.memory})
+    log_text = (paths.DATA_DIR / generate.GENERATION_LOG_NAME).read_text(
+        encoding="utf-8")
+    assert _BAD_A1 in log_text and _BAD_A2 in log_text
+    con.close()

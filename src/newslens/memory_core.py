@@ -1231,6 +1231,22 @@ def _arc_then_leg_material(entries: List[Dict], date: str) -> str:
     return dated + (sig or what)
 
 
+def _fmt_arc_candidate(text: str, limit: int = 400) -> str:
+    """Quote a REJECTED arc candidate VERBATIM for the disclosure warn so the
+    generation log records WHAT tripped the validator, not only the reason
+    string (2026-07-18 observability mini). Truncated defensively at ~limit
+    chars: a lawful arc line is <=35 words, but a runaway candidate must not
+    bloat the append-only log. Log-only — no behaviour, absence, or money
+    change; the caller controls whether/which candidates are shown.
+    Precondition: text is str — both call sites guard it (the non-empty-str
+    early return above; the isinstance/strip gate on cand2); a non-str here
+    is a caller bug and should fail loud."""
+    n = len(text)
+    if n > limit:
+        text = text[:limit] + f"…[truncated, {n} chars]"
+    return f'"{text}"'
+
+
 def _author_arc_line(raw, state_text: str, anchor_iso: str, chat, openai_key: str,
                      topic: str, date: str, then_leg: str
                      ) -> Tuple[str, str, float, float]:
@@ -1254,6 +1270,9 @@ def _author_arc_line(raw, state_text: str, anchor_iso: str, chat, openai_key: st
     except ArcLineRejected as first:
         first_reason = str(first)
     charged = shadow = 0.0
+    # cand2 holds the retry's candidate text for the diagnosability warn below;
+    # it stays None if the retry transport-fails before the model answers.
+    cand2 = None
     try:
         prompt = _arc_retry_prompt(topic, date, anchor_iso, state_text, then_leg,
                                    first_reason)
@@ -1273,9 +1292,21 @@ def _author_arc_line(raw, state_text: str, anchor_iso: str, chat, openai_key: st
         if billed is not None:
             charged = float(billed or 0.0)
             shadow = float(getattr(second, "usd_shadow", charged) or charged)
-        return ("", f"arc line rejected ({first_reason}); corrected retry did not "
-                    f"recover ({type(second).__name__}: {second}) — arc omitted "
-                    "this edition (absence, §B)", charged, shadow)
+        # Diagnosability (2026-07-18 observability mini): carry the REJECTED
+        # candidate TEXT attempt-labeled into the warn (and thus generation_log's
+        # state_rewrites detail), alongside the reason strings — so a §F.1
+        # rejection shows WHAT the model wrote, not only why it tripped. Log-only:
+        # absence semantics (arc_line stays ''), retry semantics, and the money
+        # accounting above are all unchanged. `candidate` is the (non-empty)
+        # attempt-1 text; the retry text rides only when the model actually
+        # returned one (transport failure / non-string leaves cand2 None).
+        detail = (f"arc line rejected ({first_reason}); corrected retry did not "
+                  f"recover ({type(second).__name__}: {second}) — arc omitted "
+                  f"this edition (absence, §B); "
+                  f"attempt-1 candidate: {_fmt_arc_candidate(candidate)}")
+        if isinstance(cand2, str) and cand2.strip():
+            detail += f"; retry candidate: {_fmt_arc_candidate(cand2)}"
+        return ("", detail, charged, shadow)
 
 
 def state_for_edition(con: sqlite3.Connection, thread_id: int,
