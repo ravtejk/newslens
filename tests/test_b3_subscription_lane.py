@@ -106,11 +106,16 @@ def test_haiku_seats_default_to_the_subscription_lane():
         cfg = llm.resolve_seat(seat, {})
         assert cfg.provider == "anthropic" and cfg.model == "claude-haiku-4-5"
         assert cfg.lane == "subscription", seat
+    # item C (2026-07-17): writer/analyst are on the subscription lane too, but
+    # keep their Opus/Sonnet models (not Haiku).
+    for seat, model in (("writer", "claude-opus-4-8"), ("analyst", "claude-sonnet-5")):
+        cfg = llm.resolve_seat(seat, {})
+        assert cfg.provider == "anthropic" and cfg.model == model
+        assert cfg.lane == "subscription", seat
     # the api lane is the registered alternative, reachable per-seat
     assert llm.resolve_seat("rank", {"NEWSLENS_LANE_RANK": "api"}).lane == "api"
-    # the api-default seats are untouched (synthesis is the lone openai one)
-    for seat in ("writer", "analyst", "synthesis"):
-        assert llm.resolve_seat(seat, {}).lane == "api"
+    # synthesis is the lone api-default (openai) seat now
+    assert llm.resolve_seat("synthesis", {}).lane == "api"
 
 
 def test_subscription_provider_is_registered():

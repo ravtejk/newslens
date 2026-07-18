@@ -102,13 +102,15 @@ def test_post_chat_routes_through_seam_as_rank_seat(monkeypatch):
 
 
 def test_generate_chat_routes_through_seam_as_writer_seat(monkeypatch):
-    # B4 flip (conscious, QA re-pin): the writer seat rides the Claude API lane
-    # on Opus 4.8 now. Same proof as before — _chat routes through the seam and
-    # the request is shaped by the SEAT row — re-pinned to the anthropic
-    # Messages body: temperature OMITTED (sampling=False; Opus 4.8 400s on it),
-    # thinking adaptive + effort xhigh present, max_tokens passed through,
-    # POSTed to the anthropic endpoint (req.url ignored), timeout 600s.
+    # item C (2026-07-17): the writer defaults to the SUBSCRIPTION lane now, but
+    # its Claude API lane is the registered fall-over and its bytes MUST stay
+    # correct — pin NEWSLENS_LANE_WRITER=api to exercise that wire. Same proof:
+    # _chat routes through the seam and the request is shaped by the SEAT row —
+    # the anthropic Messages body: temperature OMITTED (sampling=False; Opus 4.8
+    # 400s on it), thinking adaptive + effort xhigh, max_tokens passed through,
+    # POSTed to the anthropic endpoint (req.url ignored), api timeout 600s.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     seen = _capture(monkeypatch)
     generate._chat("sk-x", "hello", 512, 0.7, True)
     body = seen["body"]
@@ -129,17 +131,20 @@ def test_generate_chat_routes_through_seam_as_writer_seat(monkeypatch):
 
 
 def test_generate_chat_omits_response_format_when_not_json_mode(monkeypatch):
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")  # item C: exercise the api fall-over bytes
     seen = _capture(monkeypatch)
     generate._chat("sk-x", "hi", 300, 0.5, False)
     assert "response_format" not in seen["body"]
 
 
 def test_analysis_chat_routes_through_seam_as_analyst_seat(monkeypatch):
-    # B4 flip (conscious, QA re-pin): analyst seat -> Claude Sonnet 5 on the
-    # api lane. Same routing proof, re-pinned to the anthropic body: no
-    # temperature (Sonnet 5 400s on it), adaptive thinking at effort high,
-    # ANALYSIS_MAX_TOKENS (6000 — thinking headroom) on the wire, timeout 240s.
+    # item C (2026-07-17): analyst defaults to SUBSCRIPTION now; its api lane is
+    # the registered fall-over whose bytes must stay correct — pin
+    # NEWSLENS_LANE_ANALYST=api to exercise that wire. Same routing proof on the
+    # anthropic body: no temperature (Sonnet 5 400s on it), adaptive thinking at
+    # effort high, ANALYSIS_MAX_TOKENS (6000 — thinking headroom), api timeout 240s.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "api")
     seen = _capture(monkeypatch)
     analysis._analysis_chat("sk-x", "hello")
     body = seen["body"]
@@ -194,14 +199,12 @@ def test_per_seat_lane_override_wins_over_global():
 # ---------------------------------------------------------------------------
 
 def test_seat_map_after_b2_haiku_flip():
-    # B4 (conscious flip of the B3 pin): the two content seats the ~07-24
-    # battery judges flip — WRITER -> Opus 4.8 and ANALYST -> Sonnet 5, both on
-    # the Claude API lane (ADR-0016 §3 Option C: effort maps exactly and the
-    # truncation guard fires there; the seam still allows a subscription
-    # override per seat). rank/editor/script stay Haiku on subscription;
-    # 2026-07-17 the principal RULED state -> Haiku/subscription too (option a),
-    # so synthesis is the LONE remaining gpt-4o/api seat. This guard makes every
-    # model/lane flip deliberate, never accidental.
+    # B4 flip + 2026-07-17: the content seats' lanes. WRITER -> Opus 4.8 and
+    # ANALYST -> Sonnet 5, and item C (field-proven edition 7) flipped BOTH onto
+    # the subscription lane, keeping their models (the api lane is the registered
+    # fall-over). rank/editor/script are Haiku on subscription; state flipped to
+    # Haiku/subscription too (option a); synthesis is the LONE remaining
+    # gpt-4o/api seat. This guard makes every model/lane flip deliberate.
     haiku_sub = {"rank", "editor", "script", "follow_altitude"}  # NL-17-M1 resolver
     for name, cfg in llm.SEATS.items():
         if name in haiku_sub:
@@ -209,10 +212,10 @@ def test_seat_map_after_b2_haiku_flip():
             assert cfg.model == "claude-haiku-4-5", name
             assert cfg.lane == "subscription", name
         elif name == "writer":
-            assert cfg.provider == "anthropic" and cfg.lane == "api"
+            assert cfg.provider == "anthropic" and cfg.lane == "subscription"
             assert cfg.model == "claude-opus-4-8"
         elif name == "analyst":
-            assert cfg.provider == "anthropic" and cfg.lane == "api"
+            assert cfg.provider == "anthropic" and cfg.lane == "subscription"
             assert cfg.model == "claude-sonnet-5"
         elif name == "state":
             # 2026-07-17 ruling (option a): the memory/state seat is now Haiku on
@@ -311,7 +314,10 @@ def test_generate_cost_sink_gains_lane_and_shadow_keys(monkeypatch):
     assert sink, "cost_sink recorded no attempt"
     e = sink[0]
     assert e["step"] == "narrative"
-    # B4 flip (conscious): the narrative row names the Opus writer seat now.
-    assert e["lane"] == "api" and e["model"] == "claude-opus-4-8"
+    # item C (2026-07-17): the narrative row names the Opus writer seat on its
+    # DEFAULT lane — subscription now, so usd_charged is 0.0 while usd_shadow
+    # stays API-priced (Opus $5/$25).
+    assert e["lane"] == "subscription" and e["model"] == "claude-opus-4-8"
     assert "usd_shadow" in e and "usd_charged" in e
-    assert e["usd"] == e["usd_charged"]        # legacy key preserved
+    assert e["usd_shadow"] > 0.0 and e["usd_charged"] == 0.0
+    assert e["usd"] == e["usd_charged"] == 0.0  # legacy key == charged (subscription)

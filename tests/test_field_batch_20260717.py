@@ -182,11 +182,16 @@ def test_subscription_seat_timeouts_are_generous():
     assert llm.SEATS["editor"].timeout_sub_s == 300
     assert llm.SEATS["script"].timeout_sub_s == 300
     assert llm.SEATS["follow_altitude"].timeout_sub_s == 180
-    # api-lane timeouts are UNCHANGED (the api paths do not move)
+    # item C (2026-07-17): writer/analyst joined the subscription lane — sub
+    # timeout = api ceiling + a ~300s lane tax (subprocess + harness overhead).
+    assert llm.SEATS["analyst"].timeout_sub_s == 540   # 240 api + 300 tax
+    assert llm.SEATS["writer"].timeout_sub_s == 900    # 600 api + 300 tax
+    # api-lane timeouts are UNCHANGED (the api fall-over paths do not move)
     assert llm.SEATS["rank"].timeout_s == 90
     assert llm.SEATS["editor"].timeout_s == 120
-    # a seat that never sets timeout_sub_s falls back to timeout_s
-    assert llm.SEATS["writer"].timeout_sub_s is None
+    # a seat that never sets timeout_sub_s falls back to timeout_s (synthesis is
+    # the lone api-only gpt-4o seat now)
+    assert llm.SEATS["synthesis"].timeout_sub_s is None
 
 
 def test_subscription_provider_uses_the_lane_timeout(monkeypatch):

@@ -189,50 +189,43 @@ _HAIKU_SUB = dict(
     usd_per_mtok_out=HAIKU_USD_PER_MTOK_OUT,
 )
 
-# B4 (Option C, gate/principal ratifies the lane at checkpoint): the writer seat
-# flips to Opus 4.8 on the Claude API LANE — NOT the subscription lane. Why the
-# api lane and not subscription (the B3 default for the Haiku seats):
-#   * effort maps EXACTLY on the api (`output_config:{effort:"xhigh"}`); on the
-#     `claude -p` subscription lane it is a best-effort `/effort`-style arg that
-#     may not hold (ADR-0015 §2 spike, "the wobbliest part of lane (b)");
-#   * max_tokens is REQUIRED on the api lane and its finish_reason=="length"
-#     truncation guard fires — the subscription lane has NO max_tokens and cannot
-#     see a truncation (ADR-0015 known gap), and a truncated ~2,500-word edition
-#     is a failed run + paid retry, the expensive failure this seat must avoid.
+# B4 (Option C): the writer seat is Opus 4.8. 2026-07-17 (field batch, item C):
+# the principal RULED it onto the `claude -p` SUBSCRIPTION lane and it is now
+# FIELD-PROVEN — edition 7 (2026-07-17 22:45Z) ran the Opus narrative on the
+# subscription lane end-to-end ($0.655 shadow, $0 charged), spot-check PASSED.
+# So subscription is the default here too, joining the Haiku seats; the API lane
+# is the registered fall-over (NEWSLENS_LANE_WRITER=api, or the armed
+# NEWSLENS_LANE_FALLBACK=api). model + prices are unchanged (shadow is API-priced
+# regardless of lane); only the transport and usd_charged move (0.0 on subscription).
+# TRUNCATION-GAP CAVEAT (accepted residual, ADR-0015 known gap): the api lane
+# REQUIRES max_tokens and its finish_reason=="length" guard catches a truncated
+# ~2,500-word edition; the subscription lane has NO max_tokens and cannot see a
+# truncation. On this lane the CATCH is the caller's validation floors (word
+# count + structure) rather than a length-finish — a truncated edition fails
+# those, not the guard. effort maps best-effort on subscription (`/effort`-style,
+# ADR-0015 §2 "wobbliest part of lane (b)") vs exact on the api fall-over.
 # adaptive thinking on (`thinking:{type:"adaptive"}`) — thinking BILLS AS OUTPUT
-# and counts against max_tokens (NARRATIVE_MAX_TOKENS carries the headroom).
-# sampling=False: Opus 4.8 rejects temperature with a 400 (the caller's
-# NARRATIVE_TEMPERATURE is ignored by the provider). timeout 600s: Opus xhigh
-# thinking can run minutes (§5.1 per-seat timeout: Opus 600s). REVERT = flip this
-# row back to **_GPT4O_API in one clean diff (WRITER_MODEL derives from it).
-#
-# 2026-07-17 (field batch): the principal RULED writer + analyst onto the
-# subscription lane (DECISIONS "B4-era lane & cost rulings"). That lane flip is
-# IMPLEMENTED-AND-HELD by the implementer: it is a large, coupled test surgery
-# (~38 api-lane wire/transport/battery tests re-lane, plus the battery must go
-# lane-aware — item E) that shouldn't ride the tail of the field-fix batch. It is
-# handed off as a scoped follow-up (DECISIONS 2026-07-17 "B4-era lane & cost
-# rulings" carries the ruling). The cap stayed at the shipped 1.50 default — the
-# C-cap item DISSOLVED when the principal set his .env to 1.50 himself (DECISIONS
-# 2026-07-17 "cap amended to $1.50; OpenAI key pulled"); config.py is untouched.
-# The JSON-extraction fix (item A) and the lane-aware timeouts (item B) do NOT
-# depend on it and ship now. The seat stays api here until that follow-up lands.
-_OPUS_WRITER_API = dict(
-    provider="anthropic", model="claude-opus-4-8", lane="api",
+# and counts against max_tokens on the api fall-over (NARRATIVE_MAX_TOKENS carries
+# the headroom). sampling=False: Opus 4.8 rejects temperature with a 400.
+# REVERT = flip lane back to "api" in one clean diff (WRITER_MODEL derives from
+# this row; the api fall-over bytes stay correct — pinned in the api-lane tests).
+_OPUS_WRITER_SUB = dict(
+    provider="anthropic", model="claude-opus-4-8", lane="subscription",
     usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
     usd_per_mtok_out=OPUS_USD_PER_MTOK_OUT,
     thinking="adaptive", effort="xhigh", sampling=False,
 )
 
-# B4: the analyst seat flips to Sonnet 5 on the Claude API lane. Same lane
-# rationale as the writer (effort maps exactly; the truncation guard fires — the
-# analyst has hard validate_brief teeth, so a truncated brief must be a caught
-# length-finish, not silent). adaptive thinking on, effort "high" (dispatch item
-# 2). sampling=False: Sonnet 5 rejects temperature (the caller's 0.2 is ignored).
-# timeout 240s (§5.1 per-seat: Sonnet 240s). Shadow uses standard $3/$15.
-# 2026-07-17: subscription-lane flip HELD with the writer's (see above).
-_SONNET_ANALYST_API = dict(
-    provider="anthropic", model="claude-sonnet-5", lane="api",
+# B4: the analyst seat is Sonnet 5. 2026-07-17 (item C): flipped onto the
+# subscription lane with the writer's (field-proven edition 7: analyst Sonnet on
+# subscription, green end-to-end). Same truncation-gap caveat as the writer — the
+# analyst has hard validate_brief teeth, and on the subscription lane (no
+# max_tokens) those teeth, not a length-finish, are what catch a truncated brief.
+# adaptive thinking on, effort "high". sampling=False: Sonnet 5 rejects
+# temperature. Shadow uses standard $3/$15 (API-priced regardless of lane). The
+# api lane is the registered fall-over (NEWSLENS_LANE_ANALYST=api).
+_SONNET_ANALYST_SUB = dict(
+    provider="anthropic", model="claude-sonnet-5", lane="subscription",
     usd_per_mtok_in=SONNET_USD_PER_MTOK_IN,
     usd_per_mtok_out=SONNET_USD_PER_MTOK_OUT,
     thinking="adaptive", effort="high", sampling=False,
@@ -240,8 +233,14 @@ _SONNET_ANALYST_API = dict(
 
 SEATS: Dict[str, SeatConfig] = {
     "rank":      SeatConfig("rank",      timeout_s=90,  timeout_sub_s=300, **_HAIKU_SUB),
-    "analyst":   SeatConfig("analyst",   timeout_s=240, **_SONNET_ANALYST_API),
-    "writer":    SeatConfig("writer",    timeout_s=600, **_OPUS_WRITER_API),
+    # item C (2026-07-17): writer/analyst on the subscription lane. timeout_sub_s
+    # = the api-calibrated ceiling + a ~300s subscription lane tax (claude -p
+    # subprocess spin-up + agentic-harness verbosity — the same absolute tax the
+    # mechanical Haiku seats pay over their api timeouts). analyst 240->540,
+    # writer 600->900 (Opus xhigh on the harness is the slowest path in the
+    # system; edition 7 ran fine but uninstrumented — pad the tax generously).
+    "analyst":   SeatConfig("analyst",   timeout_s=240, timeout_sub_s=540, **_SONNET_ANALYST_SUB),
+    "writer":    SeatConfig("writer",    timeout_s=600, timeout_sub_s=900, **_OPUS_WRITER_SUB),
     "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=300, **_HAIKU_SUB),
     "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=300, **_HAIKU_SUB),
     # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver

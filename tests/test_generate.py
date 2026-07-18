@@ -536,14 +536,16 @@ def test_each_generate_step_logs_its_own_seat_model(migrated_con, fake_model):
 
 
 def test_doctor_cost_line_matches_the_measured_pipeline():
-    # FIX-4 (B4, conscious flip): the prior prose pinned a gpt-4o-era measured
-    # figure ("$0.07-0.10") that became a lie of summary the moment the
-    # content seats flipped up to Opus/Sonnet. The line now DERIVES from
+    # FIX-4 (B4) + item C (2026-07-17, conscious flip): the prose DERIVES from
     # llm.SEATS + the config default — pinned here BY DERIVATION (an f-string
-    # built from the same sources), so a future seat/cap change re-renders
-    # the prose and this test follows instead of rotting. The literals
-    # themselves are guarded once, in test_b1_llm_seam_qa's seat-table pin
-    # and test_config_guards' cap pin — never forked into prose pins again.
+    # built from the same sources), so a future seat/cap change re-renders the
+    # prose and this test follows instead of rotting. The literals themselves are
+    # guarded once, in test_b1_llm_seam_qa's seat-table pin and test_config_guards'
+    # cap pin — never forked into prose pins again. The honesty anchor MOVED: B4
+    # guarded against claiming a cost DROP when the models flipped UP; item C put
+    # those pricey seats on the $0-CHARGED subscription lane, so the anti-lie is
+    # now the CHARGED/SHADOW split — the edition charges ~$0 but the SHADOW compute
+    # is real and high, never summarized as "free".
     from newslens import config, doctor, llm
 
     (line,) = doctor.cost_estimate()
@@ -554,8 +556,9 @@ def test_doctor_cost_line_matches_the_measured_pipeline():
     assert f"${w.usd_per_mtok_in:.2f}/${w.usd_per_mtok_out:.2f}" in text
     assert f"${a.usd_per_mtok_in:.2f}/${a.usd_per_mtok_out:.2f}" in text
     assert f"${config.DEFAULT_BUDGET_CAP_USD_PER_RUN:.2f}/run" in text
-    # honesty anchors: the direction and the measurement posture
-    assert "ROSE" in text                      # never again claims a drop
+    # honesty anchors: the charged/shadow split and the measurement posture
+    assert "CHARGED" in text                   # $0 charged (subscription), said so
+    assert "SHADOW" in text                    # the real compute cost, not "free"
     assert "UNDISCOUNTED" in text              # the cap over-counts, said so
     assert "MEASURED" in text                  # figures measured, not assumed
     # the stale gpt-4o-era figure is gone
@@ -1432,9 +1435,11 @@ def test_per_step_costs_merge_into_token_cost(migrated_con, fake_model):
 
 def test_failed_run_folds_accumulated_spend_into_log(migrated_con, fake_model):
     """BUG-6/32 family (NL-63 M2 obs): a run that aborts at the script step
-    still spent real money — narrative, editor, and BOTH degenerate-stub script
-    attempts all billed before the raise. The failed generation_log entry must
-    carry that spend (total_usd + a per-attempt ledger), never a null."""
+    still incurred real COMPUTE — narrative, editor, and BOTH degenerate-stub
+    script attempts all ran before the raise. item C (2026-07-17): the content
+    seats are on the subscription lane by default, so the CHARGED total is $0 —
+    but the SHADOW ledger (real compute cost) must still be folded per attempt,
+    never a null. Money honesty on the $0 lane = the shadow ledger survives."""
     slots = [slot(1), slot(2), slot(3)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
@@ -1445,15 +1450,17 @@ def test_failed_run_folds_accumulated_spend_into_log(migrated_con, fake_model):
         (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
     )
     assert entry["status"] == "failed"
-    assert entry.get("total_usd") is not None and entry["total_usd"] > 0
+    assert entry.get("total_usd") is not None       # present, never a null
     steps = entry.get("steps") or []
     names = [s.get("step") for s in steps]
     assert "narrative" in names and "editor" in names
     # BOTH failed script attempts billed and are on the record (not just one)
     assert sum(1 for s in steps if s.get("step") == "script") == 2
-    # the logged total is the honest sum of the per-attempt costs
+    # the logged charged total is the honest sum of the per-attempt charged
+    # costs ($0 on the subscription lane), and the SHADOW is folded > 0.
     assert entry["total_usd"] == pytest.approx(
         round(sum(s.get("usd") or 0 for s in steps), 6))
+    assert sum(s.get("usd_shadow") or 0 for s in steps) > 0   # compute folded
 
 
 def test_generation_log_records_ok_runs_fully(migrated_con, fake_model):

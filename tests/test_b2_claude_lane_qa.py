@@ -387,11 +387,12 @@ def test_per_seat_shadow_math_derives_from_the_seat_table():
     subscription-default anthropic seats, and back to equal when those seats
     are pinned to the api fall-over."""
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
-    # B4 flip (conscious): per-MODEL rates — Haiku 1+5 (subscription default,
-    # charged 0), Opus 5+25 and Sonnet 3+15 (api: charged == shadow), gpt-4o
-    # 2.50+10 for the lone still-openai seat (synthesis). 2026-07-17: state
-    # joined the Haiku/subscription seats. The tooth is unchanged: every
-    # seat's math comes from ITS row, never a re-hardcoded global.
+    # per-MODEL rates — Haiku 1+5, Opus 5+25, Sonnet 3+15, gpt-4o 2.50+10. The
+    # tooth is unchanged: every seat's math comes from ITS row, never a
+    # re-hardcoded global. 2026-07-17: state joined the Haiku/subscription seats,
+    # and item C put writer(Opus)/analyst(Sonnet) on the subscription lane — so a
+    # subscription seat is now ANY anthropic model, all charged 0 (shadow always
+    # API-priced). Only synthesis (gpt-4o) stays on the api lane.
     per_model = {"claude-haiku-4-5": 1.00 + 5.00,
                  "claude-opus-4-8": 5.00 + 25.00,
                  "claude-sonnet-5": 3.00 + 15.00,
@@ -400,7 +401,7 @@ def test_per_seat_shadow_math_derives_from_the_seat_table():
         fields = llm.cost_fields(cfg, usage)
         assert fields["usd_shadow"] == pytest.approx(per_model[cfg.model]), name
         if cfg.lane == "subscription":
-            assert cfg.model == "claude-haiku-4-5", name
+            assert cfg.provider == "anthropic", name       # any anthropic model
             assert fields["usd_charged"] == 0.0, name
             api_fields = llm.cost_fields(
                 dataclasses.replace(cfg, lane="api"), usage)
@@ -501,14 +502,17 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
     (openai HTTP outer, claude -p subprocess inner) lives in
     test_b3_subscription_lane_qa."""
     _no_sleep(monkeypatch)
+    # item C (2026-07-17): writer+editor both default to subscription now; pin
+    # BOTH to their api fall-over so the wire-order proof stays HTTP-observable.
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
 
-    # B4 flip (conscious): BOTH seats ride the anthropic endpoint now (writer
-    # = Opus api, editor pinned to its api fall-over), so the wire-order
-    # proof keys on the request BODY's model instead of the URL. The tooth is
-    # unchanged: the inner editor call may not drag the outer retry onto the
-    # editor's seat, and every ledger row carries its own step's seat.
+    # BOTH seats ride the anthropic endpoint here (writer = Opus api, editor
+    # pinned to its api fall-over), so the wire-order proof keys on the request
+    # BODY's model instead of the URL. The tooth is unchanged: the inner editor
+    # call may not drag the outer retry onto the editor's seat, and every ledger
+    # row carries its own step's seat.
     def by_body(body, url):
         if body.get("model") == "claude-haiku-4-5":
             return ant_native("inner-edit", inp=10, out=20)
@@ -550,13 +554,15 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
 def test_direct_chat_after_an_editor_call_rides_the_writer_seat(monkeypatch):
     """The disarm's observable consequence: a DIRECT _chat call (the
     signature-test/legacy path) after an editor call_llm must ride the
-    writer seat (B4: Opus 4.8 -> the anthropic HTTP endpoint), not a leaked
-    seat. Still a CROSS-TRANSPORT leak check: the editor call rides its
-    default subscription lane (the sandbox stub subprocess — zero HTTP), so
-    a leaked editor seat would drag the direct _chat into a subprocess and
-    the scripted HTTP recorder would see NOTHING. Exactly one HTTP POST,
-    model claude-opus-4-8, proves the disarm."""
+    writer seat (Opus 4.8), not a leaked seat. Still a CROSS-TRANSPORT leak
+    check: item C (2026-07-17) put BOTH writer and editor on subscription by
+    default, so the writer is pinned to its api fall-over here (HTTP-observable)
+    while the editor rides its default subscription subprocess (zero HTTP) — a
+    leaked editor seat would drag the direct _chat into a subprocess and the
+    scripted HTTP recorder would see NOTHING. Exactly one HTTP POST, model
+    claude-opus-4-8, proves the disarm."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")   # pin the writer's HTTP fall-over
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     sent = _scripted(monkeypatch, [ant_native("ok")])
     generate.call_llm("k", "p", "editor", 100, 0.5, False)   # stub subprocess

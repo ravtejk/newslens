@@ -67,13 +67,16 @@ product's actual running state. If you want the daily discovery query later:
    in-app guard.
 3. Put the key in `.env` as `PERPLEXITY_API_KEY=...`
 
-### 2c. The Claude CLI — the subscription lane for rank/editor/script (B3)
+### 2c. The Claude CLI — the subscription lane for the content seats (B3 + item C)
 
-The B3 depth-architecture flip (2026-07-16) runs the ranking, editorial-tighten,
-and TTS-script seats (Claude Haiku 4.5) on the **`claude -p` subscription lane by
-default** — they ride your Claude subscription (a flat-rate seat), not the
-metered API. `usd_charged` for these seats is **$0.00**; the ledger still records
-`usd_shadow` (what the API would have cost) so caps and dashboards stay honest.
+The B3 depth-architecture flip (2026-07-16) plus item C (2026-07-17, field-proven
+edition 7) run **all the anthropic content seats** on the **`claude -p`
+subscription lane by default** — the ranking, editorial-tighten, TTS-script and
+memory/state seats (Claude Haiku 4.5), the **writer** (Opus 4.8) and the
+**analyst** (Sonnet 5). They ride your Claude subscription (a flat-rate seat), not
+the metered API. `usd_charged` for these seats is **$0.00**; the ledger still
+records `usd_shadow` (what the API would have cost) so caps and dashboards stay
+honest — a default edition charges ~$0 while its shadow compute is ~$0.90–1.30.
 
 You grant this by **installing the CLI and logging in** — no key needed for the
 default path:
@@ -97,7 +100,8 @@ default path:
 
 ### 2c-alt. ANTHROPIC_API_KEY (the API fall-over credential)
 
-`ANTHROPIC_API_KEY` is now needed only when a Haiku seat runs the **API lane**
+`ANTHROPIC_API_KEY` is now needed only when an anthropic content seat (Haiku
+rank/editor/script/state, Opus writer, or Sonnet analyst) runs the **API lane**
 instead of the subscription default — i.e. you pin `NEWSLENS_LANE_<SEAT>=api`, or
 you arm `NEWSLENS_LANE_FALLBACK=api` (the principal-armed opt-in; the ship
 checkpoint asks whether to arm it). The API lane spends real money the

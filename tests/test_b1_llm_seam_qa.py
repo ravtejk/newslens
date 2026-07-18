@@ -161,7 +161,10 @@ def test_writer_request_bytes_identical_json_mode_on(monkeypatch):
     # messages, NO temperature (sampling=False — Opus 4.8 rejects it with a
     # 400), the json nudge as a PLAIN-STRING system (no cache prefix on a
     # sentinel-less prompt), thinking adaptive, output_config effort xhigh.
+    # item C (2026-07-17): writer defaults to subscription now — pin the api lane
+    # (the registered fall-over) to keep its exact bytes pinned.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     seen = _capture(monkeypatch)
     generate._chat("sk-qa", "PROMPT-W", 333, 0.7, True)
     expected = json.dumps({
@@ -184,8 +187,10 @@ def test_writer_request_bytes_identical_json_mode_on(monkeypatch):
 def test_writer_request_bytes_identical_json_mode_off(monkeypatch):
     """system OMITTED entirely when json_mode is off and no cache prefix is
     present (the script-shaped call never sent a nudge; its presence would be
-    a behavior change). temperature stays omitted — sampling=False."""
+    a behavior change). temperature stays omitted — sampling=False.
+    item C (2026-07-17): writer defaults to subscription — pin the api fall-over."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     seen = _capture(monkeypatch)
     generate._chat("sk-qa", "PROMPT-S", 512, 0.4, False)
     expected = json.dumps({
@@ -206,7 +211,10 @@ def test_analysis_request_bytes_identical_and_historical_url(monkeypatch):
     # lane. Exact bytes: no temperature (400 on Sonnet 5), json nudge as the
     # plain-string system (no sentinel in this prompt), adaptive thinking at
     # effort high, ANALYSIS_MAX_TOKENS = 6000 on the wire.
+    # item C (2026-07-17): analyst defaults to subscription — pin the api
+    # fall-over to keep its exact bytes pinned.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "api")
     seen = _capture(monkeypatch)
     analysis._analysis_chat("sk-qa", "PROMPT-A")
     expected = json.dumps({
@@ -278,9 +286,12 @@ def test_call_llm_and_call_llm_validated_signatures_preserved():
     ({"NEWSLENS_LANE": "api"}, "rank", "api"),               # explicit fall-over
     ({"NEWSLENS_LANE": " api "}, "rank", "api"),             # whitespace strip
     ({"NEWSLENS_LANE": "api", "NEWSLENS_LANE_RANK": "api"}, "rank", "api"),
-    # writer defaults api (anthropic); state defaults subscription after the
-    # 2026-07-17 flip (Haiku); synthesis is the lone openai seat left on api.
-    ({}, "writer", "api"),
+    # item C (2026-07-17): writer/analyst default to subscription now (with
+    # state); synthesis is the lone openai seat left on the api default. The api
+    # lane stays reachable per-seat (NEWSLENS_LANE_WRITER=api).
+    ({}, "writer", "subscription"),
+    ({"NEWSLENS_LANE_WRITER": "api"}, "writer", "api"),   # the fall-over is reachable
+    ({}, "analyst", "subscription"),
     ({}, "state", "subscription"),
     ({}, "synthesis", "api"),
 ])
@@ -494,13 +505,15 @@ def test_per_seat_lane_override_on_generate_steps_fails_loud(
 
 
 def test_generate_steps_default_env_transport_and_ledger_agree(monkeypatch):
-    """The D1 close under B3: with NO lane env, each step's ledger row names
-    the transport that actually carried the bytes — narrative on gpt-4o over
-    the openai HTTP api lane (charged == shadow == legacy usd), editor/script
-    on the Claude Haiku SUBSCRIPTION subprocess (ZERO HTTP calls; legacy usd
-    == usd_charged == 0.0 with usd_shadow > 0). The ledger can neither fork
-    the model that ran from the price it records, nor claim a $0 subscription
-    row for bytes that rode a metered wire (the D1 lie, both directions)."""
+    """The D1 close: each step's ledger row names the transport that actually
+    carried the bytes — BOTH directions. item C (2026-07-17) put the writer on
+    the subscription lane by default, so to keep a genuinely MIXED run this
+    pins the writer to its api fall-over: narrative on the Opus HTTP api lane
+    (charged == shadow == legacy usd), editor/script on the Claude Haiku
+    SUBSCRIPTION subprocess (ZERO HTTP calls; legacy usd == usd_charged == 0.0
+    with usd_shadow > 0). The ledger can neither fork the model that ran from
+    the price it records, nor claim a $0 subscription row for bytes that rode a
+    metered wire (the D1 lie, both directions)."""
     http_calls = []
 
     def fake_urlopen(req, timeout=None):
@@ -508,11 +521,12 @@ def test_generate_steps_default_env_transport_and_ledger_agree(monkeypatch):
         return _Resp(_CANNED)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    # B4 flip (conscious): narrative rows ride the Opus writer seat on the
-    # anthropic api lane now (still HTTP — charged == shadow); editor/script
-    # stay on the $0 subscription stub. The D1 tooth is unchanged: the ledger
-    # names the transport that actually carried the bytes, both directions.
+    # item C: the writer defaults to subscription now; pin its api fall-over so
+    # this run is MIXED (narrative HTTP api, charged==shadow; editor/script on
+    # the $0 subscription stub). The D1 tooth is unchanged: the ledger names the
+    # transport that actually carried the bytes, both directions.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     expect = {"narrative": ("claude-opus-4-8", "api"),
               "narrative_retry": ("claude-opus-4-8", "api"),
               "editor": ("claude-haiku-4-5", "subscription"),
@@ -762,13 +776,15 @@ def test_generate_sink_entry_full_shape_legacy_usd_untouched(monkeypatch):
     assert set(e) == {"step", "attempt", "prompt_tokens", "completion_tokens",
                       "usd", "model", "lane", "cache_read_tokens",
                       "cache_creation_tokens", "usd_shadow", "usd_charged"}
-    # narrative rides the writer seat (B4: Opus 4.8 — WRITER_USD_* derive from
-    # the seat), so legacy `usd` == the writer-rate _step_cost == usd_charged
-    # == usd_shadow, all at Opus $5/$25 now.
-    assert e["usd"] == round(generate._step_cost(resp["usage"]), 6)
-    assert e["usd"] == e["usd_shadow"] == e["usd_charged"]
-    assert e["usd"] == round(4321 / 1e6 * 5.00 + 765 / 1e6 * 25.00, 6)
-    assert e["model"] == "claude-opus-4-8" and e["lane"] == "api"
+    # narrative rides the writer seat (Opus 4.8 — WRITER_USD_* derive from the
+    # seat). item C (2026-07-17): its DEFAULT lane is subscription now, so the
+    # legacy `usd` == usd_charged == 0.0 (subscription bills nothing), while
+    # usd_shadow stays the Opus-rate _step_cost ($5/$25) — the shadow ledger
+    # survives the $0-charged lane, and the shape is byte-for-byte the same.
+    assert e["usd_shadow"] == round(generate._step_cost(resp["usage"]), 6)
+    assert e["usd"] == e["usd_charged"] == 0.0
+    assert e["usd_shadow"] == round(4321 / 1e6 * 5.00 + 765 / 1e6 * 25.00, 6)
+    assert e["model"] == "claude-opus-4-8" and e["lane"] == "subscription"
 
 
 # ---------------------------------------------------------------------------
@@ -776,14 +792,15 @@ def test_generate_sink_entry_full_shape_legacy_usd_untouched(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_seat_table_pins_the_b3_stack_exactly():
-    # B4 (conscious flip of the B3 pin — QA re-pinned against ADR-0016):
-    #   writer  -> anthropic/claude-opus-4-8 on the API lane, $5.00/$25.00,
-    #              adaptive thinking, effort xhigh, sampling OFF (Opus 4.8
-    #              400s on temperature), timeout 600s;
-    #   analyst -> anthropic/claude-sonnet-5 on the API lane, $3.00/$15.00
+    # B4 flip + 2026-07-17 item C (QA re-pinned against ADR-0016):
+    #   writer  -> anthropic/claude-opus-4-8 on the SUBSCRIPTION lane (item C,
+    #              field-proven edition 7), $5.00/$25.00 shadow (API-priced
+    #              regardless of lane), adaptive thinking, effort xhigh, sampling
+    #              OFF (Opus 4.8 400s on temperature), api timeout 600 / sub 900;
+    #   analyst -> anthropic/claude-sonnet-5 on the SUBSCRIPTION lane, $3.00/$15.00
     #              (the STANDARD price, not the 2026-08-31 intro — a money
     #              guard never under-prices), adaptive thinking, effort high,
-    #              sampling OFF, timeout 240s;
+    #              sampling OFF, api timeout 240 / sub 540;
     #   rank/editor/script/state are Haiku/subscription ($1.00/$5.00, sampling
     #   ON, no thinking — mechanical seats; state flipped 2026-07-17, option a);
     #   synthesis is the LONE remaining gpt-4o/api seat ($2.50/$10.00,
@@ -802,14 +819,14 @@ def test_seat_table_pins_the_b3_stack_exactly():
         assert cfg.timeout_s == timeouts[name]
         if name == "writer":
             assert (cfg.provider, cfg.model, cfg.lane) == \
-                ("anthropic", "claude-opus-4-8", "api")
+                ("anthropic", "claude-opus-4-8", "subscription")
             assert cfg.usd_per_mtok_in == 5.00
             assert cfg.usd_per_mtok_out == 25.00
             assert cfg.thinking == "adaptive" and cfg.effort == "xhigh"
             assert cfg.sampling is False
         elif name == "analyst":
             assert (cfg.provider, cfg.model, cfg.lane) == \
-                ("anthropic", "claude-sonnet-5", "api")
+                ("anthropic", "claude-sonnet-5", "subscription")
             assert cfg.usd_per_mtok_in == 3.00
             assert cfg.usd_per_mtok_out == 15.00
             assert cfg.thinking == "adaptive" and cfg.effort == "high"
@@ -914,7 +931,8 @@ def test_doctor_lanes_default_env_renders_all_seats_no_fail():
                             f"lane={cfg.lane}")
             for line in seat_lines), name
     sub_lines = [l for l in seat_lines if "lane=subscription" in l]
-    assert len(sub_lines) == 5        # rank/editor/script/follow_altitude/state
+    # item C (2026-07-17): writer/analyst joined the subscription default too.
+    assert len(sub_lines) == 7  # rank/editor/script/follow_altitude/state/writer/analyst
     assert "fallback unarmed" in results[len(llm.SEATS)].text
 
 
@@ -951,17 +969,18 @@ def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
 def test_doctor_lanes_missing_binary_fails_the_subscription_seats(
         monkeypatch, tmp_path):
     """The doctor's fail-loud twin of check_lane's binary gate: with the
-    binary unresolvable (check_lane reads os.environ), the five
+    binary unresolvable (check_lane reads os.environ), the seven
     subscription-default seats FAIL naming the fix; the api seats stay INFO.
-    (NL-17-M1 added follow_altitude; 2026-07-17 added state — five sub seats.)"""
+    (NL-17-M1 added follow_altitude; 2026-07-17 added state, then writer/analyst
+    via item C — seven sub seats, leaving synthesis the lone api seat.)"""
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     results = doctor.check_llm_lanes({})
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
-    assert len(fails) == 5          # rank/editor/script/follow_altitude/state
+    assert len(fails) == 7  # rank/editor/script/follow_altitude/state/writer/analyst
     for r in fails:
         assert "NEWSLENS_CLAUDE_BIN" in r.text
-    assert len([r for r in seat_results if r.status == doctor.INFO]) == 3  # writer/analyst/synthesis
+    assert len([r for r in seat_results if r.status == doctor.INFO]) == 1  # synthesis
 
 
 def test_doctor_lanes_armed_fallback_warns():

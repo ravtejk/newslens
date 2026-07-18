@@ -641,10 +641,11 @@ def test_nested_cross_transport_call_restores_the_outer_http_seat(
         def __exit__(self, *a):
             return False
 
-    # B4 flip (conscious): the outer narrative rides the ANTHROPIC HTTP wire
-    # now (writer = Opus/api) — the fake serves the anthropic envelope; the
-    # cross-transport tooth (HTTP outer vs subprocess inner, outer retry
-    # restored to HTTP) is unchanged.
+    # item C (2026-07-17): the writer defaults to subscription now; pin its api
+    # fall-over so the outer narrative rides the ANTHROPIC HTTP wire (Opus/api) —
+    # the fake serves the anthropic envelope. The cross-transport tooth (HTTP
+    # outer vs subprocess inner editor, outer retry restored to HTTP) is unchanged.
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
 
     def fake_urlopen(req, timeout=None):
@@ -744,14 +745,17 @@ def test_memory_pass_cap_binds_on_shadow_not_charged(migrated_con):
 
 
 def _generate_harness(monkeypatch, con, editor_inp, editor_out=200):
-    """A full no-refresh generate run on the DEFAULT lane map. B4 flip
-    (conscious): the narrative rides the ANTHROPIC HTTP wire now (writer =
-    Opus 4.8 on the api lane) — the fake serves the anthropic envelope for
-    /v1/messages and refuses any other HTTP target (so audio degrades exactly
-    like the fake_model harnesses); editor+script stay on a per-call scripted
-    subscription stub (call 1: the edited payload; call 2: the compliant
-    script)."""
+    """A full no-refresh generate run. item C (2026-07-17): the writer defaults
+    to the subscription lane now, so this harness PINS it to its api fall-over
+    (NEWSLENS_LANE_WRITER=api) to keep the narrative on the ANTHROPIC HTTP wire —
+    the fake serves the anthropic envelope for /v1/messages and refuses any other
+    HTTP target (so audio degrades exactly like the fake_model harnesses). That
+    keeps the run genuinely MIXED (narrative charged on the api wire; editor+
+    script on a per-call scripted subscription stub, $0 charged — call 1: the
+    edited payload; call 2: the compliant script), which is what lets these tests
+    observe the narrative's charged cost distinctly from the $0 subscription rows."""
     _no_sleep(monkeypatch)
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     slots = [slot(1)]
     seed_briefing(con, A_DAY, slots, narrative="Published.")
@@ -1349,8 +1353,12 @@ def test_generate_fall_discloses_editor_and_script_and_labels_the_ledger(
     # so an absent binary would kill it at entry. This test is about editor/script
     # falling — pin state to api (no memory threads here, so no state transport).
     monkeypatch.setenv("NEWSLENS_LANE_STATE", "api")
-    # B4 flip (conscious): the narrative rides the anthropic wire too now
-    # (writer = Opus/api), so the fake routes by request-body MODEL — Opus ->
+    # item C (2026-07-17): the writer defaults to subscription too now — pin it to
+    # api so the narrative rides the api wire DIRECTLY (not a fall), keeping this
+    # test's disclosure surface exactly the two seats it is about: editor+script.
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
+    # the narrative rides the anthropic wire (writer = Opus/api), so the fake
+    # routes by request-body MODEL — Opus ->
     # the narrative envelope; Haiku (the fallen editor/script) -> the scripted
     # replies in order. The fall tooth itself is unchanged.
     anthropic_replies = [_ant(narrative, inp=1000, out=200),          # editor
@@ -1437,6 +1445,10 @@ def test_D6_deferred_kill_unarmed_unavailable_editor_dies_at_its_own_stage(
     # not this test's subject. Pin state to the api lane (no binary needed) so
     # the deferred-kill tooth stays about the EDITOR at its own stage.
     monkeypatch.setenv("NEWSLENS_LANE_STATE", "api")
+    # item C: the writer defaults to subscription too — pin it api so the
+    # narrative TRANSPORTS (HTTP) first; the deferred kill must land at the
+    # editor stage, not starve the narrative on the absent binary.
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     # fallback UNARMED: the editor's gate at its own stage must fail loud
     with pytest.raises(llm.LaneUnavailable) as exc:
         run(migrated_con)

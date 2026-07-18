@@ -917,10 +917,11 @@ def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
 
 def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     """The provider-seam lane map: one line per seat showing the resolved
-    provider/model/lane + per-seat price, plus fallback state. B4 stack:
-    rank/editor/script run Haiku 4.5 on the SUBSCRIPTION lane; the writer runs
-    Opus 4.8 and the analyst Sonnet 5 on the api lane; synthesis/state stay
-    gpt-4o on the api lane. A seat resolved (via NEWSLENS_LANE /
+    provider/model/lane + per-seat price, plus fallback state. Current stack
+    (post item C, 2026-07-17): the anthropic content seats all DEFAULT to the
+    SUBSCRIPTION lane — rank/editor/script/state Haiku, the writer Opus, the
+    analyst Sonnet — with the api lane as each one's registered fall-over;
+    synthesis is the lone gpt-4o/api seat. A seat resolved (via NEWSLENS_LANE /
     NEWSLENS_LANE_<SEAT>) to a lane with no registered provider is flagged
     FAIL here — the same fail-loud condition the run itself hits."""
     out: List[Result] = []
@@ -953,10 +954,10 @@ def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     out.append(Result(
         INFO,
         "registered lanes: openai/api, anthropic/api, anthropic/subscription "
-        "(the claude -p lane, B3) — the Haiku seats (rank/editor/script) DEFAULT "
-        "to subscription with api as their fall-over; the writer (Opus) and "
-        "analyst (Sonnet) DEFAULT to api (B4: effort maps exactly and the "
-        "truncation guard fires there)",
+        "(the claude -p lane, B3) — the anthropic content seats (rank/editor/"
+        "script/state Haiku, writer Opus, analyst Sonnet) DEFAULT to subscription "
+        "with api as their fall-over (item C, 2026-07-17 — field-proven edition "
+        "7); synthesis is the lone gpt-4o/api seat",
     ))
     return out
 
@@ -971,13 +972,15 @@ def cost_estimate() -> List[Result]:
     return [
         Result(
             INFO,
-            "estimated cost-per-run ROSE with the B4 content-seat flip: the "
-            f"writer is {w.model} (${w.usd_per_mtok_in:.2f}/"
-            f"${w.usd_per_mtok_out:.2f} per MTok, adaptive thinking billed as "
-            f"output) and the analyst is {a.model} (${a.usd_per_mtok_in:.2f}/"
-            f"${a.usd_per_mtok_out:.2f}); rank/editor/script stay Haiku 4.5 on "
-            "the subscription lane (usd_charged 0.0, shadow-counted). Approved "
-            f"envelope ~$0.90-1.30/edition; the budget cap defaults to "
+            "item C (2026-07-17): the writer "
+            f"({w.model}, ${w.usd_per_mtok_in:.2f}/${w.usd_per_mtok_out:.2f} per "
+            "MTok, adaptive thinking billed as output) and the analyst "
+            f"({a.model}, ${a.usd_per_mtok_in:.2f}/${a.usd_per_mtok_out:.2f}) "
+            "joined rank/editor/script/state on the SUBSCRIPTION lane — so a "
+            "default edition's CHARGED cost is ~$0 (usd_charged 0.0; field-proven "
+            "edition 7). The SHADOW (API-priced compute, what the EDITION cap "
+            "guards; the battery's own gate bounds charged dollars) is "
+            f"~$0.90-1.30/edition; the budget cap defaults to "
             f"${cap:.2f}/run (the shadow is UNDISCOUNTED — the cap OVER-counts, "
             "the safe direction for a money guard). The exact figure is MEASURED "
             "at the first real edition + the ~07-24 battery, never assumed. Plus "

@@ -291,7 +291,9 @@ def test_timeout_sub_map_is_pinned_exactly():
     """The exact-set roster guard did not grow the new knob; this is its
     timeout_sub_s twin. A silent sub-timeout change on ANY seat breaks here by
     name (api timeout_s pinned alongside, unchanged)."""
-    sub = {"rank": 300, "analyst": None, "writer": None, "editor": 300,
+    # item C (2026-07-17): writer/analyst joined the subscription lane, so their
+    # timeout_sub_s grew from None -> api ceiling + ~300s lane tax (540/900).
+    sub = {"rank": 300, "analyst": 540, "writer": 900, "editor": 300,
            "script": 300, "synthesis": None, "state": 300,
            "follow_altitude": 180}
     api = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,

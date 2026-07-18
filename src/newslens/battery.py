@@ -117,14 +117,19 @@ def _shape_check(inputs: Dict):
     return check
 
 
-def _run_arm(key: str, prompt: str, inputs: Dict, model: str,
+def _run_arm(key: str, prompt: str, inputs: Dict, model: str, lane: str,
              out_dir: Path) -> Dict:
-    """One live arm: set NEWSLENS_MODEL_WRITER=<model>, call the writer through
-    the seam (adaptive thinking / effort xhigh / api lane — the writer seat, only
-    the model swapped), render the prose, and write the artifacts. Returns a
-    manifest dict (also written to disk)."""
-    prev = os.environ.get("NEWSLENS_MODEL_WRITER")
+    """One live arm: set NEWSLENS_MODEL_WRITER=<model> AND NEWSLENS_LANE_WRITER=
+    <lane>, call the writer through the seam (adaptive thinking / effort xhigh —
+    the writer seat, only the model + lane swapped), render the prose, and write
+    the artifacts. item E (2026-07-17): the lane is a per-arm variable now (the
+    writer defaults to subscription), so a lane arm can compare the SAME model on
+    api vs subscription — keyed model+lane, never confounded with the model A/B.
+    Returns a manifest dict (also written to disk)."""
+    prev_model = os.environ.get("NEWSLENS_MODEL_WRITER")
+    prev_lane = os.environ.get("NEWSLENS_LANE_WRITER")
     os.environ["NEWSLENS_MODEL_WRITER"] = model
+    os.environ["NEWSLENS_LANE_WRITER"] = lane
     sink: List[Dict] = []
     t0 = datetime.now(timezone.utc)
     try:
@@ -133,10 +138,12 @@ def _run_arm(key: str, prompt: str, inputs: Dict, model: str,
             generate.NARRATIVE_TEMPERATURE, True,
             validate=_shape_check(inputs), cost_sink=sink)
     finally:
-        if prev is None:
-            os.environ.pop("NEWSLENS_MODEL_WRITER", None)
-        else:
-            os.environ["NEWSLENS_MODEL_WRITER"] = prev
+        for var, prev in (("NEWSLENS_MODEL_WRITER", prev_model),
+                          ("NEWSLENS_LANE_WRITER", prev_lane)):
+            if prev is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = prev
     elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
 
     draft = json.loads(content)
@@ -146,9 +153,13 @@ def _run_arm(key: str, prompt: str, inputs: Dict, model: str,
     real_usd = round((usage.get("prompt_tokens", 0) / 1e6) * pin
                      + (usage.get("completion_tokens", 0) / 1e6) * pout, 6)
     # The seam shadow (Opus-priced by the override) — kept for the cross-check.
-    shadow = llm.cost_fields(llm.resolve_seat("writer"), usage)
+    # On the subscription lane usd_charged is $0; usd_shadow is always API-priced.
+    shadow = llm.cost_fields(llm.resolve_seat("writer", {"NEWSLENS_LANE_WRITER": lane}),
+                             usage)
     manifest = {
         "arm": model,
+        "lane": lane,
+        "usd_charged_seam": shadow["usd_charged"],   # 0.0 on the subscription lane
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
         "cache_read_tokens": usage.get("prompt_tokens_details", {}).get(
@@ -180,6 +191,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--arms", default=",".join(DEFAULT_ARMS),
                    help="comma-separated writer model ids to compare "
                         f"(default: {','.join(DEFAULT_ARMS)})")
+    p.add_argument("--lanes", default="api",
+                   help="comma-separated lanes (api,subscription) to run each arm "
+                        "on (default: api — the controlled model-A/B lane). A LANE "
+                        "ARM is a paired same-model comparison: pass ONE --arms "
+                        "model with --lanes api,subscription. To avoid a lane "
+                        "confound, multiple models AND multiple lanes is refused.")
     p.add_argument("--out", default=None, metavar="DIR",
                    help="battery output root (default: <DATA_DIR>/battery)")
     p.add_argument("--variant", default="A", choices=["A", "B"],
@@ -204,8 +221,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     env = os.environ
     date = args.date or ranking.local_today()
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+    lanes = [l.strip() for l in args.lanes.split(",") if l.strip()]
     cap = config.budget_cap_usd_per_run(env)
     out_root = Path(args.out) if args.out else (paths.DATA_DIR / "battery")
+
+    # item E (2026-07-17) confound guard: the battery A/Bs ONE variable at a time.
+    # Multiple models compare MODELS (one lane); multiple lanes compare LANES (one
+    # model). A models x lanes grid confounds the two axes — refuse it (exit 2).
+    _bad_lanes = [l for l in lanes if l not in ("api", "subscription")]
+    if _bad_lanes:
+        print(f"battery: unknown lane(s) {', '.join(_bad_lanes)} — use api and/or "
+              "subscription.", file=sys.stderr)
+        return 2
+    if len(arms) > 1 and len(lanes) > 1:
+        print("battery: refused — comparing multiple models AND multiple lanes at "
+              "once confounds the model A/B with the lane arm. Run a model A/B "
+              "(many --arms, one --lanes) OR a lane arm (one --arms, --lanes "
+              "api,subscription), never both.", file=sys.stderr)
+        return 2
+    # DEF-1 (QA C+E pass): the confound guard above counts LENGTHS, so duplicate
+    # inputs slip it and two arms would plan onto ONE <date>/<model>__<lane>/
+    # dir — the second silently overwrites the first. A duplicate (model, lane)
+    # is a user error; REFUSE exit 2 (the guard's existing grammar), naming it.
+    dup_arms = [m for m in dict.fromkeys(arms) if arms.count(m) > 1]
+    dup_lanes = [l for l in dict.fromkeys(lanes) if lanes.count(l) > 1]
+    if dup_arms or dup_lanes:
+        which = ", ".join([f"model {m}" for m in dup_arms]
+                          + [f"lane {l}" for l in dup_lanes])
+        print(f"battery: refused — duplicate arm input ({which}) would plan two "
+              "runs onto one <date>/<model>__<lane>/ artifact dir and silently "
+              "overwrite. Each (model, lane) arm must be unique.", file=sys.stderr)
+        return 2
 
     # Read-only: the record is never mutated by the battery. FIX-3 (B4-D4): an
     # absent/unopenable DB (mode=ro on a nonexistent file, or a fresh DATA_DIR)
@@ -225,57 +271,94 @@ def main(argv: Optional[List[str]] = None) -> int:
     finally:
         con.close()
 
-    print(f"NewsLens writer battery — {date} (variant {args.variant})")
+    kind = ("lane arm" if len(lanes) > 1 else "model A/B")
+    print(f"NewsLens writer battery — {date} (variant {args.variant}) — {kind}")
     print(f"  prompt ~{len(prompt)} chars; budget cap ${cap:.2f}/run")
-    print(f"  arms ({len(arms)}): {', '.join(arms)}")
+    print(f"  arms ({len(arms)}): {', '.join(arms)}; lanes: {', '.join(lanes)}")
     w = llm.SEATS["writer"]
-    print(f"  writer seat: {w.provider}/{w.lane} lane, thinking={w.thinking}, "
+    print(f"  writer seat: {w.provider}, thinking={w.thinking}, "
           f"effort={w.effort}, max_tokens={generate.NARRATIVE_MAX_TOKENS}")
 
-    # Cumulative cap gate (dry-run and live share the same arithmetic).
+    # The arm set is the (model, lane) pairs — a clean N-models x 1-lane A/B or a
+    # 1-model x lanes arm (the confound grid was refused above). Cumulative cap
+    # gate (dry-run and live share the same arithmetic). item E: the dry-run
+    # discloses BOTH lanes' plans + costs — api bills usd_real; subscription is
+    # $0 CHARGED (usd_shadow still recorded, the honest compute cost).
+    # NAMED DIVERGENCE (gate FIX-1, 2026-07-17): generate's edition cap binds on
+    # SHADOW (Onna's law, generate.py:1947 + DECISIONS 2026-07-17) — this gate
+    # DELIBERATELY binds on CHARGED dollars instead: the battery is a
+    # principal-invoked bounded experiment, so the cap bounds real spend while
+    # each subscription arm's shadow is disclosed per-arm (QA-proven no smuggle
+    # path — a sub arm's $0 derives from the lane at cost_fields, never from the
+    # plan). The semantic is on the ship-ratification list; Onna's law stays
+    # edition-scoped.
     cumulative = 0.0
-    planned: List[str] = []
-    skipped: List[str] = []
+    planned: List[Tuple[str, str]] = []
+    skipped: List[Tuple[str, str]] = []
     for model in arms:
-        est = _arm_estimate(prompt, model)
-        if cumulative + est > cap:
-            skipped.append(model)
-            print(f"    - {model}: est ${est:.4f} -> SKIP (cumulative "
-                  f"${cumulative + est:.4f} would exceed the ${cap:.2f} cap)")
-            continue
-        cumulative += est
-        planned.append(model)
-        print(f"    - {model}: est ${est:.4f} (cumulative ${cumulative:.4f})")
+        for lane in lanes:
+            est = _arm_estimate(prompt, model)   # tokens are lane-independent
+            charged = 0.0 if lane == "subscription" else est
+            cost_note = (f"est ${est:.4f} shadow, $0 CHARGED (subscription)"
+                         if lane == "subscription" else f"est ${est:.4f}")
+            if cumulative + charged > cap:
+                skipped.append((model, lane))
+                print(f"    - {model} [{lane}]: {cost_note} -> SKIP (cumulative "
+                      f"charged ${cumulative + charged:.4f} would exceed the "
+                      f"${cap:.2f} cap)")
+                continue
+            cumulative += charged
+            planned.append((model, lane))
+            print(f"    - {model} [{lane}]: {cost_note} "
+                  f"(cumulative charged ${cumulative:.4f})")
     print(f"  planned {len(planned)} arm(s), skipped {len(skipped)}; "
-          f"est total ${cumulative:.4f}")
+          f"est total charged ${cumulative:.4f}")
 
     if not args.run:
         print("  DRY RUN — no calls made, no files written. Re-run with --run "
-              "to execute (needs ANTHROPIC_API_KEY).")
+              "to execute (api arms need ANTHROPIC_API_KEY; subscription arms "
+              "need the claude CLI logged in).")
         return 0
 
     key = (env.get("ANTHROPIC_API_KEY") or "").strip()
-    if not key:
-        print("battery: --run needs ANTHROPIC_API_KEY (the writer arms all ride "
-              "the Claude API lane) — set it in .env, then re-run.",
+    if any(lane == "api" for _, lane in planned) and not key:
+        print("battery: --run has api arm(s) that need ANTHROPIC_API_KEY — set it "
+              "in .env, then re-run (subscription arms use the claude CLI instead).",
               file=sys.stderr)
         return 1
+    # DEF-2 (QA C+E pass): the subscription half of the key gate. An unresolvable
+    # CLI on a subscription arm is a CONFIG error, so gate it ONCE upfront (FIX-1
+    # philosophy — config errors kill before spend, like the falsifier's --run
+    # lane preflight), never per-arm failures in the loop. check_lane is the same
+    # binary gate every seat's transport hits; run it on the writer's
+    # subscription lane before any arm.
+    if any(lane == "subscription" for _, lane in planned):
+        try:
+            llm.check_lane(llm.resolve_seat(
+                "writer", {"NEWSLENS_LANE_WRITER": "subscription"}))
+        except llm.LaneUnavailable as exc:
+            print(f"battery: --run has subscription arm(s) but the claude CLI is "
+                  f"unavailable — {exc}", file=sys.stderr)
+            return 1
 
     run_dir = out_root / date
     print(f"  writing artifacts under {run_dir}/")
     inputs = dict(inputs, date=date)   # assemble_narrative reads inputs['date']
     ok = 0
-    for model in planned:
-        arm_dir = run_dir / model.replace("/", "_")
+    for model, lane in planned:
+        # item E: artifact dirs keyed model+lane so a lane arm's two runs never
+        # overwrite each other and a model A/B stays one-dir-per-model.
+        arm_dir = run_dir / f"{model.replace('/', '_')}__{lane}"
         try:
-            m = _run_arm(key, prompt, inputs, model, arm_dir)
-            print(f"    + {model}: {m['completion_tokens']} out tok, "
-                  f"real ${m['usd_real_at_arm_price']:.4f}, "
+            m = _run_arm(key, prompt, inputs, model, lane, arm_dir)
+            print(f"    + {model} [{lane}]: {m['completion_tokens']} out tok, "
+                  f"real ${m['usd_real_at_arm_price']:.4f} "
+                  f"(charged ${m['usd_charged_seam']:.4f}), "
                   f"cache_read {m['cache_read_tokens']}, {m['elapsed_s']}s "
                   f"-> {arm_dir}/")
             ok += 1
         except Exception as exc:  # noqa: BLE001 — one arm's failure is disclosed
-            print(f"    ! {model}: FAILED ({type(exc).__name__}: {exc}) — "
+            print(f"    ! {model} [{lane}]: FAILED ({type(exc).__name__}: {exc}) — "
                   "disclosed, other arms continue", file=sys.stderr)
     print(f"battery: {ok}/{len(planned)} arms produced; artifacts under "
           f"{run_dir}/. Read blind; the record was never touched.")

@@ -925,7 +925,13 @@ def test_BUG13_retry_must_account_for_both_paid_attempts(monkeypatch):
     Fix contract: accumulate usage-derived cost across ALL attempts that
     returned usage, and surface it in the returned cost (so analyze_story's
     sa.cost_usd and the generation_log per-story row carry real spend).
-    BUG-6 precedent: money honesty is a hard requirement."""
+    BUG-6 precedent: money honesty is a hard requirement.
+
+    item C (2026-07-17): the analyst defaults to the subscription lane now, where
+    usd_charged is 0.0 — but BUG13 is about PAID-money accounting (the returned
+    cost must not under-report). Pin the analyst to its api fall-over so charged
+    == shadow == the Sonnet-priced spend and the both-attempts sum is real."""
+    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "api")
     responses = [
         {"usage": {"prompt_tokens": 1000, "completion_tokens": 1400},
          "choices": [{"finish_reason": "length", "message": {"content": ""}}]},

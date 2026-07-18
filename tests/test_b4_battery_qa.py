@@ -113,6 +113,15 @@ def _capture(monkeypatch, reply=None):
     return seen
 
 
+def _pin_content_api(monkeypatch):
+    """item C (2026-07-17): writer/analyst default to the subscription lane now.
+    The wire tests observe their exact anthropic-api BYTES (the registered
+    fall-over, whose correctness must stay pinned) — pin both to api so the
+    urlopen recorder sees the request. (Harmless for a test that uses only one.)"""
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
+    monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "api")
+
+
 def _transport_tripwire(monkeypatch):
     """Any HTTP call or subprocess spawn is an immediate failure."""
     calls = []
@@ -186,6 +195,7 @@ def test_sampling_omitted_for_claude46_seats_kept_for_haiku_and_gpt4o(
     keep gpt-4o's temperature is pinned directly on both remaining sampling-on
     seats. A sampling regression in either direction fails here by name."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: writer/analyst wire = the api fall-over
     openai_shape = json.dumps({
         "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
@@ -224,6 +234,7 @@ def test_no_anthropic_body_ever_carries_budget_tokens_or_top_p(monkeypatch):
     reintroduction anywhere in the provider fails here before it 400s in
     production."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: writer/analyst wire = the api fall-over
     monkeypatch.setenv("NEWSLENS_LANE_RANK", "api")
     monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     monkeypatch.setenv("NEWSLENS_LANE_SCRIPT", "api")
@@ -253,6 +264,7 @@ def test_max_tokens_headroom_constants_and_wire_values(monkeypatch):
     assert generate.NARRATIVE_MAX_TOKENS == 16000
     assert analysis.ANALYSIS_MAX_TOKENS == 6000
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: writer/analyst wire = the api fall-over
     seen = _capture(monkeypatch)
     generate.call_llm("sk-x", "P", "narrative", generate.NARRATIVE_MAX_TOKENS,
                       generate.NARRATIVE_TEMPERATURE, True)
@@ -323,6 +335,7 @@ def test_writer_wire_shape_cached_system_prefix_and_reassembly_identity(
     and system-block-0 + user body == the original prompt BYTE-IDENTICAL
     (the split moves the law's ROLE, never its text)."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: writer wire = the api fall-over
     prompt, _ = _built_narrative_prompt()
     seen = _capture(monkeypatch)
     generate._chat("sk-x", prompt, generate.NARRATIVE_MAX_TOKENS,
@@ -353,6 +366,7 @@ def test_analyst_split_at_its_sentinel_and_no_split_without_it(monkeypatch):
     prompt without the sentinel (or with it at position 0) ships unsplit,
     and the json nudge stays the plain B2 string."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: analyst wire = the api fall-over
     instructions = "STATIC BRIEF INSTRUCTIONS\nrules and law here\n"
     data = analysis._ANALYST_CACHE_SENTINEL + " 400\nPER-SLOT DATA {hostile}"
     prompt = instructions + data
@@ -447,6 +461,7 @@ def test_cache_read_recorded_nonzero_while_usd_shadow_stays_undiscounted(
     in+out price (a money guard never under-counts on an unproven hit; the
     ~0.1x is measured by the battery, not assumed here)."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: writer wire = the api fall-over
     _capture(monkeypatch, reply=anthropic_envelope(
         "ok", input_tokens=10_000, output_tokens=500,
         cache_creation=1_000, cache_read=9_000))
@@ -532,6 +547,7 @@ def test_model_override_reaches_the_wire_with_seat_knobs_and_seat_prices(
     the seam's ledger row prices at the SEAT's table (Opus $5/$25 — the
     documented caveat; the arm's real rate is the battery manifest's job)."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: writer wire = the api fall-over
     monkeypatch.setenv("NEWSLENS_MODEL_WRITER", "claude-fable-5")
     seen = _capture(monkeypatch, reply=anthropic_envelope(
         "ok", input_tokens=1000, output_tokens=200))
@@ -641,8 +657,12 @@ def test_flap_window_cannot_fork_analyst_report_lane(monkeypatch):
         assert calls == 1
         assert rep["lane"] == "subscription"
         assert analysis._ACTIVE_ANALYST is None           # teardown held
-        calls, rep = run_with((llm.SEATS["analyst"],
-                               "subscription_unavailable"))
+        # item C (2026-07-17): the analyst DEFAULTS to subscription now, so a
+        # 'subscription_unavailable' fall LANDS on api — the published resolution
+        # #1 is the api fall-over cfg (lane=api) carrying the reason. (Pre-flip
+        # SEATS["analyst"] was already api; now it must be set explicitly.)
+        fell = dataclasses.replace(llm.SEATS["analyst"], lane="api")
+        calls, rep = run_with((fell, "subscription_unavailable"))
         assert calls == 1
         assert rep["lane"] == "api(fallback:subscription_unavailable)"
         assert analysis._ACTIVE_ANALYST is None
@@ -663,6 +683,7 @@ def test_hostile_braces_in_titles_and_excerpts_render_split_and_ship(
     double-format regression (formatting a string that already embeds slot
     data) would KeyError/IndexError here by name."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-b4")
+    _pin_content_api(monkeypatch)   # item C: writer wire = the api fall-over
     prompt, _ = _built_narrative_prompt(hostile=True)
     assert "Fed hikes {rates} to {0}% — {a[b]} say {'k': 1}" in prompt
     assert "braces {x} and {} and %s and {1:>8}." in prompt
@@ -784,7 +805,8 @@ def test_battery_cap_gate_cumulative_skips_the_crossing_arm_only(
         "--arms", "claude-fable-5,claude-opus-4-8,claude-haiku-4-5"])
     out = capsys.readouterr().out
     assert rc == 0
-    lines = {m: next(l for l in out.splitlines() if f"- {m}:" in l)
+    # item C: the per-arm plan line is now "- <model> [<lane>]: ..." (lane-keyed).
+    lines = {m: next(l for l in out.splitlines() if f"- {m} [" in l)
              for m in ("claude-fable-5", "claude-opus-4-8",
                        "claude-haiku-4-5")}
     assert "SKIP" not in lines["claude-fable-5"]
@@ -796,11 +818,11 @@ def test_battery_cap_gate_cumulative_skips_the_crossing_arm_only(
 def test_battery_run_produces_per_arm_artifacts_under_sandboxed_data_dir(
         monkeypatch, capsys):
     """The live path against a scripted wire: per-arm model on the request,
-    artifacts under <sandbox DATA_DIR>/battery/<date>/<arm>/, manifest
-    numbers at the ARM's real rate vs the seam's Opus-priced shadow (kept
-    distinct — the honest-cost split), cache_read from the envelope, the
-    briefing record untouched, and NEWSLENS_MODEL_WRITER restored to its
-    pre-run value."""
+    artifacts under <sandbox DATA_DIR>/battery/<date>/<model>__<lane>/ (item C:
+    the model A/B runs on the api lane, keyed model+lane), manifest numbers at
+    the ARM's real rate vs the seam's Opus-priced shadow (kept distinct — the
+    honest-cost split), cache_read from the envelope, the briefing record
+    untouched, and NEWSLENS_MODEL_WRITER restored to its pre-run value."""
     _guard_sanction(monkeypatch)
     slots = _seed_sandbox_record()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-battery")
@@ -822,7 +844,7 @@ def test_battery_run_produces_per_arm_artifacts_under_sandboxed_data_dir(
     root = Path(paths.DATA_DIR) / "battery" / A_DAY
     for arm, pin, pout in (("claude-opus-4-8", 5.0, 25.0),
                            ("claude-fable-5", 10.0, 50.0)):
-        d = root / arm
+        d = root / f"{arm}__api"          # item C: dirs keyed model+lane
         assert (d / "narrative.json").exists()
         assert (d / "narrative.md").read_text(encoding="utf-8").strip()
         m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
@@ -856,11 +878,11 @@ def test_battery_discloses_a_failed_arm_and_continues(monkeypatch, capsys):
                        "--arms", "claude-opus-4-8,claude-sonnet-5", "--run"])
     cap = capsys.readouterr()
     assert rc == 0                                    # one arm produced
-    assert "claude-opus-4-8: FAILED" in cap.err
+    assert "claude-opus-4-8 [api]: FAILED" in cap.err
     assert "disclosed, other arms continue" in cap.err
     root = Path(paths.DATA_DIR) / "battery" / A_DAY
-    assert not (root / "claude-opus-4-8" / "manifest.json").exists()
-    assert (root / "claude-sonnet-5" / "manifest.json").exists()
+    assert not (root / "claude-opus-4-8__api" / "manifest.json").exists()
+    assert (root / "claude-sonnet-5__api" / "manifest.json").exists()
     # env override cleaned up even on the failure path (prev unset -> popped)
     assert "NEWSLENS_MODEL_WRITER" not in os.environ
 
@@ -877,5 +899,53 @@ def test_battery_out_flag_redirects_artifacts(monkeypatch, tmp_path, capsys):
                        "--out", str(out_root), "--run"])
     capsys.readouterr()
     assert rc == 0
-    assert (out_root / A_DAY / "claude-opus-4-8" / "manifest.json").exists()
+    assert (out_root / A_DAY / "claude-opus-4-8__api" / "manifest.json").exists()
     assert not (Path(paths.DATA_DIR) / "battery").exists()
+
+
+# ===========================================================================
+# item E (2026-07-17) — the battery's LANE arm (paired same-model comparison)
+# ===========================================================================
+
+def test_lane_arm_dry_run_discloses_both_lanes_keyed_model_plus_lane(
+        monkeypatch, capsys):
+    """item E (BORN-RED before the lane-aware rework): a LANE arm (one model,
+    --lanes api,subscription) is the writer's api-vs-subscription paired
+    comparison. The dry-run plan discloses BOTH lanes, each keyed model+lane,
+    with their DISTINCT charged costs — api bills the estimate, subscription is
+    $0 CHARGED (the shadow compute is still real). No transport, no writes."""
+    _guard_sanction(monkeypatch)
+    _seed_sandbox_record()
+    _transport_tripwire(monkeypatch)          # a dry run must make ZERO calls
+    rc = battery.main(["--date", A_DAY, "--arms", "claude-opus-4-8",
+                       "--lanes", "api,subscription"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "lane arm" in out                                  # the run kind is named
+    api_line = next(l for l in out.splitlines()
+                    if "claude-opus-4-8 [api]:" in l)
+    sub_line = next(l for l in out.splitlines()
+                    if "claude-opus-4-8 [subscription]:" in l)
+    assert "$0 CHARGED" not in api_line                       # api bills the estimate
+    assert "$0 CHARGED (subscription)" in sub_line            # subscription bills nothing
+    assert "planned 2 arm(s), skipped 0" in out
+    assert not (Path(paths.DATA_DIR) / "battery").exists()    # DRY RUN wrote nothing
+
+
+def test_battery_refuses_the_models_x_lanes_confound_grid(monkeypatch, capsys):
+    """item E confound guard (BORN-RED): comparing multiple MODELS and multiple
+    LANES at once mixes the two axes — refused (exit 2), zero transport. Either
+    axis alone is fine; both at once is the confound the guard exists to stop.
+    A bad lane string is likewise refused."""
+    _guard_sanction(monkeypatch)
+    _seed_sandbox_record()
+    _transport_tripwire(monkeypatch)
+    rc = battery.main(["--date", A_DAY,
+                       "--arms", "claude-opus-4-8,claude-sonnet-5",
+                       "--lanes", "api,subscription"])
+    assert rc == 2
+    assert "confounds the model A/B with the lane arm" in capsys.readouterr().err
+    rc2 = battery.main(["--date", A_DAY, "--arms", "claude-opus-4-8",
+                        "--lanes", "api,ftp"])
+    assert rc2 == 2
+    assert "unknown lane" in capsys.readouterr().err
