@@ -84,7 +84,7 @@ def test_story_title_is_a_real_link_to_its_deep_view():
                         "text": "b"}})
     page, _ = server.build_page(con)
     con.close()
-    lead = page.split('<article class="lead"')[1].split("</article>")[0]
+    lead = page.split('<article class="lead')[1].split("</article>")[0]
     # the headline is wrapped in a real <a> opening the SAME deep view as the entry
     assert 'class="headline-link"' in lead
     assert lead.count("openDeepView('story-0', event)") == 2  # title + bottom entry
@@ -102,8 +102,8 @@ def test_story_without_a_deep_view_has_no_title_link():
     con.close()
     # slot 2 (story-1) has no brief and isn't quick -> no deep view, no headline-link
     assert "view-deep-story-1" not in page
-    right = page.split('class="col-right"')[1]
-    second = right.split('id="story-1"')[1].split("</article>")[0]
+    # v8-M2: no col-right wrapper — the medium card is a direct grid child.
+    second = page.split('id="story-1"')[1].split("</article>")[0]
     assert "headline-link" not in second
 
 
@@ -129,15 +129,20 @@ def _seed_arc_lead(con, topic="Strait of Hormuz"):
 
 
 def test_covered_before_signal_renders_once_on_a_tracked_lead():
-    """The arc line AND the tracked-ongoing marker both signal prior coverage;
-    on a tracked lead that gets an arc, the marker is suppressed so the signal
-    appears ONCE (the live 07-14 lead rendered it TWICE)."""
+    """v8-M2: the slim memory STAMP replaces the arc prose as the covered-before
+    signal, and the tracked-ongoing marker is still suppressed where the stamp
+    shows, so prior coverage is signalled ONCE (the live 07-14 lead rendered it
+    TWICE). No arc PROSE renders on Today anymore — the full arc is deep-view
+    only."""
     con = _con()
     _seed_arc_lead(con)
     page, _ = server.build_page(con)
     con.close()
-    lead = page.split('<article class="lead"')[1].split("</article>")[0]
-    assert "When we last covered this" in lead        # the rich arc signal stays
+    lead = page.split('<article class="lead')[1].split("</article>")[0]
+    assert "When we last covered this" not in lead     # the arc PROSE is gone from Today
+    assert 'class="memline"' in lead                   # the slim stamp is the signal
+    assert "entry on this thread" in lead              # full stamp form (lead tier)
+    assert "last covered" in lead
     assert "Tracked ongoing story" not in lead         # the redundant marker is gone
 
 
@@ -164,7 +169,7 @@ def test_tracked_lead_without_an_arc_keeps_its_marker():
         json.dumps(entry) + "\n", encoding="utf-8")
     page, _ = server.build_page(con)
     con.close()
-    lead = page.split('<article class="lead"')[1].split("</article>")[0]
+    lead = page.split('<article class="lead')[1].split("</article>")[0]
     assert "When we last covered this" not in lead     # no arc (day-one)
     assert "Tracked ongoing story" in lead             # marker is the sole signal
 
@@ -261,7 +266,7 @@ def test_today_watch_beat_strips_a_past_date():
     seed(con, [slot(1, "Lead")], [s])
     page, _ = server.build_page(con)
     con.close()
-    lead = page.split('<article class="lead"')[1].split("</article>")[0]
+    lead = page.split('<article class="lead')[1].split("</article>")[0]
     assert _month_day(-4) not in lead                    # the stale date is stripped
     assert "Watch the oil markets." in lead              # the forward clause survives
 

@@ -651,22 +651,13 @@ def test_BUG34_post_persist_memory_failure_must_not_crash_a_published_edition(
 # ===========================================================================
 
 def test_BUG35_same_thread_split_day_arc_renders_once_per_edition(tmp_paths):
-    """RED (acceptance contract). QA RULING on the 4f residual: on a
-    sanctioned-split day (two same-thread slots in one edition — the real
-    Jul-10 A' shape), the arc line renders ONCE, under the most prominent
-    same-thread slot; the In-Brief sibling suppresses its duplicate. Today
-    _today_arc_html's `seen` set is per-SLOT, and the arc text is composed
-    from the thread ledger (identical for both slots) — so the identical
-    continuity paragraph prints twice on one page. That is the exact
-    "tells me nothing" register the principal reviewed against (NL-58 item
-    11), doubled.
-
-    SCOPE GUARD: the kill-test scope ruling (per story) stands — each story's
-    arc is still independently kill-tested against ITS OWN text; this
-    contract adds only page-level dedup of the SAME rendered line (prominent
-    slot wins). FIX SKETCH (implementer's, endorsed): a per-edition seen set
-    threaded from the story loop into _today_arc_html (~3 lines).
-    """
+    """v8-M2 form of the BUG-35 acceptance contract: on a sanctioned-split day
+    (two same-thread slots in one edition — the real Jul-10 A' shape), the
+    covered-before signal renders ONCE under the most prominent same-thread
+    slot; the sibling suppresses its duplicate. The signal is now the slim
+    memory STAMP (the arc PROSE is gone from Today entirely); the per-edition
+    dedup set (keyed on thread id) carries the same anti-doubling guarantee the
+    principal reviewed against (NL-58 item 11)."""
     db.migrate()
     con = db.connect()
     try:
@@ -702,8 +693,9 @@ def test_BUG35_same_thread_split_day_arc_renders_once_per_edition(tmp_paths):
         (paths.DATA_DIR / "generation_log.jsonl").write_text(
             json.dumps(entry) + "\n", encoding="utf-8")
         page, _ = server.build_page(con, DATE)
-        assert page.count("When we last covered this") == 1, (
-            "the identical arc line rendered under BOTH same-thread slots — "
+        assert "When we last covered this" not in page      # arc PROSE gone from Today
+        assert page.count("entry on this thread") == 1, (
+            "the identical memory stamp rendered under BOTH same-thread slots — "
             "per-edition dedup missing (prominent slot wins)")
     finally:
         con.close()

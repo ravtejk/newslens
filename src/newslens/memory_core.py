@@ -699,6 +699,45 @@ def _ledger_integrity(entries: List[Dict]) -> Tuple[bool, str]:
     return True, "ok"
 
 
+def today_memory_stamp(con: sqlite3.Connection, thread_id: int,
+                       today_date: str) -> Optional[Tuple[int, str]]:
+    """The slim Today memory stamp's data (v8-M2 item 2) — PURE FURNITURE: no
+    prose, no LLM, no kill-test. Returns (ordinal, last_covered_date) for a
+    followed thread that MOVED this edition and has prior coverage; None
+    otherwise. Reuses ledger_for_thread (the ledger is the one source of truth).
+
+    - The gate is PRIOR COVERAGE, same as the arc: a thread the stamp computes
+      for is always a slot in TODAY's edition (its story is on the page), so its
+      appearance today IS this edition's move — the only question is whether it
+      has history to reach back to. A day-one thread (no prior) gets no stamp,
+      ever — the arc's day-one silence, as furniture.
+    - ordinal = (distinct prior edition dates) + 1: today's appearance is the
+      current, Nth entry. This is robust to whether today's own delta has been
+      written yet (deltas land after generation), and it collapses a sanctioned
+      split-day (two deltas, one date) to ONE appearance by counting DISTINCT
+      dates — the mockup's "3rd entry" for a thread covered on three dates.
+    - last_covered_date is the latest DISTINCT prior edition date. The stamp
+      never reverts or discloses (it carries no claim to be wrong about); a
+      corrupt ledger is the arc's concern, not the stamp's.
+
+    FIX-2 (2026-07-18): edition_date is normalized to [:10] in BOTH the distinct
+    set and the `< today_date` comparison. is_calendar_date validates s[:10], so
+    a timestamped edition_date ('2026-07-05T08:00:00Z') would otherwise count as
+    a date distinct from its bare form (ordinal inflation) and compare wrong at
+    the day boundary. Unreachable today (the single writer inserts bare dates),
+    but one backfill script away. `today_date` is caller-validated — the server
+    gates it through _is_calendar_date (server.py) before calling — so it is a
+    bare YYYY-MM-DD and needs no slicing here.
+    """
+    entries = ledger_for_thread(con, thread_id)
+    prior = sorted({e["edition_date"][:10] for e in entries
+                    if is_calendar_date(e.get("edition_date", ""))
+                    and e["edition_date"][:10] < today_date})
+    if not prior:
+        return None                       # day-one: no prior coverage, no stamp
+    return len(prior) + 1, prior[-1]
+
+
 # ---------------------------------------------------------------------------
 # 4. The Today arc render — then -> now -> difference + kill-test + reversion
 # ---------------------------------------------------------------------------

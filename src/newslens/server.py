@@ -923,6 +923,58 @@ def _today_arc_html(con, slot: Dict, st: Dict, date: str,
     return "".join(out)
 
 
+def _ordinal_num(n: int) -> str:
+    """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 11 -> '11th'. Natural case: the
+    memline's CSS text-transform does the visual uppercasing, so screen readers
+    hear 'third', not the letters of an uppercased 'THRD'."""
+    if 10 <= n % 100 <= 20:
+        suf = "th"
+    else:
+        suf = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf}"
+
+
+def _memory_stamp_inner(con, slot: Dict, date: str, degraded: bool = False,
+                        seen: Optional[set] = None) -> str:
+    """The slim memory stamp's INNER html (v8-M2 item 2) — PURE FURNITURE, no
+    generated prose. Full form (lead + medium cards): '● Nth entry on this
+    thread · last covered <Mon D>'. Degraded form (strips): '● last covered
+    <Mon D>' — the ordinal drops. Below the strip meta line there is no smaller
+    slot, so the signal degrades to ABSENT (''), never a partial bare-dot: the
+    deep view still carries the full arc, so absence loses nothing durable, and
+    a lone green dot would make colour the sole channel (Axel's veto). The WORDS
+    carry the meaning. Renders for the slot's FIRST followed thread that moved
+    this edition with prior coverage; '' otherwise.
+
+    BUG-35 carried forward: `seen` is the caller's per-EDITION dedup set. On a
+    sanctioned-split day (two same-thread slots in one edition) the stamp is
+    identical for both — the prominent (earliest-rendered) slot wins and the
+    sibling suppresses, so the covered-before signal never doubles (the register
+    the principal reviewed against). Keyed on thread id."""
+    if con is None or not _is_calendar_date(date):
+        return ""
+    from . import memory_core
+    for topic in slot.get("matched_memory") or []:
+        tid = memory_core.resolve_thread_id(con, topic)
+        if tid is None:
+            continue
+        stamp = memory_core.today_memory_stamp(con, tid, date)
+        if stamp is None:
+            continue
+        if seen is not None:
+            if tid in seen:
+                return ""                 # per-edition dedup: prominent slot won
+            seen.add(tid)
+        ordinal, last = stamp
+        covered = _e(memory_core.human_date(last))
+        dot = '<span class="mem-dot">●</span>'
+        if degraded:
+            return f'{dot} last covered {covered}'
+        return (f'{dot} {_e(_ordinal_num(ordinal))} entry on this thread '
+                f'· last covered {covered}')
+    return ""
+
+
 def _story_movement_paras(st: Dict, date: str) -> List[str]:
     """The story's Today body beats — the 'Why it matters' / 'Watch for'
     movements as .move-label headers. Shared by the Today story body AND the
@@ -960,28 +1012,63 @@ def _deep_today_prose(st: Dict, date: str) -> str:
     return f'<div class="deep-section deep-today-prose">{"".join(paras)}</div>'
 
 
+def _strip_smeta(slot: Dict, stamp_inner: str) -> str:
+    """The strip's machine meta line (v8-M2 item 1): a mono register line led,
+    when its followed thread moved this edition, by the DEGRADED stamp
+    (● last covered <date>), then the corroboration count and the primary
+    selecting topic. CODE-OWNED, never prose; '' when there is nothing honest to
+    say. Uppercase is CSS presentation (screen readers hear natural case)."""
+    bits: List[str] = []
+    if stamp_inner:
+        bits.append(stamp_inner)
+    meta = (slot.get("corroboration_label") or "").strip()
+    if meta:
+        bits.append(_e(meta))
+    here = _here_for(slot)
+    first = here.split(",")[0].strip() if here else ""
+    if first:
+        bits.append(_e(first))
+    if not bits:
+        return ""
+    return f'<p class="smeta">{" · ".join(bits)}</p>'
+
+
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   active_topics: set, has_file: bool = False,
                   slug: Optional[str] = None, date: str = "",
                   deep_return: str = "view-today", con=None,
-                  arc_seen: Optional[set] = None, role: str = "story") -> str:
-    """One story in the v7 grid. `role` selects the shape:
-    - "lead"    → article.lead: h1 + deck + body + [full picture] + furniture
-    - "story"   → article.story (col-right full-picture story): h2 + deck + body + …
-    - "snippet" → article.snippet (In Brief, quick tier): h3 + compact deck + body + …
-    NL-65: the DECK under the title carries ONLY the follow control; the deep-view
-    entry moves to the story BOTTOM (`.story-more`), just before the furniture."""
+                  arc_seen: Optional[set] = None, role: str = "story",
+                  grid_cls: str = "", grid_row: str = "") -> str:
+    """One story in the v8 newspaper grid. `role` selects the shape:
+    - "lead"  → article.lead: h2 + deck (follow + slim memory stamp) + body +
+                [full picture] + furniture (the dominant left column, spanning).
+    - "story" → article.story (medium card, right column): h2 + deck + body + …
+    - "strip" → article.strip (the quick-tier GROUT): hairline top rule +
+                headline-link + 2-line-clamped summary + machine smeta. No deck,
+                no body beats, no bottom link — the headline IS the deep-view
+                door (NL-68 item 8); the "In brief" label is dead (scale and
+                placement are the label).
+    `grid_cls` is the CSS grid COLUMN placement; `grid_row` (FIX-1) is the
+    computed "<start> / <end>" row span, emitted as the --gr custom property so
+    the ≥900px grid squares the rectangle while the ≤900px stack (which resets
+    grid-row to auto) is untouched. Both are presentation only; DOM stays rank
+    order. v8-M2: the arc PROSE block is gone from Today entirely — a slim
+    machine STAMP rides the deck (full form) / the smeta (degraded); the full
+    arc register lives only in the deep view."""
     slug = slug or f"story-{i}"
     # Heading semantics (v7-M2): ONE h1 per document view — the dateline (Today)
-    # / view-title (edition) is the h1, so the lead story demotes to h2 (WAS h1;
-    # the M1 multiple-h1 leftover). Stories are h2, In-Brief snippets h3.
-    wrap_cls, h = {"lead": ("lead", "h2"), "snippet": ("snippet", "h3")}.get(
+    # / view-title (edition) is the h1, so the lead story demotes to h2. Stories
+    # are h2; the strips (quick tier) are h3 — the heading tree carries the tier
+    # for screen readers now that the visible "In brief" label is dead.
+    wrap_cls, h = {"lead": ("lead", "h2"), "strip": ("strip", "h3")}.get(
         role, ("story", "h2"))
-    parts = [f'<article class="{wrap_cls}" id="{_e(slug)}">']
+    stamp = _memory_stamp_inner(con, slot, date, degraded=(role == "strip"),
+                                seen=arc_seen)
+    row_style = f' style="--gr:{grid_row}"' if grid_row else ""
+    parts = [f'<article class="{wrap_cls}{grid_cls}" id="{_e(slug)}"{row_style}>']
 
-    marks = list(slot.get("matched_memory") or [])
     # The override callout stays ABOVE the title (it explains why an off-beat
-    # story is here); the tracked-ongoing marker sits in the deck under the title.
+    # story is here) — on every tier, including a strip.
     if slot.get("override"):
         label = slot.get("override_label") or "Editor's override"
         reason = slot.get("world_impact_reason") or ""
@@ -990,37 +1077,46 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
             + (f'<span class="reason">{_e(reason)}</span>' if reason else "")
             + "</p>")
 
-    # NL-68 item 6: the visible "The Lead" kicker DIES — the design carries the
-    # hierarchy (lead = largest type, top-left of the asymmetric grid). No label.
+    # NL-68 item 6: the visible "The Lead" kicker DIES — scale + placement carry
+    # the hierarchy. NL-68 item 8: the title itself is the deep-view door.
     parts.append(_headline_html(h, st.get("headline", ""), slot, has_file, tier,
                                 slug, deep_return))
 
-    # NL-68 item 7 (kill the covered-before DUPE): the arc line ("When we last
-    # covered this …") and the tracked-ongoing marker ("Tracked ongoing story —
-    # …") BOTH signal prior coverage — on the real 07-14 lead they rendered
-    # together (marker in the deck + arc in the body = the signal TWICE). Compute
-    # the arc first: when it renders on a tracked story it is the richer,
-    # superseding signal (then → now → difference, with a link to the prior
-    # edition), so the redundant deck marker is suppressed. A tracked story with
-    # NO arc (day-one / tells-nothing) keeps the marker as its sole signal; a
-    # non-tracked story keeps its follow toggle (never carries an arc). This kills
-    # the dupe without redesigning the marker/follow control (NL-68 item 2's job).
-    arc_html = _today_arc_html(con, slot, st, date, arc_seen)
-    suppress_marker = bool(marks) and bool(arc_html)
+    if role == "strip":
+        # Hairline strip: 2-line-clamped summary (the lede; a headline-only
+        # strip carries none) + machine smeta with the degraded stamp.
+        if st.get("lede"):
+            parts.append(f'<p class="sum">{_e(st["lede"])}</p>')
+        parts.append(_strip_smeta(slot, stamp))
+        parts.append("</article>")
+        return "".join(parts)
+
+    marks = list(slot.get("matched_memory") or [])
+    # NL-68 item 7 (kill the covered-before DUPE), v8-M2 form: the slim stamp and
+    # the tracked-ongoing marker BOTH signal prior coverage. Where the stamp
+    # shows (the thread moved this edition, with history), the redundant marker
+    # is suppressed and the stamp is its richer replacement. A tracked story with
+    # NO stamp (day-one / did-not-move) keeps the marker as its sole signal; a
+    # non-tracked story keeps its follow toggle. The marker/follow-control
+    # redesign itself stays NL-68 item 2's job.
+    suppress_marker = bool(marks) and bool(stamp)
     follow = "" if suppress_marker else _follow_control(
         st, slot, marks, active_topics, date)
+    deck_bits: List[str] = []
     if follow:
-        parts.append(f'<p class="deck">{follow}</p>')
+        deck_bits.append(follow)
+    if stamp:
+        deck_bits.append(f'<span class="memline">{stamp}</span>')
+    if deck_bits:
+        parts.append(f'<p class="deck">{"".join(deck_bits)}</p>')
 
-    # Body: lede, arc continuity line, then the "Why it matters"/"Watch for"
-    # beats as .move-label headers (§2). Quick-tier snippets carry the lede only.
+    # Body: lede, then the "Why it matters"/"Watch for" beats as .move-label
+    # headers (§2). NO arc prose on Today anymore (v8-M2) — the stamp above is
+    # the whole Today memory signal.
     body_parts: List[str] = []
     if st.get("lede"):
         body_parts.append(f'<p>{_e(st["lede"])}</p>')
-    if arc_html:
-        body_parts.append(arc_html)
-    if role != "snippet":
-        body_parts.extend(_story_movement_paras(st, date))
+    body_parts.extend(_story_movement_paras(st, date))
     parts.append(f'<div class="body">{"".join(body_parts)}</div>')
 
     # NL-65: the deep-view entry moves to the story BOTTOM, before the furniture.
@@ -1246,6 +1342,116 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
     return head + f'<div class="page">{body}</div>'
 
 
+def _grid_est(st: Dict, role: str) -> float:
+    """Rough content-height estimate (arbitrary units) for one grid slot, by
+    role. Deterministic, off headline+lede+movement word counts. Shared by the
+    column-balance heuristic (_grid_columns) and the row placement
+    (_grid_row_spans) so both read the same proxy — a bad estimate yields a
+    slightly uneven bottom, NEVER a broken page or a reordered DOM. Missing
+    fields never raise (str()/.get defaults)."""
+    words = len((str(st.get("headline", "")) + " "
+                 + str(st.get("lede", ""))).split())
+    words += sum(len(str(m.get("text", "")).split())
+                 for m in (st.get("movements") or []) if isinstance(m, dict))
+    if role == "lead":
+        return 8.0 + words / 9.0
+    if role == "story":
+        return 4.0 + words / 8.0
+    return 4.0                              # strips clamp to a ~constant height
+
+
+def _grid_columns(grid_stories: Dict[int, Tuple]) -> Dict[int, str]:
+    """v8-M2 strip GROUT balance (governing amendment, principal 2026-07-18):
+    the strips (#4..N — however many the edition has) slot into whichever column
+    is currently SHORTER, evening the bottom edge into a newspaper-like
+    rectangle. Returns {index: 'a'|'b'} for the strip indices only (the lead is
+    always column a, the medium cards always column b).
+
+    PRESENTATION ONLY — the DOM stays rank-ordered 1→N (grid-column CSS classes
+    place the slots; screen readers hear rank order). Deterministic, server-side,
+    off a rough content-length estimate: a bad estimate yields a slightly uneven
+    bottom, NEVER a broken page or a reordered DOM. The earlier 'strips under the
+    lead' sketch is the special case where the lead ran shorter than #2+#3 and
+    the left column was the shorter one. Chosen the amendment's sanctioned SIMPLE
+    version (greedy shorter-column-first; no clever bin-packing, no cross-column
+    bottom band) over a clever one."""
+    left = right = 0.0
+    for st, _slot, _tier, role in grid_stories.values():
+        if role == "lead":
+            left += _grid_est(st, role)
+        elif role == "story":
+            right += _grid_est(st, role)
+    assign: Dict[int, str] = {}
+    for i in sorted(grid_stories):
+        st, _slot, _tier, role = grid_stories[i]
+        if role != "strip":
+            continue
+        if left <= right:
+            assign[i] = "a"
+            left += 4.0
+        else:
+            assign[i] = "b"
+            right += 4.0
+    return assign
+
+
+def _grid_row_spans(grid_stories: Dict[int, Tuple],
+                    cols: Dict[int, str]) -> Dict[int, str]:
+    """v8-M2 FIX-1 — the RECTANGLE-squaring row placement (principal 2026-07-18):
+    the server-computed generalization of the approved mockup's grid-areas
+    mechanism (design/mockup-v8.html lines 207-219). Returns {index:
+    "<start> / <end>"}, a CSS grid-row per slot, emitted by the caller as the
+    --gr custom property so the ≤900px single-column stack (which resets
+    grid-row to auto) is untouched; the placement applies at ≥900px only.
+
+    THE MECHANISM: the two presentation columns — left = the lead then its
+    balance-assigned strips; right = the medium cards then theirs, both in rank
+    order — are laid end-to-end against a SHARED set of row lines derived from
+    each slot's rough content height (_grid_est). Each slot spans the lines its
+    cumulative-height band covers, so a tall right card (#3) spans DOWN across
+    the lines its left-column strips occupy (the mockup's s3 trick, computed) and
+    the lead's span is COMPUTED, not the retired fixed `grid-row: 1 / span 2`
+    that stranded a void beside cards which outran a shorter lead. Auto-sized
+    rows mean a bad estimate yields a ragged bottom, NEVER overlap or a reordered
+    DOM.
+
+    Degenerate floor: a lone lead / no strips / an all-quick right column still
+    gets valid spans (each slot simply spans its own band); page-safety is the
+    law. PRESENTATION ONLY — placement, never a DOM reorder."""
+    if not grid_stories:
+        return {}
+    left_seq: List[int] = []
+    right_seq: List[int] = []
+    for i in sorted(grid_stories):
+        _st, _slot, _tier, role = grid_stories[i]
+        if role == "lead":
+            left_seq.append(i)
+        elif role == "story":
+            right_seq.append(i)
+        else:                               # strip: placed by the balance class
+            (left_seq if cols.get(i, "a") == "a" else right_seq).append(i)
+
+    # Cumulative-height bands per column, off the shared _grid_est proxy. Each
+    # item's [lo, hi) rounds to collapse float drift so consecutive same-column
+    # items share an exact edge (contiguous, non-overlapping) and a left/right
+    # pair that lands at the same height shares one row line.
+    band: Dict[int, Tuple[float, float]] = {}
+    for seq in (left_seq, right_seq):
+        acc = 0.0
+        for i in seq:
+            st, _slot, _tier, role = grid_stories[i]
+            lo = round(acc, 3)
+            hi = round(acc + _grid_est(st, role), 3)
+            band[i] = (lo, hi)
+            acc = hi
+
+    # Map every distinct band edge (both columns share the row-line space) to a
+    # 1-based CSS grid line. A slot's grid-row is line(lo) / line(hi).
+    edges = sorted({0.0} | {e for lohi in band.values() for e in lohi})
+    line = {v: n + 1 for n, v in enumerate(edges)}
+    return {i: f"{line[lo]} / {line[hi]}" for i, (lo, hi) in band.items()}
+
+
 def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
                           briefs: Optional[Dict[int, Dict]],
                           slug_prefix: str, deep_return: str) -> str:
@@ -1263,10 +1469,8 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     # its most prominent (earliest) slot only; a split-day sibling suppresses
     # the identical continuity paragraph.
     arc_seen: set = set()
-    lead_html = ""
-    right_stories: List[str] = []      # col-right full/medium "full picture" stories
-    brief_snips: List[str] = []        # In Brief (quick tier)
-    still_lines: List[str] = []        # still-tracking register
+    still_lines: List[str] = []        # still-tracking register (below the grid)
+    grid_stories: Dict[int, Tuple] = {}   # i -> (st, slot, tier, role)
     # §12.3 slot routing. Ids/tiers use the ORIGINAL enumerate index so
     # _collect_deep_views stays aligned (a still-tracking slot consumes its
     # index but gets no deep view — it is a status line, not a story).
@@ -1279,32 +1483,40 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
             if line:
                 still_lines.append(line)
             continue
-        role = "lead" if i == 0 else ("snippet" if tier == "quick" else "story")
-        rendered = _render_story(
+        # v8-M2 tiers → grid roles: lead (i==0), medium cards (right column),
+        # quick-tier strips (the grout). "In brief" as a labelled region is dead.
+        role = "lead" if i == 0 else ("strip" if tier == "quick" else "story")
+        grid_stories[i] = (st, slot, tier, role)
+
+    # v8-M2: the newspaper grid. All slots are DIRECT children of .today-grid in
+    # rank/DOM order 1→N (screen readers hear rank); grid-column classes place
+    # them — lead left (spanning), cards right, strips balanced across the
+    # bottom to square the rectangle. No wrapper column (that would break DOM
+    # rank order); no "In brief" label (scale + placement are the label).
+    cols = _grid_columns(grid_stories)
+    rows = _grid_row_spans(grid_stories, cols)     # FIX-1: computed row placement
+    grid_html: List[str] = []
+    for i in sorted(grid_stories):
+        st, slot, tier, role = grid_stories[i]
+        if role == "lead":
+            grid_cls = " grid-lead"
+        elif role == "story":
+            grid_cls = " grid-col-b"
+        else:                               # strip: balanced column a or b
+            grid_cls = " grid-col-" + cols.get(i, "a")
+        grid_html.append(_render_story(
             i, st, slot, tier, active, has_file=(i + 1) in (briefs or {}),
             slug=f"{slug_prefix}story-{i}", date=row["date"],
-            deep_return=deep_return, con=con, arc_seen=arc_seen, role=role)
-        if role == "lead":
-            lead_html = rendered
-        elif role == "snippet":
-            brief_snips.append(rendered)
-        else:
-            right_stories.append(rendered)
+            deep_return=deep_return, con=con, arc_seen=arc_seen, role=role,
+            grid_cls=grid_cls, grid_row=rows.get(i, "")))
 
-    col_parts: List[str] = list(right_stories)
-    if brief_snips:
-        col_parts.append(
-            f'<div class="in-brief" role="region" aria-label={_e_attr(labels.IN_BRIEF)}>'
-            f'<h2 class="brief-label">{_e(labels.IN_BRIEF)}</h2>'
-            + "".join(brief_snips) + "</div>")
+    still_html = ""
     if still_lines:
-        col_parts.append(
+        still_html = (
             f'<div class="still-tracking" role="region" '
             f'aria-label={_e_attr(labels.STILL_TRACKING_PREFIX)}>'
             + "".join(still_lines) + "</div>")
-    col_right = (f'<div class="col-right">{"".join(col_parts)}</div>'
-                 if col_parts else "")
-    grid = f'<div class="today-grid">{lead_html}{col_right}</div>'
+    grid = f'<div class="today-grid">{"".join(grid_html)}</div>{still_html}'
 
     # Footer disclosure (addendum #3): quiet line; window/caveat/cost a tap
     # away. Ids are slug_prefix-scoped so Today's footer and an open archive

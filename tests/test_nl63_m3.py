@@ -257,9 +257,12 @@ def _seed_quick_edition(con):
         json.dumps(entry) + "\n", encoding="utf-8")
 
 
-def test_in_brief_quick_slot_gets_sources_context_entry_link(tmp_paths):
-    """An In-Brief (quick-tier) story with no analyst brief carries a 'Sources
-    & context' entry — NOT 'The full picture' (that stays the analyst tier)."""
+def test_in_brief_quick_slot_gets_sources_context_view(tmp_paths):
+    """A quick-tier story with no analyst brief still has the $0 sources-&-
+    context deep view. v8-M2: the quick slot is a lean STRIP — its headline is
+    the door to that view (openDeepView), and the redundant '→ Sources &
+    context' BOTTOM link is gone (the view labels itself with the eyebrow).
+    'The full picture' stays the analyst tier's affordance."""
     db.migrate()
     con = db.connect()
     _seed_quick_edition(con)
@@ -267,10 +270,11 @@ def test_in_brief_quick_slot_gets_sources_context_entry_link(tmp_paths):
     con.close()
     # analyst affordance count is unchanged (only slot 1 has a valid brief)
     assert page.count("→ The full picture") == 1
-    # the quick slot (story-3) gets the sources-&-context affordance + view
-    assert "→ Sources &amp; context" in page
-    assert "openDeepView('story-3', event)" in page
-    assert 'id="view-deep-story-3"' in page
+    # the quick slot (story-3) reaches the sources-&-context view via its headline
+    assert "→ Sources &amp; context" not in page        # no redundant bottom link on a strip
+    assert "openDeepView('story-3', event)" in page     # the headline is the door
+    assert 'id="view-deep-story-3"' in page             # ...and the $0 view is collected
+    assert "Sources &amp; context" in page              # the view labels itself (eyebrow)
 
 
 def test_sources_context_view_shows_summary_sources_tags_and_here_for(tmp_paths):
@@ -317,16 +321,20 @@ def test_sources_context_view_is_not_the_analyst_tier(tmp_paths):
 
 
 def test_sources_context_renders_in_archive_edition_path_too(tmp_paths):
-    """The In-Brief deep view rides the archive-in-place path (NL-11), same as
-    the analyst deep views — the entry link and view both slug-prefixed."""
+    """The sources-&-context deep view rides the archive-in-place path (NL-11),
+    same as the analyst deep views — reached from the strip headline and
+    slug-prefixed. v8-M2: no '→ Sources & context' bottom link (lean strip); the
+    view itself (eyebrow + slug-prefixed id) is what rides the path."""
     db.migrate()
     con = db.connect()
     _seed_quick_edition(con)
     html, rendered = server.build_edition_fragment(con, DATE)
     con.close()
     assert rendered == DATE
-    assert "→ Sources &amp; context" in html
-    assert f'id="view-deep-ed{DATE}-story-3"' in html
+    assert "→ Sources &amp; context" not in html                    # no bottom link on a strip
+    assert f"openDeepView('ed{DATE}-story-3'" in html               # the headline is the door
+    assert f'id="view-deep-ed{DATE}-story-3"' in html               # the $0 view rides the path
+    assert "Sources &amp; context" in html                          # the view labels itself
 
 
 def test_sources_context_honest_empty_when_slot_has_no_sources(tmp_paths):

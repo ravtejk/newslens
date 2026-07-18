@@ -296,8 +296,10 @@ def test_section_labels_are_real_h2_headings_following():
     assert '<p class="section-h"' not in html
 
 
-def test_in_brief_label_is_a_real_h2_heading():
-    """The In-Brief brief-label becomes an <h2> under the view h1."""
+def test_in_brief_label_dies_quick_tier_is_a_strip():
+    """v8-M2 (item 1): the visible 'In brief' label DIES — scale and placement
+    are the label, the h3 heading carries the tier for AT. A quick-tier item is
+    now a hairline STRIP in the newspaper grid, no labelled region around it."""
     from newslens import ranking, generate
 
     con = _con()
@@ -331,8 +333,14 @@ def test_in_brief_label_is_a_real_h2_heading():
     con.commit()
     page, _ = server.build_page(con)
     con.close()
-    assert f'<h2 class="brief-label">{labels.IN_BRIEF}</h2>' in page
-    assert '<p class="brief-label"' not in page
+    # Scope to the Today VIEW — the deep view legitimately keeps an "In brief"
+    # SECTION label (NL-66b), a distinct concern from the retired Today region.
+    today = page.split('id="view-today"')[1].split('id="view-following"')[0]
+    assert 'class="in-brief"' not in today           # the labelled region is dead
+    assert 'class="brief-label"' not in today        # ...and its heading
+    assert labels.IN_BRIEF not in today              # the label text is gone from Today
+    assert '<article class="strip' in today          # the quick tier is a strip now
+    assert 'id="story-3"' in today                   # S4 (index 3) rendered
 
 
 def test_today_view_has_exactly_one_h1():

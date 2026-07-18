@@ -60,7 +60,6 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 section.view { display: none; } section.view.active { display: block; }
 .page { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
 article.story { scroll-margin-top: 0.75rem; }
-.snippet { scroll-margin-top: 0.75rem; }
 
 /* ---- Masthead / the dateline ceremony (DIRECTION-v5 §4) ---- */
 .masthead { padding-top: 2.25rem; }
@@ -112,15 +111,56 @@ article.story { scroll-margin-top: 0.75rem; }
 .mini-head .wordmark { margin: 0 0 0.3rem; }
 .mini-head .mh-date { font-family: var(--font-mono); font-size: 0.75rem; color: var(--ink-faint); }
 
-/* ============================ TODAY — asymmetric grid (§12.3) ============================ */
-.today-grid { display: grid; grid-template-columns: 7fr 5fr; gap: 0 4rem; padding: 2.2rem 0 1rem; }
+/* ============================ TODAY — the newspaper grid (v8-M2, §12.3) ============================
+   #1 heads the left column (slightly wider than half); #2/#3 the right column
+   (one tier, roughly equal, content-sized); #4..N are the strips — the GROUT —
+   balanced across the bottom (server-side) to square the page into a rectangle.
+   DOM is rank order 1→N; grid-column classes place the COLUMN (presentation
+   only). FIX-1 (principal 2026-07-18): the ROW placement is server-computed too
+   — each slot carries a --gr custom property ("<start> / <end>" grid lines,
+   from server._grid_row_spans, generalizing the mockup's grid-areas), so the
+   lead's span is COMPUTED (retiring the fixed `grid-row: 1 / span 2` that
+   stranded a void beside cards that outran it) and a tall #3 spans DOWN beside
+   the left strips. --gr rides an INLINE custom property, never inline grid-row,
+   so the ≤900px reset below (grid-row:auto) still wins and the mobile stack is
+   untouched. align-items:start so nothing stretches when column heights differ
+   (scroll released). */
+.today-grid { display: grid; grid-template-columns: 7fr 5fr; gap: 0 4rem;
+  padding: 2.2rem 0 1rem; align-items: start; }
+.today-grid > .grid-lead { grid-column: 1; grid-row: var(--gr, auto); }
+.today-grid > .grid-col-a { grid-column: 1; grid-row: var(--gr, auto); }
+.today-grid > .grid-col-b { grid-column: 2; grid-row: var(--gr, auto); }
+/* Medium cards (#2/#3) — one tier, quiet register (was the retired .col-right). */
+.today-grid article.story { padding: 0 0 1.6rem; margin-bottom: 1.6rem; border-bottom: 1px solid var(--rule); }
+.today-grid article.story h2.headline { font-size: 1.4rem; }
+.today-grid article.story .body { font-size: 0.95rem; }
+.today-grid article.story .body > p { margin: 0 0 0.8rem; }
+.today-grid article.story .deck { font-size: 0.82rem; margin-bottom: 0.7rem; padding: 0.35rem 0; }
+.today-grid article.story .move-label { font-size: 0.72rem; margin: 1rem 0 0.25rem; }
+.today-grid article.story .furniture, .today-grid article.story .meta-footnote { font-size: 0.76rem; margin-top: 0.6rem; }
+/* The slim memory stamp (item 2) — pure furniture, machine register, riding the
+   deck. Same ● grammar as Following's UPDATED line; text-transform does the
+   visual uppercasing so screen readers hear natural case. The WORDS carry it;
+   the green dot never alone. */
+.memline { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em;
+  color: var(--ink-faint); text-transform: uppercase; }
+.memline .mem-dot { color: var(--moved); font-weight: 700; }
+/* Thin strips (#4..N): hairline top rule, headline-link, 2-line-clamped summary,
+   machine smeta (the degraded stamp leads it when the thread moved). Never a box. */
+.strip { border-top: 1px solid var(--rule); padding: 0.8rem 0 1rem; }
+.strip h3.headline { font-family: var(--font-display); font-weight: 700; font-size: 1.02rem;
+  line-height: 1.3; margin: 0 0 0.2rem; }
+.strip .sum { font-size: 0.85rem; line-height: 1.5; color: var(--ink-soft); margin: 0 0 0.35rem;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.strip .smeta { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
+  color: var(--ink-faint); text-transform: uppercase; }
+.strip .smeta .mem-dot { color: var(--moved); font-weight: 700; }
 .lead h2.headline { font-family: var(--font-display); font-weight: 700; font-size: 3.5rem;
   line-height: 1.06; letter-spacing: -0.015em; margin: 0 0 0.7rem; }
 .lead .body { font-size: 1.05rem; max-width: 38rem; }
 .lead .body > p { margin: 0 0 1rem; }
 .move-label { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
   letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); margin: 1.4rem 0 0.3rem; }
-.col-right .move-label { font-size: 0.72rem; margin: 1rem 0 0.25rem; }
 .my-read { font-style: italic; }
 /* the deck (under-title): NL-65 leaves ONLY the follow control here */
 .deck { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1.1rem;
@@ -149,25 +189,11 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
 .headline a.headline-link { color: inherit; text-decoration: none; }
 .headline a.headline-link:hover { color: var(--terra-deep); }
 
-/* Right column: quiet register */
-.col-right article.story { padding: 0 0 1.6rem; margin-bottom: 1.6rem; border-bottom: 1px solid var(--rule); }
-.col-right h2.headline { font-size: 1.4rem; }
-.col-right .body { font-size: 0.95rem; }
-.col-right .body > p { margin: 0 0 0.8rem; }
-.col-right .deck { font-size: 0.82rem; margin-bottom: 0.7rem; padding: 0.35rem 0; }
-.col-right .furniture, .col-right .meta-footnote { font-size: 0.76rem; margin-top: 0.6rem; }
-
-/* In brief */
-.in-brief { margin-top: 0.5rem; }
-.brief-label { font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
-  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 0.8rem; }
-.snippet { margin: 0 0 1.3rem; }
-.snippet h3.headline, .snippet h4.headline { font-family: var(--font-display); font-weight: 700;
-  font-size: 1.02rem; line-height: 1.3; margin: 0 0 0.15rem; }
-.snippet .body > p, .quick-hit p { font-size: 0.88rem; line-height: 1.5; margin: 0; color: var(--ink-soft); }
-.snippet .deck { font-size: 0.78rem; margin: 0.2rem 0 0.35rem; padding: 0; border: none; }
-.snippet .story-more { margin: 0.25rem 0 0; font-size: 0.78rem; }
-.snippet .furniture, .snippet .meta-footnote { font-size: 0.74rem; margin-top: 0.25rem; }
+/* FIX-3 (2026-07-18): the "In brief" Today region died in v8-M2 (quick-tier
+   items are strips now). Its .in-brief/.brief-label/.snippet/.quick-hit rules
+   are DELETED — the prior comment's claim that they dressed the NL-66(b) $0
+   deep view was false: that view renders .deep-section-label (server.py), and
+   these four classes had zero emit sites (grep-verified). */
 
 /* Still-tracking strip (retro-mock idiom; A8 no-fabrication teeth in the composer) */
 .still-tracking { margin: 1.6rem 0 0; padding-top: 1rem; border-top: 1px solid var(--rule); }
@@ -480,12 +506,17 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
 @media (max-width: 900px) {
   .page { padding: 0 1.15rem; }
   #view-edition, section[id^="view-deep-"], section[id^="view-thread-"] { padding: 0 1.15rem; }
+  /* Item 1 is DESKTOP; below 900px the single column stays, DOM = rank order.
+     Reset the grid placement so every slot stacks 1→N in one column. */
   .today-grid { grid-template-columns: 1fr; gap: 0; }
+  .today-grid > .grid-lead, .today-grid > .grid-col-a, .today-grid > .grid-col-b {
+    grid-column: auto; grid-row: auto; }
+  .today-grid > .grid-lead { border-bottom: 1px solid var(--ink);
+    padding-bottom: 1.4rem; margin-bottom: 0.4rem; }
   .dateline { font-size: 2.6rem; }
   .signature { font-size: 1.1rem; }
   .dispatch-strip { font-size: 0.74rem; }
   .lead h2.headline { font-size: 2.5rem; line-height: 1.08; }
-  .col-right { border-top: 1px solid var(--ink); padding-top: 1.6rem; margin-top: 0.6rem; }
   .section-line a { margin-right: 1.1rem; }
   .deep-title { font-size: 1.8rem; }
   /* v7-M2 surfaces */

@@ -380,7 +380,10 @@ def test_wiring_call_sites_present():
     core — the Today arc line, the deep timeline, and the dossier state card."""
     import inspect
     ssrc = inspect.getsource(server)
-    assert "_today_arc_html(con, slot, st, date, arc_seen)" in ssrc  # item 4 wired into _render_story (BUG-35: per-edition dedup set)
+    # v8-M2: the Today arc PROSE is gone; the slim memory STAMP is wired into
+    # _render_story instead (the full arc register lives in the deep view only).
+    assert "_today_arc_html(con, slot, st, date, arc_seen)" not in ssrc
+    assert "_memory_stamp_inner(con, slot, date, degraded=" in ssrc  # the stamp is wired into _render_story
     assert "_deep_timeline_html(con, slot, date, story_anchor)" in ssrc  # item 5 wired into deep view
     assert "_thread_state_card(t)" in ssrc                         # item 6 wired into Following
     asrc = inspect.getsource(analysis.analyze_story)

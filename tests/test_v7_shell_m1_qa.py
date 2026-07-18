@@ -249,13 +249,16 @@ def test_still_tracking_mid_list_keeps_story_and_deep_view_ids_aligned():
     assert "Deep story" in deep                    # the RIGHT doc, no off-by-one
     assert labels.DEEP_EYEBROW in deep
 
-    # the quick slots after it: sources-&-context views, anchors still aligned
+    # the quick slots after it: now STRIPS in the newspaper grid. v8-M2 makes the
+    # strip lean — the headline IS the deep-view door (openDeepView), and the
+    # redundant "→ Sources & context" bottom link is gone. The $0 sources-&-
+    # context deep view itself is unchanged and its anchors stay aligned.
     for i, headline in ((3, "Q4"), (4, "Q5")):
         art_start = page.index(f'id="story-{i}"')
         art = page[art_start:page.index("</article>", art_start)]
         assert headline in art
-        assert f"openDeepView('story-{i}'" in art
-        assert SC_RENDERED in art
+        assert f"openDeepView('story-{i}'" in art   # the headline is the door
+        assert "story-more" not in art              # no redundant bottom link on a strip
         deep_start = page.index(f'id="view-deep-story-{i}"')
         deep = page[deep_start:page.index("</section>", deep_start)]
         assert headline in deep

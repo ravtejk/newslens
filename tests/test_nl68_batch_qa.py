@@ -284,10 +284,11 @@ def test_generation_side_same_referent_figure_drop_is_wired_and_disclosed():
 
 def test_split_day_renders_the_covered_before_signal_once_per_slot_never_twice():
     """Two same-thread slots in one edition (the sanctioned-split shape,
-    BUG-35's dedup): the earliest slot carries the arc (marker suppressed);
-    the sibling's arc is deduped so it KEEPS the marker as its sole signal.
-    Net: each slot signals prior coverage exactly once, in exactly one form,
-    and no slot ever renders both."""
+    BUG-35's dedup): the earliest slot carries the slim memory STAMP (marker
+    suppressed); the sibling's stamp is deduped so it KEEPS the marker as its
+    sole signal. Net: each slot signals prior coverage exactly once, in exactly
+    one form, and no slot ever renders both. v8-M2: the signal is the stamp; the
+    arc PROSE is gone from Today entirely."""
     con = _con()
     topic = "Strait of Hormuz"
     _seed_thread_with_ledger(con, topic, prior_date="2026-07-05")
@@ -315,18 +316,19 @@ def test_split_day_renders_the_covered_before_signal_once_per_slot_never_twice()
     page, _ = server.build_page(con)
     con.close()
     today = page.split('id="view-today"')[1].split('id="view-following"')[0]
-    assert today.count("When we last covered this") == 1     # arc dedup holds
+    assert "When we last covered this" not in today          # arc PROSE gone from Today
+    assert today.count('class="memline"') == 1               # stamp dedup holds
     assert today.count("Tracked ongoing story") == 1         # sibling keeps marker
     articles = re.findall(r"<article[^>]*>.*?</article>", today, re.S)
     assert len(articles) >= 2
     for art in articles:
-        has_arc = "When we last covered this" in art
+        has_stamp = 'class="memline"' in art
         has_marker = "Tracked ongoing story" in art
-        assert not (has_arc and has_marker)                  # never both in one slot
-    arc_art = [a for a in articles if "When we last covered this" in a]
+        assert not (has_stamp and has_marker)                # never both in one slot
+    stamp_art = [a for a in articles if 'class="memline"' in a]
     marker_art = [a for a in articles if "Tracked ongoing story" in a]
-    assert len(arc_art) == 1 and len(marker_art) == 1
-    assert arc_art[0] is not marker_art[0]
+    assert len(stamp_art) == 1 and len(marker_art) == 1
+    assert stamp_art[0] is not marker_art[0]
 
 
 # ===========================================================================
@@ -371,12 +373,14 @@ def test_medium_tier_deep_view_obeys_the_superset_law():
 # Item 8 — quick-tier titles click through too (extends their lead pin)
 # ===========================================================================
 
-def test_quick_snippet_title_links_to_its_sources_context_view():
-    """An In-Brief quick item HAS a deep view (the $0 sources-&-context one),
-    so its SNIPPET title is the same real-anchor click-through, targeting the
-    SAME view as the bottom entry link. Seeded as slot 2 behind a full lead so
-    the quick story renders in the true snippet role (a lone slot would be
-    promoted to the grid's lead position)."""
+def test_quick_strip_title_links_to_its_sources_context_view():
+    """A quick-tier item HAS a deep view (the $0 sources-&-context one). v8-M2:
+    the quick tier is now a lean STRIP whose title IS the real-anchor
+    click-through to that view — the headline is the only door (the redundant
+    '→ Sources & context' bottom link is gone; scale/placement, not a link
+    label, carry the strip). Seeded as slot 2 behind a full lead so the quick
+    story renders in the true strip role (a lone slot would be promoted to the
+    grid's lead position)."""
     con = _con()
     slots = [{"slot": "1", "story_title": "Lead story", "summary": "s1",
               "item_ids": [], "outlets": ["The Hill"], "matched_tags": [],
@@ -397,11 +401,11 @@ def test_quick_snippet_title_links_to_its_sources_context_view():
         json.dumps(entry) + "\n", encoding="utf-8")
     page, _ = server.build_page(con)
     con.close()
-    snippet = page.split('<article class="snippet"')[1].split("</article>")[0]
-    assert "Court story" in snippet
-    assert 'class="headline-link"' in snippet
-    assert snippet.count("openDeepView('story-1', event)") == 2  # title + entry
-    assert "sources-context-link" in snippet
+    strip = page.split('<article class="strip')[1].split("</article>")[0]
+    assert "Court story" in strip
+    assert 'class="headline-link"' in strip
+    assert strip.count("openDeepView('story-1', event)") == 1  # the headline is the only door
+    assert "sources-context-link" not in strip                 # no redundant bottom link on a strip
 
 
 # ===========================================================================
