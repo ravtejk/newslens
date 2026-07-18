@@ -142,8 +142,13 @@ BACK_TO_TODAY = "← Back to today’s edition"
 BACK_TO_EDITION = "← Back to this edition"
 BACK_TO_ARCHIVE = "← Back to Archive"
 
-# --- Archive (§8 calendar law) -----------------------------------------------
+# --- Archive (§14 step-back redesign; supersedes the §8 list-primary law) -----
 ARCHIVE_EMPTY = "Nothing yet"
 # NL-68 item 14: ARCHIVE_CAL_INDEX_NOTE ("The grid is an index of the list below
 # it.") REMOVED — interface-explaining copy the principal named as condescension.
 ARCHIVE_TODAY_TAG = "TODAY"
+# §14: the day panel's jump — sits ABOVE the headlines (his approved spec).
+ARCHIVE_VIEW_BRIEFING = "View briefing"
+# §14 gate FIX-2: the sr-only qualifier on a no-edition today — terra alone is
+# color-alone non-visually; the a11y tree must not carry a bare numeral.
+ARCHIVE_TODAY_NO_EDITION = "today — no edition yet"

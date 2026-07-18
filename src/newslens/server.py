@@ -1881,95 +1881,216 @@ def _human_short(date_str: str) -> str:
         return date_str
 
 
-def _cal_accessible_name(dstr: str, is_today: bool) -> str:
-    """Full accessible name for an edition cell (§8): 'Friday, July 10, 2026 —
-    edition' (or '— today’s edition')."""
+def _cal_accessible_name(dstr: str, is_today: bool, picked: bool) -> str:
+    """Full accessible name for an edition BUTTON (§14): 'Friday, July 10, 2026 —
+    edition — show headlines' (picked: '— showing headlines'; today: '— today’s
+    edition'). The action hint is the approved mockup's (gate FIX-1): it is the
+    only cue that the button populates the panel rather than navigating. Only
+    edition days are focusable; the pick ALSO rides aria-pressed — pickDay keeps
+    the hint in sync client-side."""
     d = datetime.strptime(dstr, "%Y-%m-%d")
     human = f"{d.strftime('%A, %B')} {d.day}, {d.year}"
-    return human + (" — today’s edition" if is_today else " — edition")
+    return (human + (" — today’s edition" if is_today else " — edition")
+            + (" — showing headlines" if picked else " — show headlines"))
 
 
-def _calendar_html(latest_ed: str, ed_dates: set, utc_by_date: Dict[str, str],
-                   today: str) -> str:
-    """The §8 calendar for the month of the latest edition. Three exhaustive day
-    classes: edition (ink 700, moved-green underline, whole cell a link with a
-    full accessible name, real assembly stamp) · gap-in-history (ink-faint, no
-    shame copy) · pre-history + future (--cal-bare, barest). Today's edition adds
-    the terracotta ring. Sunday-start grid; decorative cells are aria-hidden; the
-    list below it is the primary accessible rendering. No streaks, no topic
-    words. The grid is an index."""
-    y, m = int(latest_ed[:4]), int(latest_ed[5:7])
+def _month_label(month: str) -> str:
+    """'2026-07' -> 'July 2026' (nav links, aria labels)."""
+    y, m = int(month[:4]), int(month[5:7])
+    return f"{datetime(y, m, 1).strftime('%B')} {y}"
+
+
+def _prev_month(month: str) -> str:
+    """The calendar month immediately before 'YYYY-MM'."""
+    y, m = int(month[:4]), int(month[5:7])
+    y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return f"{y:04d}-{m:02d}"
+
+
+def _calendar_html(month: str, ed_dates: set, utc_by_date: Dict[str, str],
+                   today: str, picked: str, first_ed: str) -> str:
+    """The §14 calendar grid for ONE month. All day-states are typographic and
+    NOTHING encloses a numeral, so two-digit dates cannot cramp (the redesign's
+    fix by construction):
+      edition — ink 700 + moved-green underline + mono stamp; a <button> (only
+                edition days are focusable); aria-pressed carries the pick;
+                cal-picked adds the display-scale jump on the picked day
+      today   — terra numeral (color marks today, and only today). Today WITH an
+                edition is a button; today WITHOUT one is a non-interactive span
+                (the pre-generation-morning state the old design never named)
+      gap     — ink-faint numeral, inside history, no shame
+      bare    — --cal-bare, pre-history and future
+    Sunday-start; decorative lead cells aria-hidden. No ring, no box, ever."""
+    y, m = int(month[:4]), int(month[5:7])
     ndays = calendar.monthrange(y, m)[1]
-    first_ed = min(ed_dates) if ed_dates else ""
     lead_blanks = (datetime(y, m, 1).weekday() + 1) % 7   # Sunday-start offset
     dow = "".join(f'<span class="cal-dow" aria-hidden="true">{d}</span>'
                   for d in ("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"))
     cells = ['<span class="cal-cell" aria-hidden="true"></span>'] * lead_blanks
     for day in range(1, ndays + 1):
         dstr = f"{y:04d}-{m:02d}-{day:02d}"
+        is_today = dstr == today
         if dstr in ed_dates:
-            is_today = dstr == today
-            cls = "cal-cell cal-edition" + (" cal-today" if is_today else "")
+            cls = "cal-cell cal-edition"
+            if is_today:
+                cls += " cal-today"
+            if dstr == picked:
+                cls += " cal-picked"
             stamp = (f'<span class="cal-stamp">{_e(utc_by_date.get(dstr, ""))} UTC</span>'
                      if utc_by_date.get(dstr) else "")
+            pressed = "true" if dstr == picked else "false"
             cells.append(
-                f'<span class="{cls}"><a href={_e_attr("/?date=" + dstr)} '
-                f'onclick="return openEdition(\'{_e(dstr)}\', event)" '
-                f'aria-label={_e_attr(_cal_accessible_name(dstr, is_today))}>'
-                f'<span class="cal-num">{day}</span>{stamp}</a></span>')
+                f'<span class="{cls}"><button type="button" '
+                f'data-date="{_e(dstr)}" '
+                f'onclick="return pickDay(\'{_e(dstr)}\', event)" '
+                f'aria-pressed="{pressed}" '
+                f'aria-label={_e_attr(_cal_accessible_name(dstr, is_today, dstr == picked))}>'
+                f'<span class="cal-num">{day}</span>{stamp}</button></span>')
+        elif is_today:
+            # Today, no edition yet (pre-generation morning): terra numeral, no
+            # underline, non-interactive. Not aria-hidden — the date still reads,
+            # and the sr-only label says WHY it reads (gate FIX-2: terra alone is
+            # color-alone non-visually; a bare numeral in the a11y tree is worse
+            # than silence).
+            cells.append('<span class="cal-cell cal-today">'
+                         f'<span class="cal-num">{day}</span>'
+                         f'<span class="sr-only"> — '
+                         f'{_e(labels.ARCHIVE_TODAY_NO_EDITION)}</span></span>')
         elif first_ed and first_ed <= dstr <= today:
             cells.append('<span class="cal-cell cal-gap" aria-hidden="true">'
                          f'<span class="cal-num">{day}</span></span>')
         else:
             cells.append('<span class="cal-cell cal-void" aria-hidden="true">'
                          f'<span class="cal-num">{day}</span></span>')
-    return f'<div class="cal-grid">{dow}{"".join(cells)}</div>'
+    return (f'<div class="cal-grid" role="group" '
+            f'aria-label={_e_attr(_month_label(month) + " calendar")}>'
+            f'{dow}{"".join(cells)}</div>')
 
 
-def _render_archive(con: sqlite3.Connection) -> str:
-    """§8 rebuild: the Study/Wire calendar in Front Page type + the list-below as
-    the PRIMARY accessible rendering. mini-masthead + section line open the view
-    (§4). The month shown is the latest edition's; a month with zero editions
-    renders the honest empty state (paging across months is a follow-up)."""
-    head = _mini_head(datetime.now().strftime("%Y-%m-%d")) + _section_line("archive")
-    today = datetime.now().strftime("%Y-%m-%d")
+def _day_panel_html(date: str, utc: str, stories: List[Dict], today: str,
+                    hidden: bool) -> str:
+    """One edition's day panel (§14): the mono stamp, the View-briefing jump
+    ABOVE the headlines (his approved spec), then EVERY headline — each a door to
+    the same edition ('two doors, one room'). openEdition is the read-logging
+    open; the href is the no-JS fallback. Hidden until picked; the picked panel's
+    reveal is announced by the aria-live stack that wraps these."""
+    d = datetime.strptime(date, "%Y-%m-%d")
+    bits = [f"{d.strftime('%A, %B')} {d.day}, {d.year}".upper()]
+    if utc:
+        bits.append(f"ASSEMBLED {utc} UTC")   # the whole stamp is _e'd on render
+    if date == today:
+        bits.append(labels.ARCHIVE_TODAY_TAG)      # the TODAY tag lives here now
+    heads = []
+    for i, s in enumerate(stories):
+        h = s.get("headline") or ""
+        if not h:
+            continue
+        cls = ' class="dp-lead"' if i == 0 else ""
+        heads.append(
+            f'<li{cls}><a href={_e_attr("/?date=" + date)} '
+            f'onclick="return openEdition(\'{_e(date)}\', event)">{_e(h)}</a></li>')
+    hidden_attr = " hidden" if hidden else ""
+    return (
+        f'<div class="day-panel"{hidden_attr} data-date="{_e(date)}">'
+        f'<p class="dp-stamp">{_e(" · ".join(bits))}</p>'
+        f'<p class="dp-action"><a class="dp-btn" href={_e_attr("/?date=" + date)} '
+        f'onclick="return openEdition(\'{_e(date)}\', event)">'
+        f'{_e(labels.ARCHIVE_VIEW_BRIEFING)} →</a></p>'
+        f'<ol class="dp-headlines">{"".join(heads)}</ol></div>')
+
+
+def _archive_body(con: sqlite3.Connection, anchor_month: Optional[str] = None) -> str:
+    """§14 archive guts (titles + month nav + the grid/panel pair), returned
+    WITHOUT the page shell so /archive?am= can serve it as a fetch fragment
+    (mirrors /edition). '' when there are no editions — the caller renders the
+    honest empty state.
+
+    Window / month-depth (the principal's build-time reach-back rider, 2026-07-18
+    — interpretation flagged in the build report): the window is the anchor month
+    plus its immediately-preceding calendar month WHEN that month carries
+    editions — so the trailing month is VISIBLE whenever it has content, and an
+    editionless trailing month is never rendered as empty noise. Default anchor is
+    the latest edition's month.
+
+    Month nav pages to the nearest edition-bearing month strictly outside the
+    window on each side; a link renders only when reachable and is ABSENT
+    otherwise (never a disabled link — v4 affordance-absence law)."""
+    from . import ranking   # local import: the file's established ranking pattern
+    today = ranking.local_today()
     editions: List[Dict] = []
     for row in con.execute("SELECT * FROM briefings ORDER BY date DESC"):
         entry = _log_entry_for(row["date"])
         stories, _ = _stories_for(row, entry)
-        lead = stories[0].get("headline", "") if stories else ""
         editions.append({"date": row["date"], "utc": _utc_hm(row["generated_at"]),
-                         "lead": lead})
+                         "stories": stories})
     if not editions:
+        return ""
+    ed_dates = {e["date"] for e in editions}
+    first_ed = min(ed_dates)
+    utc_by_date = {e["date"]: e["utc"] for e in editions}
+    ed_months = sorted({d[:7] for d in ed_dates})
+    valid_anchor = (anchor_month and re.match(r"^\d{4}-\d{2}$", anchor_month)
+                    and anchor_month in ed_months)
+    anchor = anchor_month if valid_anchor else max(ed_months)
+    trailing = _prev_month(anchor)
+    window = [anchor] + ([trailing] if trailing in ed_months else [])  # newest first
+    earliest_shown = min(window)
+    window_eds = sorted((e for e in editions if e["date"][:7] in window),
+                        key=lambda e: e["date"])
+    picked = window_eds[-1]["date"] if window_eds else ""
+
+    older = max((mo for mo in ed_months if mo < earliest_shown), default=None)
+    newer = min((mo for mo in ed_months if mo > anchor), default=None)
+    nav_bits = []
+    if older:
+        nav_bits.append(
+            f'<a class="month-nav-link mn-prev" href="#" '
+            f'onclick="return navMonth(\'{older}\', event)">'
+            f'← {_e(_month_label(older))}</a>')
+    if newer:
+        nav_bits.append(
+            f'<a class="month-nav-link mn-next" href="#" '
+            f'onclick="return navMonth(\'{newer}\', event)">'
+            f'{_e(_month_label(newer))} →</a>')
+    nav_html = f'<p class="month-nav">{"".join(nav_bits)}</p>' if nav_bits else ""
+
+    grids = []
+    for i, mo in enumerate(window):
+        y = int(mo[:4])
+        title = (f'<h1 class="month-title">{datetime(y, int(mo[5:7]), 1).strftime("%B")} '
+                 f'<span class="yr">{y}</span></h1>') if i == 0 else (
+                 f'<h2 class="month-title">{datetime(y, int(mo[5:7]), 1).strftime("%B")} '
+                 f'<span class="yr">{y}</span></h2>')
+        grid = _calendar_html(mo, ed_dates, utc_by_date, today, picked, first_ed)
+        # nav flanks the anchor (top) title only — the trailing month is the
+        # reach-back, not a second nav origin.
+        grids.append(f'<div class="cal-month">{title}{nav_html if i == 0 else ""}{grid}</div>')
+    panels = [_day_panel_html(e["date"], e["utc"], e["stories"], today,
+                              hidden=(e["date"] != picked))
+              for e in reversed(window_eds)]   # newest first in DOM
+    return (
+        f'<div class="arch-cols">'
+        f'<div class="cal-col">{"".join(grids)}</div>'
+        f'<div class="day-panel-stack" aria-live="polite">{"".join(panels)}</div>'
+        f'</div>')
+
+
+def _render_archive(con: sqlite3.Connection) -> str:
+    """§14 archive (the step-back redesign, APPROVED 2026-07-18): the month grid
+    paired with a day panel BESIDE it (desktop) / below it (mobile), the front
+    page's own 7fr/5fr skeleton. The list-below is dead; the panel carries the
+    picked day's headlines with View-briefing above them. mini-masthead + section
+    line open the view (§4). Zero editions renders the honest empty state.
+    The guts live in _archive_body so /archive?am= can page months as a fragment;
+    #archive-body is the swap target."""
+    from . import ranking   # local import: the file's established ranking pattern
+    head = _mini_head(ranking.local_today()) + _section_line("archive")
+    body = _archive_body(con)
+    if not body:
         return head + (f'<div class="page">'
                        f'<h1 class="page-title">{_e(labels.NAV_ARCHIVE)}</h1>'
                        f'<p class="empty-note">{_e(labels.ARCHIVE_EMPTY)}</p></div>')
-    ed_dates = {e["date"] for e in editions}
-    latest_ed = max(ed_dates)
-    utc_by_date = {e["date"]: e["utc"] for e in editions}
-    y, m = int(latest_ed[:4]), int(latest_ed[5:7])
-    month_name = datetime(y, m, 1).strftime("%B")
-    n_ed = sum(1 for d in ed_dates if d[:7] == latest_ed[:7])
-    cal = _calendar_html(latest_ed, ed_dates, utc_by_date, today)
-    list_items = []
-    for e in editions:
-        tag = f' · {labels.ARCHIVE_TODAY_TAG}' if e["date"] == today else ""
-        stamp = (f'{e["date"]} · {e["utc"]} UTC{tag}' if e["utc"]
-                 else f'{e["date"]}{tag}')
-        # NL-11: JS opens the edition IN-PLACE; the href is the no-JS fallback.
-        list_items.append(
-            f'<li><span class="al-date">{_e(stamp)}</span>'
-            f'<a href={_e_attr("/?date=" + e["date"])} '
-            f'onclick="return openEdition(\'{_e(e["date"])}\', event)">'
-            f'{_e(e["lead"] or "(untitled edition)")}</a></li>')
-    return head + (
-        f'<div class="page">'
-        f'<h1 class="month-title">{_e(month_name)} <span class="yr">{y}</span></h1>'
-        # NL-68 item 14 killed the interface-explainer. v8-M1 item 8 (2026-07-17):
-        # the "N editions this month" count line ALSO dies — the calendar shows the
-        # rhythm at a glance; a count caption is redundant chrome on the header.
-        f'{cal}'
-        f'<ul class="archive-list">{"".join(list_items)}</ul></div>')
+    return head + f'<div class="page"><div id="archive-body">{body}</div></div>'
 
 
 # ---------------------------------------------------------------------------
@@ -3132,6 +3253,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._page(parse_qs(parsed.query))
             if parsed.path == "/edition":
                 return self._edition(parse_qs(parsed.query))
+            if parsed.path == "/archive":
+                return self._archive(parse_qs(parsed.query))
             if parsed.path == "/api/status":
                 return self._send_json(GEN_JOB.snapshot())
             m = re.match(r"^/audio/(\d{4}-\d{2}-\d{2})\.wav$", parsed.path)
@@ -3170,6 +3293,21 @@ class Handler(BaseHTTPRequestHandler):
             if rendered:
                 events.log_read(con, rendered)
             self._send_html(html)
+        finally:
+            con.close()
+
+    def _archive(self, qs: Dict[str, List[str]]) -> None:
+        """§14 month paging: serve the archive guts for the requested month as a
+        fetch fragment (the /edition pattern). No read is logged — paging months
+        is not opening an edition. A bad/absent month falls back to the default
+        window inside _archive_body."""
+        am = (qs.get("am") or [None])[0]
+        if am and not re.match(r"^\d{4}-\d{2}$", am):
+            am = None
+        con = db.connect()
+        try:
+            body = _archive_body(con, am)
+            self._send_html(body or "<p class='empty-note'>No editions yet.</p>")
         finally:
             con.close()
 

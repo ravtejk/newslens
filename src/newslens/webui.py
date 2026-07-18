@@ -285,33 +285,55 @@ h1.view-title { font-family: var(--font-display); font-size: 1.5rem; margin: 1.5
 .q-stamp { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em; color: var(--ink-faint); }
 .lifecycle-row { border-top: none; padding: 0.4rem 0; }
 
-/* ==================== ARCHIVE — the Study/Wire calendar (§8) ==================== */
+/* ==================== ARCHIVE — the step-back redesign (§14) ====================
+   Day-states are ALL typographic; nothing encloses a numeral, so two-digit dates
+   cannot cramp (the fix by construction). Desktop pairs the month grid with the
+   day panel (the front page's own 7fr/5fr skeleton); narrow viewports stack them.
+   Two functional colors only: moved-green underline = has-edition, terra = today
+   / the action button. Scale (not a ring) marks the pick. */
 .month-title { font-family: var(--font-display); font-weight: 700; font-size: 3rem;
-  line-height: 1; margin: 2rem 0 0.2rem; }
+  line-height: 1; margin: 2rem 0 0.3rem; }
+h2.month-title { font-size: 2.2rem; }
+.cal-month + .cal-month { margin-top: 2.4rem; }
 .month-title .yr { font-size: 1.3rem; font-weight: 400; color: var(--ink-faint); }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4rem;
-  max-width: 42rem; margin-bottom: 0.6rem; }
+.month-nav { font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em;
+  color: var(--ink-faint); margin: 0 0 1.4rem; display: flex; gap: 1.6rem; }
+.month-nav a { color: var(--ink-soft); text-decoration: none; }
+.month-nav a:hover { color: var(--ink); text-decoration: underline; }
+.arch-cols { display: grid; grid-template-columns: 7fr 5fr; gap: 0 4rem;
+  align-items: start; margin: 1.4rem 0 4rem; }
+/* gate FIX-2: visually-hidden text for AT (the no-edition today qualifier). */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4rem; }
 .cal-dow { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--ink-faint); padding-bottom: 0.3rem; }
-.cal-cell { min-height: 3.6rem; padding: 0.3rem 0.35rem; font-family: var(--font-display); }
-.cal-num { font-size: 1.2rem; line-height: 1.3; display: inline-block; }
+.cal-cell { min-height: 4rem; padding: 0.3rem 0.35rem; font-family: var(--font-display); }
+.cal-num { font-size: 1.2rem; line-height: 1.2; display: inline-block; }
 .cal-void .cal-num { color: var(--cal-bare); }           /* pre-history + future: barest */
 .cal-gap .cal-num { color: var(--ink-faint); }            /* gap within history: faint, no shame */
-.cal-edition a { text-decoration: none; color: var(--ink); display: block; }
-.cal-edition .cal-num { font-weight: 700; border-bottom: 2px solid var(--moved); }
-.cal-edition a:hover .cal-num { color: var(--terra-deep); }
+.cal-edition button { background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+  text-align: left; display: block; width: 100%; color: var(--ink); font-family: var(--font-display); }
+.cal-edition .cal-num { font-weight: 700; border-bottom: 2px solid var(--moved); }  /* has-edition */
+.cal-edition button:hover .cal-num { color: var(--terra-deep); }
 .cal-stamp { display: block; font-family: var(--font-mono); font-size: 0.64rem;
   color: var(--ink-faint); margin-top: 0.2rem; }
-.cal-today .cal-num { color: var(--terra); border: 2px solid var(--terra);
-  border-radius: 50%; width: 2rem; height: 2rem; display: inline-flex;
-  align-items: center; justify-content: center; }
-.archive-list { list-style: none; padding: 0; margin: 1.6rem 0 4rem; max-width: 46rem;
-  border-top: 1px solid var(--ink); }
-.archive-list li { border-bottom: 1px solid var(--rule); padding: 0.8rem 0; }
-.archive-list .al-date { font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-faint); display: block; }
-.archive-list a { font-family: var(--font-display); font-weight: 700; font-size: 1.1rem;
+.cal-today .cal-num { color: var(--terra); }             /* today: terra numeral, nothing else */
+.cal-picked .cal-num { font-size: 2rem; line-height: 1; }  /* picked: the loud numeral — no enclosure */
+.day-panel { border-top: 1px solid var(--ink); padding-top: 0.9rem; }
+.dp-stamp { font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.06em;
+  color: var(--ink-faint); margin: 0 0 0.7rem; }
+.dp-action { margin: 0 0 1.1rem; }
+.dp-btn { display: inline-block; border: 1px solid var(--terra); border-radius: 2px;
+  color: var(--terra); font-weight: 700; font-size: 0.88rem; padding: 0.3rem 0.8rem;
+  text-decoration: none; background: none; cursor: pointer; }
+.dp-btn:hover { color: var(--terra-deep); border-color: var(--terra-deep); }
+.dp-headlines { list-style: none; margin: 0; padding: 0; }
+.dp-headlines li { border-top: 1px solid var(--rule); padding: 0.55rem 0; }
+.dp-headlines a { font-family: var(--font-display); font-weight: 700; font-size: 1rem;
   color: var(--ink); text-decoration: none; }
-.archive-list a:hover { color: var(--terra-deep); text-decoration: underline; }
+.dp-headlines li.dp-lead a { font-size: 1.2rem; }
+.dp-headlines a:hover { color: var(--terra-deep); text-decoration: underline; }
 
 /* ==================== THREAD PAGE — the Open thread destination ==================== */
 .dossier-state { font-size: 1rem; color: var(--ink); margin: 0 0 0.6rem; max-width: 44rem; line-height: 1.6; }
@@ -514,7 +536,12 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
   .page-title { font-size: 2.1rem; }
   .view-line a { margin-right: 1.1rem; }
   .month-title { font-size: 2.2rem; }
-  .cal-cell { min-height: 2.8rem; padding: 0.25rem; }
+  h2.month-title { font-size: 1.9rem; }
+  /* §14: stack the grid and panel (his approved base geometry, exact) */
+  .arch-cols { grid-template-columns: 1fr; gap: 0; }
+  .day-panel-stack { margin-top: 1.8rem; }
+  .cal-cell { min-height: 3rem; padding: 0.25rem; }
+  .cal-picked .cal-num { font-size: 1.7rem; }   /* the pick steps down on phones */
   .cal-stamp { display: none; }   /* stamps are the desktop spread's luxury */
 }
 """
@@ -1111,6 +1138,55 @@ function openEdition(date, e) {
 function backToArchive(e) {
   if (e) e.preventDefault();
   showView('archive');
+}
+/* §14: pick a day — no fetch. Every edition's panel is already in the DOM
+   (hidden); picking swaps which one shows (the aria-live stack announces it),
+   and moves the pick's scale + aria-pressed to the chosen edition button. */
+function pickDay(date, e) {
+  if (e) e.preventDefault();
+  var stack = document.querySelector('.day-panel-stack');
+  if (stack) {
+    stack.querySelectorAll('.day-panel').forEach(function (p) {
+      p.hidden = (p.getAttribute('data-date') !== date);
+    });
+  }
+  document.querySelectorAll('.cal-edition').forEach(function (cell) {
+    cell.classList.remove('cal-picked');
+    var b = cell.querySelector('button');
+    if (b) {
+      b.setAttribute('aria-pressed', 'false');
+      /* gate FIX-1: keep the accessible-name action hint truthful after a
+         client-side pick — a stale "showing headlines" on an unpressed button
+         would contradict aria-pressed. */
+      var lb = b.getAttribute('aria-label');
+      if (lb) b.setAttribute('aria-label',
+        lb.replace(' — showing headlines', ' — show headlines'));
+    }
+  });
+  var btn = document.querySelector('.cal-edition button[data-date="' + date + '"]');
+  if (btn) {
+    btn.setAttribute('aria-pressed', 'true');
+    var cell = btn.closest('.cal-edition');
+    if (cell) cell.classList.add('cal-picked');
+    var lbp = btn.getAttribute('aria-label');
+    if (lbp) btn.setAttribute('aria-label',
+      lbp.replace(' — show headlines', ' — showing headlines'));
+  }
+  return false;
+}
+/* §14: page months — fetch the archive guts for a month and swap them in place
+   (the openEdition pattern). Inline onclicks in the fragment keep working after
+   injection; the href-less links fall back to a full nav if the fetch fails. */
+function navMonth(month, e) {
+  if (e) e.preventDefault();
+  fetch('/archive?am=' + encodeURIComponent(month))
+    .then(function (r) { return r.text(); })
+    .then(function (html) {
+      var host = document.getElementById('archive-body');
+      if (host) { host.innerHTML = html; window.scrollTo(0, 0); }
+    })
+    .catch(function () { location.href = '/archive?am=' + encodeURIComponent(month); });
+  return false;
 }
 restoreViewAfterReload();
 function pollGeneration() {

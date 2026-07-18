@@ -228,30 +228,40 @@ def test_following_triad_and_lifecycle_sections():
 # ===========================================================================
 
 def test_archive_calendar_three_day_classes():
+    # CONSCIOUS FLIP (archive redesign APPROVED 2026-07-18, DIRECTION §14): the
+    # three day-classes survive; the list-below (archive-list / al-date) is DEAD,
+    # superseded by the day panel beside the grid. Contract pins moved here.
     con = _con()
-    _seed_hormuz_shaped(con)                 # editions Jul 5, 6, 10 (Jul 10 = today-ish)
-    # make Jul 10 "today" so the today ring resolves deterministically
+    _seed_hormuz_shaped(con)                 # editions Jul 5, 6, 10
     html = server._render_archive(con)
     con.close()
-    assert 'class="month-title">July' in html            # month title h1
+    assert 'class="month-title">July' in html            # month title
     assert 'class="cal-cell cal-edition' in html         # edition day class
     assert 'class="cal-cell cal-gap"' in html            # gap-in-history (Jul 7-9)
     assert 'class="cal-cell cal-void"' in html           # pre-history / future
-    # edition cells are links with FULL accessible names (§8)
-    assert re.search(r'aria-label="[A-Za-z]+, July \d+, 2026 — (edition|today’s edition)"', html)
-    # the list below is the PRIMARY accessible rendering (mono stamp + lead)
-    assert 'class="archive-list"' in html
-    assert 'class="al-date"' in html
+    # edition cells are BUTTONS with FULL accessible names (§14: only edition
+    # days are focusable; the pick rides aria-pressed, not a link)
+    assert re.search(r'aria-label="[A-Za-z]+, July \d+, 2026 — (edition|today’s edition)'
+                     r' — show(?:ing)? headlines"', html)   # gate FIX-1: the action hint
+    # the day panel beside the grid replaces the list-below (list stays dead)
+    assert 'class="arch-cols"' in html
+    assert 'class="day-panel"' in html
+    assert 'class="archive-list"' not in html
+    assert 'class="al-date"' not in html
 
 
-def test_archive_today_gets_the_ring_and_tag():
+def test_archive_today_is_terra_not_ringed_and_panel_carries_the_tag():
+    # CONSCIOUS FLIP (DIRECTION §14): the terracotta RING is gone — today is a
+    # terra numeral, nothing encloses it. cal-today stays as the class; the TODAY
+    # tag moves from the dead list stamp into the day panel's stamp.
     con = _con()
     today = datetime.now().strftime("%Y-%m-%d")
     _briefing(con, today)
     html = server._render_archive(con)
     con.close()
-    assert 'cal-edition cal-today' in html               # the terracotta ring class
-    assert labels.ARCHIVE_TODAY_TAG in html              # TODAY tag in the list stamp
+    assert 'cal-edition cal-today' in html               # today-with-edition class
+    assert 'border: 2px solid var(--terra)' not in webui.CSS   # the ring is gone
+    assert labels.ARCHIVE_TODAY_TAG in html              # TODAY tag in the panel stamp
 
 
 def test_archive_empty_state_honest():
