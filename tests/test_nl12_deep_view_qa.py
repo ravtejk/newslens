@@ -515,7 +515,11 @@ def test_arc_line_inside_archived_edition_fragment_scoped_and_navigable(ui):
     assert 'id="ed2026-07-06-story-0-open"' in frag
     assert "openEdition('2026-07-05', event)" in frag    # continuity target
     assert 'href="/?date=2026-07-05"' in frag            # no-JS fallback
-    assert '<details class="cite-fold" open>' in frag    # folds ship open
+    # v8-M1 item 4 (CONSCIOUS FLIP): the inline cite-fold apparatus DIES — the
+    # archived fragment renders the same plain-count / source-cluster grammar as
+    # a live deep view, no ▸ folds.
+    assert "cite-fold" not in frag
+    assert 'class="cite">(' in frag or 'class="src-cluster"' in frag
     con.close()
 
 
@@ -559,33 +563,31 @@ def test_one_fold_per_fact_each_keyboard_labelled_and_open():
         {"fact": "Third fact stands.", "cites": ["R1"]},
     ]
     facts = _section(_deep(b), "story-0-facts")
-    assert facts.count('<details class="cite-fold" open>') == 3
-    assert facts.count('aria-label="Show sources for this fact"') == 3
-    assert facts.count('class="cite-fold-body"') == 3
+    # v8-M1 item 4 (CONSCIOUS FLIP): the per-fact cite-fold DIES — each fact now
+    # closes with a PLAIN end-of-line outlet count, no caret, no reveal.
+    assert "cite-fold" not in facts
+    assert 'aria-label="Show sources for this fact"' not in facts
+    assert facts.count('<span class="cite">(1 outlet)</span>') == 3
 
 
 def test_register_css_deleted_not_restyled_and_fold_css_present():
     """D1: '.unknown-q / .unknown-beat styling and the (settles:) span are
     deleted, not restyled' — swept over the shipped stylesheet, plus the
-    reader-removed ledger/discrepancy/watch-item classes. The fold-away's
-    explicit collapse rule (the real-browser-caught fix) must be present:
-    an inline <details> defeats Chrome's native content-hiding."""
+    reader-removed ledger/discrepancy/watch-item classes. CONSCIOUS FLIP
+    (gate FIX-2, 2026-07-17): the cite-fold apparatus itself is now DELETED
+    (v8-M1 item 4 killed inline citations), so the fold joins the
+    deleted-not-restyled sweep instead of being asserted present."""
     css = webui.CSS
     for gone in ("unknown-q", "unknown-beat", "deep-discrepancy",
-                 "deep-ledger", "deep-watch-item", "unresolved-tag"):
+                 "deep-ledger", "deep-watch-item", "unresolved-tag",
+                 "cite-fold", "fact-cite"):
         assert gone not in css
-    assert ".cite-fold:not([open]) .cite-fold-body { display: none; }" in css
     assert ".deep-arc-line" in css
 
 
-def test_collapse_runs_after_edition_injection_not_before():
-    """Ordering contract in the openEdition path: collapseCiteFolds(mount)
-    must run AFTER mount.innerHTML is assigned — collapsing before injection
-    is a silent no-op that would leave archive folds expanded."""
-    js = webui.JS
-    inject = js.index("mount.innerHTML = html")
-    collapse = js.index("collapseCiteFolds(mount)")
-    assert inject < collapse
-    # and the load-time pass exists exactly once, after the function def
-    assert js.index("function collapseCiteFolds") < js.index(
-        "collapseCiteFolds(document)")
+def test_collapse_apparatus_fully_removed_from_shipped_js():
+    """CONSCIOUS FLIP (gate FIX-2, 2026-07-17): the ordering contract this
+    test pinned died with the apparatus — collapseCiteFolds and both its call
+    sites are REMOVED from the shipped JS (v8-M1 item 4; the absence pin in
+    test_v8_m1_ui_qa is the cross-file guard)."""
+    assert "collapseCiteFolds" not in webui.JS

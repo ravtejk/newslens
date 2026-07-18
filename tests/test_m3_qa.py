@@ -685,10 +685,11 @@ def test_effects_qualifier_copy_pinned_as_actual_v6_deviation():
     html = server._render_deep_view("story-0", "H", doc, DATE)
     eff = html.split('id="story-0-effects"')[1].split("</div>")[0]
     assert "Jan Novak:" in eff
-    # CONSCIOUSLY FLIPPED (M3 gate render batch): v6's bare grammar is now
-    # the render — never "(via X · via Sonar)", never "(via X · 1 outlet)".
-    assert "(via reuters.com)" in eff
-    assert "via Sonar)" not in eff
+    # v8-M1 item 4 (2026-07-17, CONSCIOUS FLIP): the inline "(via Outlet)"
+    # apparatus DIES — each effect reads plain and closes with a trailing source
+    # cluster naming the outlet. (WAS: the bare "(via reuters.com)" inline.)
+    assert "(via" not in eff                       # no inline via apparatus
+    assert '<p class="src-cluster">— reuters.com</p>' in eff
 
 
 def test_deep_view_jumplist_is_five_sections_no_dead_anchors():

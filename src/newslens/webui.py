@@ -269,7 +269,6 @@ h1.view-title { font-family: var(--font-display); font-size: 1.5rem; margin: 1.5
 .month-title { font-family: var(--font-display); font-weight: 700; font-size: 3rem;
   line-height: 1; margin: 2rem 0 0.2rem; }
 .month-title .yr { font-size: 1.3rem; font-weight: 400; color: var(--ink-faint); }
-.cal-note { font-size: 0.8rem; color: var(--ink-faint); margin: 0.2rem 0 1.6rem; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4rem;
   max-width: 42rem; margin-bottom: 0.6rem; }
 .cal-dow { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
@@ -424,19 +423,11 @@ h1.view-title { font-family: var(--font-display); font-size: 1.5rem; margin: 1.5
   color: var(--ink-faint); display: block; }
 .tl-signif { color: var(--ink-soft); }
 .tl-gap { font-size: 0.85rem; color: var(--ink-faint); font-style: italic; margin: 0 0 0.9rem; }
-/* NL-58 parity: the citation fold reads the same in the facts list AND in the
-   mechanism prose. <details open> => no-JS shows it expanded; JS collapses it. */
-.fact-cite { color: var(--ink-faint); font-size: 0.85em; }
-.cite-fold { display: inline; }
-.cite-fold:not([open]) .cite-fold-body { display: none; }
-.cite-fold summary { display: inline; cursor: pointer; list-style: none; color: var(--ink-faint); }
-.cite-fold summary::-webkit-details-marker { display: none; }
-.cite-fold summary:focus-visible { outline: 2px solid var(--terra); outline-offset: 2px; border-radius: 2px; }
-.cite-fold summary .caret { display: inline-block; font-size: 0.85em; transition: transform 0.12s ease; }
-.cite-fold[open] summary .caret { transform: rotate(90deg); }
-.cite-fold .cite-fold-body { color: var(--ink-faint); }
 .deep-effect { margin: 0 0 0.85rem; }
-.deep-effect .cite { color: var(--ink-faint); font-size: 0.9em; }
+/* v8-M1 item 4: the trailing per-paragraph source cluster in the analysis
+   prose sections (mockup-v8). A quiet colophon line — plain text, no tap
+   targets; the negative top margin tucks it under its paragraph. */
+.src-cluster { font-size: 0.8rem; color: var(--ink-faint); margin: -0.35rem 0 0.9rem; }
 .deep-source-row { border-top: 1px solid var(--rule); padding: 0.55rem 0; font-size: 0.88rem; }
 .deep-source-row:first-of-type { border-top: none; }
 .deep-source-row .source-outlet { font-weight: 700; margin: 0 0 0.1rem; }
@@ -774,13 +765,6 @@ function closeThread(e) {
   window.scrollTo(0, 0);
   return false;
 }
-function collapseCiteFolds(root) {
-  /* NL-12: per-fact citations ship as <details open> so a no-JS reader sees
-     them expanded (degrade = more information). With JS, collapse them to the
-     quiet marker; re-run against injected archive editions too. */
-  (root || document).querySelectorAll('details.cite-fold[open]').forEach(
-    function (d) { d.removeAttribute('open'); });
-}
 function toggleFooterDisclosure(btn) {
   /* Element-relative (NL-11): Today and an open archive edition each carry a
      footer, so the toggle works off the clicked button, not a fixed id. */
@@ -1094,7 +1078,6 @@ function openEdition(date, e) {
     .then(function (html) {
       var mount = document.getElementById('edition-mount');
       mount.innerHTML = html;
-      collapseCiteFolds(mount);
       document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
       var ed = document.getElementById('view-edition');
       if (ed) ed.classList.add('active');
@@ -1108,7 +1091,6 @@ function backToArchive(e) {
   showView('archive');
 }
 restoreViewAfterReload();
-collapseCiteFolds(document);
 function pollGeneration() {
   fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
     if (d.state === 'running') { setTimeout(pollGeneration, 2500); }

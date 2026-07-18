@@ -101,6 +101,9 @@ UPDATED_DOT = "●"
 UPDATED_STAMP = "UPDATED"
 UPDATED_THIS_EDITION = "THIS EDITION"
 LAST_UPDATED = "LAST UPDATED"
+# v8-M1 item 5 (2026-07-17): an empty thread (no state/deltas/baseline) has no
+# content date — its only honest date is when the follow was created.
+FOLLOWED = "FOLLOWED"
 # The counted quiet-fold (§12.5): "{n} quiet threads · no movement this edition".
 QUIET_FOLD_NOUN = "quiet threads"
 QUIET_FOLD_NOUN_ONE = "quiet thread"

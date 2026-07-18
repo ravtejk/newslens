@@ -368,8 +368,10 @@ def _numbers_brief():
 
 def test_numeric_ledger_row_survives_the_fold_byte_comparably():
     """The numeric-ledger-claim ROW the retired 'The numbers' section rendered
-    survives byte-for-byte, now inside 'The facts'. The row is reconstructed the
-    same way the retired section built it, so the fold preserved it exactly."""
+    survives byte-for-byte, now inside 'The facts'. v8-M1 item 4 (CONSCIOUS
+    FLIP): the row's attribution is the PLAIN end-of-line outlet count (the ▸
+    cite-fold died with the rest of the inline apparatus), reconstructed the same
+    way the sub-group now builds it."""
     con = _con()
     brief = _numbers_brief()
     html = server._render_deep_view("story-0", "H", {"header": {}, "brief": brief},
@@ -377,10 +379,9 @@ def test_numeric_ledger_row_survives_the_fold_byte_comparably():
     con.close()
     src_by_key = {s["key"]: s for s in brief["sources"]}
     e = brief["ledger"][0]
-    q = server._cite_qualifier(e["cites"], src_by_key,
-                               e.get("provenance", ""))
-    expected_row = (f'<li>{server._e(e["claim"])} '
-                    + server._cite_fold(q, "Show sources for this figure") + '</li>')
+    count = server._facts_outlet_count(e["cites"], src_by_key)
+    expected_row = (f'<li>{server._e(e["claim"])}'
+                    + (f' {count}' if count else "") + '</li>')
     assert expected_row in html                          # byte-for-byte
     facts = html.split('id="story-0-facts"')[1].split("</div>")[0]
     assert expected_row in facts                         # and it lives INSIDE the facts

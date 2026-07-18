@@ -113,22 +113,21 @@ def test_arc_line_without_a_prior_edition_cite_carries_no_link():
 # 4. Per-fact citation fold-away
 # ---------------------------------------------------------------------------
 
-def test_fact_citations_fold_away_open_by_default_keyboard_no_chips():
+def test_fact_citations_render_a_plain_end_of_line_outlet_count_no_fold():
+    """v8-M1 item 4 (2026-07-17, CONSCIOUS FLIP): the ▸ cite-fold on facts DIES
+    with the rest of the inline apparatus — facts now carry a PLAIN end-of-line
+    outlet COUNT (`(N outlets)`), never a caret, never a tap-to-reveal. The
+    outlet NAMES live in the Sources drawer. (WAS: a <details> cite-fold per
+    fact revealing '(The Hill · 1 outlet)'.)"""
     brief = m3_brief()
     html = _deep(brief)
     facts = _section(html, "story-0-facts")
-    # <details open> => a no-JS reader sees the citation expanded (more info)
-    assert '<details class="cite-fold" open>' in facts
-    # keyboard-native summary + a quiet typographic marker (caret), not a chip
-    assert "<summary" in facts and 'aria-label="Show sources for this fact"' in facts
-    assert 'class="caret"' in facts
+    assert "cite-fold" not in facts                 # no inline fold apparatus
+    assert 'class="caret"' not in facts             # no ▸ marker in the facts
     assert "chip" not in facts and "pill" not in facts
-    # the revealed body carries the outlet names + count
-    assert 'class="cite-fold-body">(The Hill · 1 outlet)' in facts
-    # JS collapses on load AND re-collapses injected archive editions
-    assert "function collapseCiteFolds" in webui.JS
-    assert "collapseCiteFolds(document)" in webui.JS
-    assert "collapseCiteFolds(mount)" in webui.JS
+    # a plain end-of-line outlet count (this fact resolves to one outlet)
+    assert '<span class="cite">(1 outlet)</span>' in facts
+    assert "The Hill" not in facts                  # names moved to the Sources drawer
 
 
 # ---------------------------------------------------------------------------

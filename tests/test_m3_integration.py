@@ -120,8 +120,10 @@ def test_deep_view_renders_with_affordance_only_where_valid_brief(tmp_paths):
     assert "deep-today-prose" in deep0 and "Lede." in deep0
     assert "deep-jumplist" in page and "closeDeepView(event)" in page
     assert "lastStoryAnchor" in page
-    # trailing qualifier grammar, not badges
-    assert "(The Hill · 1 outlet)" in page
+    # v8-M1 item 4 (CONSCIOUS FLIP): the facts cite-fold DIES — a plain
+    # end-of-line outlet COUNT, no caret, no revealed outlet name (the names live
+    # in the Sources drawer). WAS the fold body "(The Hill · 1 outlet)".
+    assert '<span class="cite">(1 outlet)</span>' in page
     # degraded-hidden == absent: rejected brief renders nothing
     analysis.persist_brief(con, DATE, 2, "medium", "rejected", None,
                            "fabricated citation", 0.01, {"manifest": {}},

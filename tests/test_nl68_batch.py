@@ -422,8 +422,11 @@ def test_archive_interface_explainer_is_removed():
     html = server._render_archive(con)
     con.close()
     assert "The grid is an index of the list below it." not in html
-    # the factual edition count (a caption, not condescension) stays
-    assert "edition" in html and "this month" in html
+    # v8-M1 item 8 (2026-07-17, CONSCIOUS FLIP): the "N editions this month" count
+    # line DIES too — the calendar shows the rhythm at a glance; the caption is
+    # redundant header chrome. (WAS: the count "stays".)
+    assert "this month." not in html
+    assert 'class="cal-note"' not in html
 
 
 def test_sources_context_footer_keeps_the_honesty_disclosure():

@@ -96,9 +96,12 @@ def test_numeric_ledger_claims_fold_into_the_facts_subgroup():
     # the numeric pinned facts stay in the facts list above (unchanged)
     assert "killed at least 11 people" in facts
     assert "68 missiles and 351 drones" in facts
-    # attribution rides as the quiet cite-fold (same surface as the facts)
-    assert '<details class="cite-fold" open>' in facts
-    assert "The Hill" in facts                            # S1's outlet, resolved
+    # v8-M1 item 4 (CONSCIOUS FLIP): attribution rides as the same PLAIN
+    # end-of-line outlet count as the facts — the ▸ cite-fold DIES; the outlet
+    # names live in the Sources drawer. (WAS: a revealed cite-fold body.)
+    assert "cite-fold" not in facts
+    assert 'class="cite">(' in facts                     # a plain outlet count
+    assert "The Hill" not in facts                       # name moved to the Sources drawer
 
 
 def test_facts_subgroup_excludes_non_numeric_ledger_claims():

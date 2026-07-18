@@ -44,27 +44,21 @@ def _deep_doc():
 
 # --- P1a: mechanism citations fold exactly like facts' -----------------------
 
-def test_mechanism_citations_use_the_same_cite_fold_as_facts():
-    """NL-58 parity ruling: mechanism-section citations previously rendered
-    inline as plain '(outlet · via Sonar)' text; they must now fold behind the
-    same quiet caret as the facts list. Fix contract: _render_deep_view routes
-    the mechanism [S#] substitution through _cite_fold (the shared helper)."""
+def test_mechanism_citations_render_a_trailing_source_cluster_not_inline_folds():
+    """v8-M1 item 4 (2026-07-17, CONSCIOUS FLIP — the citation second-raise):
+    mechanism-section citations no longer fold inline behind a caret. The [S#]
+    keys are STRIPPED from the prose and one trailing SOURCE CLUSTER names the
+    distinct outlets — prose never interrupted, no ▸ markers, no raw keys.
+    (WAS: an inline _cite_fold per [S#].)"""
     html = server._render_deep_view("story-0", "H", _deep_doc(), "2026-07-10",
                                     back_label="B", return_view="view-today")
     mech = html[html.index('id="story-0-mechanism"'):
                 html.index('id="story-0-sources"')]
-    # Two inline citations -> two folds, each with the caret and hidden body.
-    assert mech.count('<details class="cite-fold"') == 2
-    assert mech.count('<span class="caret"') == 2
-    # The qualifier is the fold BODY, never bare inline text before the fold.
-    assert 'AP · via Sonar' in mech
-    assert ' [S1]' not in mech and ' [S2]' not in mech  # raw keys consumed
-
-
-def test_cite_fold_helper_is_empty_for_empty_qualifier():
-    """A missing qualifier folds to nothing, never an empty caret."""
-    assert server._cite_fold("", "aria") == ""
-    assert '<details' in server._cite_fold("(BBC)", "aria")
+    assert "cite-fold" not in mech                   # no inline fold apparatus
+    assert '<span class="caret"' not in mech         # no ▸ marker mid-prose
+    assert ' [S1]' not in mech and ' [S2]' not in mech  # raw keys stripped
+    # one trailing cluster naming the distinct outlets (S1->BBC, S2->AP)
+    assert '<p class="src-cluster">— BBC · AP</p>' in mech
 
 
 # --- P1b: prior-edition sources name the edition and link via openEdition -----

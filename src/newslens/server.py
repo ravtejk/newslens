@@ -586,8 +586,24 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
                     break
         # the quiet-row "LAST UPDATED" stamp: newest ledger date, else the joined
         # last-referenced briefing date; future dates degrade to '' (no stamp).
-        lu = (ledger[-1]["edition_date"] if ledger else last)
-        last_updated = lu if (lu and lu <= today) else ""
+        # v8-M1 item 5 (2026-07-17): an EMPTY thread — no state, no deltas, no
+        # READY baseline — has no content date. The old fallback to `last` (the
+        # ref/join date) rendered "LAST UPDATED <date>" off the follow's BIRTH,
+        # not any coverage. Detect empty and stamp the honest "FOLLOWED
+        # <created_at>" instead. GATE RULED 2026-07-17: a pending/failed
+        # baseline is nothing a reader can open (→ FOLLOWED); a ready-baseline-
+        # only thread stamps LAST UPDATED off the baseline's OWN as_of_date —
+        # the content's date, never the ref/join pickup date (the follow's
+        # birth in disguise).
+        baseline = memory_core.latest_baseline(con, r["id"])
+        ready_baseline = (baseline
+                          if (baseline and baseline.get("status") == "ready")
+                          else None)
+        is_empty = (state is None) and (not ledger) and (ready_baseline is None)
+        lu = (ledger[-1]["edition_date"] if ledger else
+              (ready_baseline["as_of_date"] if ready_baseline else last))
+        last_updated = "" if is_empty else (lu if (lu and lu <= today) else "")
+        followed_on = _short_date(r["created_at"]) if is_empty else ""
         grouped.setdefault(r["status"], []).append({
             "id": r["id"],
             "topic": r["topic"],
@@ -604,6 +620,7 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
                             "significance": this_delta.get("significance", "")}
                            if this_delta else None),
             "last_updated": last_updated,
+            "followed_on": followed_on,
             "last_delta": ({"date": last_delta["edition_date"],
                             "what_happened": last_delta["what_happened"],
                             "significance": last_delta.get("significance", "")}
@@ -1526,6 +1543,11 @@ def _quiet_fold_html(quiet: List[Dict], zero_updated: bool) -> str:
         if t.get("last_updated"):
             stamp = (f' <span class="q-stamp">{_e(labels.LAST_UPDATED)} '
                      f'{_e(_human_short(t["last_updated"]).upper())}</span>')
+        elif t.get("followed_on"):
+            # v8-M1 item 5: empty thread — the honest date is the follow's birth,
+            # stamped FOLLOWED (never LAST UPDATED off a date with no coverage).
+            stamp = (f' <span class="q-stamp">{_e(labels.FOLLOWED)} '
+                     f'{_e(_human_short(t["followed_on"]).upper())}</span>')
         rows.append(f'<li class="q-row">{_thread_row_link(t["id"], t["topic"])}'
                     f'{stamp}</li>')
     open_attr = " open" if zero_updated else ""
@@ -1786,10 +1808,9 @@ def _render_archive(con: sqlite3.Connection) -> str:
     return head + (
         f'<div class="page">'
         f'<h1 class="month-title">{_e(month_name)} <span class="yr">{y}</span></h1>'
-        # NL-68 item 14: the "The grid is an index of the list below it."
-        # interface-explainer DIES (the audience is smarter). The edition COUNT
-        # is a factual caption, not condescension, and stays.
-        f'<p class="cal-note">{n_ed} edition{"s" if n_ed != 1 else ""} this month.</p>'
+        # NL-68 item 14 killed the interface-explainer. v8-M1 item 8 (2026-07-17):
+        # the "N editions this month" count line ALSO dies — the calendar shows the
+        # rhythm at a glance; a count caption is redundant chrome on the header.
         f'{cal}'
         f'<ul class="archive-list">{"".join(list_items)}</ul></div>')
 
@@ -2234,8 +2255,8 @@ def _deep_numbers_subgroup(brief: Dict, story_anchor: str,
     previously show (Decision B's specifics — non-discrepancy ledger claims
     that carry a figure), each as its FULL statement (never a decontextualized
     bare number — extracting a figure out of its sentence would be a new claim,
-    which the two-lane source rule forbids) with the same quiet cite-fold
-    attribution the facts use. Pinned facts already render in the facts list
+    which the two-lane source rule forbids) with the same plain end-of-line
+    outlet count the facts use (v8-M1 item 4). Pinned facts already render in the facts list
     above, so they are NOT duplicated here (the de-dup that the fold makes
     visible; the old standalone section double-showed them — flagged in the
     report). Zero LLM, zero schema change. Gated on content: no numeric ledger
@@ -2248,11 +2269,15 @@ def _deep_numbers_subgroup(brief: Dict, story_anchor: str,
             continue                      # contested figures live in What's still open
         text = e.get("claim", "")
         if _NUMBER_RE.search(text or ""):
-            q = _cite_qualifier(e.get("cites", []), src_by_key,
-                                e.get("provenance", "")
-                                or compute_prov_display(e.get("cites", []), src_by_key))
-            items.append(f'<li>{_e(text)} '
-                         + _cite_fold(q, "Show sources for this figure") + '</li>')
+            # v8-M1 item 4: the verified-specifics run folds into the facts, so it
+            # carries the same PLAIN end-of-line outlet count — the ▸ cite-fold
+            # dies here too (no inline apparatus anywhere in the deep view,
+            # EXCEPT the contested-figures drawer inside What's still open —
+            # per-side attribution is the content there; its caret is NL-68's
+            # section collapse, not a cite fold. Gate-ruled 2026-07-17).
+            count = _facts_outlet_count(e.get("cites", []), src_by_key)
+            items.append(f'<li>{_e(text)}'
+                         + (f' {count}' if count else "") + '</li>')
     if not items:
         return ""
     return (f'<ul class="deep-facts-list deep-numbers-list">'
@@ -2312,6 +2337,39 @@ def _deep_discrepancy_subgroup(brief: Dict, src_by_key: Dict[str, Dict]) -> str:
             f'<summary><span class="caret" aria-hidden="true">▸</span> '
             f'<span class="disc-count">{n} {_e(noun)}</span></summary>'
             + "".join(rows) + "</details>")
+
+
+def _analysis_src_cluster(cite_keys: List[str],
+                          src_by_key: Dict[str, Dict]) -> str:
+    """v8-M1 item 4 (2026-07-17, the citation second-raise): the trailing
+    per-paragraph SOURCE CLUSTER that replaces the inline cite apparatus (▸
+    caret folds, mid-prose `(via X)`) in the analysis prose sections. One quiet
+    colophon line naming the DISTINCT outlets — plain text, no tap targets, no
+    floating markers, sentence flow never interrupted (the fix is structural, not
+    cosmetic). '' when no cite resolves to an outlet (no dead cluster). Claim-
+    level mapping coarsens to paragraph-level here BY DESIGN; the per-claim detail
+    survives in the stored brief and the Sources drawer below."""
+    outlets: List[str] = []
+    for k in cite_keys:
+        s = src_by_key.get(k)
+        outlet = s.get("outlet", "") if isinstance(s, dict) else ""
+        if outlet and outlet not in outlets:
+            outlets.append(outlet)
+    if not outlets:
+        return ""
+    return f'<p class="src-cluster">— {_e(" · ".join(outlets))}</p>'
+
+
+def _facts_outlet_count(cites: List[str], src_by_key: Dict[str, Dict]) -> str:
+    """v8-M1 item 4: the facts-list keeps its END-OF-LINE outlet COUNT (the
+    boundary case the round preserved: `(6 outlets)`, never mid-sentence, never a
+    caret). Plain text — the outlet NAMES live in the Sources drawer, not a
+    tap-to-reveal fold. '' when nothing resolves."""
+    n = len({s.get("outlet", "") for c in cites
+             if isinstance((s := src_by_key.get(c)), dict) and s.get("outlet")})
+    if n <= 0:
+        return ""
+    return f'<span class="cite">({n} outlet{"s" if n != 1 else ""})</span>'
 
 
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
@@ -2383,11 +2441,15 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     if prose_block:
         out.append(prose_block)
 
-    # NL-63 item 5: the "story so far" timeline — the deep view's flagship
-    # section, deterministic from the ledger, sitting under the title block.
+    # NL-63 item 5: the "story so far" timeline — deterministic from the ledger.
+    # v8-M1 item 3 (2026-07-17): it RELOCATES from under the title block to
+    # second-from-last, directly before Sources — an unbounded-growth receipt
+    # belongs with the receipts, not atop the day's matter. Computed here (needs
+    # story_anchor); appended below, before the sources section, and given a
+    # jumplist door so the catch-up reader still reaches it in one tap. ONE
+    # ordering decision (Ines's falsifier is armed principal-side: if he misses
+    # it, flipping to below-the-jumplist is moving this single append up).
     timeline_html = _deep_timeline_html(con, slot, date, story_anchor)
-    if timeline_html:
-        out.append(timeline_html)
 
     # "What's still open" paragraphs are computed HERE — before the jumplist —
     # so the anchor and the section gate on the SAME rendered content (D4,
@@ -2424,6 +2486,10 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
         jump_items.append(("effects", labels.DEEP_EFFECTS))
     if open_has_content:
         jump_items.append(("open", labels.JUMP_OPEN))
+    # v8-M1 item 3: the relocated timeline gets its jumplist door, second-to-last
+    # (before Sources) — gated on real content so no dead anchor when absent.
+    if timeline_html:
+        jump_items.append(("timeline", labels.THE_STORY_SO_FAR))
     jump_items.append(("sources", labels.DEEP_SOURCES))
     out.append('<p class="deep-jumplist">'
                + '<span class="sep">·</span>'.join(
@@ -2437,14 +2503,16 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     # citations fold behind a quiet typographic marker (NL-12): the outlet
     # names + count reveal on tap; `<details open>` means no-JS shows them
     # expanded (degrade = more information) and the summary is keyboard-native.
+    # v8-M1 item 4: the facts keep an END-OF-LINE outlet COUNT (`(6 outlets)`) —
+    # the ▸ caret fold DIES with the rest of the inline apparatus; the outlet
+    # names live in the Sources drawer below (never a mid-list tap target).
     lis = []
     for f in brief.get("pinned_facts", []):
         cites = f.get("cites", [])
-        q = _cite_qualifier(cites, src_by_key,
-                            compute_prov_display(cites, src_by_key))
+        count = _facts_outlet_count(cites, src_by_key)
         lis.append(
-            f'<li>{_e(f.get("fact", ""))} '
-            + _cite_fold(q, "Show sources for this fact") + '</li>')
+            f'<li>{_e(f.get("fact", ""))}'
+            + (f' {count}' if count else "") + '</li>')
     # NL-29 consolidation (Merge 2, flagged): the verified-specifics run folds in
     # here as a sub-group — the numeric ledger claims the facts slice didn't show
     # (byte-for-byte the rows the retired 'The numbers' section rendered).
@@ -2453,37 +2521,38 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                f'<ul class="deep-facts-list">{"".join(lis)}</ul>'
                f'{numbers_sub}</div>')
 
-    # 2. How this works — inline [S#] keys become the SAME quiet citation fold the
-    # facts use (NL-58 parity ruling): the qualifier reveals on tap behind a
-    # caret, not inline as plain text. (NL-29: WAS 'Mechanism'; the label is the
-    # one-string re-pin, the anchor id story-*-mechanism is unchanged so the
-    # jumplist stays live.)
+    # 2. How this works — (NL-29: WAS 'Mechanism'; the label is the one-string
+    # re-pin, the anchor id story-*-mechanism is unchanged so the jumplist
+    # stays live.)
+    # v8-M1 item 4: the inline [S#] cite apparatus (the ▸ fold) DIES here — the
+    # keys are STRIPPED from the prose (the leading whitespace with them, so no
+    # orphaned marker or double space), the prose reads uninterrupted, and one
+    # trailing source cluster names the distinct outlets. No inline apparatus
+    # anywhere in the deep view, EXCEPT the contested-figures drawer inside
+    # What's still open (attribution IS the content there — gate-ruled
+    # 2026-07-17).
     mech = brief.get("mechanism", "")
-    mech_display = re.sub(
-        r"\s*\[([SCRP]\d+(?:,\s*[SCRP]\d+)*)\]",
-        lambda m: " " + _cite_fold(_cite_qualifier(
-            [k.strip() for k in m.group(1).split(",")], src_by_key),
-            "Show sources for this claim"),
-        _e(mech))
+    _cite_re = re.compile(r"\s*\[([SCRP]\d+(?:,\s*[SCRP]\d+)*)\]")
+    mech_keys: List[str] = []
+    for m in _cite_re.finditer(mech):
+        mech_keys.extend(k.strip() for k in m.group(1).split(","))
+    mech_display = _cite_re.sub("", mech).strip()
+    mech_cluster = _analysis_src_cluster(mech_keys, src_by_key)
     out.append(f'<div class="deep-section" id="{story_anchor}-mechanism">'
                f'<h2 class="deep-section-label">{_e(labels.DEEP_MECHANISM)}</h2>'
-               f'<p>{mech_display}</p></div>')
+               f'<p>{_e(mech_display)}</p>{mech_cluster}</div>')
 
-    # 3. effects — the citation IS the basis marker (Thread D)
+    # 3. effects (What could follow) — v8-M1 item 4: the inline "(via Outlet)"
+    # apparatus DIES; each effect paragraph reads plain and closes with its own
+    # trailing source cluster (per-paragraph, prose never interrupted). A
+    # background-only effect (no resolving outlet) simply carries no cluster.
     effs = []
     for e in brief.get("effects", []):
         holder = e.get("holder", "")
-        # v6 grammar (M3 gate): bare "(via Outlet)" — the deviation batch
-        # killed both "(via X · 1 outlet)" and the double-via Sonar shape.
-        via_outlets = []
-        for c in e.get("cites", []):
-            s = src_by_key.get(c)
-            if s and s.get("outlet") and s["outlet"] not in via_outlets:
-                via_outlets.append(s["outlet"])
-        via = f"(via {', '.join(via_outlets[:2])})" if via_outlets else "(background)"
         lead_in = f"{_e(holder)}: " if holder else ""
-        effs.append(f'<p class="deep-effect">{lead_in}{_e(e.get("effect", ""))} '
-                    f'<span class="cite">{_e(via)}</span></p>')
+        eff_cluster = _analysis_src_cluster(e.get("cites", []), src_by_key)
+        effs.append(f'<p class="deep-effect">{lead_in}{_e(e.get("effect", ""))}</p>'
+                    f'{eff_cluster}')
     if effs:
         out.append(f'<div class="deep-section" id="{story_anchor}-effects">'
                    f'<h2 class="deep-section-label">{_e(labels.DEEP_EFFECTS)}</h2>'
@@ -2503,6 +2572,11 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
         out.append(f'<div class="deep-section" id="{story_anchor}-open">'
                    f'<h2 class="deep-section-label">{_e(labels.DEEP_OPEN)}</h2>'
                    + "".join(open_paras) + disc_sub + "</div>")
+
+    # v8-M1 item 3: the story-so-far timeline lands HERE — second-from-last,
+    # directly before Sources (the receipts). Its jumplist door was added above.
+    if timeline_html:
+        out.append(timeline_html)
 
     # 5. source table — rows, real accessible names (Axel)
     rows = []
@@ -2554,23 +2628,6 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                'as receipts, not proof.</p></div>')
     out.append("</section>")
     return "".join(out)
-
-
-def _cite_fold(qualifier: str, aria: str) -> str:
-    """The quiet citation fold (NL-12), shared by the facts list AND the
-    mechanism prose so both citation surfaces read identically (NL-58 parity
-    ruling, DECISIONS 2026-07-10: mechanism citations previously rendered
-    inline and unfolded, unlike facts'). Ships as <details open> so a no-JS
-    reader sees the qualifier expanded (degrade = more information); the shared
-    collapseCiteFolds() JS closes it to the caret marker. Empty qualifier folds
-    to nothing rather than an empty caret."""
-    q = (qualifier or "").strip()
-    if not q:
-        return ""
-    return ('<span class="fact-cite"><details class="cite-fold" open>'
-            f'<summary aria-label="{_e(aria)}">'
-            '<span class="caret" aria-hidden="true">▸</span></summary>'
-            f'<span class="cite-fold-body">{_e(q)}</span></details></span>')
 
 
 def _cites_list(d: Dict) -> List[str]:
