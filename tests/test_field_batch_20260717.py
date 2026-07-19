@@ -181,7 +181,10 @@ def test_subscription_seat_timeouts_are_generous():
     assert llm.SEATS["rank"].timeout_sub_s == 300      # 90s api timeout was too tight
     assert llm.SEATS["editor"].timeout_sub_s == 300
     assert llm.SEATS["script"].timeout_sub_s == 300
-    assert llm.SEATS["follow_altitude"].timeout_sub_s == 180
+    # follow_altitude is the INTERACTIVE exception (fix loop 1 FIX-3): a reader
+    # waits on it, so it runs a SHORT timeout (12s sub) that degrades a stuck
+    # provider fast — pinned in test_nl17_m1b_fixloop1, NOT here among the
+    # generous batch seats.
     # item C (2026-07-17): writer/analyst joined the subscription lane — sub
     # timeout = api ceiling + a ~300s lane tax (subprocess + harness overhead).
     assert llm.SEATS["analyst"].timeout_sub_s == 540   # 240 api + 300 tax

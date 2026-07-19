@@ -23,14 +23,31 @@ third (no "industry", no "region", no "topic" — only the two below):
 Always identify the single PRIMARY ENTITY the story centers on, even when the
 altitude is "storyline" — it anchors the disclosure and the future match.
 
-Write a DISCLOSURE LINE the reader will see at the exact moment they follow. It
-MUST NAME THE ALTITUDE IN WORDS: state, in plain language, what they are now
-following and that it is broader than this one article. A default that a reader
-confirms with a single tap is only honest if the words on the screen tell them
-what they got — a disclosure that just repeats the headline is not acceptable.
-  entity example:    "Following Volkswagen — the company, not just this story."
-  storyline example: "Following the Volkswagen job-cuts story — the ongoing
-                      story, not just this article."
+Write a DISCLOSURE the reader will see at the exact moment they follow — a
+COMPACT NAME in the qualifier grammar, NOT a sentence and NOT a tail clause. It
+still names the altitude in words: the reader must be able to read, in the words
+alone, what they are now following.
+  entity:    the actor's name followed by its class in a lowercase parenthetical
+             — the class noun the actor IS: (company) / (person) / (agency) /
+             (organization) / (place). Example: "Volkswagen (company)".
+  storyline: the ongoing story's own name.
+             * If the name already states that it is a story (it describes an
+               event or development), render it BARE — no parenthetical. Example:
+               "Volkswagen job cuts".
+             * If the name is an ambiguous handle that could be read as an
+               entity, add a lowercase "(... story)" parenthetical that says what
+               kind of story it is. Example: "Redemption Gates (fund-withdrawal
+               story)".
+Never a tail ("— the company, not just this story" is dead grammar). Never an
+icon or a bare symbol — words only, so it translates and reads aloud.
+
+Also name the OTHER rung, in the SAME compact grammar, as "alt_label" — the
+single alternative the reader can switch to with one tap. If you chose "entity",
+alt_label is the STORYLINE name (bare, or "(... story)" if ambiguous). If you
+chose "storyline", alt_label is the ENTITY name with its "(class)" parenthetical.
+It is the same actor at the other altitude — words, never a symbol.
+  chose entity "Volkswagen (company)"      -> alt_label "Volkswagen job cuts"
+  chose storyline "Volkswagen job cuts"    -> alt_label "Volkswagen (company)"
 
 Give a CONFIDENCE:
   * "high"   — the primary entity and the altitude are both obvious.
@@ -38,9 +55,12 @@ Give a CONFIDENCE:
   * "low"    — genuinely ambiguous: the headline names more than one plausible
                primary actor (a supplier AND a customer), or it is unclear whether
                the reader wants the whole entity or just this one story. Say "low"
-               rather than guessing confidently.
+               rather than guessing confidently. At low the reader is asked to
+               choose — so make BOTH the disclosure (your best rung) and alt_label
+               (the other rung) clean, named options.
 
 Output ONLY a single JSON object — no prose before or after, no markdown fences:
 {"altitude": "entity" or "storyline", "primary_entity": "<the named actor>",
- "disclosure": "<the one-line, altitude-naming sentence>",
+ "disclosure": "<compact qualifier-grammar name of the chosen rung>",
+ "alt_label": "<compact qualifier-grammar name of the OTHER rung>",
  "confidence": "high" or "medium" or "low"}

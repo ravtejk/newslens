@@ -118,11 +118,54 @@ VERB_RESUME = "Resume"
 VERB_DELETE = "Delete"
 VERB_EDIT_NOTE = "Edit note"
 
-# --- Follow control (server.py + client JS via NL_LABELS) --------------------
-FOLLOW_STORY_ACTIVE = "Following this story"
-FOLLOW_STORY_INACTIVE = "＋ Follow this story"
-# The in-place confirm toast (client JS): held 2× per NL-58 ruling 5.
-FOLLOW_STORY_CONFIRM = "✓ Following — see it under Following → Threads"
+# --- Follow control — the follow-altitude picker (NL-17-M1b, mockup-v9 copy
+#     register; server.py + client JS via NL_LABELS). One grammar, one place. ---
+# Resting verb (compact deck verb, not following): the ○/● pairing is the
+# disclosure mark (mockup COPY REGISTER). NB re-pin 2026-07-18: v8 shipped "＋
+# Follow this story"; mockup-v9's register names "○" (see implementer report —
+# flagged for the principal's glance against the STATE-0 "unchanged" caption).
+FOLLOW_STORY_INACTIVE = "○ Follow this story"
+# Committed forms are COMPOSED around the resolver's compact qualifier name (the
+# disclosure), never static — Kass's disclosure on every follow surface:
+#   moment (follow-line):  "● " + FOLLOW_COMMITTED_VERB + " " + <disclosure>
+#   steady (deck verb):    "● " + FOLLOW_STEADY_PREFIX  + " " + <disclosure>
+#   narrow (this-story):   …STEADY_PREFIX + " " + FOLLOW_NARROW_QUALIFIER-less
+FOLLOW_COMMITTED_VERB = "Following"          # "● Following Volkswagen (company)"
+FOLLOW_STEADY_PREFIX = "Following —"         # "● Following — Volkswagen (company)"
+FOLLOW_NARROW = "this story"                 # narrow follow's name ("— this story")
+FOLLOW_DOT_ON = "●"
+FOLLOW_DOT_OFF = "○"
+# The resolving interval (the control expands from the verb into the line).
+FOLLOW_RESOLVING = "Deciding what this follow covers…"
+# The acts line under a committed follow: "Instead: <alt> · just this story · Unfollow".
+FOLLOW_INSTEAD_PREFIX = "Instead:"
+# Lawful worded fallback when the resolver named no alternative (alt_label ''):
+# name the OTHER altitude in words, never a bare symbol (mockup seam note).
+FOLLOW_ALT_FALLBACK_ENTITY = "the company"
+FOLLOW_ALT_FALLBACK_STORYLINE = "the ongoing story"
+FOLLOW_JUST_THIS_STORY = "just this story"   # inline, acts line
+FOLLOW_UNFOLLOW = "Unfollow"                 # the symmetry-law verb (2026-07-18)
+# Low confidence: the line ASKS; nothing is followed until the reader picks.
+FOLLOW_LOW_LEAD = "What would you like to follow?"
+FOLLOW_JUST_THIS_STORY_OPTION = "Just this story"   # option-row form
+# Resolver failure / timeout: the this-story follow commits IMMEDIATELY with
+# EXACTLY this copy (principal ruling 2026-07-18, verbatim; string-equality
+# pinned in test_nl17_m1b_wiring). The two halves are the moment line's two
+# lines AND the Following-row upgrade line; they compose the exact whole.
+FOLLOW_DEGRADE_LEAD = "Following — this story."
+FOLLOW_DEGRADE_UPGRADE = "Couldn't fetch broader follow — choose it anytime."
+FOLLOW_DEGRADE_COMMITTED = FOLLOW_DEGRADE_LEAD + " " + FOLLOW_DEGRADE_UPGRADE
+# Switch refused: the server declined the "Instead" move (e.g. a transient); the
+# current follow is UNCHANGED. A plain register line so the reader's tap is never
+# a silent no-op (FIX LOOP 2 R2). FLAGGED FOR THE GATE — this exact string is the
+# implementer's plainest register candidate, not a settled copy call; the gate /
+# content own the final wording.
+FOLLOW_SWITCH_FAILED = "Couldn't switch just now — try again."
+# RETIRED 2026-07-18 (M1b), retired-but-kept so nothing imports a dangling name
+# (KICKER_LEAD precedent). The instant-flip toast and static active label are
+# replaced by the inline resolving→committed disclosure; no surface renders them.
+FOLLOW_STORY_ACTIVE = "Following this story"   # RETIRED (M1b) — composed now
+FOLLOW_STORY_CONFIRM = "✓ Following — see it under Following → Threads"  # RETIRED (M1b)
 TRACKED_ONGOING_PREFIX = "Tracked ongoing story —"
 
 # --- Staleness guard (2026-07-16 stale-server incident -> a mechanism) --------

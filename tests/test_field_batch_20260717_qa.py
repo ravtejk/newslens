@@ -293,21 +293,25 @@ def test_timeout_sub_map_is_pinned_exactly():
     name (api timeout_s pinned alongside, unchanged)."""
     # item C (2026-07-17): writer/analyst joined the subscription lane, so their
     # timeout_sub_s grew from None -> api ceiling + ~300s lane tax (540/900).
+    # follow_altitude is the INTERACTIVE exception (fix loop 1 FIX-3): a reader
+    # waits, so it degrades a stuck provider fast — 8s api / 12s sub, not the
+    # generous batch ceilings.
     sub = {"rank": 300, "analyst": 540, "writer": 900, "editor": 300,
            "script": 300, "synthesis": None, "state": 300,
-           "follow_altitude": 180}
+           "follow_altitude": 12}
     api = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
-           "script": 120, "synthesis": 120, "state": 60, "follow_altitude": 60}
+           "script": 120, "synthesis": 120, "state": 60, "follow_altitude": 8}
     assert set(sub) == set(llm.SEATS)
     for name, cfg in llm.SEATS.items():
         assert cfg.timeout_sub_s == sub[name], name
         assert cfg.timeout_s == api[name], name
 
 
-@pytest.mark.parametrize("seat,expect", [("state", 300), ("follow_altitude", 180)])
+@pytest.mark.parametrize("seat,expect", [("state", 300), ("follow_altitude", 12)])
 def test_subscription_provider_uses_the_sub_knob_per_seat(monkeypatch, seat, expect):
     """The implementer proved rank; state and follow_altitude ride the same
-    (timeout_sub_s or timeout_s) selection — per seat, mechanically."""
+    (timeout_sub_s or timeout_s) selection — per seat, mechanically.
+    follow_altitude's sub knob is the short INTERACTIVE 12s (fix loop 1 FIX-3)."""
     captured = {}
     real_run = llm.subprocess.run
 

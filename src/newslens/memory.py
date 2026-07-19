@@ -638,6 +638,202 @@ def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
     return "added"
 
 
+# ---------------------------------------------------------------------------
+# NL-17-M1b — the follow-altitude picker's persistence + Axel's instrument.
+# STORED altitude vocabulary (0019): the two resolver rungs + 'narrow' (the
+# just-this-story follow, a reader pick or the resolver-failure landing). ''
+# is an unmigrated follow (pre-M1b) — renders bare, nothing fabricated.
+# ---------------------------------------------------------------------------
+STORED_ALTITUDES: Tuple[str, ...] = ("entity", "storyline", "narrow")
+ALTITUDE_SOURCES: Tuple[str, ...] = ("auto", "pick", "degrade")
+
+
+def _log_altitude_event(con: sqlite3.Connection, thread_id: Optional[int],
+                        topic: str, kind: str, *, altitude: str = "",
+                        confidence: str = "", source: str = "") -> None:
+    """Append one row to the follow-altitude instrument (0020, append-only).
+    An EXPLICIT follow act only (§F: a lawful write, never read-logging)."""
+    con.execute(
+        "INSERT INTO follow_altitude_events (thread_id, topic, kind, altitude,"
+        " confidence, source, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (thread_id, topic, kind, altitude, confidence, source, _utc_now_iso()))
+
+
+def _set_altitude_columns(con: sqlite3.Connection, thread_id: int, *,
+                          altitude: str, primary_entity: str, disclosure: str,
+                          alt_label: str, source: str) -> None:
+    con.execute(
+        "UPDATE memory SET altitude = ?, primary_entity = ?, disclosure = ?,"
+        " alt_label = ?, altitude_source = ?, updated_at = ? WHERE id = ?",
+        (altitude, primary_entity, disclosure, alt_label, source,
+         _utc_now_iso(), thread_id))
+
+
+def add_thread_at_altitude(con: sqlite3.Connection, name: str, *,
+                           altitude: str, primary_entity: str = "",
+                           disclosure: str = "", alt_label: str = "",
+                           confidence: str = "", source: str = "auto",
+                           origin_story: str = "",
+                           last_referenced_briefing_id: Optional[int] = None
+                           ) -> Tuple[str, int]:
+    """Create (or revive) a follow AT A RESOLVED ALTITUDE — the picker's commit
+    path (high/med auto-commit, a low/switch reader pick, or a resolver-failure
+    narrow landing). Stores the 0019 disclosure columns and logs a 'commit'
+    event for Axel's instrument. Returns (outcome, thread_id) where outcome is
+    'added' | 'revived' | 'already-active' (add_thread's vocabulary).
+
+    The topic key is `name` — the entity name, the storyline name, or (for a
+    narrow follow) the headline. Following add_thread's lower(topic) uniqueness.
+
+    origin_story (0021, FIX LOOP 1): the story this follow was BORN from (the
+    reader-tapped card's canonical topic). Recorded so the origin card recognizes
+    its altitude-renamed follow across reload/regenerate — a HIGH/MED commit
+    stores the follow under the RESOLVER's name, which is not the story's title.
+    Set ONCE: a later switch MOVES the follow's rung but keeps its birthplace, and
+    a revive keeps the original origin (first wins). '' leaves name-only
+    recognition unchanged (a manually-added / unmigrated thread has no origin).
+    """
+    if altitude not in STORED_ALTITUDES:
+        raise ValueError(
+            f"altitude must be one of {list(STORED_ALTITUDES)}, got {altitude!r}")
+    if source not in ALTITUDE_SOURCES:
+        raise ValueError(
+            f"source must be one of {list(ALTITUDE_SOURCES)}, got {source!r}")
+    outcome = add_thread(
+        con, name, last_referenced_briefing_id=last_referenced_briefing_id)
+    row = con.execute(
+        "SELECT id FROM memory WHERE lower(topic) = lower(?)", (name,)).fetchone()
+    thread_id = row["id"]
+    with con:
+        _set_altitude_columns(
+            con, thread_id, altitude=altitude, primary_entity=primary_entity,
+            disclosure=disclosure, alt_label=alt_label, source=source)
+        if origin_story:
+            # set-once: only fill an EMPTY origin — never rewrite a follow's
+            # birthplace (a switch/revive lands here again, and the first origin
+            # is the one the origin card keys recognition on).
+            con.execute(
+                "UPDATE memory SET origin_story = ? WHERE id = ? AND"
+                " origin_story = ''", (origin_story, thread_id))
+        _log_altitude_event(
+            con, thread_id, name, "commit", altitude=altitude,
+            confidence=confidence, source=source)
+    return outcome, thread_id
+
+
+def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
+                         new_name: str, altitude: str, primary_entity: str = "",
+                         disclosure: str = "", alt_label: str = "",
+                         confidence: str = "", source: str = "pick"
+                         ) -> Optional[int]:
+    """The SWITCH: the reader taps the other rung. The follow MOVES, never copies
+    (mutation law) — the SAME memory row's topic + altitude columns are updated
+    in place. Logs a 'correct' event against the prior commit (the reader changed
+    the altitude) and a fresh 'commit' at the picked rung. Returns the surviving
+    active thread_id, or None if no such row.
+
+    COLLISION REVIVE-MERGE (FIX LOOP 2 R2): when `new_name` is already held by a
+    DIFFERENT row, the plain topic UPDATE would hit the 0005 unique index — the
+    silent-500 bug (a switch onto a DISMISSED holder's name). Instead the switch
+    REVIVE-MERGES onto that holder, the CREATE path's revive precedent
+    (add_thread): the holder becomes the active follow at the picked rung, the
+    moved row retires, ONE active row remains. The moved follow's birthplace
+    (origin_story) carries to the survivor ONLY when the survivor has none
+    (set-once — never a rewrite of a birthplace). Events stay coherent — the
+    'correct' is logged off the MOVED row (the reader corrected its altitude) and
+    the 'commit' against the SURVIVOR — and the whole merge is ONE transaction, so
+    any failure rolls back clean with no orphan correction event.
+    """
+    if altitude not in STORED_ALTITUDES:
+        raise ValueError(
+            f"altitude must be one of {list(STORED_ALTITUDES)}, got {altitude!r}")
+    row = con.execute(
+        "SELECT id, topic, origin_story FROM memory WHERE id = ?",
+        (thread_id,)).fetchone()
+    if row is None:
+        return None
+    now = _utc_now_iso()
+    # a DIFFERENT row already holding new_name (case-insensitive — the 0005 key)?
+    clash = con.execute(
+        "SELECT id, status, origin_story FROM memory"
+        " WHERE lower(topic) = lower(?) AND id != ?",
+        (new_name, thread_id)).fetchone()
+    with con:
+        # the reader corrected the MOVED row's altitude (Axel's instrument).
+        _log_altitude_event(con, thread_id, row["topic"], "correct")
+        if clash is None:
+            survivor_id = thread_id
+            con.execute(
+                "UPDATE memory SET topic = ?, updated_at = ? WHERE id = ?",
+                (new_name, now, thread_id))
+        else:
+            # revive-merge onto the holder: it becomes the active follow, the
+            # moved row retires — ONE active row for the name.
+            survivor_id = clash["id"]
+            con.execute(
+                "UPDATE memory SET status = 'active', status_changed_at = ?,"
+                " updated_at = ? WHERE id = ?", (now, now, survivor_id))
+            if row["origin_story"] and not clash["origin_story"]:
+                # set-once: fill only an EMPTY survivor origin with the moved
+                # follow's birthplace (never rewrite the survivor's own).
+                con.execute(
+                    "UPDATE memory SET origin_story = ? WHERE id = ?"
+                    " AND origin_story = ''", (row["origin_story"], survivor_id))
+            con.execute(
+                "UPDATE memory SET status = 'dismissed_user',"
+                " status_changed_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, thread_id))
+        _set_altitude_columns(
+            con, survivor_id, altitude=altitude, primary_entity=primary_entity,
+            disclosure=disclosure, alt_label=alt_label, source=source)
+        _log_altitude_event(
+            con, survivor_id, new_name, "commit", altitude=altitude,
+            confidence=confidence, source=source)
+    return survivor_id
+
+
+def record_altitude_correction(con: sqlite3.Connection, topic: str) -> bool:
+    """Log that the reader CHANGED a follow's altitude (unfollow, or switch by
+    name) — the correction Axel's instrument watches. Idempotent-safe to call
+    alongside the state change; False if no such thread. (A dedicated 'correct'
+    logger for the unfollow lane, which dismisses by topic; move_follow_altitude
+    logs its own correction inline.)"""
+    row = con.execute(
+        "SELECT id, topic FROM memory WHERE lower(topic) = lower(?)", (topic,)
+    ).fetchone()
+    if row is None:
+        return False
+    with con:
+        _log_altitude_event(con, row["id"], row["topic"], "correct")
+    return True
+
+
+def medium_correction_stats(con: sqlite3.Connection) -> Dict[str, object]:
+    """Axel's OPERATOR-FACING count (no reader surface): of the MEDIUM-confidence
+    AUTO commits, how many were corrected (altitude changed / unfollowed) within
+    24h. The pre-registered flip is a HUMAN call on this ratio; this only makes
+    it observable. Read-only aggregate over the append-only log (0020)."""
+    medium_auto = con.execute(
+        "SELECT COUNT(*) AS n FROM follow_altitude_events"
+        " WHERE kind = 'commit' AND confidence = 'medium' AND source = 'auto'"
+    ).fetchone()["n"]
+    corrected = con.execute(
+        "SELECT COUNT(*) AS n FROM follow_altitude_events c WHERE c.kind = 'commit'"
+        "  AND c.confidence = 'medium' AND c.source = 'auto'"
+        "  AND EXISTS (SELECT 1 FROM follow_altitude_events r"
+        "              WHERE r.kind = 'correct' AND r.thread_id = c.thread_id"
+        "                AND julianday(r.occurred_at) >= julianday(c.occurred_at)"
+        "                AND julianday(r.occurred_at) - julianday(c.occurred_at)"
+        "                    <= 1.0)"
+    ).fetchone()["n"]
+    ratio = (corrected / medium_auto) if medium_auto else 0.0
+    return {"medium_auto_commits": medium_auto,
+            "corrected_within_day": corrected,
+            "ratio": round(ratio, 4),
+            "flip_threshold": 0.2,
+            "flip_would_trigger": bool(medium_auto and ratio >= 0.2)}
+
+
 def dismiss_thread(con: sqlite3.Connection, topic: str) -> bool:
     """dismissed_user: visible in memory.md, never auto-revives. False if
     no such thread."""

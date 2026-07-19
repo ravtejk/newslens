@@ -150,8 +150,8 @@ def test_follow_recognized_across_title_drift_both_directions(tmp_paths):
     page, _ = server.build_page(con)
     con.close()
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
-    assert 'aria-pressed="true"' in today
-    assert "Following this story" in today
+    assert 'class="follow-slot"' in today               # NL-17-M1b single node
+    assert 'data-state="committed"' in today            # recognized as followed
     # NL-60 gate F1: the ACTION half — when recognition fired via the headline,
     # data-topic must carry the STORED thread phrasing so unfollow's exact-match
     # dismiss finds the row (display-recognized but unfollowable = the NL-58

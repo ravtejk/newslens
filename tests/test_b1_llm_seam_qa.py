@@ -811,9 +811,12 @@ def test_seat_table_pins_the_b3_stack_exactly():
     assert set(llm.SEATS) == {"rank", "analyst", "writer", "editor", "script",
                               "synthesis", "state", "follow_altitude"}
     haiku_sub = {"rank", "editor", "script", "follow_altitude", "state"}
+    # follow_altitude is the INTERACTIVE seat (fix loop 1 FIX-3): a reader waits,
+    # so it runs a short 8s api / 12s sub timeout that degrades a stuck provider
+    # fast — the batch seats stay generous.
     timeouts = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
                 "script": 120, "synthesis": 120, "state": 60,
-                "follow_altitude": 60}
+                "follow_altitude": 8}
     for name, cfg in llm.SEATS.items():
         assert cfg.seat == name
         assert cfg.timeout_s == timeouts[name]

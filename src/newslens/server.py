@@ -43,7 +43,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import analysis, config, db, events, labels, memory, paths, webui
+from . import (analysis, config, db, events, follow_altitude, labels, memory,
+               paths, webui)
 
 DEFAULT_PORT = 8484
 DEVELOPING_WINDOW_DAYS = 7  # dot = thread picked up within this many days
@@ -607,6 +608,12 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
         grouped.setdefault(r["status"], []).append({
             "id": r["id"],
             "topic": r["topic"],
+            # NL-17-M1b: the persisted altitude disclosure (0019) — Kass's law,
+            # rendered on every Following surface. Bare '' for unmigrated threads
+            # (the honest v1 mix — nothing backfilled).
+            "altitude": _row_col(r, "altitude"),
+            "disclosure": _row_col(r, "disclosure"),
+            "altitude_source": _row_col(r, "altitude_source"),
             "note": r["principal_note"] or "",
             "since": _short_date(r["created_at"]),
             "last": last,
@@ -631,6 +638,44 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
     # order preserved within ties — display-order only, no lifecycle change.
     grouped["active"].sort(key=lambda th: th["last"] or "", reverse=True)
     return grouped
+
+
+def _row_col(r, name: str, default: str = "") -> str:
+    """Safe column read from a sqlite3.Row: an older DB that predates a column
+    (a real record not yet re-migrated) reads the default rather than raising —
+    the same degrade-to-honest posture load_thread_input takes."""
+    try:
+        return (r[name] if name in r.keys() else default) or default
+    except (IndexError, KeyError):
+        return default
+
+
+def _altitude_qualifier_html(row: Dict) -> str:
+    """Kass's disclosure, persistent form (mockup-v9 grammar): the altitude
+    qualifier appended to a Following row's NAME. entity/ambiguous-storyline ->
+    the quiet '(class)' parenthetical; narrow -> '— this story'; a descriptive
+    storyline OR an unmigrated follow -> BARE (the name states its own class, or
+    no altitude exists — never a fabricated qualifier). Words only; the .alt-q
+    register (serif 400 ink-soft) carries it — color is never the signal."""
+    if (row.get("altitude") or "") == "narrow":
+        return f' <span class="alt-q">— {_e(labels.FOLLOW_NARROW)}</span>'
+    disclosure = row.get("disclosure") or ""
+    if not disclosure:
+        return ""                              # unmigrated — honest bare
+    _name, cls = follow_altitude.split_qualifier(disclosure)
+    if cls:
+        return f' <span class="alt-q">({_e(cls)})</span>'
+    return ""                                  # descriptive storyline — bare by grammar
+
+
+def _altitude_upgrade_line(row: Dict) -> str:
+    """A follow that landed NARROW by resolver failure keeps its quiet upgrade
+    door in the row (mockup-v9 degraded row) — the exact 07-18 degrade sentence,
+    one grammar with the moment of follow. Only for source='degrade' (a reader's
+    deliberate 'just this story' pick shows no nag)."""
+    if (row.get("altitude_source") or "") != "degrade":
+        return ""
+    return (f'<p class="fl-degrade-why">{_e(labels.FOLLOW_DEGRADE_UPGRADE)}</p>')
 
 
 def _active_topics_lower(con: sqlite3.Connection) -> set:
@@ -1046,7 +1091,7 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     # redesign itself stays NL-68 item 2's job.
     suppress_marker = bool(marks) and bool(stamp)
     follow = "" if suppress_marker else _follow_control(
-        st, slot, marks, active_topics, date)
+        st, slot, marks, active_topics, date, slug=slug, con=con)
     deck_bits: List[str] = []
     if follow:
         deck_bits.append(follow)
@@ -1132,14 +1177,135 @@ def _here_for(slot: Dict) -> str:
     return "world-impact selection (no tag or thread match)"
 
 
+def _altitude_options(res, headline: str) -> List[Dict]:
+    """The low-confidence picker's options (deterministic order — the resolver's
+    pick, the other rung, just-this-story last; mockup a11y contract). Each is
+    PRE-ALTITUDED: picking it commits at that altitude with NO further resolver
+    call (mutation law). `name` is the compact name minus its class parenthetical
+    (the stored match key); the other rung's own alternative is this rung."""
+    a_name, _ = follow_altitude.split_qualifier(res.disclosure)
+    other = "storyline" if res.altitude == "entity" else "entity"
+    opts = [{"label": res.disclosure, "name": a_name or res.primary_entity,
+             "altitude": res.altitude, "disclosure": res.disclosure,
+             "alt_label": res.alt_label, "primary_entity": res.primary_entity}]
+    if (res.alt_label or "").strip():
+        b_name, _ = follow_altitude.split_qualifier(res.alt_label)
+        opts.append({"label": res.alt_label, "name": b_name, "altitude": other,
+                     "disclosure": res.alt_label, "alt_label": res.disclosure,
+                     "primary_entity": res.primary_entity})
+    opts.append({"label": labels.FOLLOW_JUST_THIS_STORY_OPTION,
+                 "name": headline, "altitude": "narrow", "disclosure": "",
+                 "alt_label": "", "primary_entity": ""})
+    return opts
+
+
+def _follow_altitude_row(con, topic: str) -> Dict:
+    """The stored disclosure for an active follow (0019 columns) — read verbatim
+    for the committed deck verb. Empty dict when there is no con / no such active
+    row / an older DB without the columns (degrade to a BARE committed verb — the
+    honest unmigrated v1 mix, never a fabricated qualifier)."""
+    if con is None:
+        return {}
+    try:
+        r = con.execute(
+            "SELECT altitude, primary_entity, disclosure, alt_label,"
+            " altitude_source FROM memory"
+            " WHERE lower(topic) = lower(?) AND status = 'active'", (topic,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    return dict(r) if r else {}
+
+
+def _origin_follow_row(con, story_topic: str, headline: str) -> Dict:
+    """The active follow this story is the ORIGIN of — an altitude-renamed picker
+    follow stored under the resolver's entity/storyline name (so NOT recognizable
+    by the story's title in active_topics), bridged by the 0021 origin_story
+    column (NL-17-M1b FIX LOOP 1 FIX-1). Matches origin_story against the story's
+    canonical topic OR its headline, so the origin card recognizes its follow
+    across reload AND across a regenerate (origin_story is the stable story_title,
+    surviving a headline drift). Render-time, read-only, NO llm call. {} on an
+    unmigrated DB (no origin_story column) / no such row."""
+    if con is None:
+        return {}
+    try:
+        r = con.execute(
+            "SELECT altitude, primary_entity, disclosure, alt_label,"
+            " altitude_source, topic, origin_story FROM memory"
+            " WHERE status = 'active' AND origin_story != ''"
+            "   AND lower(origin_story) IN (lower(?), lower(?))"
+            " ORDER BY id DESC LIMIT 1", (story_topic, headline)).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    return dict(r) if r else {}
+
+
+def _resolve_guard_row(con, story_topic: str, headline: str) -> Dict:
+    """The follow-resolve XOR guard (NL-17-M1b FIX LOOP 1 FIX-1): the active
+    follow this story ALREADY carries — by the follow's NAME (topic == the
+    story's canonical topic or headline) or by ORIGIN (origin_story == either). A
+    tap on an already-followed story is the steady-state expand: the resolve
+    endpoint returns THIS committed row and never runs a second paid resolve or
+    creates a divergent second active follow (QA's double: "…job cuts" +
+    "Volkswagen" for one story). Read-only; {} when unfollowed / on an unmigrated
+    DB (the guard degrades off, resolve proceeds as before)."""
+    if con is None:
+        return {}
+    try:
+        r = con.execute(
+            "SELECT altitude, primary_entity, disclosure, alt_label,"
+            " altitude_source, topic, origin_story FROM memory"
+            " WHERE status = 'active' AND ("
+            "     lower(topic) IN (lower(?), lower(?))"
+            "     OR (origin_story != ''"
+            "         AND lower(origin_story) IN (lower(?), lower(?))))"
+            " ORDER BY id DESC LIMIT 1",
+            (story_topic, headline, story_topic, headline)).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    return dict(r) if r else {}
+
+
+def _committed_verb_inner(alt: Dict) -> str:
+    """The committed deck verb's steady label (single-rendering law STATE 5):
+    "● Following — <qualifier>", Kass's disclosure carried on Today. narrow ->
+    "this story"; a named follow -> the compact qualifier (name + quiet class);
+    an UNMIGRATED follow (no stored disclosure) -> bare "● Following" (honest —
+    no altitude exists, nothing fabricated)."""
+    dot = _e(labels.FOLLOW_DOT_ON)
+    altitude = alt.get("altitude") or ""
+    disclosure = alt.get("disclosure") or ""
+    if altitude == "narrow":
+        return (f'{dot} {_e(labels.FOLLOW_STEADY_PREFIX)} '
+                f'{_e(labels.FOLLOW_NARROW)}')
+    if disclosure:
+        name, cls = follow_altitude.split_qualifier(disclosure)
+        qual = _e(name)
+        if cls:
+            qual += f' <span class="oq">({_e(cls)})</span>'
+        return f'{dot} {_e(labels.FOLLOW_STEADY_PREFIX)} {qual}'
+    return f'{dot} {_e(labels.FOLLOW_COMMITTED_VERB)}'   # unmigrated — bare
+
+
 def _follow_control(st: Dict, slot: Dict, marks: List[str],
-                    active_topics: set, date: str) -> str:
-    """The under-title follow control (NL-65: it STAYS under the title, alone).
-    Recognition (NL-58 P3a, both directions): a story reads as followed when
-    EITHER its thread is active (matched_memory `marks`) OR its story-follow
-    title is active — checked against both story_title and headline, so a follow
-    created under one edition's phrasing survives title drift into the next.
-    Thread-tracked stories show the marker STATE; story-follows are a toggle."""
+                    active_topics: set, date: str, slug: str = "",
+                    con=None) -> str:
+    """The under-title follow control — the follow-altitude picker's single
+    persistent node (NL-17-M1b, mockup-v9). SINGLE-RENDERING LAW: ONE
+    `.follow-slot` element carries BOTH the compact deck verb (rest, steady) and
+    the expanded follow-line (resolving/asking/commit, rendered by the client
+    into this same node) — never two follow-state surfaces. The v8
+    aria-haspopup="dialog" is retired for this behavior: the committed verb
+    carries aria-expanded and re-opens the line (the EDITOR keeps aria-haspopup).
+
+    marks path (a thread-tracked story) is unchanged — it shows the marker STATE,
+    not the picker. Recognition has two paths: (1) NAME (NL-58 P3a) — followed
+    when the story_title OR headline is an active topic, so a follow survives
+    title drift, and unfollow/altitude reads target the story's phrasing (NL-60
+    gate F1); (2) ORIGIN (FIX LOOP 1) — an altitude-renamed follow is stored under
+    the RESOLVER's name (not in active_topics under the story's title), bridged
+    back to its origin card by the 0021 origin_story column, and its committed
+    data-topic is the STORED name so unfollow/switch exact-match the real row."""
     if marks:
         return (f'<span class="tracked-marker">{_e(labels.TRACKED_ONGOING_PREFIX)} '
                 f'{_e(", ".join(marks))}</span>')
@@ -1147,20 +1313,57 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
     headline = st.get("headline") or ""
     t_in = topic.lower() in active_topics
     h_in = headline.lower() in active_topics
-    followed = t_in or h_in
-    if followed and not t_in:
-        # NL-60 gate F1: unfollow must target the STORED thread phrasing —
-        # dismiss_thread is an exact match, so a drift-recognized follow sending
-        # the unmatched title would be visible but unfollowable.
+    name_followed = t_in or h_in
+    if name_followed and not t_in:
+        # recognized via the headline (title drift, NL-58 P3a): the committed
+        # reads target the story's headline phrasing (NL-60 gate F1).
         topic = headline
-    pressed = "true" if followed else "false"
-    label = (labels.FOLLOW_STORY_ACTIVE if followed
-             else labels.FOLLOW_STORY_INACTIVE)
-    cls = " followed" if followed else ""
+    # FIX-1 (fix loop 1): an altitude-renamed follow is stored under the
+    # RESOLVER's name, so it is NOT in active_topics under the story's title — the
+    # origin_story column bridges it back to this card (0021). con carries this
+    # (render-time read, no llm); active_topics-only callers keep name recognition.
+    origin_row = {} if name_followed else _origin_follow_row(con, topic, headline)
+    followed = name_followed or bool(origin_row)
+    slot_id = f"follow-{slug}" if slug else "follow-slot"
     date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
-    return (f'<button class="follow-story-btn{cls}" data-topic={_e_attr(topic)}'
-            f'{date_attr} aria-pressed="{pressed}" onclick="toggleFollow(this)">'
-            f'{_e(label)}</button>')
+    origin_attr = f' data-origin={_e_attr(headline)}' if headline else ""
+    # R1 (fix loop 2): the card's canonical STORY topic. Once committed, data-topic
+    # is the STORED follow name (an altitude-renamed follow), so the client stamps
+    # this to restore data-topic to the STORY on unfollow — a re-tap then resolves
+    # the STORY (not the stale follow name) and stores the canonical origin (the
+    # 0021 reload bridge). `topic` here is the resting resolve subject (story_title,
+    # else headline; the drift reassignment above is already applied).
+    story_attr = f' data-story={_e_attr(topic)}'
+    if not followed:
+        # RESTING: the follow target is the story's canonical topic (story_title,
+        # else headline — the v7/NL-65 selection, preserved); the resolver names
+        # the better altitude from it at tap time. data-origin (the headline) is
+        # the "just this story" target on the low picker. aria-expanded="false" —
+        # the line is closed; a tap opens it in this same node.
+        return (f'<span class="follow-slot" id={_e_attr(slot_id)} '
+                f'data-topic={_e_attr(topic)}{origin_attr}{story_attr}{date_attr} '
+                f'data-state="resting">'
+                f'<button class="deck-follow not-following" type="button" '
+                f'aria-expanded="false" onclick="followTap(this)">'
+                f'{_e(labels.FOLLOW_STORY_INACTIVE)}</button></span>')
+    if origin_row:
+        # the follow lives under the resolver's name — data-topic is that STORED
+        # name so unfollow/switch exact-match the real row; the disclosure is read
+        # from this row (never a second lookup by the story's — different — title).
+        alt = origin_row
+        committed_topic = origin_row.get("topic") or topic
+    else:
+        alt = _follow_altitude_row(con, topic)
+        committed_topic = topic
+    return (f'<span class="follow-slot" id={_e_attr(slot_id)} '
+            f'data-topic={_e_attr(committed_topic)}{origin_attr}{story_attr}{date_attr} '
+            f'data-state="committed" '
+            f'data-altitude={_e_attr(alt.get("altitude") or "")} '
+            f'data-alt-label={_e_attr(alt.get("alt_label") or "")} '
+            f'data-disclosure={_e_attr(alt.get("disclosure") or "")}>'
+            f'<button class="deck-follow" type="button" aria-expanded="false" '
+            f'onclick="followTap(this)">{_committed_verb_inner(alt)}</button>'
+            f'</span>')
 
 
 def _has_deep_view(has_file: bool, tier: str) -> bool:
@@ -1646,25 +1849,28 @@ def _thread_state_card(t: Dict) -> str:
     return "".join(bits)
 
 
-def _thread_name_link(tid: int, topic: str, tag: str = "h2") -> str:
+def _thread_name_link(tid: int, topic: str, tag: str = "h2",
+                      qualifier: str = "") -> str:
     """The thread NAME as a Following row's single action (Design's ruling —
     extends the §12.5 fold grammar to the loud updated rows too): a link to the
     thread page (openThread). Accessible name = the topic (distinguishable across
     19+ rows, §12.5 'label = accessible name'); the shared 'fallback control
     label' labels.THREAD_WHOLE rides as the control's title so the row's single
     action is named from the label table. The name is a real heading so AT can
-    navigate the thread list."""
+    navigate the thread list. NL-17-M1b: the altitude qualifier rides INSIDE the
+    link (the accessible name carries the class — Kass's disclosure)."""
     return (f'<{tag} class="thread-name"><a href="#" '
             f'onclick="openThread(\'{tid}\', event); return false;" '
-            f'title={_e_attr(labels.THREAD_WHOLE)}>{_e(topic)}</a></{tag}>')
+            f'title={_e_attr(labels.THREAD_WHOLE)}>{_e(topic)}{qualifier}</a></{tag}>')
 
 
-def _thread_row_link(tid: int, topic: str) -> str:
+def _thread_row_link(tid: int, topic: str, qualifier: str = "") -> str:
     """The compressed-row variant (quiet fold + lifecycle rows): the name as a
     plain link (not a heading — 17 quiet names as headings would flood the
-    heading list), same single-action grammar and label."""
+    heading list), same single-action grammar and label. NL-17-M1b: the altitude
+    qualifier rides inside the link (accessible name carries the class)."""
     return (f'<a href="#" onclick="openThread(\'{tid}\', event); return false;" '
-            f'title={_e_attr(labels.THREAD_WHOLE)}>{_e(topic)}</a>')
+            f'title={_e_attr(labels.THREAD_WHOLE)}>{_e(topic)}{qualifier}</a>')
 
 
 def _spine_updated_row(t: Dict) -> str:
@@ -1677,12 +1883,15 @@ def _spine_updated_row(t: Dict) -> str:
     stamp = (f'<span class="t-stamp"><span class="t-moved">{_e(labels.UPDATED_DOT)} '
              f'{_e(labels.UPDATED_STAMP)}</span> · {_e(labels.UPDATED_THIS_EDITION)}'
              + (f' · {_e(date_h)}' if date_h else "") + '</span>')
-    name = _thread_name_link(t["id"], t["topic"], tag="h2")
+    name = _thread_name_link(t["id"], t["topic"], tag="h2",
+                             qualifier=_altitude_qualifier_html(t))
     delta_html = (f'<p class="thread-delta">{_e(d.get("what_happened", ""))}</p>'
                   if d.get("what_happened") else "")
+    upgrade = _altitude_upgrade_line(t)      # degrade-narrow: the quiet door
     note = (t.get("note") or "").strip()
     note_html = f'<p class="thread-note">{_e(note)}</p>' if note else ""
-    return f'<article class="thread">{stamp}{name}{delta_html}{note_html}</article>'
+    return (f'<article class="thread">{stamp}{name}{delta_html}{upgrade}'
+            f'{note_html}</article>')
 
 
 def _quiet_fold_html(quiet: List[Dict], zero_updated: bool) -> str:
@@ -1705,8 +1914,10 @@ def _quiet_fold_html(quiet: List[Dict], zero_updated: bool) -> str:
             # stamped FOLLOWED (never LAST UPDATED off a date with no coverage).
             stamp = (f' <span class="q-stamp">{_e(labels.FOLLOWED)} '
                      f'{_e(_human_short(t["followed_on"]).upper())}</span>')
-        rows.append(f'<li class="q-row">{_thread_row_link(t["id"], t["topic"])}'
-                    f'{stamp}</li>')
+        rows.append(
+            f'<li class="q-row">'
+            f'{_thread_row_link(t["id"], t["topic"], _altitude_qualifier_html(t))}'
+            f'{stamp}</li>')
     open_attr = " open" if zero_updated else ""
     return (f'<details class="quiet-fold"{open_attr}>'
             f'<summary><span class="qf-count">{n} {_e(noun)}</span> · '
@@ -1718,7 +1929,7 @@ def _lifecycle_row(t: Dict, stamp: str) -> str:
     """A dormant/dismissed row: name-as-action (single action → thread page) +
     a quiet lifecycle stamp. The Resume/Delete verbs live on the thread page."""
     return (f'<div class="q-row lifecycle-row">'
-            f'{_thread_row_link(t["id"], t["topic"])} '
+            f'{_thread_row_link(t["id"], t["topic"], _altitude_qualifier_html(t))} '
             f'<span class="q-stamp">{_e(stamp)}</span></div>')
 
 
@@ -3119,9 +3330,27 @@ def _nl_labels_js() -> str:
     renders, injected as window.NL_LABELS so a labels.py re-pin lands in the
     client too — the same one-place re-pin the server renders enjoy. <>&-escaped
     so a re-pin can never break out of the <script> element."""
-    payload = {"followActive": labels.FOLLOW_STORY_ACTIVE,
-               "followInactive": labels.FOLLOW_STORY_INACTIVE,
-               "followConfirm": labels.FOLLOW_STORY_CONFIRM}
+    # NL-17-M1b: the follow-altitude picker's client copy — the JS morphs the
+    # persistent .follow-slot through resolving/committed/ask/degrade from this
+    # one table (a labels.py re-pin lands client-side too). The v8 instant-flip
+    # toast (followConfirm) is RETIRED — the inline resolving->committed
+    # disclosure replaces it.
+    payload = {"followInactive": labels.FOLLOW_STORY_INACTIVE,
+               "resolving": labels.FOLLOW_RESOLVING,
+               "committedVerb": labels.FOLLOW_COMMITTED_VERB,
+               "steadyPrefix": labels.FOLLOW_STEADY_PREFIX,
+               "narrow": labels.FOLLOW_NARROW,
+               "dotOn": labels.FOLLOW_DOT_ON, "dotOff": labels.FOLLOW_DOT_OFF,
+               "insteadPrefix": labels.FOLLOW_INSTEAD_PREFIX,
+               "altFallbackEntity": labels.FOLLOW_ALT_FALLBACK_ENTITY,
+               "altFallbackStoryline": labels.FOLLOW_ALT_FALLBACK_STORYLINE,
+               "justThisStory": labels.FOLLOW_JUST_THIS_STORY,
+               "justThisStoryOption": labels.FOLLOW_JUST_THIS_STORY_OPTION,
+               "unfollow": labels.FOLLOW_UNFOLLOW,
+               "lowLead": labels.FOLLOW_LOW_LEAD,
+               "degradeLead": labels.FOLLOW_DEGRADE_LEAD,
+               "degradeUpgrade": labels.FOLLOW_DEGRADE_UPGRADE,
+               "switchFailed": labels.FOLLOW_SWITCH_FAILED}
     blob = (json.dumps(payload, ensure_ascii=False)
             .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
     return "window.NL_LABELS = " + blob + ";"
@@ -3380,6 +3609,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             handler = {
                 "/api/follow": self._api_follow,
+                "/api/follow/resolve": self._api_follow_resolve,
+                "/api/follow/at": self._api_follow_at,
                 "/api/unfollow": self._api_dismiss,
                 "/api/dismiss": self._api_dismiss,
                 "/api/revive": self._api_revive,
@@ -3437,12 +3668,153 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send_json(self._with_memory(verb))
 
+    def _ref_id_for(self, con, briefing_date: Optional[str]):
+        if not briefing_date:
+            return None
+        r = con.execute("SELECT id FROM briefings WHERE date = ?",
+                        (briefing_date,)).fetchone()
+        return r["id"] if r else None
+
+    def _commit_altitude(self, con, *, name: str, altitude: str,
+                         primary_entity: str = "", disclosure: str = "",
+                         alt_label: str = "", confidence: str = "",
+                         source: str = "auto", origin_story: str = "",
+                         briefing_date: Optional[str] = None) -> Dict:
+        """Store a picker follow at an altitude (the resolve auto-commit, a low/
+        switch reader pick, or the degrade narrow landing) + log the instrument
+        event. One place, so every commit path shares the storage contract.
+        origin_story (FIX-1) records the story this follow was born from, so the
+        origin card recognizes an altitude-renamed follow across reload."""
+        ref_id = self._ref_id_for(con, briefing_date)
+        outcome, tid = memory.add_thread_at_altitude(
+            con, name, altitude=altitude, primary_entity=primary_entity,
+            disclosure=disclosure, alt_label=alt_label, confidence=confidence,
+            source=source, origin_story=origin_story,
+            last_referenced_briefing_id=ref_id)
+        return {"ok": True, "outcome": outcome, "topic": name, "thread_id": tid}
+
+    def _api_follow_resolve(self, body: Dict) -> None:
+        """The follow TAP on a headline-origin story: resolve the altitude, then
+        HIGH/MED auto-commit WITH the disclosure; LOW commits NOTHING and returns
+        the options (the reader's pick creates the follow); resolver FAILURE/
+        TIMEOUT commits this-story immediately (the act is never lost) with the
+        exact degrade copy. The resolver call holds NO db open (its own law); the
+        commit is a separate short verb. Subscription lane — $0 charged."""
+        headline = self._topic_arg(body)
+        if not headline:
+            return self._send_json({"ok": False, "error": "topic required"}, 400)
+        # data-origin is the raw headline (the resting card carries both — see
+        # _follow_control); the story's canonical topic (`headline` here, the
+        # data-topic) is the origin key we STORE, and both are match keys.
+        origin = str(body.get("origin") or "").strip() or headline
+        briefing_date = str(body.get("briefing_date") or "").strip() or None
+        # XOR / recognition guard (FIX-1): a tap on an ALREADY-followed story is
+        # the steady-state expand, not a fresh follow. Return the committed row —
+        # never a second paid resolve, never a divergent second active follow
+        # (QA NO-GO: rows "…job cuts" + "Volkswagen" for one story). Read-only.
+        con = db.connect()
+        try:
+            existing = _resolve_guard_row(con, headline, origin)
+        finally:
+            con.close()
+        if existing:
+            return self._send_json({
+                "ok": True, "state": "committed", "topic": existing["topic"],
+                "altitude": existing.get("altitude") or "",
+                "disclosure": existing.get("disclosure") or "",
+                "alt_label": existing.get("alt_label") or ""})
+        try:
+            res = follow_altitude.resolve_altitude(
+                follow_altitude.ThreadInput(thread_id=None, topic=headline),
+                retry_transport=False)   # R3: a reader waits — degrade on the
+                                         # first timeout window, never retry to ~25s
+        except Exception as exc:  # noqa: BLE001 — AltitudeError/LaneUnavailable/transport
+            # FAILURE/TIMEOUT: commit this-story NOW (mutation law: the reader's
+            # act stands; only the broader proposal degraded — never --danger).
+            out = self._with_memory(lambda con: self._commit_altitude(
+                con, name=headline, altitude="narrow", source="degrade",
+                origin_story=headline, briefing_date=briefing_date))
+            out.update({"state": "degrade", "reason": str(exc),
+                        "lead": labels.FOLLOW_DEGRADE_LEAD,
+                        "upgrade": labels.FOLLOW_DEGRADE_UPGRADE})
+            return self._send_json(out)
+        if res.confidence == "low":
+            # LOW: the line ASKS; nothing is followed until the pick.
+            return self._send_json({
+                "ok": True, "state": "ask", "lead": labels.FOLLOW_LOW_LEAD,
+                "options": _altitude_options(res, headline)})
+        # HIGH/MEDIUM: auto-commit at the resolved altitude, named. origin_story
+        # is the tapped story — the bridge back to this card after reload (FIX-1).
+        name, _cls = follow_altitude.split_qualifier(res.disclosure)
+        name = name or res.primary_entity or headline
+        out = self._with_memory(lambda con: self._commit_altitude(
+            con, name=name, altitude=res.altitude,
+            primary_entity=res.primary_entity, disclosure=res.disclosure,
+            alt_label=res.alt_label, confidence=res.confidence, source="auto",
+            origin_story=headline, briefing_date=briefing_date))
+        out.update({"state": "committed", "altitude": res.altitude,
+                    "disclosure": res.disclosure, "alt_label": res.alt_label,
+                    "confidence": res.confidence})
+        return self._send_json(out)
+
+    def _api_follow_at(self, body: Dict) -> None:
+        """A reader PICK at a chosen altitude (a low-confidence option, or a
+        switch from a committed follow). Pre-altituded — the resolver is NOT
+        re-consulted (mutation law). A switch (from_topic present + active) MOVES
+        the existing follow; otherwise it creates one."""
+        name = str(body.get("name") or "").strip()
+        altitude = str(body.get("altitude") or "").strip()
+        if not name or memory.SEPARATOR in name:
+            return self._send_json({"ok": False, "error": "name required"}, 400)
+        if altitude not in memory.STORED_ALTITUDES:
+            return self._send_json({"ok": False, "error": "bad altitude"}, 400)
+        from_topic = str(body.get("from_topic") or "").strip()
+        disclosure = str(body.get("disclosure") or "")
+        alt_label = str(body.get("alt_label") or "")
+        primary_entity = str(body.get("primary_entity") or "")
+        # the story this pick was made from (FIX-1) — stored on a CREATE so a
+        # low-confidence pick's altitude-renamed follow is recognized on reload;
+        # a MOVE keeps the moved row's original origin (never rewritten).
+        origin = str(body.get("origin") or "").strip()
+        briefing_date = str(body.get("briefing_date") or "").strip() or None
+
+        def verb(con):
+            if from_topic:
+                row = con.execute(
+                    "SELECT id FROM memory WHERE lower(topic) = lower(?)"
+                    " AND status = 'active'", (from_topic,)).fetchone()
+                if row is not None:
+                    # R2: the switch may revive-merge onto a dismissed holder of
+                    # `name` — report the SURVIVING active row, not the moved one.
+                    survivor = memory.move_follow_altitude(
+                        con, row["id"], new_name=name, altitude=altitude,
+                        primary_entity=primary_entity, disclosure=disclosure,
+                        alt_label=alt_label, source="pick")
+                    return {"ok": True, "outcome": "moved", "topic": name,
+                            "thread_id": survivor if survivor else row["id"]}
+            return self._commit_altitude(
+                con, name=name, altitude=altitude, primary_entity=primary_entity,
+                disclosure=disclosure, alt_label=alt_label, source="pick",
+                origin_story=origin, briefing_date=briefing_date)
+
+        out = self._with_memory(verb)
+        out.update({"state": "committed", "altitude": altitude,
+                    "disclosure": disclosure, "alt_label": alt_label})
+        self._send_json(out)
+
     def _api_dismiss(self, body: Dict) -> None:
         topic = self._topic_arg(body)
         if not topic:
             return self._send_json({"ok": False, "error": "topic required"}, 400)
-        self._send_json(self._with_memory(
-            lambda con: {"ok": memory.dismiss_thread(con, topic)}))
+
+        def verb(con):
+            # SYMMETRY LAW: unfollow from the same surface. Log the altitude
+            # correction FIRST (Axel's instrument — a within-24h unfollow of a
+            # medium auto-commit counts), then dismiss.
+            memory.record_altitude_correction(con, topic)
+            return {"ok": memory.dismiss_thread(con, topic)}
+
+        self._send_json(self._with_memory(verb))
 
     def _api_revive(self, body: Dict) -> None:
         topic = self._topic_arg(body)

@@ -33,12 +33,16 @@ MIGRATION_0015 = "0015_thread_closures.sql"           # collect-now (ruling C): 
 MIGRATION_0016 = "0016_concept_explanations.sql"      # collect-now (ruling C): explained-once registry (schema only)
 MIGRATION_0017 = "0017_thread_baselines.sql"          # NL-77: the cold-start backgrounder (entry-zero baseline)
 MIGRATION_0018 = "0018_thread_state_arc_line.sql"     # arc-line contract v1: authored arc_line column on thread_state
+MIGRATION_0019 = "0019_memory_follow_altitude.sql"    # NL-17-M1b: the follow-altitude picker's persisted disclosure columns on memory
+MIGRATION_0020 = "0020_follow_altitude_events.sql"    # NL-17-M1b: Axel's medium-confidence instrument (append-only event log)
+MIGRATION_0021 = "0021_memory_follow_origin.sql"      # NL-17-M1b FIX LOOP 1: the origin-story bridge (recognize an altitude-renamed follow on its origin card)
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
     MIGRATION_0008, MIGRATION_0009, MIGRATION_0010,
     MIGRATION_0011, MIGRATION_0012, MIGRATION_0013, MIGRATION_0014,
     MIGRATION_0015, MIGRATION_0016, MIGRATION_0017, MIGRATION_0018,
+    MIGRATION_0019, MIGRATION_0020, MIGRATION_0021,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
@@ -46,6 +50,7 @@ EXPECTED_TABLES = {
     "thread_deltas", "thread_state",
     "thread_delta_supersessions", "watch_items", "thread_delta_provenance",
     "thread_closures", "concept_explanations", "thread_baselines",
+    "follow_altitude_events",
 }
 
 

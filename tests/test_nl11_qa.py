@@ -185,10 +185,10 @@ def test_coexistence_title_equals_active_thread_without_matched_memory(tmp_paths
     assert rendered == TODAY
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
     assert 'class="tracked-marker"' not in today       # no matched_memory -> no marker
-    assert 'class="follow-story-btn' in today           # the merged follow control
+    assert 'class="follow-slot"' in today               # NL-17-M1b: the single-node control
     assert 'class="deck"' in today                      # v7/NL-65: under-title control row
-    assert 'aria-pressed="true"' in today              # ...in the followed state
-    assert "Following this story" in today
+    assert 'data-state="committed"' in today           # ...recognized as followed
+    assert 'data-state="resting"' not in today         # not the resting form
     assert 'data-topic="Iran War"' in today            # the story's own casing travels
 
 
@@ -222,7 +222,7 @@ def test_coexistence_empty_story_title_falls_back_to_headline(tmp_paths):
     page, _ = server.build_page(con)
     con.close()
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
-    assert 'class="follow-story-btn' in today
+    assert 'class="follow-slot"' in today
     assert 'data-topic="Fallback Headline"' in today   # headline, never a blank topic
     assert 'data-topic=""' not in today
 

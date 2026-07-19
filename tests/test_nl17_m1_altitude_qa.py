@@ -381,7 +381,10 @@ def test_prompt_file_teaches_exactly_the_two_rungs():
     assert '"entity"' in law and '"storyline"' in law
     assert "only two rungs" in law                       # wrap-proof anchor
     assert 'no "industry", no "region"' in law           # deferred rungs forbidden
-    assert "NAME THE ALTITUDE IN WORDS" in law           # Kass's clause, verbatim
+    # Kass's clause survives the M1b compact re-land (2026-07-18): the disclosure
+    # still NAMES the altitude in words — the tailed-sentence phrasing became the
+    # compact qualifier grammar, but "in words" is the invariant.
+    assert "names the altitude in words" in law          # Kass's clause
     assert fa._system_law() == law                       # the file IS the system law
 
 

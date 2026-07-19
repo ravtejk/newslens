@@ -166,11 +166,53 @@ article.story { scroll-margin-top: 0.75rem; }
 .deck { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1.1rem;
   margin: 0 0 1.15rem; padding: 0.45rem 0; border-bottom: 1px solid var(--rule); font-size: 0.88rem; }
 .deck > * { min-width: 0; }
-.tracked-marker, .follow-story-btn { background: none; border: none; padding: 0; cursor: pointer;
+.tracked-marker, .deck-follow { background: none; border: none; padding: 0; cursor: pointer;
   text-align: left; font-family: var(--font-sans); font-size: 0.88rem; font-weight: 700; color: var(--terra); }
-.follow-story-btn:hover { color: var(--terra-deep); text-decoration: underline; }
-.follow-story-btn:not(.followed):not(.confirming) { font-weight: 400; color: var(--ink-soft); }
-.follow-story-btn.followed, .follow-story-btn.confirming { color: var(--moved); }
+/* NL-17-M1b: the follow-altitude picker — ONE persistent .follow-slot node
+   (single-rendering law) carrying the compact deck verb (rest/steady) OR the
+   inline follow-line (resolving/asking/commit). spans-and-links, no new
+   container shapes (Greta's feasibility); the follow ● is terra (action), the
+   continuity ● stays moved-green. */
+.deck-follow:hover { color: var(--terra-deep); text-decoration: underline; }
+.deck-follow.not-following { font-weight: 400; color: var(--ink-soft); }
+.follow-slot { min-width: 0; }
+.follow-slot[data-state="resolving"], .follow-slot[data-state="asking"],
+.follow-slot[data-state="expanded"] { display: block; flex-basis: 100%; }
+.fl-status { display: block; font-size: 0.9rem; font-style: italic; color: var(--ink-faint); }
+.fl-sentence { display: block; font-size: 0.95rem; color: var(--ink); }
+.fl-sentence .fl-dot, .fl-degrade .fl-dot { color: var(--terra); font-weight: 700; }
+.fl-sentence strong { font-weight: 700; }
+/* FIX-4: the committed sentence is a collapse toggle (a button) — reset the
+   chrome so it still reads as the sentence, keep it keyboard-operable. Size and
+   colour stay with the .fl-sentence / .fl-degrade classes above. */
+button.fl-sentence, button.fl-degrade { width: auto; background: none; border: 0;
+  padding: 0; margin: 0; text-align: left; cursor: pointer;
+  font-family: var(--font-sans); }
+button.fl-sentence:hover, button.fl-degrade:hover { text-decoration: underline; }
+.fl-alts { display: block; font-size: 0.85rem; color: var(--ink-faint); margin-top: 0.15rem; }
+.fl-alts a, .fl-alts .fl-unfollow { color: var(--terra); }
+.fl-alts .sep { margin: 0 0.4rem; color: var(--rule); }
+.fl-unfollow { background: none; border: none; padding: 0; cursor: pointer;
+  font-family: var(--font-sans); font-size: inherit; font-style: normal;
+  font-weight: 400; color: var(--terra); }
+.fl-unfollow:hover { color: var(--terra-deep); text-decoration: underline; }
+.fl-lead { display: block; font-size: 0.95rem; color: var(--ink); margin-bottom: 0.1rem; }
+.fl-options { list-style: none; margin: 0.25rem 0 0.2rem; padding: 0; max-width: 34rem; }
+.fl-options li { border-top: 1px solid var(--rule); }
+.fl-options li:last-child { border-bottom: 1px solid var(--rule); }
+.fl-options a { display: block; padding: 0.55rem 0.1rem; font-size: 0.95rem;
+  color: var(--terra); text-decoration: none; }
+.fl-options a:hover { color: var(--terra-deep); text-decoration: underline; }
+.fl-degrade { display: block; font-size: 0.9rem; color: var(--ink); }
+.fl-degrade-why { display: block; font-size: 0.85rem; font-style: italic; color: var(--ink-faint); }
+.fl-degrade-why .sep { margin: 0 0.4rem; color: var(--rule); }
+/* R2: a refused switch — a quiet register line, the current follow left intact. */
+.fl-switch-failed { display: block; font-size: 0.85rem; color: var(--ink-faint); margin-top: 0.2rem; }
+/* the compact class qualifier (deck verb + moment line) and the persistent
+   Following-row qualifier (Screen 2): words, quiet register, color carries
+   nothing. */
+.oq { color: var(--ink-soft); font-weight: 400; }
+.alt-q { font-weight: 400; color: var(--ink-soft); }
 .tracked-marker { color: var(--moved); cursor: default; }
 .tracked-marker::before { content: "\\25CF "; }
 /* NL-65: the deep-view entry moves to the story BOTTOM, before the furniture */
@@ -732,39 +774,269 @@ function restoreViewAfterReload() {
     requestAnimationFrame(function () { requestAnimationFrame(applyScroll); });
   }
 }
-/* Per-story follow: in-place swap by design (v3 §Today #3) — the one
-   popup-pattern carve-out; requires no further input, so no popup. */
-function toggleFollow(btn) {
-  var topic = btn.getAttribute('data-topic');
-  var when = btn.getAttribute('data-briefing-date') || CURRENT_DATE;
-  var pressed = btn.getAttribute('aria-pressed') === 'true';
-  if (pressed) {
-    btn.setAttribute('aria-pressed', 'false');
-    btn.classList.remove('followed');
-    btn.textContent = NL_LABELS.followInactive;
-    api('/api/unfollow', {topic: topic}, function (d) {
-      if (d && d.ok === false) {  // server refused: don't lie about the state
-        btn.setAttribute('aria-pressed', 'true');
-        btn.classList.add('followed');
-        btn.textContent = NL_LABELS.followActive;
-      }
+/* NL-17-M1b — the follow-altitude picker (mockup-v9). ONE persistent
+   .follow-slot node (single-rendering law) morphs between the compact deck verb
+   and the inline follow-line (resolving/committed/ask/degrade) — never a popup,
+   never a scrim. MUTATION LAW: only a reader tap commits; high/med auto-commit
+   at the moment of disclosure is the ratified exception; LOW commits nothing
+   until a pick; resolver FAILURE lands this-story with the exact degrade copy.
+   SYMMETRY LAW: a quiet Unfollow closes every committed line. The transient
+   states are spans-and-links inside this same node (Greta's feasibility). */
+function flEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+function flSlot(el) { return el.closest ? el.closest('.follow-slot') : null; }
+function flWhen(slot) {
+  return slot.getAttribute('data-briefing-date') || CURRENT_DATE;
+}
+function flDA(slot, name) { return slot.getAttribute('data-' + name) || ''; }
+/* render a compact qualifier ("Volkswagen (company)") as name-bold + quiet class;
+   a bare name renders bold with no parenthetical (storyline states its class). */
+function flQualified(disclosure) {
+  var s = String(disclosure || ''), m = s.match(/^(.*) \(([^()]*)\)$/);
+  if (m) return '<strong>' + flEsc(m[1]) + '</strong> <span class="oq">('
+    + flEsc(m[2]) + ')</span>';
+  return '<strong>' + flEsc(s) + '</strong>';
+}
+function flOtherAltitude(a) { return a === 'entity' ? 'storyline' : 'entity'; }
+/* FIX-2 (focus continuity, fix loop 1): every morph replaces .follow-slot
+   innerHTML, destroying whatever child held focus (pre-fix: activeElement fell
+   to <body>). Roving tabindex on the PERSISTENT slot — before each morph, if
+   focus sits on a child about to be destroyed, move it to the slot so focus is
+   never dropped. The slot's aria-live announces the new state without a focus
+   jump to a specific child (the mockup's "announced without stealing focus").
+   Structural pin only; live keyboard verification is QA's re-check. */
+function flHold(slot) {
+  slot.setAttribute('tabindex', '-1');
+  var a = document.activeElement;
+  if (a && a !== slot && slot.contains(a)) {
+    try { slot.focus({ preventScroll: true }); } catch (e) { slot.focus(); }
+  }
+}
+function followTap(btn) {
+  var slot = flSlot(btn);
+  if (!slot) return;
+  var state = slot.getAttribute('data-state');
+  if (state === 'committed' || state === 'expanded') return flExpandCommitted(slot);
+  flStartResolve(slot);   // resting
+}
+/* RESOLVING: the control expands from the verb into the line (aria-live
+   announces the outcome); nothing renders as followed yet (low must not flash a
+   follow it never made). */
+function flStartResolve(slot) {
+  var origin = flDA(slot, 'origin') || flDA(slot, 'topic');
+  flHold(slot);
+  slot.setAttribute('data-origin', origin);
+  slot.setAttribute('data-state', 'resolving');
+  slot.setAttribute('aria-live', 'polite');
+  slot.innerHTML = '<span class="fl-status">' + flEsc(NL_LABELS.resolving)
+    + '</span>';
+  // origin (the raw headline) rides along as a second recognition key for the
+  // resolve XOR guard (FIX-1); the server stores the story's canonical topic.
+  api('/api/follow/resolve',
+    { topic: flDA(slot, 'topic'), origin: origin, briefing_date: flWhen(slot) },
+    function (d) {
+      if (!d || d.ok === false) return flRenderResting(slot);
+      if (d.state === 'ask') return flRenderAsk(slot, d);
+      if (d.state === 'degrade') return flRenderDegrade(slot);
+      flRenderCommitted(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
     });
+}
+/* HIGH/MED committed, or a pick/switch: the compact disclosure + the acts line
+   (Instead <alt> · just this story · Unfollow). narrow -> the degrade grammar. */
+function flRenderCommitted(slot, topic, altitude, disclosure, altLabel) {
+  flHold(slot);
+  slot.setAttribute('data-topic', topic || '');
+  slot.setAttribute('data-altitude', altitude || '');
+  slot.setAttribute('data-alt-label', altLabel || '');
+  slot.setAttribute('data-disclosure', disclosure || '');
+  slot.setAttribute('data-state', 'expanded');
+  // FIX-4 (fix loop 1): the committed SENTENCE is the collapse toggle — a button
+  // carrying aria-expanded="true" whose tap routes back through followTap ->
+  // flExpandCommitted -> flCollapseCommitted (mockup STATE 5: "a second tap
+  // collapses it"). aria-expanded is honest both ways (the compact verb declares
+  // "false"). Not destructive — the destructive Unfollow stays a separate named
+  // verb in the acts line (mockup's discoverable-affordance ruling).
+  if (altitude === 'narrow') {
+    slot.innerHTML =
+      '<button class="fl-sentence fl-degrade" type="button" aria-expanded="true" '
+      + 'onclick="followTap(this)"><span class="fl-dot">' + flEsc(NL_LABELS.dotOn)
+      + '</span> ' + flEsc(NL_LABELS.steadyPrefix) + ' '
+      + flEsc(NL_LABELS.narrow) + '.</button>' + flActsLine(slot, true);
     return;
   }
-  btn.classList.add('confirming');
-  btn.textContent = NL_LABELS.followConfirm;
-  api('/api/follow', {topic: topic, briefing_date: when}, function (d) {
-    if (d && d.ok === false) {  // no silent lie — revert on refusal
-      btn.classList.remove('confirming');
-      btn.textContent = NL_LABELS.followInactive;
-      return;
-    }
-    setTimeout(function () {
-      btn.classList.remove('confirming');
-      btn.classList.add('followed');
-      btn.setAttribute('aria-pressed', 'true');
-      btn.textContent = NL_LABELS.followActive;
-    }, 2800);  // NL-58 ruling 5: confirm state holds 2x the old duration
+  slot.innerHTML =
+    '<button class="fl-sentence" type="button" aria-expanded="true" '
+    + 'onclick="followTap(this)"><span class="fl-dot">' + flEsc(NL_LABELS.dotOn)
+    + '</span> ' + flEsc(NL_LABELS.committedVerb) + ' ' + flQualified(disclosure)
+    + '</button>' + flActsLine(slot, false);
+}
+/* the acts line — the switch offer + just-this-story + the symmetry-law Unfollow.
+   narrowOnly drops the two switch links (a this-story follow has no other rung). */
+function flActsLine(slot, narrowOnly) {
+  var acts = '<span class="fl-alts">';
+  if (!narrowOnly) {
+    var alt = flDA(slot, 'alt-label');
+    // lawful worded fallback when the resolver named no alternative — never a
+    // bare symbol; the words name the OTHER altitude.
+    var fallback = (flOtherAltitude(flDA(slot, 'altitude')) === 'storyline')
+      ? NL_LABELS.altFallbackStoryline : NL_LABELS.altFallbackEntity;
+    var instead = '<a href="#" onclick="flSwitch(this); return false;">'
+      + (alt ? flQualified(alt) : flEsc(fallback)) + '</a>';
+    acts += flEsc(NL_LABELS.insteadPrefix) + ' ' + instead
+      + '<span class="sep">·</span>'
+      + '<a href="#" onclick="flPickNarrow(this); return false;">'
+      + flEsc(NL_LABELS.justThisStory) + '</a><span class="sep">·</span>';
+  }
+  acts += '<button class="fl-unfollow" type="button" onclick="flUnfollow(this)">'
+    + flEsc(NL_LABELS.unfollow) + '</button></span>';
+  return acts;
+}
+/* LOW: the line ASKS; nothing is followed until the pick. Options are real
+   links whose visible text IS the accessible name (class included). */
+function flRenderAsk(slot, d) {
+  flHold(slot);
+  slot.setAttribute('data-state', 'asking');
+  var html = '<span class="fl-lead">' + flEsc(d.lead || NL_LABELS.lowLead)
+    + '</span><ul class="fl-options">';
+  (d.options || []).forEach(function (o) {
+    var text = (o.altitude === 'narrow')
+      ? flEsc(o.label || NL_LABELS.justThisStoryOption) : flQualified(o.label);
+    html += '<li><a href="#" data-name="' + flEsc(o.name) + '" data-altitude="'
+      + flEsc(o.altitude) + '" data-disclosure="' + flEsc(o.disclosure)
+      + '" data-alt-label="' + flEsc(o.alt_label) + '" data-primary-entity="'
+      + flEsc(o.primary_entity) + '" onclick="flPick(this); return false;">'
+      + text + '</a></li>';
+  });
+  slot.innerHTML = html + '</ul>';
+}
+/* resolver FAILURE/TIMEOUT: the this-story follow already COMMITTED server-side
+   (the act is never lost) — render the EXACT degrade copy + the Unfollow. */
+function flRenderDegrade(slot) {
+  flHold(slot);
+  slot.setAttribute('data-altitude', 'narrow');
+  slot.setAttribute('data-state', 'expanded');
+  slot.innerHTML =
+    '<span class="fl-degrade"><span class="fl-dot">' + flEsc(NL_LABELS.dotOn)
+    + '</span> ' + flEsc(NL_LABELS.degradeLead) + '</span>'
+    + '<span class="fl-degrade-why">' + flEsc(NL_LABELS.degradeUpgrade)
+    + '<span class="sep">·</span>'
+    + '<button class="fl-unfollow" type="button" onclick="flUnfollow(this)">'
+    + flEsc(NL_LABELS.unfollow) + '</button></span>';
+}
+function flRenderResting(slot) {
+  flHold(slot);
+  slot.setAttribute('data-state', 'resting');
+  slot.removeAttribute('aria-live');
+  // R1 (fix loop 2): the committed render re-stamped data-topic to the STORED
+  // follow NAME; on unfollow, restore the card's canonical STORY topic (stamped
+  // by the server as data-story) so a re-tap resolves the STORY — not the stale
+  // follow name — and stores the canonical origin (the 0021 reload bridge).
+  var story = flDA(slot, 'story');
+  if (story) {
+    slot.setAttribute('data-topic', story);
+    if (!flDA(slot, 'origin')) slot.setAttribute('data-origin', story);
+  }
+  slot.innerHTML = '<button class="deck-follow not-following" type="button" '
+    + 'aria-expanded="false" onclick="followTap(this)">'
+    + flEsc(NL_LABELS.followInactive) + '</button>';
+}
+/* the steady committed verb re-opens the line where Instead + Unfollow live
+   (aria-expanded); a second tap collapses it. */
+function flExpandCommitted(slot) {
+  if (slot.getAttribute('data-state') === 'expanded') {
+    return flCollapseCommitted(slot);
+  }
+  flRenderCommitted(slot, flDA(slot, 'topic'), flDA(slot, 'altitude'),
+    flDA(slot, 'disclosure'), flDA(slot, 'alt-label'));
+}
+function flCollapseCommitted(slot) {
+  flHold(slot);
+  slot.setAttribute('data-state', 'committed');
+  var dot = flEsc(NL_LABELS.dotOn), verb;
+  if (flDA(slot, 'altitude') === 'narrow') {
+    verb = dot + ' ' + flEsc(NL_LABELS.steadyPrefix) + ' '
+      + flEsc(NL_LABELS.narrow);
+  } else if (flDA(slot, 'disclosure')) {
+    verb = dot + ' ' + flEsc(NL_LABELS.steadyPrefix) + ' '
+      + flQualified(flDA(slot, 'disclosure'));
+  } else {
+    verb = dot + ' ' + flEsc(NL_LABELS.committedVerb);
+  }
+  slot.innerHTML = '<button class="deck-follow" type="button" '
+    + 'aria-expanded="false" onclick="followTap(this)">' + verb + '</button>';
+}
+/* a low-confidence PICK: pre-altituded, the resolver is NOT re-consulted
+   (mutation law). Nothing was committed at low, so this creates the follow. */
+function flPick(a) {
+  var slot = flSlot(a);
+  api('/api/follow/at', {
+    name: a.getAttribute('data-name'),
+    altitude: a.getAttribute('data-altitude'),
+    disclosure: a.getAttribute('data-disclosure'),
+    alt_label: a.getAttribute('data-alt-label'),
+    primary_entity: a.getAttribute('data-primary-entity'),
+    // FIX-1: the story this low-confidence pick was made from, so its altitude-
+    // renamed follow is recognized on reload (the resolve path stores the same).
+    origin: flDA(slot, 'topic'),
+    briefing_date: flWhen(slot)
+  }, function (d) {
+    if (!d || d.ok === false) return flRenderResting(slot);
+    flRenderCommitted(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
+  });
+}
+/* the SWITCH ("Instead"): the follow MOVES to the other rung (from_topic set)
+   — never a re-resolve. Swap disclosure<->alt_label for the switch-back offer. */
+function flSwitch(a) {
+  var slot = flSlot(a);
+  var cur = flDA(slot, 'topic'), altLabel = flDA(slot, 'alt-label');
+  var newAlt = flOtherAltitude(flDA(slot, 'altitude'));
+  var newName = altLabel.replace(/ \([^()]*\)$/, '') || cur;
+  api('/api/follow/at', {
+    name: newName, altitude: newAlt, disclosure: altLabel,
+    alt_label: flDA(slot, 'disclosure'), from_topic: cur,
+    briefing_date: flWhen(slot)
+  }, function (d) {
+    if (!d || d.ok === false) return flSwitchFailed(slot);   // surface, not swallow
+    flRenderCommitted(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
+  });
+}
+/* R2 (fix loop 2): the switch was REFUSED server-side (a transient, or a collision
+   the server could not merge); the CURRENT follow is UNCHANGED. Surface a quiet
+   register line so the reader's tap is never a silent no-op — WITHOUT destroying
+   the committed line already in the slot. role="status" announces it; a second
+   failed try replaces the note rather than stacking. */
+function flSwitchFailed(slot) {
+  flHold(slot);
+  var prev = slot.querySelector('.fl-switch-failed');
+  if (prev) prev.parentNode.removeChild(prev);
+  var note = document.createElement('span');
+  note.className = 'fl-switch-failed';
+  note.setAttribute('role', 'status');
+  note.textContent = NL_LABELS.switchFailed;
+  slot.appendChild(note);
+}
+/* just this story: MOVE the committed follow to narrow (the origin headline). */
+function flPickNarrow(a) {
+  var slot = flSlot(a);
+  var cur = flDA(slot, 'topic'), origin = flDA(slot, 'origin') || cur;
+  api('/api/follow/at', {
+    name: origin, altitude: 'narrow', from_topic: cur,
+    briefing_date: flWhen(slot)
+  }, function (d) {
+    if (!d || d.ok === false) return;
+    flRenderCommitted(slot, d.topic, 'narrow', '', '');
+  });
+}
+/* SYMMETRY LAW: one-tap unfollow from the same surface (records the altitude
+   correction server-side for Axel's instrument), then back to resting. */
+function flUnfollow(btn) {
+  var slot = flSlot(btn);
+  api('/api/unfollow', { topic: flDA(slot, 'topic') }, function (d) {
+    if (d && d.ok === false) return;   // server refused: leave the line as-is
+    flRenderResting(slot);
   });
 }
 /* M9-M3: deep-view navigation — v6's lastStoryAnchor logic is the spec.

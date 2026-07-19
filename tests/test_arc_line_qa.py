@@ -443,9 +443,13 @@ def test_0018_applies_over_armed_append_only_triggers_and_keeps_them(tmp_path):
         con.commit()
     finally:
         con.close()
-    # the upgrade: ONLY 0018 pending against the full shipped dir
+    # the upgrade: 0018 (+ the later NL-17-M1b additive pair) pending against the
+    # full shipped dir; all apply cleanly over 0010's armed append-only triggers.
     applied2 = db.migrate(db_path=db_path)
-    assert applied2 == ["0018_thread_state_arc_line.sql"]
+    assert applied2 == ["0018_thread_state_arc_line.sql",
+                        "0019_memory_follow_altitude.sql",
+                        "0020_follow_altitude_events.sql",
+                        "0021_memory_follow_origin.sql"]
     con = db.connect(db_path)
     try:
         row = con.execute("SELECT arc_line FROM thread_state").fetchone()

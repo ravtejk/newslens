@@ -114,6 +114,33 @@ class AltitudeResult:
     usd_shadow: float
     usd_charged: float
     lane: str
+    # NL-17-M1b build rider (design seam, 2026-07-18): the OTHER rung named in
+    # words, compact-qualifier grammar ("Volkswagen job cuts" / "Volkswagen
+    # (company)") — feeds the follow-line's "Instead" act and the low-confidence
+    # picker's second option. A prompt-COMPATIBLE extension: an M1a-shaped answer
+    # that omits it stays valid and this is "" — the UI then renders the lawful
+    # worded fallback ("the ongoing story" / "the company"), never a bare symbol.
+    alt_label: str = ""
+
+
+# ---------------------------------------------------------------------------
+# The compact qualifier grammar (M1b) — split a resolver disclosure/alt_label
+# ("Volkswagen (company)" / "Volkswagen job cuts" / "Redemption Gates (fund-
+# withdrawal story)") into (name, class) so the render can style the name bold
+# and the class in the quiet parenthetical. This is the inverse of the grammar
+# the prompt emits — a TOTAL, deterministic split of a controlled "name" or
+# "name (class)" token, NOT prose-parsing (0018's dumb-render concern was
+# authored prose in a JSON blob; this is a formatting split of a two-part name).
+# ---------------------------------------------------------------------------
+
+def split_qualifier(qname: str) -> Tuple[str, str]:
+    """('Volkswagen (company)') -> ('Volkswagen', 'company'); a bare name ->
+    (name, ''). Splits on the LAST ' (' that closes the string with ')'."""
+    q = (qname or "").strip()
+    if q.endswith(")") and " (" in q:
+        head, _, tail = q.rpartition(" (")
+        return head.strip(), tail[:-1].strip()
+    return q, ""
 
 
 # ---------------------------------------------------------------------------
@@ -170,16 +197,37 @@ def _validate(content: str) -> Dict:
     if confidence not in CONFIDENCES:
         raise ValueError(
             f"confidence must be one of {list(CONFIDENCES)}, got {confidence!r}")
+    # alt_label — the OTHER rung named in words (M1b). OPTIONAL by design: a
+    # prompt-compatible extension, so an omitted/blank value is NOT a rejection
+    # (M1a back-compat) — it degrades to "" and the UI renders the worded
+    # fallback. A present value must be a real string (never a bare symbol);
+    # anything else is coerced to the fallback rather than failing the whole
+    # pick (the alternative is a convenience act, not the disclosure Kass's
+    # clause guards).
+    alt = payload.get("alt_label")
+    alt_label = alt.strip() if isinstance(alt, str) else ""
     return {"altitude": altitude, "primary_entity": primary.strip(),
-            "disclosure": disclosure.strip(), "confidence": confidence}
+            "disclosure": disclosure.strip(), "confidence": confidence,
+            "alt_label": alt_label}
 
 
 def resolve_altitude(thread: ThreadInput, *, api_key: str = "",
                      env: Optional[Dict[str, str]] = None,
                      seat: Optional[Tuple["llm.SeatConfig", Optional[str]]] = None,
-                     cost_sink: Optional[List[Dict]] = None) -> AltitudeResult:
+                     cost_sink: Optional[List[Dict]] = None,
+                     retry_transport: bool = True) -> AltitudeResult:
     """Resolve one followed thread's altitude. ONE call + ONE corrected retry,
     then AltitudeError.
+
+    `retry_transport` (NL-17-M1b FIX LOOP 2 R3): whether the provider TIMEOUT
+    class consumes the retry. The BATCH falsifier keeps the M1a default (True):
+    an unattended run rides out one transient by retrying the original. The
+    INTERACTIVE follow-line (_api_follow_resolve) passes False — a reader is
+    WAITING, so a timeout must degrade DIRECTLY after one window (≤ one timeout +
+    epsilon), never spend a second 12s window + backoff pinning "Deciding…" at
+    ~25s. Scoped to the timeout class only; every OTHER transport shape still
+    retries once on both paths (they fail fast). The degrade copy and this-story
+    commit are byte-identical either way.
 
     The seam resolution is THREADED (the generate/ranking one-resolution-per-run
     pattern, B3-D6): the seat is resolved ONCE — here via llm.effective_seat, or
@@ -234,7 +282,8 @@ def resolve_altitude(thread: ThreadInput, *, api_key: str = "",
                 primary_entity=parsed["primary_entity"],
                 disclosure=parsed["disclosure"], confidence=parsed["confidence"],
                 attempts=attempt, usd_shadow=fields["usd_shadow"],
-                usd_charged=fields["usd_charged"], lane=fields["lane"])
+                usd_charged=fields["usd_charged"], lane=fields["lane"],
+                alt_label=parsed["alt_label"])
         except urllib.error.HTTPError as exc:
             detail = ranking._http_error_detail(exc)
             who = "Anthropic" if cfg.provider == "anthropic" else "OpenAI"
@@ -259,6 +308,20 @@ def resolve_altitude(thread: ThreadInput, *, api_key: str = "",
             last_error = f"invalid resolver output ({exc})"
             next_user = (user + "\n\n" + _RETRY_CORRECTION_PREFIX + str(exc)
                          + _RETRY_CORRECTION_SUFFIX)
+        except TimeoutError as exc:
+            # The provider TIMEOUT class (llm.py raises the builtin TimeoutError
+            # when claude -p / the api call exceeds the seat's window). BATCH
+            # (retry_transport=True): transport-shaped — retry the ORIGINAL, the
+            # M1a semantics. INTERACTIVE (retry_transport=False): the reader is
+            # waiting; the timeout must NOT consume the retry — degrade fires
+            # DIRECTLY after one window (a second window + backoff is the ~25s
+            # miss). Only the timeout class opts out; other transport shapes fall
+            # through to the generic retry below.
+            last_error = f"{type(exc).__name__}: {exc}"
+            if not retry_transport:
+                raise AltitudeError(
+                    f"altitude resolution timed out for {thread.topic!r} "
+                    f"(interactive, one window): {last_error}") from exc
         except Exception as exc:  # noqa: BLE001 — transport-shaped: retry ORIGINAL
             last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
         if attempt == 1:

@@ -458,18 +458,19 @@ def test_nav_labels_global_absence_when_repinned(monkeypatch):
 
 def test_follow_control_copy_is_centralized(monkeypatch):
     """The follow-control strings (server.py + the client JS via NL_LABELS) read
-    from labels.py — a re-pin lands both server- and client-side."""
-    from newslens import ranking
+    from labels.py — a re-pin lands both server- and client-side. NL-17-M1b: the
+    instant-flip toast is retired; the client copy is the picker's resolving/
+    ask/degrade table (a re-pin still lands client-side)."""
     monkeypatch.setattr(labels, "FOLLOW_STORY_INACTIVE", "ZZ-FOLLOW")
-    monkeypatch.setattr(labels, "FOLLOW_STORY_CONFIRM", "ZZ-CONFIRM")
+    monkeypatch.setattr(labels, "FOLLOW_RESOLVING", "ZZ-RESOLVING")
     st = {"headline": "H"}
     slot = {"story_title": "H"}
-    # server-rendered initial button text
-    ctl = server._follow_control(st, slot, [], set(), DATE)
+    # server-rendered resting verb reads the resting label
+    ctl = server._follow_control(st, slot, [], set(), DATE, slug="s")
     assert "ZZ-FOLLOW" in ctl
-    # client-facing NL_LABELS blob carries the toast copy for the JS
+    # client-facing NL_LABELS blob carries the picker copy for the JS
     blob = server._nl_labels_js()
-    assert "ZZ-CONFIRM" in blob and "ZZ-FOLLOW" in blob
+    assert "ZZ-RESOLVING" in blob and "ZZ-FOLLOW" in blob
     assert '<script>{nl_labels_js}</script>' in webui.PAGE   # injected before the JS
 
 

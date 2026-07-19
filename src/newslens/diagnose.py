@@ -249,6 +249,35 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
              f"{CONSTRUCTION_END_UTC}")
     push("")
 
+    # ---------------- Follow-altitude (Axel's medium instrument, NL-17-M1b) ----
+    # Operator-facing ONLY (no reader surface, no read-logging — a follow tap is
+    # an explicit signal). The pre-registered flip — ≥1-in-5 medium auto-commits
+    # corrected within a day → medium goes picker-first — is a HUMAN call; this
+    # only makes the ratio observable, read-only.
+    from . import memory as _memory
+    try:
+        con = db.connect_readonly()
+        try:
+            fa_stats = _memory.medium_correction_stats(con)
+        finally:
+            con.close()
+    except Exception:
+        fa_stats = None
+    push("FOLLOW-ALTITUDE — medium-confidence auto-commit instrument "
+         "(Axel's pre-registered flip watch)")
+    if not fa_stats or not fa_stats["medium_auto_commits"]:
+        push("  no medium-confidence auto-commits yet — nothing to judge")
+    else:
+        push(f"  medium auto-commits: {fa_stats['medium_auto_commits']} · "
+             f"corrected within a day: {fa_stats['corrected_within_day']} · "
+             f"ratio {fa_stats['ratio']:.2f} "
+             f"(flip threshold {fa_stats['flip_threshold']:.2f})")
+        push("  " + ("FLIP THRESHOLD REACHED — a HUMAN call: does medium go "
+                     "picker-first? (mockup-v9 pre-registration)"
+                     if fa_stats["flip_would_trigger"]
+                     else "below the flip threshold — medium stays auto-commit"))
+    push("")
+
     # ---------------- Generation record ----------------
     entries, bad_lines = _load_entries()
     analysis_entries = [e for e in entries if e.get("stage") == "analysis"]

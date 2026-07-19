@@ -775,8 +775,9 @@ def test_a11y_structural_markers(ui):
     assert 'aria-labelledby="popup-delete-title"' in page
     # The dark toggle is a labeled switch:
     assert 'role="switch"' in page and 'aria-label="Dark mode"' in page
-    # Follow buttons carry pressed state; removes are labeled:
-    assert "aria-pressed" in page
+    # The follow control is the NL-17-M1b single node (deck verb carries
+    # aria-expanded, not the retired aria-pressed); removes are labeled:
+    assert 'class="follow-slot"' in page and 'class="deck-follow' in page
     assert 'aria-label="Remove' in page or "aria-label=\"Stop" in page
     # Escape + focus wiring exists in the shipped JS:
     assert "Escape" in webui.JS
@@ -1177,9 +1178,10 @@ def test_item27_furniture_contract_through_build_page(ui):
     assert "Here for" in page
     # 4. Disclosure trigger: the revival back-reference reaches the surface:
     assert "2026-07-01" in page
-    # 5. Follow affordance with pressed state (on the NON-tracked story — the
-    # tracked story drops the redundant button per the NL-11 coexistence rule):
-    assert "aria-pressed" in page
+    # 5. Follow affordance (on the NON-tracked story — the tracked story drops
+    # the redundant control per the NL-11 coexistence rule). NL-17-M1b: the
+    # single-node .follow-slot, resting form, deck verb with aria-expanded:
+    assert 'class="follow-slot"' in page
     # 6. Coexistence (NL-11 rule, NL-58 merged control): the tracked story
     # shows only its marker STATE; the override story (no thread match) keeps a
     # follow toggle. v7/NL-65 flip — WAS: the follow control + "full picture"
@@ -1188,7 +1190,7 @@ def test_item27_furniture_contract_through_build_page(ui):
     # bottom). One .deck per story; the marker/button split is unchanged.
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
     assert today.count('class="tracked-marker"') == 1     # the tracked story
-    assert today.count('class="follow-story-btn') == 1    # only the override story
+    assert today.count('class="follow-slot"') == 1        # only the override story
     assert today.count('class="deck"') == 2               # under-title control row per story
     assert 'class="glance"' not in page                   # glance removed (NL-11)
 
