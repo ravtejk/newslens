@@ -24,6 +24,7 @@ network, no subprocess, no real key.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -93,11 +94,15 @@ def _seed_db(rows):
 # seat registration (the seam law)
 # --------------------------------------------------------------------------
 
-def test_seat_registered_haiku_subscription_default():
+def test_seat_registered_haiku_api_default():
+    # RESOLVER LANE FIX (2026-07-20): this interactive, reader-waiting seat is the
+    # ONE anthropic seat whose code default is the API lane (measured 1.2s vs the
+    # ~48s subscription resolve) — subscription is now the registered fall-over /
+    # airbag, not the default. Model/provider/knobs unchanged.
     cfg = llm.SEATS["follow_altitude"]
     assert cfg.model == "claude-haiku-4-5"
     assert cfg.provider == "anthropic"
-    assert cfg.lane == "subscription"          # matches the Haiku family + mandate
+    assert cfg.lane == "api"                    # the interactive-seat exception
     assert cfg.thinking is None and cfg.effort is None   # mechanical, not reasoning
 
 
@@ -109,12 +114,30 @@ def test_seat_is_not_a_generate_step():
         llm.seat_for_step("follow_altitude")
 
 
-def test_effective_seat_resolves_under_the_stub_bin():
-    # conftest points NEWSLENS_CLAUDE_BIN at the canned stub, so the
-    # subscription-default seat gates cleanly with no real binary.
+def test_effective_seat_resolves_on_the_api_lane_by_default():
+    # RESOLVER LANE FIX: with no lane override the seat gates on the API lane
+    # (its code default now) — check_lane's api arm needs no binary, so it
+    # resolves cleanly with reason None.
     cfg, reason = llm.effective_seat("follow_altitude")
-    assert cfg.seat == "follow_altitude" and cfg.lane == "subscription"
+    assert cfg.seat == "follow_altitude" and cfg.lane == "api"
     assert reason is None
+
+
+def test_subscription_override_is_the_escape_hatch():
+    """CARRIED-INVARIANT (born-green): NEWSLENS_LANE_FOLLOW_ALTITUDE stays a live
+    escape hatch after the default flip — its meaning just inverts. Setting it to
+    'subscription' forces the seat back onto the claude -p lane (the airbag), and
+    that lane still gates cleanly under the conftest stub binary. Proves the
+    override mechanism was not lost when the code default moved to api."""
+    env = dict(os.environ, NEWSLENS_LANE_FOLLOW_ALTITUDE="subscription")
+    assert llm.resolve_seat("follow_altitude", env).lane == "subscription"
+    cfg, reason = llm.effective_seat("follow_altitude", env)
+    assert cfg.lane == "subscription" and reason is None
+    # and the api direction is honored too (redundant with the default, but pins
+    # that an explicit '=api' is still accepted, not just the bare default).
+    assert llm.resolve_seat(
+        "follow_altitude", dict(os.environ, NEWSLENS_LANE_FOLLOW_ALTITUDE="api")
+    ).lane == "api"
 
 
 # --------------------------------------------------------------------------
@@ -198,12 +221,13 @@ def test_resolver_parses_entity_pick(monkeypatch):
     # the stable law rides the system prefix; the title rides the user prompt
     assert "THREAD TITLE: Volkswagen" in chat.prompts[0]
     assert chat.systems[0] and "altitude" in chat.systems[0].lower()
-    # cost_sink carries the full shadow-ledger keys (subscription lane: $0
-    # charged, Haiku-priced shadow > 0)
+    # cost_sink carries the full shadow-ledger keys. RESOLVER LANE FIX: the seat
+    # defaults to the api lane now, so a real resolve BILLS (charged == shadow > 0,
+    # Haiku-priced); the $0 subscription path is the escape hatch (tested elsewhere).
     assert len(sink) == 1
     assert sink[0]["usd_shadow"] > 0
-    assert sink[0]["usd_charged"] == 0.0
-    assert sink[0]["lane"] == "subscription"
+    assert sink[0]["usd_charged"] == sink[0]["usd_shadow"]
+    assert sink[0]["lane"] == "api"
     assert sink[0]["model"] == "claude-haiku-4-5"
 
 
@@ -231,9 +255,10 @@ def test_truncation_is_a_corrected_retry(monkeypatch):
 
 
 def test_api_override_charges_the_shadow(monkeypatch):
-    """NEWSLENS_LANE_FOLLOW_ALTITUDE=api -> usd_charged == usd_shadow (the api
-    lane bills); the subscription default charges $0. Pins the lane/shadow
-    ledger correctness for the new seat."""
+    """The api lane bills: usd_charged == usd_shadow. After the RESOLVER LANE FIX
+    api is the seat's default, so the explicit '=api' here matches it — the pin is
+    that an api resolve records charged==shadow (the $0 path is the subscription
+    escape hatch, covered separately). Pins the lane/shadow ledger correctness."""
     monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "api")
     chat = _Chat([(_pick(), "stop")])
     monkeypatch.setattr(llm, "chat", chat)
@@ -280,7 +305,7 @@ def test_dryrun_makes_zero_calls_and_zero_writes(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "followed threads: 2" in out         # dismissed excluded from the count
     assert "DRY RUN" in out
-    assert "subscription" in out                # the resolved lane is disclosed
+    assert "api" in out                         # the resolved lane is disclosed (api default now)
 
 
 def test_dryrun_refuses_absent_record(capsys):
@@ -313,7 +338,8 @@ def test_run_resolves_followed_threads_and_writes_report(monkeypatch, capsys):
     assert report["followed_total"] == 2
     names = {r["primary_entity"] for r in report["results"]}
     assert names == {"Volkswagen", "Fed policy"}      # dismissed excluded
-    assert report["usd_charged_total"] == 0.0         # subscription lane
+    # RESOLVER LANE FIX: the api default BILLS (charged == shadow > 0)
+    assert report["usd_charged_total"] == report["usd_shadow_total"] > 0
 
 
 def test_run_adds_zero_rows_to_the_record(monkeypatch):
@@ -339,8 +365,11 @@ def test_run_adds_zero_rows_to_the_record(monkeypatch):
 
 def test_run_fails_loud_when_subscription_lane_unavailable(monkeypatch, capsys):
     """The subscription binary won't resolve -> --run dies at the gate with a
-    named fix, BEFORE any transport (fail-loud, one gate upfront)."""
+    named fix, BEFORE any transport (fail-loud, one gate upfront). RESOLVER LANE
+    FIX: the seat now DEFAULTS to api, so this subscription-gate scenario is
+    exercised by forcing the subscription lane via the escape-hatch env var."""
     _seed_db([("Volkswagen", "active")])
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN",
                        str(paths.DATA_DIR / "nonexistent-claude"))
     monkeypatch.setattr(llm, "chat",

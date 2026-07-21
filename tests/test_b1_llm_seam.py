@@ -205,12 +205,19 @@ def test_seat_map_after_b2_haiku_flip():
     # fall-over). rank/editor/script are Haiku on subscription; state flipped to
     # Haiku/subscription too (option a); synthesis is the LONE remaining
     # gpt-4o/api seat. This guard makes every model/lane flip deliberate.
-    haiku_sub = {"rank", "editor", "script", "follow_altitude"}  # NL-17-M1 resolver
+    haiku_sub = {"rank", "editor", "script"}
     for name, cfg in llm.SEATS.items():
         if name in haiku_sub:
             assert cfg.provider == "anthropic", name
             assert cfg.model == "claude-haiku-4-5", name
             assert cfg.lane == "subscription", name
+        elif name == "follow_altitude":
+            # RESOLVER LANE FIX (2026-07-20): the interactive resolver seat is the
+            # one anthropic seat defaulting to the API lane (subscription is its
+            # fall-over) — same Haiku model, different transport by design.
+            assert cfg.provider == "anthropic", name
+            assert cfg.model == "claude-haiku-4-5", name
+            assert cfg.lane == "api", name
         elif name == "writer":
             assert cfg.provider == "anthropic" and cfg.lane == "subscription"
             assert cfg.model == "claude-opus-4-8"

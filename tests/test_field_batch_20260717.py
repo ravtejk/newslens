@@ -109,6 +109,10 @@ def test_subscription_fenced_output_resolves_on_the_first_attempt(monkeypatch, t
                             "confidence": "high"})
               + "\n```\n\nThat's my answer.")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(_write_shim(tmp_paths / "s1", fenced)))
+    # RESOLVER LANE FIX (2026-07-20): follow_altitude now DEFAULTS to the api lane,
+    # so this SUBSCRIPTION-transport test forces the (now fallback) subscription
+    # lane via the escape hatch to keep exercising the claude -p shim.
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     res = fa.resolve_altitude(fa.ThreadInput(22, "Volkswagen"))
     assert res.altitude == "entity" and res.primary_entity == "Volkswagen"
     assert res.attempts == 1                     # extracted on the first attempt
@@ -123,6 +127,10 @@ def test_subscription_extraction_never_weakens_validation(monkeypatch, tmp_paths
                          "confidence": "high"})     # disclosure missing
            + "\n```")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(_write_shim(tmp_paths / "s2", bad)))
+    # force the (now fallback) subscription lane so the shim is actually exercised
+    # (else the api default would raise AltitudeError for the WRONG reason — the
+    # offline network guard — silently no-op'ing this validation test).
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     with pytest.raises(fa.AltitudeError):
         fa.resolve_altitude(fa.ThreadInput(1, "VW"))
 

@@ -31,8 +31,11 @@ set (ALTITUDES) is the no-new-vocabulary tripwire — a third rung cannot enter
 without a code change the QA pin flips red on.
 
 SEAM (ADR-0014/0015/0016 law): the resolver's model call goes through the
-`follow_altitude` seat in llm.SEATS (Haiku 4.5, subscription-default like
-rank/editor/script; api the registered fall-over). ONE effective_seat resolution
+`follow_altitude` seat in llm.SEATS (Haiku 4.5; the ONE seat whose code default
+is the API lane — RESOLVER LANE FIX 2026-07-20 — because it is interactive and
+reader-waiting: ~1.2s api vs a ~48s claude -p resolve; subscription is the
+registered fall-over / airbag, forced via NEWSLENS_LANE_FOLLOW_ALTITUDE=
+subscription). ONE effective_seat resolution
 per call, threaded through the gate + both transport attempts + every cost row
 (the B3-D6 fix); prompt-shaped JSON rides the corrected-retry law (rank's twin).
 Read-only DB via db.connect_readonly; the instrument self-sanctions real paths

@@ -3699,7 +3699,8 @@ class Handler(BaseHTTPRequestHandler):
         the options (the reader's pick creates the follow); resolver FAILURE/
         TIMEOUT commits this-story immediately (the act is never lost) with the
         exact degrade copy. The resolver call holds NO db open (its own law); the
-        commit is a separate short verb. Subscription lane — $0 charged."""
+        commit is a separate short verb. API lane by default (RESOLVER LANE FIX
+        2026-07-20) — ~1.2s, cents/month charged; the subscription fall-over is $0."""
         headline = self._topic_arg(body)
         if not headline:
             return self._send_json({"ok": False, "error": "topic required"}, 400)

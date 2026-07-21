@@ -263,11 +263,15 @@ def test_fix2_every_transition_path_restores_focus():
 # ===========================================================================
 
 def test_fix3_follow_altitude_seat_has_a_short_interactive_timeout():
-    """A reader waits on the resolve; a stuck provider must fall to the proven
-    degrade fast, not pin "Deciding…" for minutes. BORN-RED: 60/180s."""
+    """A reader waits on the resolve. The DEFAULT api path stays a tight 8s (a
+    healthy Haiku round-trip is ~1.2s). The subscription knob (reached ONLY via the
+    explicit escape-hatch — there is no automatic api->subscription fall): RESOLVER
+    LANE FIX (2026-07-20) raised it 12->45s so an explicitly-forced subscription
+    resolve can actually complete (median ~14s, tail ~48s) instead of instantly
+    re-degrading at the old 12s wall. BORN-RED on the 45 (was 12)."""
     cfg = llm.SEATS["follow_altitude"]
-    assert cfg.timeout_s == 8                                # api-lane interactive
-    assert cfg.timeout_sub_s == 12                           # subscription-lane interactive
+    assert cfg.timeout_s == 8                                # api-lane interactive (default, unchanged)
+    assert cfg.timeout_sub_s == 45                           # subscription-lane FALLBACK airbag (12->45)
     # the BATCH seats stay generous — only this interactive seat is short
     assert llm.SEATS["rank"].timeout_sub_s == 300
     assert llm.SEATS["writer"].timeout_sub_s == 900

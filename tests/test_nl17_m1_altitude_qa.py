@@ -183,15 +183,17 @@ def test_step_prefix_map_never_routes_to_the_resolver_seat():
 def test_mid_call_lane_and_model_flap_cannot_fork_transport_or_ledger(monkeypatch):
     """D1/D6 for the resolver: attempt 1 fails validation AND the per-seat lane
     + model env flip mid-call. The seat was resolved ONCE — attempt 2's bytes
-    and BOTH ledger rows must stay on the original subscription/Haiku
-    resolution. A fork here is the exact B3-D6 breach class."""
+    and BOTH ledger rows must stay on the original api/Haiku resolution (the
+    RESOLVER LANE FIX default). The mid-call flap tries to yank the lane to
+    SUBSCRIPTION and the model to fable-5; a fork to either is the B3-D6 breach."""
     seen_cfgs = []
 
     def chat(req):
         seen_cfgs.append((req.cfg.lane, req.cfg.model, req.cfg.seat))
         if len(seen_cfgs) == 1:
-            # the flap lands between the two transport attempts
-            monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "api")
+            # the flap lands between the two transport attempts — flip AWAY from
+            # the api default, so a re-resolution would be visibly detectable.
+            monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
             monkeypatch.setenv("NEWSLENS_MODEL_FOLLOW_ALTITUDE", "claude-fable-5")
             return _envelope("not json")
         return _envelope(_pick())
@@ -201,11 +203,11 @@ def test_mid_call_lane_and_model_flap_cannot_fork_transport_or_ledger(monkeypatc
     sink = []
     res = fa.resolve_altitude(fa.ThreadInput(1, "Volkswagen"), cost_sink=sink)
     assert res.attempts == 2
-    assert seen_cfgs == [("subscription", "claude-haiku-4-5", "follow_altitude")] * 2
-    assert [e["lane"] for e in sink] == ["subscription", "subscription"]
+    assert seen_cfgs == [("api", "claude-haiku-4-5", "follow_altitude")] * 2
+    assert [e["lane"] for e in sink] == ["api", "api"]
     assert [e["model"] for e in sink] == ["claude-haiku-4-5"] * 2
-    assert all(e["usd_charged"] == 0.0 for e in sink)
-    assert res.lane == "subscription"
+    assert all(e["usd_charged"] == e["usd_shadow"] > 0 for e in sink)   # api bills
+    assert res.lane == "api"
 
 
 def test_armed_fall_is_labeled_on_every_row_and_survives_midcall_disarm(monkeypatch):
@@ -214,6 +216,10 @@ def test_armed_fall_is_labeled_on_every_row_and_survives_midcall_disarm(monkeypa
     DISARMED mid-call. The captured resolution must carry attempt 2 and label
     EVERY cost row 'api(fallback:subscription_unavailable)' — never a bare
     'api' hiding real API spend, never a re-gate back to a dead lane."""
+    # RESOLVER LANE FIX: the armed subscription->api fall only exists when the seat
+    # STARTS on subscription; force it (api is the default now) so this D5 test
+    # exercises the labeled fall, not a plain api resolution.
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", "/nonexistent/claude-nl17-qa")
     monkeypatch.setenv("NEWSLENS_LANE_FALLBACK", "api")
     calls = []
@@ -249,7 +255,7 @@ def test_falsifier_run_rides_one_resolution_across_all_threads(monkeypatch):
         lanes_seen.append(req.cfg.lane)
         # hostile: flip the per-seat lane var between threads
         monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE",
-                           "api" if len(lanes_seen) % 2 else "subscription")
+                           "subscription" if len(lanes_seen) % 2 else "api")
         title = req.prompt.split("THREAD TITLE:", 1)[1].splitlines()[0].strip()
         return _envelope(_pick(primary=title,
                                disclosure=f"Following {title} — the company."))
@@ -257,13 +263,16 @@ def test_falsifier_run_rides_one_resolution_across_all_threads(monkeypatch):
     monkeypatch.setattr(llm, "chat", chat)
     rc = fa.main(["--run"])
     assert rc == 0
-    assert lanes_seen == ["subscription"] * 3
+    # RESOLVER LANE FIX: the --run gate resolves ONCE on the api default; the
+    # hostile mid-run flap toward subscription must not re-lane later threads.
+    assert lanes_seen == ["api"] * 3
     report = json.loads(
         (paths.DATA_DIR / "follow_altitude" / ranking.local_today()
          / "report.json").read_text())
-    assert report["seat"]["lane"] == "subscription"
-    assert {e["lane"] for e in report["cost_attempts"]} == {"subscription"}
-    assert report["usd_charged_total"] == 0.0
+    assert report["seat"]["lane"] == "api"
+    assert {e["lane"] for e in report["cost_attempts"]} == {"api"}
+    # api lane bills: charged total == shadow total > 0 (was $0 on subscription)
+    assert report["usd_charged_total"] == report["usd_shadow_total"] > 0
 
 
 # --------------------------------------------------------------------------
@@ -309,12 +318,16 @@ def test_truncated_attempt_is_billed(monkeypatch):
 
 def test_shadow_arithmetic_is_the_haiku_table_exactly(monkeypatch):
     """usd_shadow must be pt/1e6*$1.00 + ct/1e6*$5.00 to the cent — the seat
-    table, not an estimate. Subscription: charged 0. api override: charged ==
+    table, not an estimate. Subscription (forced via the escape hatch): charged 0.
+    api (the RESOLVER LANE FIX default, here carrying a model arm): charged ==
     shadow (same table — the model override never re-prices)."""
     pt, ct = 200_000, 40_000            # -> 0.2 + 0.2 = $0.40 exactly
     monkeypatch.setattr(llm, "chat", lambda req: _envelope(_pick(), pt=pt, ct=ct))
+    # the $0 path is now the SUBSCRIPTION escape hatch (api is the default).
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     sink = []
     res = fa.resolve_altitude(fa.ThreadInput(1, "VW"), cost_sink=sink)
+    assert res.lane == "subscription"
     assert sink[0]["usd_shadow"] == pytest.approx(0.40)
     assert sink[0]["usd_charged"] == 0.0 and res.usd_charged == 0.0
 
@@ -448,6 +461,9 @@ def test_gate_refusal_writes_no_artifact(monkeypatch, capsys):
     """--run with a dead subscription binary refuses BEFORE the report dir is
     created — a refused run leaves zero trace on disk."""
     _seed_db([("Volkswagen", "active")])
+    # RESOLVER LANE FIX: force subscription so the dead-binary gate fires (api,
+    # the new default, needs no binary and would not refuse here).
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", "/nonexistent/claude-nl17-qa")
     rc = fa.main(["--run"])
     assert rc == 1
@@ -579,6 +595,9 @@ def test_resolver_rides_the_real_subscription_transport_via_shim(
         disclosure="Following the Volkswagen job-cuts story — the ongoing "
                    "story, not just this article."))
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(shim_dir / "claude"))
+    # RESOLVER LANE FIX: this test is ABOUT the subscription spawn path, so force
+    # the (now fallback) subscription lane — the api default would never spawn a shim.
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     sink = []
     res = fa.resolve_altitude(fa.ThreadInput(22, "Volkswagen job cuts"),
                               cost_sink=sink)
@@ -605,6 +624,9 @@ def test_falsifier_survives_binary_vanish_mid_run_without_forking(
                                disclosure="Following Alpha — the company."),
                self_destruct=True)
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(shim_dir / "claude"))
+    # RESOLVER LANE FIX: force the (now fallback) subscription lane — this run-scope
+    # vanish test is about the claude -p spawn path and its subscription ledger.
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     monkeypatch.setattr(fa.time, "sleep", lambda s: None)
     rc = fa.main(["--run"])
     assert rc == 0                                    # partial success is honest

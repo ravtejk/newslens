@@ -246,28 +246,41 @@ SEATS: Dict[str, SeatConfig] = {
     # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver
     # seat. A cheap mechanical single-turn classification (given a followed
     # thread, pick entity|storyline + the primary entity + a disclosure line) —
-    # the same seat class as rank/editor/script, so it takes the SAME Haiku
-    # subscription-default row (subscription-first mandate; the api lane is the
-    # registered fall-over via NEWSLENS_LANE_FOLLOW_ALTITUDE=api or the armed
-    # NEWSLENS_LANE_FALLBACK=api). thinking/effort stay None — it is not
-    # reasoning work; the caller's parse+validate+corrected-retry law is the
-    # backstop for the prompt-shaped JSON (follow_altitude.py, rank's twin).
+    # the same MODEL class as rank/editor/script (Haiku 4.5), but the ONE seat
+    # whose code default is the API lane (**_HAIKU_API), not subscription.
+    # RESOLVER LANE FIX (principal ruling 2026-07-20, DECISIONS "RESOLVER LANE
+    # FIX"): unlike every batch seat this one runs INTERACTIVE, with a reader
+    # WAITING on the follow-line. Diagnosis (Opus-seated eng round, 07-20) found
+    # the feature 100% broken in production — the 12s subscription resolve wall vs
+    # a real ~48s claude -p resolve => 4/4 source=degrade, ZERO source=auto commits
+    # ever. The api lane resolves the SAME call in ~1.2s (measured, $0.0013). This
+    # is the wrong-transport-for-an-interactive-path bug (Ada): latency-sensitive
+    # and batch seats have opposite lane-optimization criteria, so this seat's code
+    # default departs from the B4 all-subscription default. It uses the existing
+    # ANTHROPIC_API_KEY; real charge is cents/month at a few follows/day.
+    # ESCAPE HATCH (unchanged mechanism, inverted meaning): NEWSLENS_LANE_FOLLOW_
+    # ALTITUDE=subscription forces it back onto claude -p (resolve_seat reads the
+    # per-seat override regardless of the default); =api is redundant with the
+    # default. thinking/effort stay None — not reasoning work; the caller's parse+
+    # validate+corrected-retry law backstops the prompt-shaped JSON (rank's twin).
     # DELIBERATELY NOT in _STEP_PREFIX_SEAT: it is not a `generate` edition step
     # (its output is a REPORT, never edition state or a selection weight), so it
     # is reached only through follow_altitude.resolve_altitude, never
     # seat_for_step / generate.call_llm.
-    # INTERACTIVE timeout (FIX LOOP 1 FIX-3, 2026-07-18): unlike every other seat
-    # this one runs with a READER WAITING on the follow-line ("Deciding…"). The
-    # generous batch ceilings (rank 90/300, editor 120/300) exist so an unattended
-    # generate never false-times-out; here the opposite is right — a stuck
-    # provider must fall to the PROVEN degrade (commit this-story, exact copy)
-    # FAST, not pin the reader for minutes. 8s api / 12s subscription: the design
-    # suggested ~4s (mockup-v9), plus headroom for a healthy Haiku round-trip and
-    # the claude -p subprocess spin-up on the subscription lane — enough that a
-    # LIVE provider answers, short enough that a HUNG one degrades in a beat. A
-    # cold subprocess that can't answer in 12s degrades by design (the act is
-    # never lost). Copy path unchanged — only the ceiling moved.
-    "follow_altitude": SeatConfig("follow_altitude", timeout_s=8, timeout_sub_s=12, **_HAIKU_SUB),
+    # TIMEOUTS. api (default, the interactive path): timeout_s=8 — a healthy Haiku
+    # round-trip is ~1.2s, so 8s is ~6.6x headroom; a hung provider still degrades
+    # to the PROVEN this-story commit (exact copy) in a beat, never pinning the
+    # reader. subscription (the explicit escape-hatch path ONLY): timeout_sub_s
+    # raised 12 -> 45s. This knob is INERT on the default api path — there is no
+    # automatic api->subscription fall (effective_seat forbids it, ~llm.py:994;
+    # the only lane-replace in the tree is subscription->api). The subscription
+    # lane is reached ONLY when explicitly forced (per-seat NEWSLENS_LANE_FOLLOW_
+    # ALTITUDE=subscription or global NEWSLENS_LANE=subscription). Raised so an
+    # explicitly-selected subscription resolve can actually complete (median ~14s,
+    # tail ~48s) instead of re-degrading at the old 12s wall; an api-key failure
+    # on the default path surfaces as an honest source=degrade, never a silent
+    # subscription retry. The api-lane path's own timing is untouched.
+    "follow_altitude": SeatConfig("follow_altitude", timeout_s=8, timeout_sub_s=45, **_HAIKU_API),
     # synthesis has no live call site yet (B6 builds it); it is declared here
     # so the seat table is the whole roster the design named, not a subset.
     "synthesis": SeatConfig("synthesis", timeout_s=120, **_GPT4O_API),

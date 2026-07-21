@@ -15,8 +15,10 @@ Pinned here:
     implementer pinned only the subscription side).
   * TIMEOUTS: the full timeout_sub_s map pinned exactly (the exact-set roster
     guard did not grow the new knob); the subscription provider uses the sub
-    knob for state (300) and follow_altitude (180); the api provider still
-    passes the api knob (rank 90).
+    knob for state (300) and follow_altitude (45, the subscription escape-hatch
+    knob — explicit selection only, no automatic api->subscription fall — RESOLVER
+    LANE FIX 2026-07-20); the api provider still passes the api
+    knob (rank 90).
   * STATE FLIP: end-to-end _default_state_chat through the subscription shim
     with FENCED state JSON (the flip depends on extraction — proven, not
     assumed); check_lane's gate message on the flipped seat; seat_is_openai
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import stat as stat_mod
 import textwrap
 import urllib.request
@@ -159,6 +162,9 @@ def test_resolver_whole_array_reply_is_refereed_by_the_validator(monkeypatch,
     shim.write_text(src)
     shim.chmod(shim.stat().st_mode | stat_mod.S_IXUSR)
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(shim))
+    # RESOLVER LANE FIX: force the (now fallback) subscription lane so this
+    # subscription-shim referee test exercises claude -p, not the api default.
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     monkeypatch.setattr(fa.time, "sleep", lambda s: None)
     sink = []
     with pytest.raises(fa.AltitudeError, match="expected a single JSON object"):
@@ -232,6 +238,9 @@ def test_resolver_fenced_recovery_bills_exactly_once(monkeypatch, tmp_path):
     fenced = "Here you go:\n```json\n" + _pick() + "\n```"
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN",
                        str(_make_shim(tmp_path / "s", fenced)))
+    # RESOLVER LANE FIX: force the (now fallback) subscription lane — this test's
+    # $0/subscription ledger assertions describe the claude -p path.
+    monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     sink = []
     res = fa.resolve_altitude(fa.ThreadInput(1, "Volkswagen"), cost_sink=sink)
     assert res.attempts == 1
@@ -294,11 +303,13 @@ def test_timeout_sub_map_is_pinned_exactly():
     # item C (2026-07-17): writer/analyst joined the subscription lane, so their
     # timeout_sub_s grew from None -> api ceiling + ~300s lane tax (540/900).
     # follow_altitude is the INTERACTIVE exception (fix loop 1 FIX-3): a reader
-    # waits, so it degrades a stuck provider fast — 8s api / 12s sub, not the
-    # generous batch ceilings.
+    # waits, so its DEFAULT api path is a tight 8s. Its subscription FALLBACK sub
+    # knob was raised 12->45s (RESOLVER LANE FIX, 2026-07-20 — Rook's airbag: a
+    # median ~14s / tail ~48s subscription resolve can actually complete instead
+    # of instantly re-degrading), still far below the generous batch ceilings.
     sub = {"rank": 300, "analyst": 540, "writer": 900, "editor": 300,
            "script": 300, "synthesis": None, "state": 300,
-           "follow_altitude": 12}
+           "follow_altitude": 45}
     api = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
            "script": 120, "synthesis": 120, "state": 60, "follow_altitude": 8}
     assert set(sub) == set(llm.SEATS)
@@ -307,11 +318,21 @@ def test_timeout_sub_map_is_pinned_exactly():
         assert cfg.timeout_s == api[name], name
 
 
-@pytest.mark.parametrize("seat,expect", [("state", 300), ("follow_altitude", 12)])
-def test_subscription_provider_uses_the_sub_knob_per_seat(monkeypatch, seat, expect):
+@pytest.mark.parametrize("seat,expect,force_lane", [
+    ("state", 300, None),
+    ("follow_altitude", 45, "subscription"),   # the subscription escape-hatch knob (explicit selection; no auto-fall)
+])
+def test_subscription_provider_uses_the_sub_knob_per_seat(
+        monkeypatch, seat, expect, force_lane):
     """The implementer proved rank; state and follow_altitude ride the same
-    (timeout_sub_s or timeout_s) selection — per seat, mechanically.
-    follow_altitude's sub knob is the short INTERACTIVE 12s (fix loop 1 FIX-3)."""
+    (timeout_sub_s or timeout_s) selection — per seat, mechanically. state runs
+    the subscription lane by default; follow_altitude DEFAULTS to the api lane
+    (RESOLVER LANE FIX, 2026-07-20), so its 45s subscription knob is proven by
+    forcing that lane through the escape-hatch env var (explicit selection; there
+    is no automatic api->subscription fall). BORN-RED on 45 (was 12)."""
+    env = dict(os.environ)
+    if force_lane:
+        env[f"NEWSLENS_LANE_{seat.upper()}"] = force_lane
     captured = {}
     real_run = llm.subprocess.run
 
@@ -321,7 +342,7 @@ def test_subscription_provider_uses_the_sub_knob_per_seat(monkeypatch, seat, exp
 
     monkeypatch.setattr(llm.subprocess, "run", rec)
     llm.chat(llm.LaneRequest(
-        cfg=llm.resolve_seat(seat), prompt="p", temperature=0, max_tokens=10,
+        cfg=llm.resolve_seat(seat, env), prompt="p", temperature=0, max_tokens=10,
         json_mode=True, user_agent="ua", api_key="k"))
     assert captured["timeout"] == expect
 
