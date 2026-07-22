@@ -1774,6 +1774,200 @@ def _repetition_subject_units(sentence: str, match: "re.Match",
 
 
 # ===========================================================================
+# M1 — the editor-preservation matcher (editor-preservation batch, 2026-07-21).
+# Deterministic, NO LLM (Rook's determinism law). A pure function over the draft
+# payload + the thread's ledger context PREDATING this edition. It tags each
+# DRAFT sentence PROTECT / POISON / TRIM so the length-editor can be TOLD which
+# dated ledger callbacks to keep (the belt, injected into editor_pass.txt) and a
+# post-edit diff can ENFORCE it (the suspenders, in generate.py's degrade seam).
+#
+# It exists HERE, beside has_predating_antecedent and the repetition machinery,
+# because it IS the antecedent-licensing surface — it reuses _REPETITION_RE,
+# _repetition_subject_units, _salient_units, effective_provenance, and the
+# provenance grade sets. generate.py imports `ledger_callbacks` /
+# `protect_facts_lost` the same way it imports has_predating_antecedent.
+#
+#   PROTECT = a DATED ledger callback: the sentence carries a date-token that
+#     equals a PREDATING record-established (or untyped-default → record-
+#     established, per effective_provenance) delta/state's date, AND a
+#     discriminating subject-unit shared with that same antecedent. The
+#     protection unit is the (date + subject) FACT BY PRESENCE — the editor may
+#     reword around it but must not remove the date or the subject. PROTECT keys
+#     off a POSITIVE record-grade antecedent match; it does NOT read a poison
+#     mark (guardrail: PROTECT must never depend on a poison mark — a callback
+#     with no positive record antecedent is simply not protected, e.g. e7's
+#     'reinstated Jul 14', whose only Jul-14 antecedent is source-echo).
+#   POISON = continuity diction (_REPETITION_RE) whose OBJECT traces to a delta
+#     carrying a POSITIVE 'source-echo' provenance mark (Rook, BLOCKING: rides
+#     ONLY the positive mark — never a defaulted/absent grade, never a
+#     no-antecedent fallback). Warn-only this week (A10); no drop, no degrade.
+#   TRIM = everything else — the editor's ordinary license.
+# ===========================================================================
+
+@dataclass(frozen=True)
+class CallbackTag:
+    """One classification of one DRAFT sentence. A sentence bearing two dated
+    callbacks yields two PROTECT tags (one per matched antecedent); a sentence
+    that is both a dated callback and poisoned yields a PROTECT tag AND a POISON
+    tag; a plain sentence yields one TRIM tag."""
+    story_index: int
+    sentence: str
+    tag: str                              # "PROTECT" | "POISON" | "TRIM"
+    date: str = ""                        # ISO date of the protected fact (PROTECT)
+    subject_units: Tuple[str, ...] = ()   # discriminating units of the fact
+    marker: str = ""                      # the continuity word (POISON only)
+
+
+def _story_sentences(story: Dict) -> List[str]:
+    """Every prose sentence of a story, split per-field (abbreviation-safe) so a
+    field boundary never fuses two sentences. All string fields are scanned — a
+    dated callback the writer put in the lede or the editor moved to my_read is
+    caught either way."""
+    out: List[str] = []
+    for v in story.values():
+        if isinstance(v, str) and v.strip():
+            out.extend(_sentences(v))
+    return out
+
+
+def _dates_in(text: str, year: str) -> set:
+    """Canonical ISO dates named in `text`: ISO tokens resolve to themselves; a
+    human 'Month D' resolves against the edition's YEAR (mirrors
+    future_relative_watch_findings / parse_due_date)."""
+    out: set = set()
+    for m in _ISO_RE.finditer(text or ""):
+        out.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+    if year and year.isdigit() and len(year) == 4:
+        for dm in _MONTH_DAY_RE.finditer(text or ""):
+            mon = _MONTH_NUM[dm.group(1).lower()]
+            out.add(f"{year}-{mon:02d}-{int(dm.group(2)):02d}")
+    return out
+
+
+def _discriminating_units(text: str, topics: List[str]) -> set:
+    """Salient units of `text` MINUS the thread topics' own words (D6): the
+    thread-topic word ('strait') must never be the discriminator, or a bare
+    topic mention would license/protect on nothing. Lower-cased for comparison."""
+    topic_words: set = set()
+    for t in topics or []:
+        topic_words.update(u.lower() for u in _salient_units(t))
+    return {u.lower() for u in _salient_units(text) if u.lower() not in topic_words}
+
+
+def ledger_callbacks(draft_payload: Dict,
+                     ledger_by_story: List[Dict],
+                     edition_date: str) -> List[CallbackTag]:
+    """Tag each DRAFT sentence PROTECT / POISON / TRIM. PURE over
+    (draft_payload, ledger_by_story, edition_date) — no DB, no LLM, unit-pinnable
+    in isolation.
+
+    `ledger_by_story[i]` is the ledger context for story i (same order as
+    draft_payload['stories']): a dict {"topics": [str], "rows": [row]}, where
+    each row is a PREDATING delta/state normalized to
+    {"date": ISO, "text": str, "provenance": str|None, "kind": "delta"|"state"}.
+    A row's grade defaults to record-established when `provenance` is None/absent
+    (effective_provenance), exactly as the ledger read does; states are untyped
+    and so are always record-grade (never poison). The caller
+    (generate._ledger_callback_context) builds this from ledger_for_thread — the
+    same strictly-predating antecedent surface NL-75 uses, non-superseded rows
+    only — so no fresh query with different prior-cutoff semantics is introduced.
+    """
+    stories = (draft_payload or {}).get("stories") or []
+    year = (edition_date or "")[:4]
+    tags: List[CallbackTag] = []
+    for idx, story in enumerate(stories):
+        if not isinstance(story, dict):
+            continue
+        ctx = ledger_by_story[idx] if idx < len(ledger_by_story) else {}
+        topics = ctx.get("topics") or []
+        rows = ctx.get("rows") or []
+        # Antecedent partition. record_rows: the grade filter has_predating_
+        # antecedent itself applies — record-established + reader-explicit +
+        # untyped-default license; source-echo / external-synthesis do not.
+        record_rows = [r for r in rows
+                       if effective_provenance(r) not in PROVENANCE_NON_LICENSING]
+        # echo_rows: a POSITIVE 'source-echo' mark ONLY (Rook, BLOCKING). Not
+        # effective_provenance — a defaulted/absent grade is NOT poison.
+        echo_rows = [r for r in rows
+                     if (r.get("provenance") or "") == PROVENANCE_SOURCE_ECHO]
+        for sent in _story_sentences(story):
+            sent_dates = _dates_in(sent, year)
+            disc_units = _discriminating_units(sent, topics)
+            protect_emitted = False
+            for r in record_rows:
+                rdate = (r.get("date") or "")[:10]
+                if not rdate or rdate not in sent_dates:
+                    continue
+                shared = disc_units & _discriminating_units(r.get("text", ""), topics)
+                if shared:
+                    tags.append(CallbackTag(idx, sent, "PROTECT", rdate,
+                                            tuple(sorted(shared)), ""))
+                    protect_emitted = True
+            poison_emitted = False
+            m = _REPETITION_RE.search(sent)
+            if m and echo_rows:
+                obj_units = {u.lower()
+                             for u in _repetition_subject_units(sent, m, topics)}
+                for r in echo_rows:
+                    r_units = {u.lower() for u in _salient_units(r.get("text", ""))}
+                    shared = obj_units & r_units
+                    if shared:
+                        tags.append(CallbackTag(idx, sent, "POISON", "",
+                                                tuple(sorted(shared)), m.group(0)))
+                        poison_emitted = True
+                        break
+            if not protect_emitted and not poison_emitted:
+                tags.append(CallbackTag(idx, sent, "TRIM", "", (), ""))
+    return tags
+
+
+def protect_facts_lost(protect_facts, edited_payload: Dict,
+                       edition_date: str) -> List[Tuple[str, Tuple[str, ...]]]:
+    """The post-edit diff (M2 teeth). `protect_facts` is an iterable of
+    (iso_date, subject_units) drawn from the DRAFT's PROTECT tags. Returns the
+    facts NO LONGER present in `edited_payload`.
+
+    A9 protection unit = the (date + subject) FACT BY PRESENCE. Reword-tolerant:
+    the date matches in ANY form (Jul 9 / July 9 / 2026-07-09, via _dates_in);
+    a subject unit matches by substring (mirrors has_predating_antecedent's
+    membership test), so 'blockade' survives inside 'blockades' and across a
+    move to another field.
+
+    A fact is LOST iff its date is gone OR every subject unit is gone — because
+    the dated callback is destroyed by removing EITHER constituent (Eng
+    constraint: "must not remove the date OR the subject"). NOTE the deliberate
+    departure from a literal "date AND subject both gone" reading: the canonical
+    HSR specimen SHARES a subject word ('blockade') between the poison callback
+    (e7, kept) and the clean callback (e8, deleted), so a both-gone rule could
+    never detect e8's deletion — 'blockade' survives in e7. See the batch report
+    and test_editor_preservation. Sub-sentence co-occurrence is NOT enforced
+    (Eng: not enforceable) — presence is payload-wide."""
+    year = (edition_date or "")[:4]
+    stories = (edited_payload or {}).get("stories") or []
+    blob = " ".join(v for s in stories if isinstance(s, dict)
+                    for v in s.values() if isinstance(v, str))
+    edited_dates = _dates_in(blob, year)
+    # F1 (gate 2026-07-21): WHOLE-TOKEN membership, symmetric with the emission
+    # side (ledger_callbacks tags subjects from _salient_units token-sets). Raw
+    # substring membership let a real deletion slip when a lost subject-unit was
+    # a substring of a KEPT word ('state' ⊂ 'reinstated'/'United States') while
+    # the date recurred elsewhere. Token-set, NOT stemming: 'state' ∉
+    # {states, reinstated, united, ...}. The conscious trade — 'blockade' no
+    # longer matches 'blockades' (plural reads as absent) — is a direction-safe
+    # OVER-fire, pinned by test_token_set_sacrifices_plural_tolerance.
+    edited_tokens = set(_salient_units(blob))
+    lost: List[Tuple[str, Tuple[str, ...]]] = []
+    for iso, units in protect_facts:
+        units = tuple(units)
+        date_present = iso in edited_dates
+        subj_present = bool(units) and any((u or "").lower() in edited_tokens
+                                           for u in units)
+        if (not date_present) or (not subj_present):
+            lost.append((iso, units))
+    return lost
+
+
+# ===========================================================================
 # NL-69 (migration 0014): the self-marking write path + the supervised mark.
 # ===========================================================================
 

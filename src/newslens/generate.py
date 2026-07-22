@@ -1373,6 +1373,72 @@ def forward_claim_findings(con, stories: List[Dict], slots: List[Dict],
     return out
 
 
+# ---------------------------------------------------------------------------
+# M1/M2 — editor-preservation (editor-preservation batch, 2026-07-21). The
+# deterministic matcher lives in memory_core (ledger_callbacks); these are the
+# generate-side seams: build the predating ledger context, render the PROTECT
+# block the editor is TOLD to keep (belt), and — in the degrade seam — enforce
+# it by the post-edit diff (suspenders).
+# ---------------------------------------------------------------------------
+
+def _ledger_callback_context(con, slots: List[Dict],
+                             edition_date: str) -> List[Dict]:
+    """Per-story ledger context for mc.ledger_callbacks: {"topics", "rows"} for
+    each slot, in slot order. Rows are the thread's PREDATING deltas (the exact
+    NL-75 antecedent surface — ledger_for_thread with before_date, superseded
+    rows dropped) plus the newest predating standing state, each normalized to
+    {date, text, provenance, kind}. No fresh query with different cutoff
+    semantics is introduced (dispatch guardrail)."""
+    from . import memory_core as mc
+    ctx: List[Dict] = []
+    for slot in slots:
+        topics = [t for t in (slot.get("matched_memory") or []) if t]
+        rows: List[Dict] = []
+        for topic in topics:
+            tid = mc.resolve_thread_id(con, topic)
+            if tid is None:
+                continue
+            for e in mc.ledger_for_thread(con, tid, before_date=edition_date):
+                if e.get("superseded_by"):
+                    continue          # Rook's gate: a corrected delta anchors nothing
+                rows.append({
+                    "date": e.get("edition_date"),
+                    "text": f"{e.get('what_happened', '')} {e.get('significance', '')}",
+                    "provenance": e.get("provenance"),   # None => record-established
+                    "kind": "delta",
+                })
+            st = mc.latest_state(con, tid, before_date=edition_date, strict=True)
+            if st:
+                rows.append({
+                    "date": st.get("as_of_date"),
+                    "text": st.get("state_text", ""),
+                    "provenance": None,     # thread_state is untyped => record-grade
+                    "kind": "state",
+                })
+        ctx.append({"topics": topics, "rows": rows})
+    return ctx
+
+
+def _render_protect_block(callback_tags: List) -> str:
+    """The editor-facing PROTECT list (belt). One line per pinned dated callback,
+    fact-level (date + subject), never the verbatim sentence — demanding verbatim
+    retention would rebuild the 'stamp in prose clothing' the arc-line contract
+    killed (Vera's constraint); the editor keeps the FACT and rewords at will."""
+    from . import memory_core as mc
+    prot = [t for t in callback_tags if t.tag == "PROTECT"]
+    if not prot:
+        return ("(no dated ledger callbacks in this draft — nothing pinned; edit "
+                "under your ordinary license)")
+    lines: List[str] = []
+    for t in prot:
+        subj = ", ".join(t.subject_units)
+        lines.append(
+            f"  - story {t.story_index + 1}: KEEP the {mc.human_date(t.date)} "
+            f"({t.date}) accountability reference to [{subj}] — date AND subject "
+            "must both survive, in any wording.")
+    return "\n".join(lines)
+
+
 def assemble_narrative(
     date: str, variant: str, stories: List[Dict], inputs: Dict
 ) -> str:
@@ -3050,11 +3116,38 @@ def _run_generate_body(
     # unedited draft WITH disclosure — never a dead run.
     edited_payload = draft_payload
     editor_note = "editor: skipped"
+    # A9/A10 (editor-preservation batch, 2026-07-21): tag the DRAFT's dated
+    # ledger callbacks DETERMINISTICALLY (no LLM) so the editor is TOLD to keep
+    # them (belt, injected below) and a post-edit diff can ENFORCE it (suspenders,
+    # in the degrade seam). Computed on the DRAFT before the editor runs. Wrapped
+    # degrade-safe: a matcher/DB hiccup must never kill the run — it just leaves
+    # nothing pinned this edition (the pre-batch behavior).
+    _protect_facts: List[Tuple[str, Tuple[str, ...]]] = []
+    _poison_facts: List[Tuple[str, Tuple[str, ...]]] = []
+    _protect_block = "(callback matcher unavailable this run — nothing pinned)"
+    try:
+        from . import memory_core as _mc_cb
+        _cb_ctx = _ledger_callback_context(con, inputs["slots"], date)
+        _callback_tags = _mc_cb.ledger_callbacks(draft_payload, _cb_ctx, date)
+        _protect_facts = [(t.date, t.subject_units)
+                          for t in _callback_tags if t.tag == "PROTECT"]
+        _poison_facts = [(t.marker, t.subject_units)
+                         for t in _callback_tags if t.tag == "POISON"]
+        _protect_block = _render_protect_block(_callback_tags)
+        if _protect_facts:
+            report.warnings.append(
+                f"A9 preserve: pinned {len(_protect_facts)} dated ledger "
+                f"callback(s) for the editor to keep")
+    except Exception as exc:   # noqa: BLE001 — never let instrumentation kill a run
+        report.warnings.append(
+            f"A9 preserve: callback matcher skipped ({type(exc).__name__}: {exc}) "
+            "— nothing pinned this edition")
     try:
         e_template = (paths.PROMPTS_DIR / PROMPT_EDITOR).read_text(encoding="utf-8")
         e_prompt = e_template.format(
             labels_block=build_labels_block(inputs),
             analysis_facts_block=build_analysis_facts_block(inputs),
+            protect_block=_protect_block,
             draft_json=json.dumps(draft_payload, ensure_ascii=False),
         )
         est_e = _est_cost(e_prompt, EDITOR_MAX_TOKENS, "editor")
@@ -3138,6 +3231,38 @@ def _run_generate_body(
                 f"editor cut the lead to {_lead_words(edited_payload)} words "
                 f"— below its {LEAD_FLOOR_WORDS}-word tier floor (the draft "
                 "met it)")
+        # A9 preserve-enforcement (editor-preservation batch): the teeth. A
+        # dated ledger callback the DRAFT carried whose (date + subject) fact no
+        # longer survives the edit is DISCARDED via this SAME degrade path —
+        # exactly the LEAD_FLOOR mirror above: raise ValueError -> the edit is
+        # dropped, the writer's draft ships with disclosure. This is the direct
+        # HSR unblock: the length-editor can no longer delete the writer's clean
+        # dated accountability callbacks (e8/e9) while keeping the poison one.
+        # Degrade-to-draft is the LONGER, pricier text (Onna) — couples to the
+        # shadow cap — so the firing is instrumented below for degrade-rate.
+        if edited_payload is not draft_payload and _protect_facts:
+            _lost = _mc_cb.protect_facts_lost(_protect_facts, edited_payload, date)
+            if _lost:
+                _lost_desc = "; ".join(
+                    f"{d} [{', '.join(u)}]" for d, u in _lost)
+                # Instrumentation (Onna, blocking-for-observability): a distinct,
+                # greppable degrade-rate warning AND a structured report.steps
+                # marker (cost-folding tolerates a non-cost step — it sums
+                # s.get('usd')|0), both emitted BEFORE the raise so they survive
+                # the discard.
+                report.warnings.append(
+                    f"A9-DEGRADE: editor discarded — {len(_lost)} dated ledger "
+                    f"callback(s) lost ({_lost_desc}); degraded to the writer's "
+                    "draft (LONGER text; degrade-rate event)")
+                report.steps.append({
+                    "step": "a9_preserve_degrade",
+                    "callbacks_lost": len(_lost),
+                    "facts": [{"date": d, "subject": list(u)} for d, u in _lost],
+                })
+                raise ValueError(
+                    f"editor lost {len(_lost)} dated ledger callback(s) "
+                    f"({_lost_desc}) — the writer's clean accountability "
+                    "callbacks must survive (A9 preserve-enforcement)")
         stories, narrative_warnings = validate_narrative_payload(
             edited_payload, inputs["slots"], report.variant,
         )
@@ -3172,6 +3297,34 @@ def _run_generate_body(
     # and unconverted expired watch-fors surface as visible warnings.
     report.warnings.extend(
         forward_claim_findings(con, stories, inputs["slots"], date))
+
+    # A10 WARN-ONLY this week (editor-preservation batch): a POISON-marked
+    # sentence — continuity diction tracing to a POSITIVE source-echo delta
+    # (Rook: the positive mark only, never a no-antecedent fallback) — that
+    # SURVIVED into the shipped text emits a warn-only marker so poison-survival
+    # is measurable from day one. NO DROP, NO DEGRADE on poison this week; the
+    # A10 hard-drop is M3, explicitly OUT of this build.
+    if _poison_facts:
+        from . import memory_core as _mc
+        _final_text = " ".join(
+            v for s in stories if isinstance(s, dict)
+            for v in s.values() if isinstance(v, str))
+        _final_tokens = set(_mc._salient_units(_final_text))
+        for _marker, _units in _poison_facts:
+            # Token-aware survival, mirroring the F1 fix: the marker matches on a
+            # WORD BOUNDARY (multi-word markers like 'back on' survive; 'again'
+            # no longer false-matches inside 'against'), units by whole-token
+            # membership. Raw substring inflated this warn-only signal we collect
+            # this week.
+            _marker_present = bool(_marker) and re.search(
+                r"\b" + re.escape(_marker) + r"\b", _final_text, re.I) is not None
+            _units_present = any((u or "").lower() in _final_tokens for u in _units)
+            if _marker_present and _units_present:
+                report.warnings.append(
+                    f"A10-WARN: source-echo continuity diction survived the edit "
+                    f"— {_marker!r} on [{', '.join(_units)}] traces to a "
+                    "source-echo ledger row (warn-only this week; no drop — "
+                    "poison-survival instrumentation)")
 
     narrative = assemble_narrative(date, report.variant, stories, inputs)
     report.narrative_text = narrative

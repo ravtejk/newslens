@@ -51,6 +51,13 @@ WHAT TO DO, in priority order:
    "throat-clearing." A repetition word shipped WITH its record date or WITH
    its source attribution ("reports call it 'reinstated'") is correct — keep
    the date and the attribution; do not strip them into a bare assertion.
+   A9 (editor-preservation batch) — the DATED LEDGER CALLBACKS listed in their
+   own block below are the writer's clean, record-established accountability
+   moves. Each is a (date + subject) fact that this record itself established on
+   a PRIOR edition. You MUST keep the fact: the date AND the subject must both
+   survive your edit, in ANY wording. Reword, tighten, or move the sentence
+   freely — you may NOT delete the date or drop the subject. An edit that loses
+   a pinned callback is DISCARDED and the writer's draft ships in its place.
 7. Quick-tier ("In Brief") stories are STRUCTURED mini-stories, not snippets:
    they carry lede + why_it_matters + watch_for like every other story, just
    tighter (~180-260 words). Tighten them, but NEVER strip their why_it_matters
@@ -75,6 +82,12 @@ below, this block IS its fact universe. A specific in the draft that is
 not present here (and not plain arithmetic on figures that are) is a
 FABRICATION — cut it, never tighten it.
 {analysis_facts_block}
+
+=== DATED LEDGER CALLBACKS TO PRESERVE (A9 — see rule 6) ===
+These are computed deterministically from this record's OWN prior editions.
+Each names a date + subject you MUST keep (both, in any wording). Losing one
+gets your whole edit discarded in favor of the draft.
+{protect_block}
 
 === THE DRAFT (edit this) ===
 {draft_json}
