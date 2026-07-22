@@ -315,12 +315,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return 2
         config.load_env()
+
+        def _progress(label: str, model):
+            # NL-88: a terminal `generate` is a ~40-min run; print each phase
+            # boundary as it happens so it's no longer a silent wait. To stderr,
+            # so stdout stays the clean narrative artifact.
+            tail = f" [{model}]" if model else ""
+            print(f"  … {label}{tail}", file=sys.stderr, flush=True)
+
         try:
             rep = generate.run_generate(
                 date=args.date,
                 variant_override=args.variant,
                 refresh=not args.no_refresh,
                 no_threads=args.no_threads,
+                progress=_progress,
             )
         except generate.GenerateError as exc:
             print(str(exc), file=sys.stderr)

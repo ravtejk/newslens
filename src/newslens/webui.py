@@ -266,10 +266,11 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
 .state-panel { background: var(--surface); border-radius: var(--radius); padding: 1.75rem 1.5rem; margin-top: 1.5rem; }
 .state-panel h2 { font-family: var(--font-display); font-size: 1.15rem; margin: 0 0 0.6rem; }
 .state-panel p { font-size: 0.9rem; color: var(--ink-soft); margin: 0 0 1rem; }
-.steps { list-style: none; margin: 0 0 1rem; padding: 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-faint); }
-.steps li { padding: 0.2rem 0; }
-.steps li.done { color: var(--ink); } .steps li.done::before { content: "\\2713 "; color: var(--moved); }
-.steps li.active::before { content: "\\2026 "; } .steps li.pending::before { content: "\\00B7 "; }
+/* NL-88 live generation status — typography-carried, tokens only, no chrome. */
+.gen-live { font-family: var(--font-mono); font-size: 0.82rem; color: var(--ink-soft); margin: 0 0 1rem; }
+.gen-live .gen-live-stage { color: var(--ink); }
+.gen-live .gen-live-model { color: var(--ink-faint); }
+.gen-live .gen-live-clock { display: block; color: var(--ink-faint); font-size: 0.76rem; margin-top: 0.3rem; }
 .error-text { font-size: 0.85rem; color: var(--danger); margin: 0 0 1rem; }
 .cta-quiet { display: inline-block; background: var(--ink); color: var(--bg); font-size: 0.85rem;
   border: none; padding: 0.6rem 1.1rem; border-radius: var(--radius); cursor: pointer; }
@@ -1461,13 +1462,49 @@ function navMonth(month, e) {
   return false;
 }
 restoreViewAfterReload();
+/* NL-88: live generation status. The clock ticks client-side (1s) between the
+   2.5s polls, re-syncing to the server's elapsed values on every poll so it
+   never drifts. Stage label + model come straight from /api/status. */
+var genClock = { total: 0, stage: 0, sync: 0, timer: null };
+function genFmt(s) {
+  s = Math.max(0, Math.floor(s));
+  var m = Math.floor(s / 60), r = s % 60;
+  return m + ':' + (r < 10 ? '0' : '') + r;
+}
+function genClockTick() {
+  var el = document.getElementById('gen-live-clock');
+  if (!el) { return; }
+  var d = (Date.now() - genClock.sync) / 1000;
+  el.textContent = genFmt(genClock.total + d) + ' elapsed · '
+    + genFmt(genClock.stage + d) + ' on this step';
+}
+function genClockSync(totalS, stageS) {
+  if (typeof totalS === 'number' && totalS >= 0) { genClock.total = totalS; }
+  genClock.stage = (typeof stageS === 'number' && stageS >= 0) ? stageS : 0;
+  genClock.sync = Date.now();
+  if (!genClock.timer) { genClock.timer = setInterval(genClockTick, 1000); }
+  genClockTick();
+}
 function pollGeneration() {
   fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
-    if (d.state === 'running') { setTimeout(pollGeneration, 2500); }
-    else { location.reload(); }
+    if (d.state === 'running') {
+      var st = document.getElementById('gen-live-stage');
+      if (st && d.stage) { st.textContent = d.stage; }
+      var md = document.getElementById('gen-live-model');
+      if (md) { md.textContent = d.stage_model ? ' · ' + d.stage_model : ''; }
+      genClockSync(d.total_elapsed_s, d.stage_elapsed_s);
+      setTimeout(pollGeneration, 2500);
+    } else { location.reload(); }
   }).catch(function () { setTimeout(pollGeneration, 4000); });
 }
-if (document.getElementById('gen-running')) { pollGeneration(); }
+if (document.getElementById('gen-running')) {
+  var gl = document.getElementById('gen-live');
+  if (gl) {
+    genClockSync(parseFloat(gl.getAttribute('data-total')) || 0,
+                 parseFloat(gl.getAttribute('data-stage-el')) || 0);
+  }
+  pollGeneration();
+}
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Escape') return;
   closeSettings();

@@ -199,9 +199,15 @@ def test_today_only_default_hides_stale_edition(ui):
 
 
 def test_api_status_starts_idle(ui):
+    # NL-88: snapshot() is now the ENRICHED payload (state/error + the live
+    # stage fields). At rest everything past state/error is empty/None.
     code, _, body = get(ui, "/api/status")
     assert code == 200
-    assert json.loads(body) == {"state": "idle", "error": ""}
+    assert json.loads(body) == {
+        "state": "idle", "error": "",
+        "started_at": None, "stage": None, "stage_model": None,
+        "stage_elapsed_s": None, "total_elapsed_s": None,
+    }
 
 
 # --- the generation job: never two concurrent paid runs -----------------------------------

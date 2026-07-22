@@ -60,6 +60,13 @@ class _GenJob:
         self.state = "idle"  # idle | running | done | error
         self.error = ""
         self.started_at: Optional[str] = None
+        # NL-88: the live stage the generate thread is in RIGHT NOW. Written by
+        # _progress (the callback run_generate fires at each phase boundary),
+        # read by snapshot(), BOTH under self.lock — the server thread reads
+        # while the generate thread writes, so this MUST stay lock-guarded.
+        self.stage: Optional[str] = None
+        self.stage_model: Optional[str] = None
+        self.stage_started_at: Optional[str] = None
 
     def start(self) -> bool:
         with self.lock:
@@ -68,20 +75,38 @@ class _GenJob:
             self.state = "running"
             self.error = ""
             self.started_at = datetime.now(timezone.utc).isoformat()
+            self.stage = None
+            self.stage_model = None
+            self.stage_started_at = None
         threading.Thread(target=self._run, daemon=True).start()
         return True
+
+    def _progress(self, label: str, model: Optional[str]) -> None:
+        # NL-88: the progress callback handed to run_generate. Fires on the
+        # GENERATE thread at each phase boundary; takes the SAME lock snapshot()
+        # reads under, so a mid-run status read never tears. run_generate wraps
+        # this in a swallow (_emit_progress), so even a raise here can never
+        # touch the generation — but it must not raise anyway (a stage stamp is
+        # a couple of assignments under a short-held lock).
+        now = datetime.now(timezone.utc).isoformat()
+        with self.lock:
+            self.stage = label
+            self.stage_model = model
+            self.stage_started_at = now
 
     def _run(self) -> None:
         try:
             from . import generate
             config.load_env()
-            generate.run_generate()
+            generate.run_generate(progress=self._progress)
             with self.lock:
                 self.state = "done"
+                self._clear_stage_locked()
         except Exception as exc:  # surfaced verbatim in the error panel
             with self.lock:
                 self.state = "error"
                 self.error = str(exc)
+                self._clear_stage_locked()
         finally:
             # Ride 24 (M8): a BaseException (KeyboardInterrupt delivered to
             # this thread, SystemExit from deep inside a lib, MemoryError)
@@ -95,10 +120,35 @@ class _GenJob:
                     self.error = ("generation thread exited abnormally "
                                   "(BaseException) — check the serve "
                                   "terminal for the traceback")
+                    self._clear_stage_locked()
 
-    def snapshot(self) -> Dict[str, str]:
+    def _clear_stage_locked(self) -> None:
+        # Caller holds self.lock. Terminal states carry no live stage.
+        self.stage = None
+        self.stage_model = None
+        self.stage_started_at = None
+
+    def snapshot(self) -> Dict[str, object]:
         with self.lock:
-            return {"state": self.state, "error": self.error}
+            now = datetime.now(timezone.utc)
+
+            def _elapsed(iso: Optional[str]) -> Optional[float]:
+                if not iso:
+                    return None
+                try:
+                    return round((now - datetime.fromisoformat(iso)).total_seconds(), 1)
+                except Exception:  # never let a clock read break the status endpoint
+                    return None
+
+            return {
+                "state": self.state,
+                "error": self.error,
+                "started_at": self.started_at,
+                "stage": self.stage,
+                "stage_model": self.stage_model,
+                "stage_elapsed_s": _elapsed(self.stage_started_at),
+                "total_elapsed_s": _elapsed(self.started_at),
+            }
 
 
 GEN_JOB = _GenJob()
@@ -1433,19 +1483,27 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
             + _section_line("today"))
 
     if gen_state["state"] == "running":
-        body = """
+        # NL-88: a LIVE status line (stage label + model + a ticking clock)
+        # replaces the old hardcoded ladder that always showed "ingest active"
+        # — a full edition runs ~40 min, and a featureless panel read as
+        # "stuck" (the 2026-07-18 incident). Seeded server-side from the
+        # current snapshot; webui.js updates it each poll and ticks the clock
+        # between polls.
+        _stage_label = gen_state.get("stage") or "Starting…"
+        _stage_model = gen_state.get("stage_model") or ""
+        _model_suffix = f" · {_e(_stage_model)}" if _stage_model else ""
+        _total0 = gen_state.get("total_elapsed_s") or 0
+        _stage0 = gen_state.get("stage_elapsed_s") or 0
+        body = f"""
 <div class="state-panel" id="gen-running">
   <h2>Generating today’s edition…</h2>
-  <p>Fetching your sources, ranking, writing, and recording the episode.
-     This usually takes a couple of minutes; the page refreshes itself
-     when it’s ready.</p>
-  <ul class="steps">
-    <li class="active">ingest — fetching your sources</li>
-    <li class="pending">rank — choosing today’s stories</li>
-    <li class="pending">write — drafting the briefing</li>
-    <li class="pending">edit — the second read</li>
-    <li class="pending">voice — recording the episode</li>
-  </ul>
+  <p>Fetching your sources, ranking, writing, editing, and recording the
+     episode. A full edition takes a while — the live status below shows
+     exactly where it is; the page refreshes itself when it’s ready.</p>
+  <p class="gen-live" id="gen-live" data-total="{_total0}" data-stage-el="{_stage0}">
+    <span class="gen-live-stage" id="gen-live-stage">{_e(_stage_label)}</span><span class="gen-live-model" id="gen-live-model">{_model_suffix}</span>
+    <span class="gen-live-clock" id="gen-live-clock"></span>
+  </p>
 </div>"""
     elif gen_state["state"] == "error":
         body = f"""

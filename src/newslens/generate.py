@@ -45,7 +45,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import config, db, llm, memory, paths, ranking
 # NL-69: the repetition-word machinery moved to its home beside
@@ -2729,6 +2729,62 @@ def write_artifact(date: str, variant: str, sample: bool, narrative: str,
 # Entry point
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# NL-88: live-progress side-channel (PURE OBSERVABILITY — no pipeline change)
+#
+# run_generate accepts an OPTIONAL progress(label, model) callback and fires it
+# at each phase boundary the run ALREADY passes through. The one property that
+# MUST hold: a progress callback can NEVER affect a generation. Every emit goes
+# through _emit_progress, which is a no-op when progress is None and SWALLOWS
+# any exception (a bad callback, a seat lookup that raises). Generation
+# behavior, output, cost, and ordering are byte-identical whether or not a
+# callback is passed. The internal phase key -> plain, non-engineer label map
+# lives HERE, in one place; both the web UI and the CLI render these labels.
+# ---------------------------------------------------------------------------
+
+PROGRESS_LABELS: Dict[str, str] = {
+    "ingest":    "Gathering the news",
+    "rank":      "Ranking stories",
+    "analysis":  "Reading the stories closely",
+    "narrative": "Writing the briefing",
+    "editor":    "Editing",
+    "script":    "Adapting the script",
+    "audio":     "Making the audio",
+    "persist":   "Saving",
+    "state":     "Updating the story threads",
+}
+
+
+def _emit_progress(progress: Optional[Callable[[str, Optional[str]], None]],
+                   phase: str, seat: Optional[str] = None,
+                   env: Optional[dict] = None) -> None:
+    """Fire the live-progress side-channel for one phase boundary (NL-88).
+
+    NON-INTERFERING by construction: a None `progress` returns immediately (a
+    no-op code path), and any `Exception` raised by the callback OR by the
+    seat/model lookup is swallowed here — no ordinary progress error can abort,
+    slow, reorder, or alter a generation. The swallow is deliberately
+    `except Exception`, NOT `BaseException`: a KeyboardInterrupt/SystemExit
+    raised while a callback runs PROPAGATES on purpose, so a ~40-min generate
+    stays interruptible (a Ctrl-C must land the same whether it hits inside the
+    callback or one instruction later). The real callbacks — _GenJob._progress
+    and the CLI printer — never raise, so output, cost, and ordering are
+    byte-identical whether or not a callback is passed."""
+    if progress is None:
+        return
+    try:
+        label = PROGRESS_LABELS.get(phase, phase)
+        model: Optional[str] = None
+        if seat is not None:
+            try:
+                model = llm.resolve_seat(seat, env).model
+            except Exception:  # noqa: BLE001 — a seat lookup never affects a run
+                model = None
+        progress(label, model)
+    except Exception:  # noqa: BLE001 — a progress error NEVER touches generation
+        pass
+
+
 def run_generate(
     date: Optional[str] = None,
     con: Optional[sqlite3.Connection] = None,
@@ -2736,6 +2792,7 @@ def run_generate(
     variant_override: Optional[str] = None,
     refresh: bool = True,
     no_threads: bool = False,
+    progress: Optional[Callable[[str, Optional[str]], None]] = None,
 ) -> GenReport:
     import os
 
@@ -2784,7 +2841,7 @@ def run_generate(
     try:
         try:
             return _run_generate_body(
-                con, date, src_env, key, report, refresh, no_threads
+                con, date, src_env, key, report, refresh, no_threads, progress
             )
         except GenerateError as exc:
             # BUG-6/32 family (NL-63 M2 obs): a run that aborts mid-pipeline
@@ -2825,7 +2882,8 @@ def run_generate(
 
 def _run_generate_body(
     con: sqlite3.Connection, date: str, src_env, key: str,
-    report: GenReport, refresh: bool, no_threads: bool = False
+    report: GenReport, refresh: bool, no_threads: bool = False,
+    progress: Optional[Callable[[str, Optional[str]], None]] = None,
 ) -> GenReport:
     from . import ingest
 
@@ -2839,6 +2897,7 @@ def _run_generate_body(
     # blanket that pre-empts every anthropic stage).
 
     if refresh:
+        _emit_progress(progress, "ingest", env=src_env)
         try:
             ing = ingest.run_ingest(con=con, env=src_env)
         except config.SourcesParseError as exc:
@@ -2849,6 +2908,7 @@ def _run_generate_body(
         )
         if ing.degradation_message:
             report.warnings.append(ing.degradation_message)
+        _emit_progress(progress, "rank", "rank", env=src_env)
         try:
             rank_rep = ranking.run_rank(date=date, con=con, env=src_env)
         except ranking.RankingError as exc:
@@ -2968,6 +3028,7 @@ def _run_generate_body(
     briefs_by_slot: Dict[int, Optional[Dict]] = {}
     analyst_slot3_tier: Optional[str] = None
     if refresh and not no_threads:
+        _emit_progress(progress, "analysis", "analyst", env=src_env)
         try:
             a_rep = analysis_mod.run_analysis(
                 date=date, con=con, env=src_env, already_spent=spent,
@@ -3010,6 +3071,7 @@ def _run_generate_body(
     # edition is on the record — see the memory block near the run's end.
 
     # --- Narrative pass ---
+    _emit_progress(progress, "narrative", "writer", env=src_env)
     n_prompt = build_narrative_prompt(date, report.variant, inputs)
     est = _est_cost(n_prompt, NARRATIVE_MAX_TOKENS)
     if spent + est > cap:
@@ -3116,6 +3178,7 @@ def _run_generate_body(
     # unedited draft WITH disclosure — never a dead run.
     edited_payload = draft_payload
     editor_note = "editor: skipped"
+    _emit_progress(progress, "editor", "editor", env=src_env)
     # A9/A10 (editor-preservation batch, 2026-07-21): tag the DRAFT's dated
     # ledger callbacks DETERMINISTICALLY (no LLM) so the editor is TOLD to keep
     # them (belt, injected below) and a post-edit diff can ENFORCE it (suspenders,
@@ -3357,6 +3420,7 @@ def _run_generate_body(
         )
 
     # --- Script pass ---
+    _emit_progress(progress, "script", "script", env=src_env)
     s_prompt = build_script_prompt(date, report.variant, narrative, inputs)
     est_s = _est_cost(s_prompt, SCRIPT_MAX_TOKENS, "script")
     if spent + est_s > cap:
@@ -3514,6 +3578,7 @@ def _run_generate_body(
 
     # --- Audio step (M6 mandate 1): the last stage; a synth failure
     # degrades to a no-audio run WITH disclosure, never a dead run.
+    _emit_progress(progress, "audio")
     from . import audio as audio_mod
 
     cfg_full = config.load_sources()
@@ -3548,6 +3613,7 @@ def _run_generate_body(
 
     # --- Persist (never for samples), artifact, instrumentation ---
     if not report.sample:
+        _emit_progress(progress, "persist")
         persist_generation(con, date, narrative, script, report.steps,
                            audio_path=audio_path_str)
         # --- Memory core (NL-63 M1): the delta ledger + standing state ---
@@ -3574,6 +3640,7 @@ def _run_generate_body(
         # state-rewrite step to report.steps; fold that late spend into the persisted
         # briefing cost so briefings.token_cost stays honest (money-honesty rule).
         if not no_threads:
+            _emit_progress(progress, "state", "state", env=src_env)
             steps_before = len(report.steps)
             try:
                 spent = run_memory_pass(con, date, key, cap, spent, briefs_by_slot,
