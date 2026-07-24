@@ -29,7 +29,7 @@ import urllib.error
 
 import pytest
 
-from conftest import anthropic_envelope
+from conftest import anthropic_envelope, rank_keys
 from newslens import config, llm as llm_mod, ranking
 
 DATE = "2026-07-04"
@@ -59,6 +59,7 @@ def cluster(
 
 
 def envelope(payload, prompt_tokens=1000, completion_tokens=200):
+    payload = rank_keys(payload)   # NL-70: int item_ids -> [id=KEY] model output
     return json.dumps(
         {
             "choices": [{"message": {"content": json.dumps(payload)}}],
@@ -720,8 +721,10 @@ def test_run28_fabrication_lands_outside_the_real_vocabulary():
 
 def _resp(payload, finish_reason=None):
     """A parsed /chat/completions response as _post_chat returns it (a dict,
-    not bytes) — for monkeypatching _post_chat to sequence attempts."""
-    choice = {"message": {"content": json.dumps(payload)}}
+    not bytes) — for monkeypatching _post_chat to sequence attempts.
+    NL-70: int item_ids are rendered as [id=KEY] codes, the keys-only output a
+    live rank seat emits, so the response decodes back through decode_keys."""
+    choice = {"message": {"content": json.dumps(rank_keys(payload))}}
     if finish_reason is not None:
         choice["finish_reason"] = finish_reason
     return {"choices": [choice], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}

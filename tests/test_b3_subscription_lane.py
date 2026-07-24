@@ -419,7 +419,9 @@ def test_D1_rank_cost_sink_legacy_usd_is_charged_zero_on_subscription(monkeypatc
     usd_shadow still binds. Fails if ranking reverts to usage_to_usd for `usd`."""
     from newslens import ranking
     good = {"choices": [{"message": {"content": json.dumps({"clusters": [
-        {"story_title": "T", "summary": "S", "item_ids": [1], "matched_tags": [],
+        {"story_title": "T", "summary": "S",
+         "item_ids": [ranking.encode_rank_key(1)],  # NL-70: keys-only model output
+         "matched_tags": [],
          "matched_memory": [], "world_impact": 5, "world_impact_reason": "r"}]})},
         "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1000, "completion_tokens": 200}}
@@ -532,7 +534,9 @@ def test_D5_flap_window_cannot_fork_ranking_transport_from_its_ledger(monkeypatc
 
     seen = {}
     good = json.dumps({"clusters": [
-        {"story_title": "T", "summary": "S", "item_ids": [1], "matched_tags": [],
+        {"story_title": "T", "summary": "S",
+         "item_ids": [ranking.encode_rank_key(1)],  # NL-70: keys-only model output
+         "matched_tags": [],
          "matched_memory": [], "world_impact": 5, "world_impact_reason": "r"}]})
 
     # Stub the TRANSPORT dispatch (not _post_chat) so the REAL _post_chat runs

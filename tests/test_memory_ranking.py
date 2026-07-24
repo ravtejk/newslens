@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import anthropic_envelope
+from conftest import anthropic_envelope, rank_keys
 from newslens import config, llm as llm_mod, memory, paths, ranking
 
 NOW = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
@@ -251,10 +251,12 @@ def test_prompt_items_are_bracket_keyed_and_armored():
         DATE, items, rank_cfg(), ACTIVE_THREADS, "the last 14 day(s)",
         dormant=DORMANT_THREADS,
     )
-    assert "[id=7] Outlet A | Fed cuts 50 points, 2026 outlook" in prompt
-    assert "[id=12] Outlet B | S&P 500 hits 6000" in prompt
+    # NL-70: the [id=KEY] token is now the Crockford base32 render alias of the
+    # raw id, not the decimal id — the armor is unchanged, the encoding is new.
+    assert f"[id={ranking.encode_rank_key(7)}] Outlet A | Fed cuts 50 points, 2026 outlook" in prompt
+    assert f"[id={ranking.encode_rank_key(12)}] Outlet B | S&P 500 hits 6000" in prompt
     # The armor sentence that separates ids from headline numbers:
-    assert "ONLY the N inside its [id=N] bracket" in prompt
+    assert "the short alphanumeric KEY inside its [id=KEY] bracket" in prompt
     # Vocabulary sections all render:
     assert "FORMERLY-TRACKED" in prompt and "Helium Shortage" in prompt
     assert "Iran War" in prompt
@@ -480,7 +482,7 @@ def test_gatefix3_midrun_hand_edit_survives_and_refresh_is_skipped(
         return {
             "choices": [
                 {"finish_reason": "stop",
-                 "message": {"content": json.dumps(payload)}}
+                 "message": {"content": json.dumps(rank_keys(payload))}}  # NL-70: keys-only model output
             ],
             "usage": {"prompt_tokens": 900, "completion_tokens": 200},
         }
@@ -531,5 +533,11 @@ def test_gatefix4_hostile_bracketed_title_cannot_mint_id_tokens():
     assert "[id=99]" not in prompt
     assert "(id=99)" in prompt                       # sanitized, content kept
     assert "Plain (bracketed) aside" in prompt
-    numeric_tokens = sorted(re.findall(r"\[id=(\d+)\]", prompt))
-    assert numeric_tokens == ["7", "8"]              # ONLY the real keys
+    # NL-70: real [id=...] tokens are now Crockford base32 keys. The rendered
+    # ITEM LINES start with the key token; those must be exactly the two real
+    # keys (the hostile "[id=99]" was sanitized to "(id=99)" and can never begin
+    # an item line). Prose examples of the format elsewhere in the prompt are
+    # mid-sentence, so line-start scoping isolates the real keys.
+    item_lines = [ln for ln in prompt.splitlines() if ln.startswith("[id=")]
+    item_keys = sorted(re.match(r"\[id=([^\]]+)\]", ln).group(1) for ln in item_lines)
+    assert item_keys == sorted([ranking.encode_rank_key(7), ranking.encode_rank_key(8)])

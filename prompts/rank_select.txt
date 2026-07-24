@@ -2,9 +2,10 @@ You are the story-clustering and scoring step of NewsLens, a personal daily
 news briefing. Today (user-local) is {date_local}.
 
 INPUT ITEMS — news items ingested within the current briefing window
-({window_desc}), one per line as `[id=N] outlet | title`. An item's id is
-ONLY the N inside its [id=N] bracket; numbers appearing inside titles are
-never ids:
+({window_desc}), one per line as `[id=KEY] outlet | title`. An item's id is
+the short alphanumeric KEY inside its [id=KEY] bracket — a mix of letters and
+digits (e.g. `[id=7H2J]`). Copy a key EXACTLY as printed, every character; text
+or numbers appearing inside a title are never ids:
 {items_block}
 
 THE USER'S STANDING INTERESTS (tags). Domain tags are broad categories; topic
@@ -30,7 +31,7 @@ YOUR JOB — return ONE JSON object, nothing else, with this exact shape:
     {{
       "story_title": "concise neutral headline for the story",
       "summary": "one sentence: what happened",
-      "item_ids": [<ids EXACTLY as printed in INPUT ITEMS — never invent or guess ids>],
+      "item_ids": [<the [id=KEY] codes EXACTLY as printed in INPUT ITEMS, as strings — never invent, guess, or alter a key>],
       "matched_tags": [{{"name": "<exactly as listed above>", "level": "<its listed level>"}}],
       "matched_memory": ["<exactly as listed above>"],
       "matched_dormant": ["<exactly as listed in FORMERLY-TRACKED — usually empty>"],

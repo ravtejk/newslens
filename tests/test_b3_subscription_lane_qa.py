@@ -183,7 +183,8 @@ def _http_tripwire(monkeypatch):
 
 
 _RANK_CLUSTERS = {"clusters": [{"story_title": "T", "summary": "S",
-                                "item_ids": [1], "matched_tags": [],
+                                "item_ids": [ranking.encode_rank_key(1)],  # NL-70: keys-only model output
+                                "matched_tags": [],
                                 "matched_memory": [], "world_impact": 5,
                                 "world_impact_reason": "r"}]}
 
@@ -1297,7 +1298,7 @@ def test_run_rank_fall_is_disclosed_and_the_persisted_row_is_labeled(
     from conftest import anthropic_envelope
     ranked = {"clusters": [{
         "story_title": "Tagged story", "summary": "Matched your tags.",
-        "item_ids": [1],
+        "item_ids": [ranking.encode_rank_key(1)],  # NL-70: keys-only model output
         "matched_tags": [{"name": "AI regulation", "level": "topic"}],
         "matched_memory": [], "world_impact": 5,
         "world_impact_reason": "Sector-wide effect"}]}
@@ -1484,7 +1485,7 @@ def _d7_flap_run(migrated_con, tmp_path, monkeypatch, armed: bool):
     http = _http_tripwire(monkeypatch)
     ranked = {"clusters": [{
         "story_title": "Tagged story", "summary": "Matched your tags.",
-        "item_ids": [1],
+        "item_ids": [ranking.encode_rank_key(1)],  # NL-70: keys-only model output
         "matched_tags": [{"name": "AI regulation", "level": "topic"}],
         "matched_memory": [], "world_impact": 5,
         "world_impact_reason": "Sector-wide effect"}]}
@@ -1575,7 +1576,7 @@ def test_run_rank_persisted_token_cost_is_charged_honest_on_subscription(
         interests_broad=["economy"], interests_granular=["AI regulation"])
     ranked = {"clusters": [{
         "story_title": "Tagged story", "summary": "Matched your tags.",
-        "item_ids": [1],
+        "item_ids": [ranking.encode_rank_key(1)],  # NL-70: keys-only model output
         "matched_tags": [{"name": "AI regulation", "level": "topic"}],
         "matched_memory": [], "world_impact": 5,
         "world_impact_reason": "Sector-wide effect"}]}

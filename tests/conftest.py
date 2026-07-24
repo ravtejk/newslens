@@ -74,6 +74,29 @@ def _default_stub_claude() -> Path:
 _STUB_CLAUDE_BIN = _default_stub_claude()
 
 
+def rank_keys(content):
+    """NL-70 re-key: a real rank seat emits bracketed [id=KEY] Crockford codes,
+    not raw ints (ranking.decode_keys now REJECTS bare JSON-number ints — that was
+    the silent in-vocab channel QA F1 closed). Mocked rank output is authored with
+    readable int item_ids for legibility; this renders each into the KEY the model
+    would actually emit, so the fixture decodes back through decode_keys to the same
+    int. Ints only (bool/negative/non-int pass through untouched, so a test that
+    deliberately sends a malformed value still exercises the reject path). Returns a
+    COPY — the caller's payload dict is never mutated. Non-rank content (a narrative
+    string, a dict without a `clusters` list) passes straight through."""
+    from newslens import ranking
+    if not isinstance(content, dict) or not isinstance(content.get("clusters"), list):
+        return content
+    out = dict(content)
+    out["clusters"] = [
+        {**c, "item_ids": [ranking.encode_rank_key(x) if type(x) is int and x >= 0 else x
+                           for x in c["item_ids"]]}
+        if isinstance(c, dict) and isinstance(c.get("item_ids"), list) else c
+        for c in content["clusters"]
+    ]
+    return out
+
+
 def anthropic_envelope(content, input_tokens: int = 1000, output_tokens: int = 200,
                        stop_reason: str = "end_turn", cache_creation: int = 0,
                        cache_read: int = 0) -> bytes:
@@ -81,7 +104,11 @@ def anthropic_envelope(content, input_tokens: int = 1000, output_tokens: int = 2
     twin of each test-file's OpenAI-shaped `envelope()`. `content` is the text
     (a JSON string for json_mode seats, a plain string otherwise; a dict/list is
     json.dumps'd for convenience). stop_reason 'max_tokens' is what the provider
-    maps to finish_reason 'length' (the truncation-guard trigger)."""
+    maps to finish_reason 'length' (the truncation-guard trigger).
+
+    NL-70: a rank-cluster dict is re-keyed (int item_ids -> [id=KEY] codes) so the
+    fake body carries keys-only model output, exactly as a live Haiku would."""
+    content = rank_keys(content)
     text = json.dumps(content) if isinstance(content, (dict, list)) else str(content)
     return json.dumps({
         "id": "msg_qa", "type": "message", "role": "assistant",

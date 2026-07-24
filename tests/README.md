@@ -705,3 +705,14 @@ superseded — the glance section is REMOVED (rework backlogged NL-20; pinned
 by `test_glance_section_is_gone`). The dirty-guard's value-diff rationale
 still holds under the combobox (a suggestion PICK commits without keystrokes,
 exactly as a datalist selection did).
+
+## NL-70 (2026-07-24): rank ids render as short keys
+
+Rank-prompt item ids now render as `[id=KEY]` — Crockford base32 with a mod-37
+check symbol — and `decode_keys()` (ranking.py) translates model output back to
+canonical ints BEFORE `validate_payload`; bare ints (and bools/floats) in
+`item_ids` are decode-time rejects that ride the corrected retry. Fixtures build
+keyed responses via `conftest.rank_keys(content)`. NOTE: §5.9 item 4's "the only
+[id= tokens in the prompt are the real keys" claim is decimal-era — the prompt
+now carries prose format examples, and the invariant is line-start-scoped per
+`test_gatefix4_hostile_bracketed_title_cannot_mint_id_tokens`.

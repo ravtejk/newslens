@@ -76,8 +76,13 @@ TAGS = {"AI regulation": "topic"}
 
 
 def cluster(ids, title="A story"):
+    # NL-70: emit [id=KEY] Crockford codes, the keys-only output a live rank seat
+    # produces (decode_keys now rejects bare JSON-number ints). Guarded so a
+    # non-int / already-key value passes through untouched (no double-encode).
     return {
-        "story_title": title, "summary": "What happened.", "item_ids": list(ids),
+        "story_title": title, "summary": "What happened.",
+        "item_ids": [ranking.encode_rank_key(i) if type(i) is int and i >= 0 else i
+                     for i in ids],
         "matched_tags": [], "matched_memory": [],
         "world_impact": 5, "world_impact_reason": "Because it matters.",
     }

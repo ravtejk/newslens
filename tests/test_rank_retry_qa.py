@@ -181,7 +181,7 @@ def test_correction_text_only_tightens_compliance():
     text = ranking.RETRY_CORRECTION
     # demands present
     assert "copied verbatim" in text
-    assert "[id=N]" in text
+    assert "[id=KEY]" in text                         # NL-70: the alphanumeric key format
     assert "Do NOT invent" in text
     assert "EXACTLY" in text
     assert "leave that item out" in text          # honest fallback is omission

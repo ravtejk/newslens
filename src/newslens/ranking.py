@@ -285,6 +285,151 @@ def active_memory_topics(con: sqlite3.Connection) -> List[str]:
     return memory.active_context(con)
 
 
+# ---------------------------------------------------------------------------
+# NL-70: the rank-id short key (Crockford base32 render alias + check symbol)
+# ---------------------------------------------------------------------------
+# The ranking pass shows the model ~550 candidate lines keyed `[id=KEY]`. Raw
+# 4-digit DB ids sit at the model's token-copy edge and 5 digits worsen the
+# slip rate (NL-70). Instead of the raw int we render a per-run PRESENTATION
+# ALIAS: the canonical id encoded as Crockford base32 with a trailing mod-37
+# check symbol (7714 -> "7H2" + check "J" -> "7H2J"). Two properties this buys:
+#   * shorter than the decimal id at every scale (7714 -> "7H2J", 4 chars),
+#     without densifying the id space (the SPARSE-ID LAW still holds — these are
+#     the raw ids, just re-radixed, so a fabricated id still lands OUTSIDE the
+#     real set and hard-rejects at the isinstance-int / unknown-id guard in
+#     validate_payload);
+#   * a single mis-copied symbol changes the decoded value, whose check symbol no
+#     longer matches the copied one, so the key fails to decode LOUDLY instead of
+#     silently landing on a real NEIGHBOURING id — the run-30 in-vocab-slip class
+#     that decimal ids leave undefended (adjacency is real: 8355 -> "853Y",
+#     8356 -> "854Z", so the check symbol is doing the work, not the radix).
+# The DB id stays canonical; nothing is stored as base32. decode_keys() is the
+# ONLY place the model's string keys are turned back into ints, and it runs
+# BEFORE validate_payload so the isinstance-int guard keeps operating on ints,
+# untouched. It accepts KEYS ONLY — a bare JSON-number int bypasses the check
+# symbol entirely (that is QA F1's silent in-vocab channel), so it is rejected
+# here. A decode/check failure raises ValueError, which rides the EXISTING
+# corrected-retry except in call_llm_validated — same class as an invented-id
+# reject, never a silent pass.
+_RANKKEY_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32 (no I,L,O,U)
+_RANKKEY_CHECK_EXTRA = "*~$=U"                          # check-only symbols for 32..36
+_RANKKEY_CHECK_ALPHABET = _RANKKEY_ALPHABET + _RANKKEY_CHECK_EXTRA  # 37 symbols
+
+
+def _build_rankkey_decoders() -> Tuple[Dict[str, int], Dict[str, int]]:
+    """Decode tables: case-insensitive, folding the Crockford confusables
+    (I/L -> 1, O -> 0). The check table additionally accepts the 5 check-only
+    symbols (values 32..36); the body table does NOT (a U/*/~/$/= in the body is
+    an invalid symbol)."""
+    body: Dict[str, int] = {}
+    for i, ch in enumerate(_RANKKEY_ALPHABET):
+        body[ch] = i
+        body[ch.lower()] = i
+    for bad, val in (("I", 1), ("L", 1), ("O", 0)):
+        body[bad] = val
+        body[bad.lower()] = val
+    check = dict(body)
+    for i, ch in enumerate(_RANKKEY_CHECK_EXTRA, start=32):
+        check[ch] = i
+        check[ch.lower()] = i
+    return body, check
+
+
+_RANKKEY_DECODE, _RANKKEY_CHECK_DECODE = _build_rankkey_decoders()
+
+
+def encode_rank_key(n: int) -> str:
+    """Canonical DB id -> its per-run `[id=KEY]` alias: Crockford base32 body +
+    trailing mod-37 check symbol. Presentation only; the exact inverse is
+    decode_rank_key. Reference parity (build contract §1): 7714 -> "7H2J",
+    99999 -> "31MZS", 1000000 -> "YGJ01"."""
+    if n < 0:
+        raise ValueError(f"rank id must be non-negative, got {n!r}")
+    if n == 0:
+        body = "0"
+    else:
+        syms: List[str] = []
+        m = n
+        while m > 0:
+            syms.append(_RANKKEY_ALPHABET[m % 32])
+            m //= 32
+        body = "".join(reversed(syms))
+    return body + _RANKKEY_CHECK_ALPHABET[n % 37]
+
+
+def decode_rank_key(key: str) -> int:
+    """`[id=KEY]` alias -> canonical int id (exact inverse of encode_rank_key).
+    Case-insensitive; folds the I/L->1, O->0 confusables. Raises ValueError —
+    which rides the corrected-retry path — on a malformed body OR a check-symbol
+    mismatch. The mismatch case is the single-symbol-slip defense: a slipped body
+    decodes to a DIFFERENT int whose checksum no longer matches the copied
+    symbol, so a neighbouring-id slip is caught before the vocab lookup."""
+    if not isinstance(key, str):
+        raise ValueError(f"item_id key must be a string, got {type(key).__name__}")
+    s = key.strip()
+    if len(s) < 2:
+        raise ValueError(f"item_id key {key!r} too short to carry a check symbol")
+    body, chk = s[:-1], s[-1]
+    n = 0
+    for ch in body:
+        if ch not in _RANKKEY_DECODE:
+            raise ValueError(f"item_id key {key!r} has invalid symbol {ch!r}")
+        n = n * 32 + _RANKKEY_DECODE[ch]
+    if chk not in _RANKKEY_CHECK_DECODE:
+        raise ValueError(f"item_id key {key!r} has invalid check symbol {chk!r}")
+    if _RANKKEY_CHECK_DECODE[chk] != n % 37:
+        raise ValueError(f"item_id key {key!r} failed its check symbol (a mis-copied id)")
+    return n
+
+
+def decode_keys(payload: object) -> object:
+    """Rewrite the model's `[id=KEY]` string codes back to canonical int ids
+    BEFORE validate_payload sees the payload (twin of repair_duplicate_ids).
+    This is the ONLY seam that turns keys back into ints, so validate_payload's
+    isinstance-int guard and its closed-vocab (unknown-id) check stay UNTOUCHED
+    and keep operating on ints.
+
+    KEYS ONLY. Post-NL-70, honest model output is bracketed [id=KEY] strings —
+    the prompt and the corrected-retry text both say so. Every item_id element
+    must therefore be a decodable string key; ANYTHING ELSE — a bare JSON-number
+    int, a JSON boolean, a float — is a decode FAILURE that raises ValueError and
+    rides the corrected-retry path (same class as an invented-id reject), never a
+    silent pass. A string key fails the same way on a bad Crockford format OR a
+    check-symbol mismatch (the run-30 neighbour-slip defense).
+
+    Why bare ints must NOT pass through (QA F1, fix loop 1): a JSON-number int
+    never reaches the check symbol, so an in-window fabrication like 8500 against
+    a {8355..8904} window would validate SILENTLY — the exact run-30 in-vocab
+    class the check symbol exists to catch. Rejecting bare ints keeps the check
+    symbol on the only path in. This also closes the JSON-boolean hole (bool is an
+    int subclass that would otherwise satisfy validate_payload's isinstance-int
+    check and ride the guard).
+
+    No stored-int payload can re-enter here: validate_payload has exactly ONE call
+    site (the decode chain in _call_llm_validated below), so decode_keys runs once,
+    on raw model output only — canonical DB ints never round-trip through it.
+    Shape errors (item_ids not a list, etc.) are left for validate_payload to name."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("clusters"), list):
+        return payload
+    bad: List[str] = []
+    pending: List[Tuple[Dict, List]] = []
+    for c in payload["clusters"]:
+        if not isinstance(c, dict) or not isinstance(c.get("item_ids"), list):
+            continue  # not this seam's class — validate_payload names the shape error
+        decoded: List[int] = []
+        for x in c["item_ids"]:
+            try:
+                decoded.append(decode_rank_key(x))  # rejects non-str (int/bool/float) too
+            except ValueError as exc:
+                bad.append(str(exc))
+        pending.append((c, decoded))
+    if bad:
+        raise ValueError("unresolvable item_id key(s): " + "; ".join(bad))
+    for c, decoded in pending:
+        c["item_ids"] = decoded
+    return payload
+
+
 def build_prompt(
     date_local: str,
     items: List[sqlite3.Row],
@@ -310,8 +455,11 @@ def build_prompt(
     # 28's fabricated lattice (383-613) INSIDE the vocabulary and silently
     # mis-attributed every cluster. Detection property pinned by
     # test_run28_fabrication_lands_outside_the_real_vocabulary.
+    # NL-70: the key is the Crockford base32 render alias of the raw id (see
+    # encode_rank_key above), not the decimal id — shorter and check-guarded,
+    # while the raw id below stays the canonical thing decode_keys returns.
     items_block = "\n".join(
-        f"[id={r['id']}] {r['outlet']} | "
+        f"[id={encode_rank_key(r['id'])}] {r['outlet']} | "
         + r["title"].replace("[", "(").replace("]", ")")
         for r in sorted(items, key=lambda r: r["id"])
     )
@@ -611,10 +759,11 @@ def repair_duplicate_ids(payload: object) -> Tuple[object, Dict]:
 RETRY_CORRECTION = (
     "CORRECTION — your previous response was rejected as invalid, most likely "
     "for one of these hard rules:\n"
-    "1. Every item_id MUST be copied verbatim from an [id=N] bracket in the "
-    "INPUT ITEMS list above. Do NOT invent, guess, renumber, or generate ids, "
-    "and never emit an evenly-spaced or made-up sequence of numbers; if you are "
-    "unsure of an item's id, leave that item out. Numbers inside titles are "
+    "1. Every item_id MUST be the short alphanumeric [id=KEY] code copied "
+    "verbatim from an INPUT ITEMS line above — every character, letters and "
+    "digits both, as a JSON string. Do NOT invent, guess, renumber, shorten, or "
+    "generate keys, and never emit an evenly-spaced or made-up sequence; if you "
+    "are unsure of an item's key, leave that item out. Numbers inside titles are "
     "never ids.\n"
     "2. matched_tags / matched_memory / matched_dormant entries must be copied "
     "EXACTLY from the provided lists (tags with their listed level), or left "
@@ -732,6 +881,11 @@ def _call_llm_validated(
                 )
             content = choice["message"]["content"]
             payload = json.loads(content)
+            # NL-70: decode the model's [id=KEY] string codes back to canonical
+            # ints BEFORE anything downstream (repair, then validate) — a
+            # decode/check failure raises ValueError and rides the corrected-retry
+            # path below, same class as an invented-id reject.
+            payload = decode_keys(payload)
             payload, repair_info = repair_duplicate_ids(payload)
             shape_notes: List[str] = []
             clusters = validate_payload(

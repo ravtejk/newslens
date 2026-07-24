@@ -291,7 +291,8 @@ def test_rank_cost_sink_gains_lane_and_shadow_keys(monkeypatch):
     good = {
         "choices": [{"message": {"content": json.dumps(
             {"clusters": [{"story_title": "T", "summary": "S",
-                           "item_ids": [1], "matched_tags": [],
+                           "item_ids": [ranking.encode_rank_key(1)],  # NL-70: keys-only model output
+                           "matched_tags": [],
                            "matched_memory": [], "world_impact": 5,
                            "world_impact_reason": "r"}]})},
             "finish_reason": "stop"}],
