@@ -1927,11 +1927,12 @@ def protect_facts_lost(protect_facts, edited_payload: Dict,
     (iso_date, subject_units) drawn from the DRAFT's PROTECT tags. Returns the
     facts NO LONGER present in `edited_payload`.
 
-    A9 protection unit = the (date + subject) FACT BY PRESENCE. Reword-tolerant:
-    the date matches in ANY form (Jul 9 / July 9 / 2026-07-09, via _dates_in);
-    a subject unit matches by substring (mirrors has_predating_antecedent's
-    membership test), so 'blockade' survives inside 'blockades' and across a
-    move to another field.
+    A9 protection unit = the (date + subject) FACT BY PRESENCE. Reword-tolerant
+    on dates: the date matches in ANY form (Jul 9 / July 9 / 2026-07-09, via
+    _dates_in). A subject unit matches by WHOLE TOKEN against the edited
+    payload's salient token set (F1, gate 2026-07-21 — inline comment below):
+    it survives a move to another field, but 'blockade' does NOT survive as
+    only 'blockades' — the pinned, direction-safe over-fire.
 
     A fact is LOST iff its date is gone OR every subject unit is gone — because
     the dated callback is destroyed by removing EITHER constituent (Eng
