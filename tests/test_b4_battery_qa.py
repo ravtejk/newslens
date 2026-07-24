@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -71,7 +72,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import anthropic_envelope
+from conftest import anthropic_envelope, anthropic_sse_bytes
 from test_generate import A_DAY, seed_briefing, slot, stories_payload
 
 from newslens import analysis, battery, config, db, generate, llm, memory_core, paths, ranking
@@ -86,9 +87,32 @@ PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
 class _Resp:
     def __init__(self, b: bytes):
         self._b = b
+        # NL-93: the LONG-call seats (writer 16k, analyst 6k) now stream — serve
+        # the SAME reply bytes as an SSE event stream via readline. The bytes are
+        # re-parsed to a payload dict for a faithful serialisation; a non-anthropic
+        # or non-JSON reply (an openai-shaped canned dict a routing test uses, or a
+        # short seat that never reads via readline) yields a minimal valid stream.
+        try:
+            payload = json.loads(b)
+        except (ValueError, TypeError):
+            payload = {}
+        self._sse = io.BytesIO(
+            anthropic_sse_bytes(payload if isinstance(payload, dict) else {}))
 
-    def read(self):
+    def read(self, *a):
         return self._b
+
+    def readline(self, *a):
+        return self._sse.readline()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
 
     def __enter__(self):
         return self

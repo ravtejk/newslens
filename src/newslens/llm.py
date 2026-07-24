@@ -503,6 +503,45 @@ _STOP_REASON_MAP = {
     "max_tokens": "length", "tool_use": "tool_calls", "refusal": "content_filter",
 }
 
+# NL-93: SSE streaming for the api lane's LONG-output calls. The non-streaming
+# /v1/messages POST held one blocking socket read for the whole generation, so
+# the xhigh writer (adaptive thinking + 16k max_tokens) sat minutes with zero
+# response bytes and the server closed the idle connection -> RemoteDisconnected
+# (reproduced 3/3 arms x retries, sandboxed AND unsandboxed, 2026-07-24; short
+# calls fine). Streaming ("stream": true) keeps the connection fed with SSE text
+# deltas + periodic pings so it never idle-dies, and — because each readline is
+# its own socket op — it turns cfg.timeout_s from a TOTAL wall-time cap into a
+# per-read INTER-EVENT idle bound (see _anthropic_provider).
+#
+# TRIGGER = the per-call max_tokens BUDGET (not the seat's thinking flag).
+# Thinking tokens BILL AS OUTPUT and count against max_tokens (SEATS notes), so
+# the token budget bounds the whole call's wall time: a large-budget call (the
+# writer 16k, the analyst 6k) can run minutes and must stream; a small-budget
+# call — including a thinking seat asked for only a few hundred tokens — finishes
+# in a beat and is safe (and proven) on the blocking json.load path. Keying on
+# the budget (not `cfg.thinking`) is therefore both the failure-aligned predictor
+# AND what keeps every cheap short call byte-identical.
+#
+# The bar sits BELOW the analyst's real budget (ANALYSIS_MAX_TOKENS=6000) and
+# ABOVE the editor's (EDITOR_MAX_TOKENS=4600) — llm is a leaf (no import of
+# generate/analysis, by design), so the coupling is documented here, not
+# referenced. RESIDUAL: trimming ANALYSIS_MAX_TOKENS below this bar would
+# silently drop the analyst off streaming — keep the bar under the analyst budget.
+_STREAM_MIN_MAX_TOKENS = 5000
+
+
+def _should_stream(cfg: SeatConfig, max_tokens: int) -> bool:
+    """Stream the LONG-call class only (NL-93 constraint 4): a per-call max_tokens
+    budget at/above _STREAM_MIN_MAX_TOKENS. Real writer (16000) and analyst (6000)
+    calls stream; every current short/medium api call (editor 4600, rank/script
+    3000, state 400, follow_altitude 400, and any cheap small-budget probe) stays
+    below the bar, so its request bytes (no `stream` key) and its blocking
+    json.load transport are UNCHANGED — its pinned tests do not move, and the
+    latency-sensitive interactive follow_altitude path keeps its exact
+    non-streaming semantics. `cfg` is accepted for forward flexibility (a future
+    seat-specific rule) but the budget alone decides today."""
+    return max_tokens >= _STREAM_MIN_MAX_TOKENS
+
 
 def _anthropic_credential() -> str:
     """The Claude API lane OWNS its own credential (ADR-0014 §4): it reads
@@ -566,6 +605,159 @@ def _openai_shaped(usage: Usage, content: str, finish: Optional[str],
     }
 
 
+def _iter_sse_events(resp):
+    """Yield each parsed SSE event dict from a streaming /v1/messages response
+    (NL-93). Line-delimited SSE: `event:`/`data:` frames separated by a blank
+    line; dispatch is off the data JSON's own `type` field (robust to which line
+    named the event).
+
+    FAIL-LOUD, exact exception classes (NL-93 constraint 3). A socket read error
+    mid-stream (timeout / connection reset / RemoteDisconnected) propagates
+    UNCHANGED from resp.readline — it is a transport error and the callers
+    classify it exactly as today (their `except Exception` transport arm, retry
+    the original bytes). A malformed `data:` JSON frame is re-raised as
+    ConnectionError — NEVER a bare json.JSONDecodeError: JSONDecodeError IS a
+    ValueError, and the callers route the ValueError family to the CORRECTED-
+    RETRY arm, so a stream corruption surfacing as ValueError would be misrouted.
+    ConnectionError (an OSError subclass, the RemoteDisconnected family) lands in
+    the transport arm, matching the class the non-streaming path already raised."""
+    data_lines = []
+    while True:
+        raw = resp.readline()              # transport errors propagate untouched
+        if not raw:                        # EOF (b"") — no terminator left
+            break
+        line = raw.decode("utf-8", "replace").rstrip("\r\n")
+        if line == "":                     # blank line == event boundary
+            if data_lines:
+                payload = "\n".join(data_lines)
+                data_lines = []
+                try:
+                    yield json.loads(payload)
+                except ValueError as exc:  # json.JSONDecodeError <: ValueError
+                    raise ConnectionError(
+                        f"malformed SSE data frame from /v1/messages: {exc}"
+                    ) from exc
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[len("data:"):].lstrip(" "))
+        # event: / id: / retry: / ':' comment lines carry no payload -> ignored
+
+
+def _accumulate_sse(resp) -> Dict:
+    """Consume the SSE event stream and rebuild the SAME native /v1/messages dict
+    the non-streaming path returns from json.load(resp) — so _anthropic_content,
+    _anthropic_usage and _anthropic_finish_reason (and the whole downstream
+    validation + cost + retry surface) run UNCHANGED (NL-93 constraint 2: cost
+    must not move by a token, stop_reason 'max_tokens' must still map to
+    'length').
+
+    Reconstruction from the event grammar:
+      * message_start.message seeds id/model/role and the BASE usage
+        (input_tokens + cache_read/creation; output_tokens is the small initial
+        count, overwritten below).
+      * content_block_start/delta accumulate per index into text/thinking blocks.
+        Only text blocks become `content` text (thinking blocks are preserved in
+        the array but _anthropic_content already skips them, as it does for the
+        non-streaming thinking blocks — no thinking token leaks into content).
+      * message_delta carries the FINAL cumulative usage.output_tokens and the
+        terminal stop_reason.
+      * message_stop terminates the stream.
+
+    NO SILENT PARTIALS (constraint 3): a stream that ends (EOF) without a
+    message_stop, or an in-band `error` event, raises ConnectionError (a
+    transport class) — never a truncated-but-returned text."""
+    message = None
+    blocks: Dict[int, Dict] = {}
+    stop_reason = None
+    final_usage = None
+    saw_stop = False
+    for evt in _iter_sse_events(resp):
+        # F1 (gate): the per-event dispatch is wrapped so a malformed frame that
+        # trips a TypeError (a delta whose "text" is a non-string, a block whose
+        # "index" is an unorderable type, …) surfaces as a TRANSPORT class — never
+        # a bare TypeError, which is in the callers' corrected-retry tuple and
+        # would misroute a stream corruption to the model-correction arm. The
+        # readline/iterator itself is NOT wrapped (it stays outside this try), so
+        # a socket.timeout / RemoteDisconnected mid-stream still propagates its own
+        # transport class unchanged (the propagation pins hold).
+        try:
+            etype = evt.get("type") if isinstance(evt, dict) else None
+            if etype == "message_start":
+                message = evt.get("message") or {}
+            elif etype == "content_block_start":
+                idx = evt.get("index", 0)
+                cb = evt.get("content_block") or {}
+                blk = blocks.setdefault(idx, {"type": None, "text": "", "thinking": ""})
+                blk["type"] = cb.get("type") or blk["type"]
+                if cb.get("type") == "text":
+                    blk["text"] += cb.get("text", "") or ""
+                elif cb.get("type") == "thinking":
+                    blk["thinking"] += cb.get("thinking", "") or ""
+            elif etype == "content_block_delta":
+                idx = evt.get("index", 0)
+                d = evt.get("delta") or {}
+                blk = blocks.setdefault(idx, {"type": None, "text": "", "thinking": ""})
+                dt = d.get("type") if isinstance(d, dict) else None
+                if dt == "text_delta":
+                    blk["text"] += d.get("text", "") or ""
+                    blk["type"] = blk["type"] or "text"
+                elif dt == "thinking_delta":
+                    blk["thinking"] += d.get("thinking", "") or ""
+                    blk["type"] = blk["type"] or "thinking"
+                # signature_delta / input_json_delta carry no assistant text -> ignored
+            elif etype == "message_delta":
+                d = evt.get("delta") or {}
+                if isinstance(d, dict) and d.get("stop_reason") is not None:
+                    stop_reason = d.get("stop_reason")
+                u = evt.get("usage")
+                if isinstance(u, dict):
+                    final_usage = u            # cumulative final output_tokens
+            elif etype == "message_stop":
+                saw_stop = True
+                break
+            elif etype == "error":
+                err = (evt.get("error") or {}) if isinstance(evt, dict) else {}
+                raise ConnectionError(
+                    "Anthropic streamed an error event "
+                    f"({err.get('type')}: {err.get('message')})"
+                )
+            # ping / content_block_stop / unknown -> ignored
+        except TypeError as exc:
+            raise ConnectionError(
+                f"malformed SSE event (bad field type): {exc}"
+            ) from exc
+    if not saw_stop:
+        raise ConnectionError(
+            "Anthropic SSE stream ended without a message_stop event — "
+            "incomplete response (transport failure, no partial returned)"
+        )
+    # F1 (gate): the reconstruction is wrapped for the SAME reason — e.g.
+    # sorted(blocks) over mixed-type indices is a TypeError that must be a
+    # transport class, not a corrected-retry misroute.
+    try:
+        native: Dict = dict(message) if isinstance(message, dict) else {}
+        content = []
+        for idx in sorted(blocks):
+            blk = blocks[idx]
+            if blk.get("type") == "text":
+                content.append({"type": "text", "text": blk.get("text", "")})
+            elif blk.get("type") == "thinking":
+                content.append({"type": "thinking", "thinking": blk.get("thinking", "")})
+        native["content"] = content
+        if stop_reason is not None:
+            native["stop_reason"] = stop_reason
+        usage = dict(native.get("usage") or {})
+        if isinstance(final_usage, dict):
+            usage.update(final_usage)      # output_tokens (+ any keys the delta reports)
+        native["usage"] = usage
+        return native
+    except TypeError as exc:
+        raise ConnectionError(
+            "malformed SSE stream (reconstruction failed on a bad field type): "
+            f"{exc}"
+        ) from exc
+
+
 def _anthropic_provider(req: LaneRequest) -> LaneResponse:
     """Claude API lane transport: a raw urllib POST to /v1/messages. The lane
     reads its OWN endpoint (ANTHROPIC_MESSAGES_URL) and IGNORES req.url — the
@@ -573,6 +765,13 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
     Headers: x-api-key (the lane's own credential) + anthropic-version +
     content-type. max_tokens is REQUIRED by the Messages API. thinking/effort
     are sent only when the seat sets them (the Haiku seats leave both None).
+
+    NL-93: the LONG-call class (writer/analyst — see _should_stream) POSTs with
+    "stream": true and the SSE event deltas are accumulated by _accumulate_sse
+    into the SAME native dict json.load would return, so everything below the
+    read (content extraction, json_mode cleanup, usage, finish_reason, the
+    synthesised .raw) is transport-agnostic. Short/medium seats keep the exact
+    non-streaming json.load path.
 
     urllib is referenced through the `urllib.request` module (not a bound
     import) so the suite's `monkeypatch.setattr(urllib.request, "urlopen", …)`
@@ -607,6 +806,13 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
         body["thinking"] = {"type": cfg.thinking}
     if cfg.effort:                             # None on the Haiku seats -> omitted
         body["output_config"] = {"effort": cfg.effort}
+    # NL-93: stream the LONG-call class (writer/analyst; see _should_stream) so a
+    # minutes-long generation never idle-dies (RemoteDisconnected). `stream` is
+    # added LAST and only on this path, so the non-streaming request bytes (the
+    # short seats) are byte-unchanged and their pinned body tests do not move.
+    stream = _should_stream(cfg, req.max_tokens)
+    if stream:
+        body["stream"] = True
     request = urllib.request.Request(
         ANTHROPIC_MESSAGES_URL,
         data=json.dumps(body).encode("utf-8"),
@@ -617,8 +823,16 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
             "User-Agent": req.user_agent,
         },
     )
+    # TIMEOUT SEMANTICS (NL-93 constraint 5). urlopen's `timeout` is the socket
+    # timeout; on the NON-streaming path it bounds the one blocking read (total
+    # wall time, as today). On the STREAMING path each _accumulate_sse readline
+    # is its own socket op, so the SAME cfg.timeout_s becomes the connect +
+    # per-read INTER-EVENT IDLE bound — a healthy long stream that keeps emitting
+    # deltas/pings is never killed by a total-wall cap (that was the failure),
+    # only a genuine stall past timeout_s raises socket.timeout (transport-shaped,
+    # retried like any 5xx). timeout_sub_s is subscription-lane and out of scope.
     with urllib.request.urlopen(request, timeout=cfg.timeout_s) as resp:
-        native = json.load(resp)
+        native = _accumulate_sse(resp) if stream else json.load(resp)
     content = _anthropic_content(native)
     # DEF-A′ (2026-07-17, field-charged): apply the SAME json_mode extraction on
     # the api lane. First scoped subscription-only on the theory the api lane's

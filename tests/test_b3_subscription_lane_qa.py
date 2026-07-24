@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+import io
 import json
 import os
 import stat
@@ -81,6 +82,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import anthropic_sse_bytes
 from newslens import doctor, generate, llm, memory_core, paths, ranking
 from test_generate import (A_DAY, ENV, compliant_script, run, seed_briefing,
                            slot, stories_payload)
@@ -763,11 +765,25 @@ def _generate_harness(monkeypatch, con, editor_inp, editor_out=200):
     narrative = stories_payload(slots)
 
     class _R:
-        def __init__(self, b):
-            self._b = b
+        def __init__(self, payload):
+            self._b = json.dumps(payload).encode()
+            # NL-93: the narrative (writer, 16k) streams — dual-mode fake.
+            self._sse = io.BytesIO(anthropic_sse_bytes(payload))
 
-        def read(self):
+        def read(self, *a):
             return self._b
+
+        def readline(self, *a):
+            return self._sse.readline()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            line = self.readline()
+            if not line:
+                raise StopIteration
+            return line
 
         def __enter__(self):
             return self
@@ -777,13 +793,13 @@ def _generate_harness(monkeypatch, con, editor_inp, editor_out=200):
 
     def fake_urlopen(req, timeout=None):
         if req.full_url == llm.ANTHROPIC_MESSAGES_URL:
-            return _R(json.dumps({
+            return _R({
                 "id": "msg_h", "type": "message", "role": "assistant",
                 "model": "claude-opus-4-8",
                 "content": [{"type": "text", "text": json.dumps(narrative)}],
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 900, "output_tokens": 200},
-            }).encode())
+            })
         raise OSError("offline: only the narrative wire is scripted")
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -1102,9 +1118,24 @@ def _ant(content, inp=1000, out=200):
 class _RResp:
     def __init__(self, payload):
         self._b = json.dumps(payload).encode()
+        # NL-93: the narrative (writer, 16k) now streams — serve the SAME payload
+        # as SSE via readline too. Haiku editor/script (< 5k) still use read().
+        self._sse = io.BytesIO(anthropic_sse_bytes(payload))
 
-    def read(self):
+    def read(self, *a):
         return self._b
+
+    def readline(self, *a):
+        return self._sse.readline()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
 
     def __enter__(self):
         return self

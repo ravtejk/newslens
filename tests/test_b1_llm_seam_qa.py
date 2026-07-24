@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import io
 import json
 import os
 import sys
@@ -53,6 +54,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import anthropic_sse_bytes
 from newslens import analysis, doctor, generate, llm, ranking
 
 # ---------------------------------------------------------------------------
@@ -68,9 +70,24 @@ _CANNED = {
 class _Resp:
     def __init__(self, payload):
         self._b = json.dumps(payload).encode()
+        # NL-93: dual-mode — a LONG-call seat (writer/analyst) now streams and
+        # reads via readline; short seats keep read()/json.load. Same payload.
+        self._sse = io.BytesIO(anthropic_sse_bytes(payload))
 
-    def read(self):
+    def read(self, *a):
         return self._b
+
+    def readline(self, *a):
+        return self._sse.readline()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
 
     def __enter__(self):
         return self
@@ -213,6 +230,9 @@ def test_analysis_request_bytes_identical_and_historical_url(monkeypatch):
     # effort high, ANALYSIS_MAX_TOKENS = 6000 on the wire.
     # item C (2026-07-17): analyst defaults to subscription — pin the api
     # fall-over to keep its exact bytes pinned.
+    # NL-93 (2026-07-24): the analyst's 6000-token budget is at/above the
+    # streaming bar, so the api-lane body now carries "stream": true (added LAST,
+    # so every other byte is unchanged). The rest of the shape is byte-identical.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     monkeypatch.setenv("NEWSLENS_LANE_ANALYST", "api")
     seen = _capture(monkeypatch)
@@ -224,6 +244,7 @@ def test_analysis_request_bytes_identical_and_historical_url(monkeypatch):
         "system": llm._ANTHROPIC_JSON_SYSTEM,
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": "high"},
+        "stream": True,
     }).encode("utf-8")
     assert seen["data"] == expected
     assert b"temperature" not in seen["data"]

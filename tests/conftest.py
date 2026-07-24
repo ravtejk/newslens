@@ -120,6 +120,59 @@ def anthropic_envelope(content, input_tokens: int = 1000, output_tokens: int = 2
                   "cache_read_input_tokens": cache_read},
     }).encode("utf-8")
 
+
+def anthropic_sse_bytes(payload: dict) -> bytes:
+    """NL-93: serialise a non-streaming /v1/messages payload dict into the SSE
+    event stream the LONG-call seats (writer/analyst) now receive, so a fake
+    urlopen response can serve the SAME content EITHER way. The frames rebuild,
+    through llm._accumulate_sse, the SAME native dict json.load would produce from
+    the non-streaming body: message_start carries input + cache usage (initial
+    output_tokens=1, wire-faithful); each content block is streamed whole;
+    message_delta carries the FINAL cumulative output_tokens + stop_reason;
+    message_stop terminates. A payload that is not anthropic-shaped (e.g. an
+    OpenAI-shaped canned dict a ROUTING test uses, where content/usage are not
+    asserted) yields a minimal valid stream that still completes (message_stop
+    present) so the accumulator never raises its incomplete-stream transport
+    error."""
+    usage = payload.get("usage") or {}
+    out_tokens = usage.get("output_tokens")
+    start_usage = {k: v for k, v in usage.items() if k != "output_tokens"}
+    start_usage["output_tokens"] = 1
+    events = [{
+        "type": "message_start",
+        "message": {
+            "id": payload.get("id", "msg_sse"), "type": "message",
+            "role": "assistant", "model": payload.get("model", "claude"),
+            "content": [], "stop_reason": None, "usage": start_usage,
+        },
+    }]
+    idx = 0
+    for block in (payload.get("content") or []):
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type", "text")
+        key = "thinking" if btype == "thinking" else "text"
+        dtype = "thinking_delta" if btype == "thinking" else "text_delta"
+        events += [
+            {"type": "content_block_start", "index": idx,
+             "content_block": {"type": btype, key: ""}},
+            {"type": "content_block_delta", "index": idx,
+             "delta": {"type": dtype, key: block.get(key, "")}},
+            {"type": "content_block_stop", "index": idx},
+        ]
+        idx += 1
+    delta_usage = {} if out_tokens is None else {"output_tokens": out_tokens}
+    events += [
+        {"type": "message_delta",
+         "delta": {"stop_reason": payload.get("stop_reason") or "end_turn",
+                   "stop_sequence": None},
+         "usage": delta_usage},
+        {"type": "message_stop"},
+    ]
+    frames = "".join(
+        f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+    return frames.encode("utf-8")
+
 # The actual on-disk locations, captured through the guard's backing table
 # (plain dict read — no sanction check, no PEP 562) before any sandboxing.
 _REAL_DATA_DIR = paths._GUARDED["DATA_DIR"]

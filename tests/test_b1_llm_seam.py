@@ -12,11 +12,13 @@ to (DECISIONS.md 2026-07-16).
 
 from __future__ import annotations
 
+import io
 import json
 import urllib.request
 
 import pytest
 
+from conftest import anthropic_sse_bytes
 from newslens import analysis, generate, llm, ranking
 
 
@@ -27,9 +29,25 @@ from newslens import analysis, generate, llm, ranking
 class _Resp:
     def __init__(self, payload):
         self._b = json.dumps(payload).encode()
+        # NL-93: serve the SAME payload as an SSE stream too, so a LONG-call seat
+        # (writer/analyst, which now streams) reads it via readline while short
+        # seats keep read()/json.load — the fake needn't know which path runs.
+        self._sse = io.BytesIO(anthropic_sse_bytes(payload))
 
-    def read(self):
+    def read(self, *a):
         return self._b
+
+    def readline(self, *a):
+        return self._sse.readline()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
 
     def __enter__(self):
         return self
