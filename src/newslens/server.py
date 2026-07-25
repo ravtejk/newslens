@@ -3689,15 +3689,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, 500)
 
     def _with_memory(self, fn) -> Dict:
-        """The CLI verb protocol: sync -> verb -> render-only file write."""
+        """The CLI verb protocol: sync -> verb -> render-only file write.
+
+        NL-81 EMBEDDED DEGRADE (contract §5.2): a stale memory.md does NOT kill
+        the verb — this is a reader mid-session, and refusing their tap over a
+        file they may not even know exists is worse than the disease. The
+        opening sync skipped the import and rewrote nothing; the verb runs on
+        database state, the file rewrite is skipped too (so "neither side
+        mutated" stays true for the file), and the refusal rides back in the
+        JSON response where the client can surface it."""
         con = db.connect()
         try:
             try:
-                memory.sync_memory(con)
+                sync = memory.sync_memory(con)
             except memory.MemorySyncError as exc:
                 return {"ok": False, "error": str(exc)}
             result = fn(con)
-            memory.write_memory_file(con)
+            if not sync.stale_refusal:
+                memory.write_memory_file(con)
+            warnings = sync.guard_lines()
+            if warnings and isinstance(result, dict):
+                result["warnings"] = list(result.get("warnings") or []) + warnings
             return result
         finally:
             con.close()

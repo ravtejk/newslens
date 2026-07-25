@@ -93,6 +93,25 @@ MINIMAL_FILE = """# NewsLens memory
 """
 
 
+def stamped(con, text: str) -> str:
+    """Give a hand-authored memory.md the CURRENT lawful generation stamp
+    (NL-81 §5.2's import precondition).
+
+    Every test in this section pins what a LAWFUL file does to the database —
+    file-wins semantics, annotation round-trips, the gate-fix pins. Since
+    NL-81, "lawful" means the file descends from this database's last render,
+    so the fixture that used to be a bare string is now a bare string plus the
+    stamp the last render would have left. Nothing about what is ASSERTED
+    changed. The guard's own refusal paths — unstamped-and-disagreeing, wrong
+    generation, wrong pairing identity — are pinned in test_nl81_sync_guard.py,
+    where they belong."""
+    return memory.stamp_line(con) + text
+
+
+def minimal(con, line: str) -> str:
+    return stamped(con, MINIMAL_FILE.format(line=line))
+
+
 # --- seeding guard ---------------------------------------------------------------
 
 def test_first_run_seeds_the_14_taxonomy_threads(migrated_con, memfile):
@@ -118,11 +137,17 @@ def test_no_reseed_when_table_has_rows_even_if_file_deleted(migrated_con, memfil
     result = memory.sync_memory(migrated_con)
     assert result.seeded == 0
     assert statuses(migrated_con) == {"Old Thread": "dismissed_user"}
-    assert "(dismissed by you" in memfile.read_text(encoding="utf-8")
+    # NL-81 §5.4: this row was seeded with no provenance (the legacy shape), so
+    # it renders NEUTRAL — we never backfill agency we cannot prove. Asserted
+    # on the LINE, not on the file: the header prose also contains the phrase
+    # "(dismissed by you <date>)", so a substring test over the whole file
+    # passes no matter what the line says.
+    assert [ln for ln in memfile.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("- ")] == ["- Old Thread (dismissed 2026-07-02)"]
 
 
 def test_no_seed_when_file_exists_but_table_is_empty(migrated_con, memfile):
-    memfile.write_text(MINIMAL_FILE.format(line="My Own Topic"), encoding="utf-8")
+    memfile.write_text(minimal(migrated_con, "My Own Topic"), encoding="utf-8")
     result = memory.sync_memory(migrated_con)
     assert result.seeded == 0
     assert result.added == ["My Own Topic"]
@@ -133,7 +158,7 @@ def test_no_seed_when_file_exists_but_table_is_empty(migrated_con, memfile):
 def test_deleted_line_is_dismissal_with_audit_row(migrated_con, memfile):
     add_row(migrated_con, "Keep Me")
     add_row(migrated_con, "Delete Me")
-    memfile.write_text(MINIMAL_FILE.format(line="Keep Me"), encoding="utf-8")
+    memfile.write_text(minimal(migrated_con, "Keep Me"), encoding="utf-8")
     result = memory.sync_memory(migrated_con)
     assert result.dismissed_by_deletion == ["Delete Me"]
     row = migrated_con.execute(
@@ -142,13 +167,18 @@ def test_deleted_line_is_dismissal_with_audit_row(migrated_con, memfile):
     assert row is not None  # audit row kept, never hard-deleted
     assert row["status"] == "dismissed_user"
     assert row["status_changed_at"] is not None
-    assert "(dismissed by you" in memfile.read_text(encoding="utf-8")
+    # NL-81 §5.4: the sync INFERRED this from the file, so the line names the
+    # mechanism and claims no actor. (Line-level, not file-level — see the
+    # note in test_no_reseed_when_table_has_rows_even_if_file_deleted.)
+    assert [ln for ln in memfile.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("- ") and "Delete Me" in ln] == [
+        "- Delete Me (removed from your memory.md 2026-07-04)"]
 
 
 def test_hand_edited_note_is_honored_and_written_back(migrated_con, memfile):
     add_row(migrated_con, "Iran War", note="old note")
     memfile.write_text(
-        MINIMAL_FILE.format(line="Iran War — fresh principal wording"),
+        minimal(migrated_con, "Iran War — fresh principal wording"),
         encoding="utf-8",
     )
     result = memory.sync_memory(migrated_con)
@@ -163,7 +193,9 @@ def test_hand_edited_note_is_honored_and_written_back(migrated_con, memfile):
 def test_added_line_creates_an_active_row(migrated_con, memfile):
     add_row(migrated_con, "Existing")
     memfile.write_text(
-        "# x\n## Active threads\n- Existing\n- Brand New — with note\n## Inactive\n",
+        stamped(migrated_con,
+                "# x\n## Active threads\n- Existing\n- Brand New — with note\n"
+                "## Inactive\n"),
         encoding="utf-8",
     )
     result = memory.sync_memory(migrated_con)
@@ -174,8 +206,9 @@ def test_added_line_creates_an_active_row(migrated_con, memfile):
 def test_bare_line_under_inactive_is_an_explicit_dismissal(migrated_con, memfile):
     add_row(migrated_con, "Pushed Down")
     memfile.write_text(
-        "# x\n## Active threads\n## Inactive\n- Pushed Down\n", encoding="utf-8"
-    )
+        stamped(migrated_con,
+                "# x\n## Active threads\n## Inactive\n- Pushed Down\n"),
+        encoding="utf-8")
     result = memory.sync_memory(migrated_con)
     assert result.status_changed == ["Pushed Down: active->dismissed_user"]
     assert statuses(migrated_con)["Pushed Down"] == "dismissed_user"
@@ -208,7 +241,7 @@ def test_dismissed_annotation_round_trips(migrated_con, memfile):
 def test_moving_a_line_back_to_active_revives_it(migrated_con, memfile, start):
     add_row(migrated_con, "Come Back", status=start,
             changed=iso(NOW - timedelta(days=5)))
-    memfile.write_text(MINIMAL_FILE.format(line="Come Back"), encoding="utf-8")
+    memfile.write_text(minimal(migrated_con, "Come Back"), encoding="utf-8")
     result = memory.sync_memory(migrated_con)
     assert result.status_changed == [f"Come Back: {start}->active"]
     assert statuses(migrated_con)["Come Back"] == "active"
@@ -217,7 +250,7 @@ def test_moving_a_line_back_to_active_revives_it(migrated_con, memfile, start):
 def test_case_insensitive_line_matching_updates_not_duplicates(migrated_con, memfile):
     add_row(migrated_con, "Iran War")
     memfile.write_text(
-        MINIMAL_FILE.format(line="iran war — lowercase edit"), encoding="utf-8"
+        minimal(migrated_con, "iran war — lowercase edit"), encoding="utf-8"
     )
     result = memory.sync_memory(migrated_con)
     assert result.added == []  # matched the existing row
@@ -240,7 +273,7 @@ def test_db_unique_index_rejects_case_variant_duplicates(migrated_con):
 def test_rename_dismisses_old_and_starts_new(migrated_con, memfile):
     """Documented in the file header: renaming = dismiss old + add new."""
     add_row(migrated_con, "Old Name")
-    memfile.write_text(MINIMAL_FILE.format(line="New Name"), encoding="utf-8")
+    memfile.write_text(minimal(migrated_con, "New Name"), encoding="utf-8")
     result = memory.sync_memory(migrated_con)
     assert result.added == ["New Name"]
     assert result.dismissed_by_deletion == ["Old Name"]
@@ -433,7 +466,7 @@ def test_note_edit_moves_updated_at_only_not_status_changed_at(migrated_con, mem
     changed = iso(NOW - timedelta(days=6))
     add_row(migrated_con, "Annotated", changed=changed)
     memfile.write_text(
-        MINIMAL_FILE.format(line="Annotated — a brand new note"), encoding="utf-8"
+        minimal(migrated_con, "Annotated — a brand new note"), encoding="utf-8"
     )
     memory.sync_memory(migrated_con)
     row = migrated_con.execute(
@@ -459,7 +492,7 @@ def test_gatefix1a_file_move_revival_survives_its_own_sync_and_the_next(
         changed=iso(NOW - timedelta(days=30)),
         created=iso(NOW - timedelta(days=60)),
     )
-    memfile.write_text(MINIMAL_FILE.format(line="Sleeper"), encoding="utf-8")
+    memfile.write_text(minimal(migrated_con, "Sleeper"), encoding="utf-8")
     result = memory.sync_memory(migrated_con)
     assert result.status_changed == ["Sleeper: dormant->active"]
     assert result.went_dormant == []  # did NOT self-revert in the same pass
@@ -497,9 +530,10 @@ def test_gatefix2_annotation_kept_move_to_active_is_clean_revival(
         created=iso(NOW - timedelta(days=60)), ref=b,
     )
     memfile.write_text(
-        "# x\n## Active threads\n"
-        "- Sleeper (dormant since 2026-06-04, last covered 2026-06-01)\n"
-        "## Inactive\n",
+        stamped(migrated_con,
+                "# x\n## Active threads\n"
+                "- Sleeper (dormant since 2026-06-04, last covered 2026-06-01)\n"
+                "## Inactive\n"),
         encoding="utf-8",
     )
     result = memory.sync_memory(migrated_con)
@@ -522,8 +556,9 @@ def test_gatefix2_dismissed_annotation_kept_on_active_move_also_revives(
         changed=iso(NOW - timedelta(days=5)),
     )
     memfile.write_text(
-        "# x\n## Active threads\n- Comeback (dismissed by you 2026-06-29)\n"
-        "## Inactive\n",
+        stamped(migrated_con,
+                "# x\n## Active threads\n- Comeback (dismissed by you 2026-06-29)\n"
+                "## Inactive\n"),
         encoding="utf-8",
     )
     result = memory.sync_memory(migrated_con)
@@ -541,8 +576,9 @@ def test_gatefix2_lastref_annotation_kept_on_demotion_strips_clean(
     b = add_briefing(migrated_con, "2026-07-01", "2026-07-01T12:00:00.000Z")
     add_row(migrated_con, "Demoted", ref=b)
     memfile.write_text(
-        "# x\n## Active threads\n## Inactive\n"
-        "- Demoted (last referenced: 2026-07-01)\n",
+        stamped(migrated_con,
+                "# x\n## Active threads\n## Inactive\n"
+                "- Demoted (last referenced: 2026-07-01)\n"),
         encoding="utf-8",
     )
     result = memory.sync_memory(migrated_con)

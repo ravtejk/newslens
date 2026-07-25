@@ -716,3 +716,51 @@ keyed responses via `conftest.rank_keys(content)`. NOTE: §5.9 item 4's "the onl
 [id= tokens in the prompt are the real keys" claim is decimal-era — the prompt
 now carries prose format examples, and the invariant is line-start-scoped per
 `test_gatefix4_hostile_bracketed_title_cannot_mint_id_tokens`.
+
+## NL-81 (2026-07-25): the sync resurrection guard — amends the M4/lifecycle-v2 surface
+
+Where this conflicts with the M4 notes above, THIS section wins. Migration
+0022 (additive: `memory_tombstones`, `sync_state`, `memory.dismissed_via`).
+
+- **`sync_memory` is no longer unconditionally file-wins.** Order: read →
+  `parse_file` (unchanged, still the loudest failure) → generation gate →
+  `plan_import` (read-only diff) → apply. A file that fails the gate is
+  REFUSED: no import, **no dormancy pass**, no file rewrite — the call's only
+  effect is `SyncResult.stale_refusal`. It never raises for staleness.
+- **The recency signal is a generation stamp, never mtime.** `write_memory_file`
+  is the one place `sync_state.sync_generation` advances (bump, then render),
+  and it echoes `<!-- newslens-sync: gen=N identity=… profile=… rendered=… -->`
+  into the file header. Import precondition: file gen == DB gen AND identity
+  matches (identity checked first — a matching counter cannot wave a foreign
+  profile's file through). `render_file` alone does NOT bump. The stamp is a
+  comment, so `parse_file` skips it and a pre-NL-81 build reads a stamped file
+  unchanged (rollback = revert the code).
+- **Bootstrap is one-shot**, keyed on generation 0: an unstamped file that
+  agrees with the DB is adopted and stamped; an unstamped file that disagrees
+  is refused. After the first render, unstamped == stale.
+- **Refusal surface splits by caller.** Interactive (`cli._memory_command`):
+  writing verbs abort rc 1 with the exits; `memory list` alone degrades (it
+  writes nothing) and says it is showing DB state. Embedded (`ranking.py`
+  ~1626/1851, `server._with_memory`): degrade — the run/verb completes on DB
+  state, the post-run refresh is skipped too, and the refusal rides out in
+  `report.warnings` / the JSON `warnings` key. Never throws the edition dead.
+- **Tombstones block resurrection even on a lawful file, and even under
+  `--accept-file`.** `delete_thread` and `move_follow_altitude` append
+  delete/rename rows (append-only triggers; `thread_id` is a plain int, not an
+  FK — the log outlives the row). Blocked file lines land in
+  `SyncResult.blocked_resurrections`, never in the DB, and are never
+  force-deleted from the file. Latest row wins per key; `lift` (appended by
+  `add_thread` and CLI `memory add`) supersedes. `tombstone_block` returns None
+  for a key a live row already wears. No expiry, ever.
+- **`dismissed_via` decides the rendered annotation:** `principal` →
+  "(dismissed by you <d>)"; `file_sync` → "(removed from your memory.md <d>)";
+  NULL (pre-0022) → "(dismissed <d>)". `parse_file` reads all three back to
+  `dismissed_user` (and strips all three off a line carried up to Active), so a
+  round-trip is zero-write and cannot launder `file_sync` into `principal`. A
+  BARE line under Inactive is `file_sync` by ruling — explicit intent, but it
+  arrived via the file.
+- **Test-fixture consequence:** a hand-authored `memory.md` must now carry a
+  lawful stamp to be imported. `test_memory_sync.stamped()/minimal()` do that;
+  files asserting a PARSE failure need no stamp (parse runs first).
+- `newslens memory sync [--accept-file]` is a new CLI verb — the named exit the
+  refusal copy points at.

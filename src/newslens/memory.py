@@ -88,19 +88,36 @@ _HEADER = """# NewsLens memory — the live threads it's tracking for you
 
   Inactive annotations are meaningful: "(dormant since <date>, ...)" marks a
   thread that idled out after {dormant_days} days unreferenced — it revives
-  AUTOMATICALLY if a story that earns a briefing slot matches it.
-  "(dismissed by you <date>)" marks your explicit dismissals — those never
-  auto-revive. Keep the annotation with the line when you rearrange; a bare
-  line under Inactive counts as dismissed by you.
+  AUTOMATICALLY if a story that earns a briefing slot matches it. The three
+  stopped forms say WHO stopped it, and never claim more than we can prove:
+  "(dismissed by you <date>)" = you used a stop/unfollow button or command;
+  "(removed from your memory.md <date>)" = this sync inferred it from an
+  edit to this file; "(dismissed <date>)" = a thread stopped before NewsLens
+  recorded provenance. None of the three ever auto-revive. Keep the
+  annotation with the line when you rearrange; a bare line under Inactive
+  counts as a stop you made in this file.
 
   Lines match database rows by topic name (case-insensitive); renaming a
   topic dismisses the old thread and starts a new one. Topic names cannot
   contain " — ".
+
+  Threads you DELETE (or rename) are remembered as deleted: an old copy of
+  this file can never resurrect them. To really bring one back, ask for it
+  by name — `newslens memory add "<topic>"`.
 -->
 """
 
 _DORMANT_ANN_RE = re.compile(r"\(dormant since (\d{4}-\d{2}-\d{2})[^)]*\)\s*$")
 _DISMISSED_ANN_RE = re.compile(r"\(dismissed by you (\d{4}-\d{2}-\d{2})\)\s*$")
+# NL-81 §5.4: the mechanism copy (sync-inferred) and the neutral copy (legacy
+# rows whose provenance predates 0022). parse_file reads all three back to
+# dismissed_user, so an unchanged Inactive line produces zero writes and a
+# round-trip can never launder 'file_sync' into 'principal'.
+_DISMISSED_FILE_ANN_RE = re.compile(
+    r"\(removed from your memory\.md (\d{4}-\d{2}-\d{2})\)\s*$")
+_DISMISSED_NEUTRAL_ANN_RE = re.compile(r"\(dismissed (\d{4}-\d{2}-\d{2})\)\s*$")
+_DISMISSED_ANN_RES = (_DISMISSED_ANN_RE, _DISMISSED_FILE_ANN_RE,
+                      _DISMISSED_NEUTRAL_ANN_RE)
 _LASTREF_ANN_RE = re.compile(r"\(last referenced: [^)]*\)\s*$")
 
 
@@ -117,6 +134,18 @@ class SyncResult:
     status_changed: List[str] = field(default_factory=list)   # "topic: old->new"
     dismissed_by_deletion: List[str] = field(default_factory=list)
     went_dormant: List[str] = field(default_factory=list)
+    # --- NL-81 guard disclosures (never silent) ---------------------------
+    # Acts the file asked for that the guard did NOT perform. blocked_
+    # resurrections: file lines for topics with a live delete/rename
+    # tombstone. stale_refusal: the whole import was skipped because the file
+    # failed the generation/identity precondition — when this is set, NEITHER
+    # side was mutated (no import, no dormancy pass, no file rewrite).
+    blocked_resurrections: List[str] = field(default_factory=list)
+    stale_refusal: Optional[str] = None
+    imported: bool = True
+    accepted_file: bool = False       # --accept-file overrode a stale file
+    bootstrapped: bool = False        # an unstamped file was adopted (5.2)
+    generation: Optional[int] = None  # the stamp this call left on the file
 
     @property
     def edits_applied(self) -> int:
@@ -125,8 +154,19 @@ class SyncResult:
             + len(self.status_changed) + len(self.dismissed_by_deletion)
         )
 
+    def guard_lines(self) -> List[str]:
+        """The NL-81 disclosures ONLY — what the guard refused to do. Callers
+        that surface a narrow warning channel (the server's JSON response)
+        use this; summary_lines() includes it plus the ordinary sync report."""
+        out: List[str] = []
+        if self.stale_refusal:
+            out.append(self.stale_refusal)
+        out.extend(self.blocked_resurrections)
+        return out
+
     def summary_lines(self) -> List[str]:
         out: List[str] = []
+        out.extend(self.guard_lines())
         if self.seeded:
             out.append(
                 f"memory: first-run bootstrap seeded {self.seeded} threads from "
@@ -183,13 +223,305 @@ def _day(value: Optional[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# NL-81 — the sync resurrection guard (build contract: engineering-2 §5)
+#
+# Three mechanisms, all DB-resident (migration 0022):
+#   1. TOMBSTONES — append-only delete/rename/lift records. The sync may never
+#      re-INSERT a topic whose key carries a live delete/rename tombstone, not
+#      even under --accept-file. Lift (an explicit `memory add`-class verb) is
+#      how a tombstone is superseded; nothing is ever updated or removed.
+#   2. GENERATION STAMP — a DB counter echoed into the file header on every
+#      DB->file render. Import precondition: file gen == DB gen AND the pairing
+#      identity matches. NEVER mtime: the 07-17 poisoned reconstruction was
+#      freshly written (newest mtime, stale content), so a wall-clock signal
+#      passes the exact file that caused the incident.
+#   3. PROVENANCE — dismissed_via, so "(dismissed by you)" renders only for
+#      acts that arrived through a principal verb surface.
+# ---------------------------------------------------------------------------
+
+TOMBSTONE_KINDS = ("delete", "rename", "lift")
+TOMBSTONE_ACTORS = ("principal", "org", "sync")
+# 'by you' is reserved for verb surfaces. See §5.4 and migration 0022 (c).
+DISMISSED_VIA_VALUES = ("principal", "file_sync", "org")
+
+_STAMP_RE = re.compile(
+    r"<!--\s*newslens-sync:\s*gen=(\d+)\s+identity=([0-9a-fA-F]+)"
+    r"\s+profile=(\S+)\s+rendered=(\S+)\s*-->")
+
+
+def sync_state(con: sqlite3.Connection) -> Optional[Dict]:
+    """The single sync_state row, or None on a pre-0022 database.
+
+    None is not a hole: without a counter there is nothing to gate on, and a
+    pre-0022 schema means this code is running against a database the migration
+    has not reached yet. Pre-0022, the read/gate helpers degrade (_check_stamp
+    reads 'lawful', stamp_line renders no stamp, tombstone lookups find nothing)
+    so old copies stay inspectable; write and render surfaces (_apply_plan,
+    render_file, the tombstone-writing verbs, dismiss_thread) require 0022 and
+    raise sqlite3.OperationalError — deliberately loud, since a guard write that
+    silently skipped its tombstone or provenance would reopen the incident's
+    hole. Unreachable through product lanes, which all run db.migrate() first."""
+    try:
+        row = con.execute(
+            "SELECT sync_generation, sync_identity, profile_slug"
+            " FROM sync_state WHERE id = 1").fetchone()
+    except sqlite3.OperationalError:      # table absent (pre-0022)
+        return None
+    if row is None:
+        return None
+    return {"generation": row["sync_generation"],
+            "identity": row["sync_identity"],
+            "profile": row["profile_slug"] or "-"}
+
+
+def bump_generation(con: sqlite3.Connection) -> Optional[int]:
+    """Advance the render counter. Called by write_memory_file ONLY, so that
+    'the counter moved' and 'the file was rewritten' are the same event."""
+    st = sync_state(con)
+    if st is None:
+        return None
+    with con:
+        con.execute(
+            "UPDATE sync_state SET sync_generation = sync_generation + 1"
+            " WHERE id = 1")
+    return st["generation"] + 1
+
+
+def stamp_line(con: sqlite3.Connection) -> str:
+    """The header stamp for the CURRENT generation (no bump — write_memory_file
+    owns the bump). Empty string on a pre-0022 database.
+
+    An HTML comment on purpose: parse_file skips comments (see its comment
+    arm), so a pre-NL-81 build reads a stamped file with no change in behavior
+    — the rollback story is 'revert the code', nothing to unwind."""
+    st = sync_state(con)
+    if st is None:
+        return ""
+    return (f"<!-- newslens-sync: gen={st['generation']} "
+            f"identity={st['identity']} profile={st['profile']} "
+            f"rendered={_utc_now_iso()} -->\n")
+
+
+def parse_stamp(text: str) -> Optional[Dict]:
+    """Read the generation stamp out of a memory.md body, or None if unstamped."""
+    m = _STAMP_RE.search(text)
+    if m is None:
+        return None
+    return {"generation": int(m.group(1)), "identity": m.group(2).lower(),
+            "profile": m.group(3), "rendered": m.group(4)}
+
+
+def append_tombstone(con: sqlite3.Connection, *, topic: str, kind: str,
+                     actor: str = "principal", thread_id: Optional[int] = None,
+                     successor: str = "") -> None:
+    """Append one tombstone row. CALLER MUST HOLD A TRANSACTION (the
+    _log_altitude_event precedent): the tombstone and the state change it
+    records commit together or not at all — a delete that committed without its
+    tombstone is exactly the hole this closes."""
+    if kind not in TOMBSTONE_KINDS:
+        raise ValueError(f"kind must be one of {list(TOMBSTONE_KINDS)}, got {kind!r}")
+    if actor not in TOMBSTONE_ACTORS:
+        raise ValueError(f"actor must be one of {list(TOMBSTONE_ACTORS)}, got {actor!r}")
+    con.execute(
+        "INSERT INTO memory_tombstones (topic_key, topic, thread_id, kind,"
+        " successor_key, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (topic.casefold(), topic, thread_id, kind,
+         successor.casefold() or None, actor, _utc_now_iso()))
+
+
+def _latest_tombstone(con: sqlite3.Connection, key: str):
+    try:
+        return con.execute(
+            "SELECT topic, kind, successor_key, created_at FROM memory_tombstones"
+            " WHERE topic_key = ? ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+    except sqlite3.OperationalError:      # pre-0022 database
+        return None
+
+
+def tombstone_block(con: sqlite3.Connection, topic: str) -> Optional[Dict]:
+    """Is re-creating `topic` from the FILE blocked? None = free to import.
+
+    Latest row wins: 'lift' (the explicit lane) supersedes, so a lifted key is
+    free again. A rename chain a->b->c is walked iteratively with a visited-set
+    cycle guard so the disclosure can name the thread's CURRENT name; the walk
+    stops at the first key that still holds a live memory row."""
+    key = topic.casefold()
+    if con.execute("SELECT 1 FROM memory WHERE lower(topic) = ?",
+                   (key,)).fetchone() is not None:
+        # A live row wears this name — there is nothing to RE-create, so there
+        # is nothing to block. (Reached by a rename cycle a->b->a, where the
+        # oldest tombstone for `a` still says "renamed away" but the row came
+        # home. The sync only consults this for keys with no row; the check is
+        # here so the predicate is honest for every caller, including the lift
+        # lane, which must not append a lift for a name that never left.)
+        return None
+    row = _latest_tombstone(con, key)
+    if row is None or row["kind"] == "lift":
+        return None
+    out = {"topic": row["topic"], "kind": row["kind"],
+           "when": _day(row["created_at"]), "current_name": None}
+    if row["kind"] == "delete":
+        return out
+    seen = {key}
+    succ = row["successor_key"]
+    while succ and succ not in seen:
+        seen.add(succ)
+        live = con.execute(
+            "SELECT topic FROM memory WHERE lower(topic) = ?", (succ,)).fetchone()
+        if live is not None:
+            out["current_name"] = live["topic"]
+            break
+        nxt = _latest_tombstone(con, succ)
+        if nxt is None or nxt["kind"] == "lift":
+            out["current_name"] = succ    # the successor key is free again
+            break
+        if nxt["kind"] == "delete":
+            break                          # renamed, then deleted — gone
+        succ = nxt["successor_key"]
+    return out
+
+
+def lift_tombstone(con: sqlite3.Connection, topic: str,
+                   actor: str = "principal") -> Optional[Dict]:
+    """THE EXPLICIT LANE. Record that a principal verb deliberately brought a
+    tombstoned topic back. Returns the tombstone that was lifted, or None when
+    the key was never tombstoned (then nothing is appended — `add` on a live
+    topic writes no tombstone row). Wraps its own transaction: callers reach
+    this before their own state change, on their own connection."""
+    block = tombstone_block(con, topic)
+    if block is None:
+        return None
+    with con:
+        append_tombstone(con, topic=topic, kind="lift", actor=actor)
+    return block
+
+
+def _blocked_line(blocked: List[Dict]) -> str:
+    """The refusal copy for tombstone-blocked file lines (contract §5.3). Names
+    every blocked act and the exact command that would really bring it back."""
+    n = len(blocked)
+    kinds = {b["kind"] for b in blocked}
+    what = ("previously deleted" if kinds == {"delete"}
+            else "previously renamed" if kinds == {"rename"}
+            else "previously deleted or renamed")
+    bits = []
+    for b in blocked:
+        if b["kind"] == "delete":
+            bits.append(f'"{b["topic"]}", deleted {b["when"]}')
+        elif b["current_name"]:
+            bits.append(f'"{b["topic"]}" was renamed — it lives on as '
+                        f'"{b["current_name"]}"')
+        else:
+            bits.append(f'"{b["topic"]}" was renamed away {b["when"]} and is no '
+                        "longer tracked")
+    verb = "was" if n == 1 else "were"
+    thread = "thread" if n == 1 else "threads"
+    back = "it" if n == 1 else "them"
+    lift = "; ".join(f'newslens memory add "{b["topic"]}"' for b in blocked)
+    return (f"memory: {n} {thread} in memory.md {verb} {what} and {verb} NOT "
+            f"re-imported ({'; '.join(bits)}) — to really bring {back} back: "
+            f"{lift}")
+
+
+_STALE_EXITS = (
+    "to proceed: `newslens memory sync --accept-file` (explicit, file wins — "
+    "deletion records and dismissal attribution still apply underneath it), or "
+    "delete memory.md and let the next run regenerate it from the database")
+
+
+def _stale_refusal_line(reason: str, detail: str, plan: "ImportPlan") -> str:
+    would = plan.would_lines()
+    body = ("; ".join(would) if would
+            else "it would have changed nothing on the database side")
+    return (f"memory: memory.md was NOT imported — {reason} ({detail}). "
+            f"Nothing on either side was changed. It would have: {body}. "
+            f"{_STALE_EXITS}")
+
+
+@dataclass
+class ImportPlan:
+    """What the file WOULD do to the database — computed read-only, so the
+    refusal copy is honest by construction (it describes the same plan the
+    lawful path applies) and the bootstrap's 'zero pending edits' test is the
+    same computation as the import itself."""
+    inserts: List[Dict] = field(default_factory=list)
+    note_updates: List[Dict] = field(default_factory=list)
+    status_changes: List[Dict] = field(default_factory=list)
+    dismissals: List[Dict] = field(default_factory=list)
+    blocked: List[Dict] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.inserts or self.note_updates or self.status_changes
+                    or self.dismissals or self.blocked)
+
+    def would_lines(self) -> List[str]:
+        out: List[str] = []
+        if self.dismissals:
+            out.append("dismiss " + ", ".join(
+                repr(d["topic"]) for d in self.dismissals))
+        if self.inserts or self.blocked:
+            names = ", ".join(repr(i["topic"]) for i in self.inserts)
+            # Name every blocked act: a refusal that says "2 blocked" without
+            # saying WHICH two is a refusal the principal cannot act on.
+            extra = (f" ({len(self.blocked)} blocked as deleted/renamed: "
+                     + ", ".join(repr(b["topic"]) for b in self.blocked) + ")"
+                     ) if self.blocked else ""
+            out.append(f"re-create {names or 'nothing'}{extra}")
+        if self.status_changes:
+            out.append("change the status of " + ", ".join(
+                repr(s["topic"]) for s in self.status_changes))
+        if self.note_updates:
+            out.append(f"update {len(self.note_updates)} note(s)")
+        return out
+
+
+def plan_import(con: sqlite3.Connection, entries: List[Dict]) -> ImportPlan:
+    """Read-only diff of parsed file entries against the memory table. Writes
+    nothing, so it is safe on the refusal path and safe as the bootstrap's
+    pending-edit probe."""
+    plan = ImportPlan()
+    rows = con.execute(
+        "SELECT id, topic, status, principal_note FROM memory").fetchall()
+    by_key = {r["topic"].casefold(): r for r in rows}
+    seen_keys = set()
+    for e in entries:
+        key = e["topic"].casefold()
+        seen_keys.add(key)
+        row = by_key.get(key)
+        if row is None:
+            block = tombstone_block(con, e["topic"])
+            if block is not None:
+                plan.blocked.append(block)
+            else:
+                plan.inserts.append(e)
+            continue
+        if (row["principal_note"] or "").strip() != e["note"]:
+            plan.note_updates.append(
+                {"id": row["id"], "topic": e["topic"], "note": e["note"]})
+        if row["status"] != e["status"]:
+            plan.status_changes.append(
+                {"id": row["id"], "topic": e["topic"], "old": row["status"],
+                 "new": e["status"]})
+    for key, row in by_key.items():
+        if key not in seen_keys and row["status"] != "dismissed_user":
+            plan.dismissals.append({"id": row["id"], "topic": row["topic"]})
+    return plan
+
+
+# ---------------------------------------------------------------------------
 # File render / parse
 # ---------------------------------------------------------------------------
 
 def render_file(con: sqlite3.Connection) -> str:
+    """DB -> canonical memory.md, stamped with the CURRENT generation.
+
+    Read-only: it does NOT bump the counter (write_memory_file does, right
+    before calling this), so rendering for inspection can never invalidate the
+    file on disk."""
     rows = con.execute(
         "SELECT m.topic, m.status, m.principal_note, m.status_changed_at,"
-        " m.last_referenced_briefing_id, b.date AS last_ref_date"
+        " m.dismissed_via, m.last_referenced_briefing_id, b.date AS last_ref_date"
         " FROM memory m LEFT JOIN briefings b ON b.id = m.last_referenced_briefing_id"
         " ORDER BY m.id"
     ).fetchall()
@@ -215,9 +547,19 @@ def render_file(con: sqlite3.Connection) -> str:
                 f", last covered {r['last_ref_date']}" if r["last_ref_date"] else ""
             )
             return base(r) + f" (dormant since {when}{covered})"
-        return base(r) + f" (dismissed by you {when})"
+        # NL-81 §5.4 — an annotation may claim principal agency ONLY when the
+        # act arrived through a principal verb surface. Anything the sync
+        # inferred is labeled by its MECHANISM; legacy rows (provenance
+        # unrecoverable) get neutral copy. We never backfill agency.
+        via = r["dismissed_via"]
+        if via == "principal":
+            return base(r) + f" (dismissed by you {when})"
+        if via == "file_sync":
+            return base(r) + f" (removed from your memory.md {when})"
+        return base(r) + f" (dismissed {when})"
 
     parts = [_HEADER.format(dormant_days=DORMANT_AFTER_DAYS)]
+    parts.append(stamp_line(con))
     parts.append("\n## Active threads\n")
     parts.extend(active_line(r) + "\n" for r in active)
     if not active:
@@ -270,11 +612,21 @@ def parse_file(text: str) -> List[Dict]:
                 if _DORMANT_ANN_RE.search(body):
                     status = "dormant"
                     body = _DORMANT_ANN_RE.sub("", body).rstrip()
-                elif _DISMISSED_ANN_RE.search(body):
-                    status = "dismissed_user"
-                    body = _DISMISSED_ANN_RE.sub("", body).rstrip()
                 else:
-                    status = "dismissed_user"  # bare line = explicit demotion
+                    # All three stopped forms (by-you / mechanism / neutral)
+                    # read back as dismissed_user — provenance lives in the DB
+                    # column, not in the annotation, so a round-trip can never
+                    # launder 'file_sync' into 'principal' (NL-81 §5.4).
+                    status = "dismissed_user"
+                    for rx in _DISMISSED_ANN_RES:
+                        if rx.search(body):
+                            body = rx.sub("", body).rstrip()
+                            break
+                    # else: a BARE line = a stop the principal made in this
+                    # file. Explicit intent, but it arrived VIA the file, so it
+                    # is provenanced 'file_sync' by the caller — "by you" stays
+                    # reserved for verb surfaces (the file can be written by
+                    # anyone, including the org: that IS the incident).
                 # A demoted line may keep the active-section suffix — strip it
                 # so it can't leak into the topic/note (M4 gate fix 2 class).
                 body = _LASTREF_ANN_RE.sub("", body).rstrip()
@@ -284,9 +636,11 @@ def parse_file(text: str) -> List[Dict]:
                 # "(dormant since …)" / "(dismissed by you …)" annotation is
                 # REVIVAL INTENT. Strip the annotations (never let them leak
                 # into the topic or note, never misread the move as a new
-                # thread + a deletion of the real one).
+                # thread + a deletion of the real one). All three stopped forms
+                # strip, not just the by-you one (NL-81).
                 body = _DORMANT_ANN_RE.sub("", body).rstrip()
-                body = _DISMISSED_ANN_RE.sub("", body).rstrip()
+                for rx in _DISMISSED_ANN_RES:
+                    body = rx.sub("", body).rstrip()
                 body = _LASTREF_ANN_RE.sub("", body).rstrip()
             topic, _, note = body.partition(SEPARATOR)
             topic = topic.strip().strip("*").strip()
@@ -383,10 +737,62 @@ def seed_if_first_run(con: sqlite3.Connection) -> int:
     return len(SEED_THREADS)
 
 
-def sync_memory(con: sqlite3.Connection) -> SyncResult:
+def _check_stamp(con: sqlite3.Connection, text: str):
+    """The recency/pairing precondition (NL-81 §5.2). Returns
+    (verdict, detail) where verdict is one of:
+
+      'lawful'    — file gen == DB gen and the pairing identity matches, OR the
+                    database predates 0022 (nothing to adjudicate).
+      'bootstrap' — the file carries no stamp and the DB has never rendered one
+                    (generation 0). The ONE-SHOT adoption path: adopt only if
+                    the file has zero pending edits, else treat as stale.
+      'stale'     — everything else. NEVER mtime: the file that caused the
+                    07-17 incident was freshly written.
+    """
+    st = sync_state(con)
+    if st is None:
+        return "lawful", ""
+    stamp = parse_stamp(text)
+    if stamp is None:
+        if st["generation"] == 0:
+            return "bootstrap", ""
+        return "stale", (
+            f"it carries no NewsLens generation stamp; this database is at "
+            f"generation {st['generation']}")
+    if stamp["identity"] != st["identity"]:
+        return "stale", (
+            f"it belongs to a DIFFERENT NewsLens database — file identity "
+            f"{stamp['identity'][:8]}… (profile {stamp['profile']}), this "
+            f"database identity {st['identity'][:8]}… (profile {st['profile']})")
+    if stamp["generation"] != st["generation"]:
+        return "stale", (
+            f"file generation {stamp['generation']}, database generation "
+            f"{st['generation']}")
+    return "lawful", ""
+
+
+def sync_memory(con: sqlite3.Connection, *,
+                accept_file: bool = False) -> SyncResult:
     """The two-way sync: file -> DB (file wins), dormancy pass, then DB ->
     file in canonical form. Safe to call repeatedly; every mutation is
-    reported in the SyncResult."""
+    reported in the SyncResult.
+
+    NL-81 — the file only wins if it is CURRENT. Order of operations matters:
+    parse FIRST (an unreadable file is still the loudest, most actionable
+    failure, and you cannot diff a file you cannot read), then the generation
+    gate, then the tombstone-aware plan, then apply.
+
+    On refusal NEITHER SIDE IS MUTATED — no import, no dormancy pass, no file
+    rewrite — so the state stays exactly as recoverable as it was, and the
+    caller decides what a refusal means: the interactive CLI aborts with the
+    exits, the embedded call sites (ranking, server) degrade to DB state with a
+    loud warning. This function itself never raises on staleness: throwing here
+    would kill the 3am edition over a stale FILE, which is strictly worse than
+    the disease.
+
+    `accept_file` is the principal's explicit file-wins override. It overrides
+    STALENESS ONLY — tombstone blocking and the attribution rule hold
+    underneath it, always."""
     result = SyncResult()
     result.seeded = seed_if_first_run(con)
 
@@ -398,59 +804,90 @@ def sync_memory(con: sqlite3.Connection) -> SyncResult:
                 f"memory.md exists but is not readable ({exc}) — fix its permissions"
             ) from exc
         entries = parse_file(text)
-        now = _utc_now_iso()
-        rows = con.execute(
-            "SELECT id, topic, status, principal_note FROM memory"
-        ).fetchall()
-        by_key = {r["topic"].casefold(): r for r in rows}
-        seen_keys = set()
-        with con:
-            for e in entries:
-                key = e["topic"].casefold()
-                seen_keys.add(key)
-                row = by_key.get(key)
-                if row is None:
-                    con.execute(
-                        "INSERT INTO memory (topic, status, principal_note,"
-                        " status_changed_at, created_at, updated_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?)",
-                        (e["topic"], e["status"], e["note"] or None, now, now, now),
-                    )
-                    result.added.append(e["topic"])
-                    continue
-                if (row["principal_note"] or "").strip() != e["note"]:
-                    con.execute(
-                        "UPDATE memory SET principal_note = ?, updated_at = ?"
-                        " WHERE id = ?",
-                        (e["note"] or None, now, row["id"]),
-                    )
-                    result.notes_updated.append(e["topic"])
-                if row["status"] != e["status"]:
-                    con.execute(
-                        "UPDATE memory SET status = ?, status_changed_at = ?,"
-                        " updated_at = ? WHERE id = ?",
-                        (e["status"], now, now, row["id"]),
-                    )
-                    result.status_changed.append(
-                        f"{e['topic']}: {row['status']}->{e['status']}"
-                    )
-            for key, row in by_key.items():
-                if key not in seen_keys and row["status"] != "dismissed_user":
-                    con.execute(
-                        "UPDATE memory SET status = 'dismissed_user',"
-                        " status_changed_at = ?, updated_at = ? WHERE id = ?",
-                        (now, now, row["id"]),
-                    )
-                    result.dismissed_by_deletion.append(row["topic"])
+        verdict, detail = _check_stamp(con, text)
+        plan = plan_import(con, entries)
+
+        if verdict == "bootstrap":
+            # ONE-SHOT adoption of the pre-guard live file: adopt only when it
+            # agrees with the database (the 07-17 cleanup verified file-DB
+            # agreement, so the live system should adopt cleanly). Any pending
+            # edit and it is stale — no silent adoption of an unstamped file
+            # that disagrees.
+            if plan.is_empty:
+                result.bootstrapped = True
+                verdict = "lawful"
+            else:
+                verdict, detail = "stale", (
+                    "it carries no NewsLens generation stamp and it disagrees "
+                    "with the database")
+
+        if verdict == "stale" and not accept_file:
+            result.imported = False
+            result.stale_refusal = _stale_refusal_line(
+                "it is not the file this database last wrote", detail, plan)
+            # Neither side mutated: no import, no dormancy, no render. The
+            # ONLY effect of this call is the disclosure above.
+            return result
+
+        result.accepted_file = verdict == "stale" and accept_file
+        _apply_plan(con, plan, result)
 
     result.went_dormant = apply_dormancy(con)
 
     try:
-        paths.MEMORY_FILE.write_text(render_file(con), encoding="utf-8")
+        result.generation = write_memory_file(con)
         result.created_file = True
     except OSError as exc:
         raise MemorySyncError(f"cannot write memory.md ({exc})") from exc
     return result
+
+
+def _apply_plan(con: sqlite3.Connection, plan: ImportPlan,
+                result: SyncResult) -> None:
+    """Apply a planned import in ONE transaction. The blocked list is reported,
+    never applied — the sync may not INSERT a tombstoned topic even here, on
+    the --accept-file path (contract §5.3: not even under --accept-file)."""
+    now = _utc_now_iso()
+    with con:
+        for e in plan.inserts:
+            # A file line landing under Inactive arrived VIA the file, so it is
+            # provenanced by its mechanism, never "by you" (§5.4).
+            con.execute(
+                "INSERT INTO memory (topic, status, principal_note,"
+                " status_changed_at, created_at, updated_at, dismissed_via)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (e["topic"], e["status"], e["note"] or None, now, now, now,
+                 "file_sync" if e["status"] == "dismissed_user" else None))
+            result.added.append(e["topic"])
+        for u in plan.note_updates:
+            con.execute(
+                "UPDATE memory SET principal_note = ?, updated_at = ?"
+                " WHERE id = ?", (u["note"] or None, now, u["id"]))
+            result.notes_updated.append(u["topic"])
+        for s in plan.status_changes:
+            # A move to Inactive (bare line or any stopped annotation) is
+            # explicit intent, but it ARRIVES VIA THE FILE — 'file_sync'. A
+            # move back to Active clears provenance: the row isn't stopped.
+            con.execute(
+                "UPDATE memory SET status = ?, status_changed_at = ?,"
+                " updated_at = ?, dismissed_via = ? WHERE id = ?",
+                (s["new"], now, now,
+                 "file_sync" if s["new"] == "dismissed_user" else None,
+                 s["id"]))
+            result.status_changed.append(
+                f"{s['topic']}: {s['old']}->{s['new']}")
+        for d in plan.dismissals:
+            # THE 07-17 MISATTRIBUTION: a file-absent row is dismissed by
+            # INFERENCE from a file the org may well have written. Labeled by
+            # mechanism; it renders "(removed from your memory.md …)".
+            con.execute(
+                "UPDATE memory SET status = 'dismissed_user',"
+                " status_changed_at = ?, updated_at = ?,"
+                " dismissed_via = 'file_sync' WHERE id = ?",
+                (now, now, d["id"]))
+            result.dismissed_by_deletion.append(d["topic"])
+    if plan.blocked:
+        result.blocked_resurrections.append(_blocked_line(plan.blocked))
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +1041,12 @@ def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
     'already-active'. `last_referenced_briefing_id` is the M7 follow-from-
     story seam: the edition the follow came from (CLI passes nothing)."""
     now = _utc_now_iso()
+    # NL-81 §5.1/§5.3 — THE EXPLICIT LIFT LANE. add_thread is a principal verb
+    # surface (the CLI's revive path, the UI create/follow door, every altitude
+    # commit), so reaching a tombstoned name HERE is the deliberate "bring it
+    # back" the guard exists to require. The lift supersedes the tombstone;
+    # nothing is updated or removed. `add` on a live topic appends nothing.
+    lift_tombstone(con, topic)
     row = con.execute(
         "SELECT id, status FROM memory WHERE lower(topic) = lower(?)", (topic,)
     ).fetchone()
@@ -617,14 +1060,15 @@ def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
                 # insert — else "Last picked up" goes stale after a revive.
                 con.execute(
                     "UPDATE memory SET status = 'active', status_changed_at = ?,"
-                    " updated_at = ?, last_referenced_briefing_id = ?"
-                    " WHERE id = ?",
+                    " updated_at = ?, last_referenced_briefing_id = ?,"
+                    " dismissed_via = NULL WHERE id = ?",
                     (now, now, last_referenced_briefing_id, row["id"]),
                 )
             else:
                 con.execute(
                     "UPDATE memory SET status = 'active', status_changed_at = ?,"
-                    " updated_at = ? WHERE id = ?", (now, now, row["id"]),
+                    " updated_at = ?, dismissed_via = NULL WHERE id = ?",
+                    (now, now, row["id"]),
                 )
         return "revived"
     with con:
@@ -761,6 +1205,16 @@ def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
     with con:
         # the reader corrected the MOVED row's altitude (Axel's instrument).
         _log_altitude_event(con, thread_id, row["topic"], "correct")
+        # NL-81 §5.1 — THE RENAME TOMBSTONE. The old key stops resolving, so a
+        # stale file carrying the OLD name would otherwise re-INSERT it as a
+        # brand-new thread (07-17: the pre-rename "Volkswagen plans significant
+        # job cuts" came back as its own row). Blocks re-INSERT of the old name
+        # ONLY — no note-mapping across renames (banked v1 cut); the successor
+        # key is carried so the disclosure can name the thread's current name.
+        if row["topic"].casefold() != new_name.casefold():
+            append_tombstone(con, topic=row["topic"], kind="rename",
+                             actor="principal", thread_id=thread_id,
+                             successor=new_name)
         if clash is None:
             survivor_id = thread_id
             con.execute(
@@ -772,16 +1226,24 @@ def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
             survivor_id = clash["id"]
             con.execute(
                 "UPDATE memory SET status = 'active', status_changed_at = ?,"
-                " updated_at = ? WHERE id = ?", (now, now, survivor_id))
+                " updated_at = ?, dismissed_via = NULL WHERE id = ?",
+                (now, now, survivor_id))
             if row["origin_story"] and not clash["origin_story"]:
                 # set-once: fill only an EMPTY survivor origin with the moved
                 # follow's birthplace (never rewrite the survivor's own).
                 con.execute(
                     "UPDATE memory SET origin_story = ? WHERE id = ?"
                     " AND origin_story = ''", (row["origin_story"], survivor_id))
+            # The merged-away row retires. This arrived through a principal
+            # verb (the reader tapped the other rung), so by the §5.4 rule it
+            # is 'principal'. NOTE for the held Following round (M1b gate G2,
+            # binding carry-forward): merged-away is NOT reader-dismissed —
+            # the forensic distinguisher stays the 0020 event pair, not this
+            # column, which only answers "did a person's verb cause it".
             con.execute(
                 "UPDATE memory SET status = 'dismissed_user',"
-                " status_changed_at = ?, updated_at = ? WHERE id = ?",
+                " status_changed_at = ?, updated_at = ?,"
+                " dismissed_via = 'principal' WHERE id = ?",
                 (now, now, thread_id))
         _set_altitude_columns(
             con, survivor_id, altitude=altitude, primary_entity=primary_entity,
@@ -834,9 +1296,19 @@ def medium_correction_stats(con: sqlite3.Connection) -> Dict[str, object]:
             "flip_would_trigger": bool(medium_auto and ratio >= 0.2)}
 
 
-def dismiss_thread(con: sqlite3.Connection, topic: str) -> bool:
+def dismiss_thread(con: sqlite3.Connection, topic: str, *,
+                   via: str = "principal") -> bool:
     """dismissed_user: visible in memory.md, never auto-revives. False if
-    no such thread."""
+    no such thread.
+
+    NL-81 §5.4: this is a PRINCIPAL VERB surface (the CLI verb, every UI
+    unfollow/stop control), so it stamps dismissed_via='principal' and its
+    lines keep the "(dismissed by you …)" copy. `via` exists so an org-lane
+    caller can label itself honestly instead of borrowing the principal's
+    agency."""
+    if via not in DISMISSED_VIA_VALUES:
+        raise ValueError(
+            f"via must be one of {list(DISMISSED_VIA_VALUES)}, got {via!r}")
     row = con.execute(
         "SELECT id FROM memory WHERE lower(topic) = lower(?)", (topic,)
     ).fetchone()
@@ -846,8 +1318,9 @@ def dismiss_thread(con: sqlite3.Connection, topic: str) -> bool:
     with con:
         con.execute(
             "UPDATE memory SET status = 'dismissed_user',"
-            " status_changed_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, row["id"]),
+            " status_changed_at = ?, updated_at = ?, dismissed_via = ?"
+            " WHERE id = ?",
+            (now, now, via, row["id"]),
         )
     return True
 
@@ -868,7 +1341,8 @@ def set_note(con: sqlite3.Connection, topic: str, note: str) -> bool:
     return True
 
 
-def delete_thread(con: sqlite3.Connection, topic: str) -> Tuple[bool, str]:
+def delete_thread(con: sqlite3.Connection, topic: str, *,
+                  actor: str = "principal") -> Tuple[bool, str]:
     """M7 SOFT delete (ADR-0010): the thread row is removed from memory (and
     so from memory.md and every UI list), while past briefings stay immutable
     — their written references to the story are baked narrative text and no
@@ -879,7 +1353,8 @@ def delete_thread(con: sqlite3.Connection, topic: str) -> Tuple[bool, str]:
     not by UI courtesy (ADR-0010 §4: "the stronger verb offered only from
     that state")."""
     row = con.execute(
-        "SELECT id, status FROM memory WHERE lower(topic) = lower(?)", (topic,)
+        "SELECT id, topic, status FROM memory WHERE lower(topic) = lower(?)",
+        (topic,)
     ).fetchone()
     if row is None:
         return False, "no thread with that topic"
@@ -887,11 +1362,26 @@ def delete_thread(con: sqlite3.Connection, topic: str) -> Tuple[bool, str]:
         return False, ("dismiss the thread first — delete is only offered on "
                        "stopped follows")
     with con:
+        # NL-81 §5.1 — the tombstone is what now SURVIVES the hard DELETE. The
+        # row is still hard-deleted (ADR-0010 stands); the deletion RECORD is
+        # what a stale file can no longer contradict. Same transaction as the
+        # DELETE: a delete that committed without its tombstone is the hole.
+        append_tombstone(con, topic=row["topic"], kind="delete", actor=actor,
+                         thread_id=row["id"])
         con.execute("DELETE FROM memory WHERE id = ?", (row["id"],))
     return True, "deleted"
 
 
-def write_memory_file(con: sqlite3.Connection) -> None:
-    """Render-only refresh of memory.md after a verb (see protocol note)."""
+def write_memory_file(con: sqlite3.Connection) -> Optional[int]:
+    """Render-only refresh of memory.md after a verb (see protocol note), and
+    THE ONE PLACE the generation counter advances (NL-81 §5.2).
+
+    Bump-then-render, in that order, so the stamp the file carries is the
+    counter the DB holds. If the write then fails, the DB is one generation
+    ahead of the file — which reads as STALE on the next sync, i.e. the failure
+    lands on the refuse side, never on the silently-import side. Returns the
+    new generation (None on a pre-0022 database)."""
     from . import paths
+    gen = bump_generation(con)
     paths.MEMORY_FILE.write_text(render_file(con), encoding="utf-8")
+    return gen

@@ -36,13 +36,14 @@ MIGRATION_0018 = "0018_thread_state_arc_line.sql"     # arc-line contract v1: au
 MIGRATION_0019 = "0019_memory_follow_altitude.sql"    # NL-17-M1b: the follow-altitude picker's persisted disclosure columns on memory
 MIGRATION_0020 = "0020_follow_altitude_events.sql"    # NL-17-M1b: Axel's medium-confidence instrument (append-only event log)
 MIGRATION_0021 = "0021_memory_follow_origin.sql"      # NL-17-M1b FIX LOOP 1: the origin-story bridge (recognize an altitude-renamed follow on its origin card)
+MIGRATION_0022 = "0022_memory_sync_guard.sql"          # NL-81: the sync resurrection guard (tombstones + generation stamp + dismissal provenance)
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
     MIGRATION_0008, MIGRATION_0009, MIGRATION_0010,
     MIGRATION_0011, MIGRATION_0012, MIGRATION_0013, MIGRATION_0014,
     MIGRATION_0015, MIGRATION_0016, MIGRATION_0017, MIGRATION_0018,
-    MIGRATION_0019, MIGRATION_0020, MIGRATION_0021,
+    MIGRATION_0019, MIGRATION_0020, MIGRATION_0021, MIGRATION_0022,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
@@ -51,6 +52,10 @@ EXPECTED_TABLES = {
     "thread_delta_supersessions", "watch_items", "thread_delta_provenance",
     "thread_closures", "concept_explanations", "thread_baselines",
     "follow_altitude_events",
+    # NL-81 (0022): the append-only deletion record + the sync generation/
+    # pairing state. Both DB-resident on purpose — the file is the untrusted
+    # side, so nothing tombstone-shaped is ever rendered into memory.md.
+    "memory_tombstones", "sync_state",
 }
 
 

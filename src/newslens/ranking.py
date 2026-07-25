@@ -1848,14 +1848,26 @@ def _run_rank_body(
         current_mtime = paths.MEMORY_FILE.stat().st_mtime_ns
     except OSError:
         current_mtime = None
-    if mem_mtime is not None and current_mtime != mem_mtime:
+    if mem_sync.stale_refusal:
+        # NL-81 EMBEDDED DEGRADE (contract §5.2, Onna's split). The opening
+        # sync refused the file, which means it imported NOTHING and rewrote
+        # NOTHING — so this refresh must not write either, or the "neither side
+        # mutated" property the refusal promises would be false by the end of
+        # the same run. The edition itself still completes on database state;
+        # the refusal is already in report.warnings (extended from
+        # mem_sync.summary_lines above), so it cannot be missed.
+        report.warnings.append(
+            "memory.md post-run refresh skipped too — the file is out of date "
+            "and this run left it, and the database, exactly as they were"
+        )
+    elif mem_mtime is not None and current_mtime != mem_mtime:
         report.warnings.append(
             "memory.md changed while this run was in flight — post-run refresh "
             "skipped to protect your edit; the next sync will reconcile it"
         )
     else:
         try:
-            paths.MEMORY_FILE.write_text(memory.render_file(con), encoding="utf-8")
+            memory.write_memory_file(con)
         except OSError as exc:  # non-fatal (opening sync validated
             # writability), but never silent:
             report.warnings.append(

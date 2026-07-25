@@ -597,7 +597,13 @@ def test_follow_stamps_reference_and_second_click_unfollows(ui):
     finally:
         con.close()
     assert status == "dismissed_user"
-    assert "(dismissed by you" in paths.MEMORY_FILE.read_text(encoding="utf-8")
+    # NL-81 §5.4: an unfollow through the UI IS the principal, so this line
+    # keeps "by you". Asserted on the LINE — the header prose contains the
+    # same phrase, so a whole-file substring test proves nothing.
+    assert [ln for ln in paths.MEMORY_FILE.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("- ") and "Chip exports" in ln] == [
+        "- Chip exports (dismissed by you "
+        + datetime.now(timezone.utc).strftime("%Y-%m-%d") + ")"]
 
 
 def test_follow_duplicate_topic_reports_already_active(ui):

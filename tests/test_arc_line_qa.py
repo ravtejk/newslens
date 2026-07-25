@@ -449,7 +449,8 @@ def test_0018_applies_over_armed_append_only_triggers_and_keeps_them(tmp_path):
     assert applied2 == ["0018_thread_state_arc_line.sql",
                         "0019_memory_follow_altitude.sql",
                         "0020_follow_altitude_events.sql",
-                        "0021_memory_follow_origin.sql"]
+                        "0021_memory_follow_origin.sql",
+                        "0022_memory_sync_guard.sql"]
     con = db.connect(db_path)
     try:
         row = con.execute("SELECT arc_line FROM thread_state").fetchone()

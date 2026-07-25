@@ -76,6 +76,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     mem_list.add_argument(
         "--status", choices=["active", "dormant", "dismissed_user", "all"], default="all"
     )
+    # NL-81: the interactive reconciliation surface. Every memory verb already
+    # syncs first; this makes the sync itself addressable so a REFUSAL has a
+    # named exit the refusal copy can point at.
+    mem_sync = memory_sub.add_parser(
+        "sync",
+        help="reconcile memory.md against the database and rewrite it. Refuses "
+        "(changing NOTHING on either side) if the file is not the one this "
+        "database last wrote — a restored backup or a reconstruction can "
+        "otherwise undo deletions you made",
+    )
+    mem_sync.add_argument(
+        "--accept-file", action="store_true", dest="accept_file",
+        help="import an out-of-date memory.md anyway — YOUR explicit file-wins "
+        "call. Deleted/renamed threads are still not resurrected, and "
+        "dismissals this applies are still attributed to the file, not to you",
+    )
     mem_add = memory_sub.add_parser("add", help="start tracking a thread")
     mem_add.add_argument("topic")
     mem_add.add_argument("--note", default="")
@@ -610,21 +626,48 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _memory_command(args) -> int:
-    """memory list/add/dismiss/note. Every verb: sync file->DB first (hand
+    """memory sync/list/add/dismiss/note. Every verb: sync file->DB first (hand
     edits are never overwritten unseen), apply the verb, resync so memory.md
-    reflects the result immediately."""
+    reflects the result immediately.
+
+    NL-81 — this is the INTERACTIVE surface, so a stale memory.md REFUSES here
+    (Onna's split: the embedded call sites degrade instead, because throwing at
+    3am over a stale file is worse than the disease). A refusal mutates neither
+    side and exits nonzero with the two ways out. `list` is the one exception:
+    it writes nothing at all, so it degrades to database state rather than
+    denying the principal the very inspection that diagnoses the refusal."""
     from . import db, memory
 
     db.migrate()
     con = db.connect()
     try:
         try:
-            sync = memory.sync_memory(con)
+            sync = memory.sync_memory(
+                con, accept_file=bool(getattr(args, "accept_file", False)))
         except memory.MemorySyncError as exc:
             print(str(exc), file=sys.stderr)
             return 1
         for line in sync.summary_lines():
             print(f"  ⚠ {line}")
+        if sync.stale_refusal:
+            if args.memory_command != "list":
+                return 1
+            print("  ⚠ showing DATABASE state only — memory.md was not imported "
+                  "and was not rewritten")
+        if args.memory_command == "sync":
+            if sync.accepted_file:
+                print("memory.md accepted over the database on your explicit "
+                      "--accept-file; memory.md rewritten from the result")
+            elif sync.bootstrapped:
+                print("memory.md had no generation stamp and agreed with the "
+                      "database — adopted and stamped")
+            elif sync.edits_applied:
+                print(f"applied {sync.edits_applied} edit(s) from memory.md; "
+                      "memory.md rewritten from the result")
+            else:
+                print("memory.md already agrees with the database — nothing to "
+                      "apply; memory.md rewritten in canonical form")
+            return 0
 
         if args.memory_command == "list":
             where = "" if args.status == "all" else " WHERE status = ?"
@@ -660,6 +703,16 @@ def _memory_command(args) -> int:
 
         if args.memory_command == "add":
             now = memory._utc_now_iso()
+            # NL-81 §5.1 — THE LIFT LANE. `memory add` is the contracted
+            # explicit way to bring back a thread the guard refuses to let a
+            # file resurrect. The lift is appended (never an update, never a
+            # delete) and it is disclosed: the principal should see that this
+            # command overrode a deletion record, not just that it worked.
+            lifted = memory.lift_tombstone(con, topic)
+            if lifted is not None:
+                past = ("deleted" if lifted["kind"] == "delete" else "renamed")
+                print(f"  ⚠ {topic!r} was {past} on {lifted['when']} — bringing "
+                      "it back on your explicit request (recorded)")
             if row is not None:
                 if row["status"] == "active":
                     print(f"already tracking {topic!r} (active)")
@@ -667,8 +720,8 @@ def _memory_command(args) -> int:
                 with con:
                     con.execute(
                         "UPDATE memory SET status = 'active',"
-                        " status_changed_at = ?, updated_at = ?"
-                        " WHERE id = ?", (now, now, row["id"]),
+                        " status_changed_at = ?, updated_at = ?,"
+                        " dismissed_via = NULL WHERE id = ?", (now, now, row["id"]),
                     )
                 print(f"revived {topic!r} (was {row['status']})")
             else:
@@ -702,9 +755,13 @@ def _memory_command(args) -> int:
                       file=sys.stderr)
                 return 1
             with con:
+                # NL-81 §5.4: a CLI verb IS the principal — this one keeps the
+                # "(dismissed by you …)" copy, and it is the only class that
+                # earns it.
                 con.execute(
                     "UPDATE memory SET status = 'dismissed_user',"
-                    " status_changed_at = ?, updated_at = ?"
+                    " status_changed_at = ?, updated_at = ?,"
+                    " dismissed_via = 'principal'"
                     " WHERE id = ?", (memory._utc_now_iso(), memory._utc_now_iso(), row["id"]),
                 )
             print(f"dismissed {topic!r} — stays visible in memory.md, never auto-revives")

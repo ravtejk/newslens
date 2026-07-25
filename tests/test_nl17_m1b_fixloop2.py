@@ -72,7 +72,13 @@ _ENTITY = dict(confidence="high", altitude="entity", primary_entity="Volkswagen"
 
 
 def _quiet_memory(monkeypatch):
-    monkeypatch.setattr(memory, "sync_memory", lambda con: None)
+    # NL-81: the stub must honour sync_memory's RETURN contract now — the
+    # server's _with_memory reads the SyncResult to decide whether the file may
+    # be rewritten (a stale file degrades: verb runs, file untouched). A clean
+    # SyncResult() is "lawful, nothing to disclose", i.e. exactly the quiet
+    # no-op these tests want.
+    monkeypatch.setattr(memory, "sync_memory",
+                        lambda con, **kw: memory.SyncResult())
     monkeypatch.setattr(memory, "write_memory_file", lambda con: None)
 
 
