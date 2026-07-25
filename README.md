@@ -107,6 +107,8 @@ and every missing item comes with its fix.
 | `newslens memory-repair-state (--thread-id N \| --all)` | NL-73: rewrites standing state for threads whose latest live delta postdates their state — full-ledger regeneration, stamped at the latest live delta's date. Refuses when nothing is stale; single selector enforced. Money-touching (~$0.01–0.03/stale thread); no dry-run — cap pre-checked per rewrite, mid-sweep budget exhaustion skips cleanly with spend disclosed. |
 | `newslens memory-baseline (--thread-id N \| --all) [--date YYYY-MM-DD]` | NL-77: writes the cold-start **backgrounder** (entry-zero baseline — "How we got here") for followed threads with an EMPTY ledger. One analyst-model call each (GPT-4o pointed backwards, ~$0.01–0.02, marked `external-synthesis`, cite currency `(baseline, <date>)`), validated (rejects bare continuity diction → an honest `failed` row, never fabricated), spend durable on the `thread_baselines` row. Cap pre-checked; single selector enforced; refuses when nothing awaits. **The `--all` retroactive sweep is a principal checkpoint — thread renames/deletes (the junk sweep) land first.** |
 | `scripts/sonar_spike` | The Sonar reliability gate — **passed live 2026-07-06** (5/5 probes, 2.9–6.6s, 9–10 search_results each, $0.0043). Re-runnable anytime; refuses politely without the key. |
+| `scripts/battery [--date] [--arms] [--lanes] [--run]` | The writer-register **model** battery (B4): one narrative artifact per model arm off the same variant-A prompt, for a date that already has a briefing row. Read-only on the record; artifacts under `data/battery/<date>/<model>__<lane>/`. **Dry-run by default** — `--run` makes the live calls, bounded by `BUDGET_CAP_USD_PER_RUN` (CHARGED dollars). Refuses a models×lanes grid (confound guard). |
+| `scripts/moat-battery {plan\|t1\|t2\|t3\|pack} [--run]` | The NL-75 **Phase-2 moat battery**: `t1` prose-first vs sectioned retro-pairs, `t2` the expression-ablation 2×2 (ledger-context on/off × form), `t3` the Concept B input pack ($0 — never makes an LLM call), `pack` the shuffled blind pack + sealed key, `plan` the whole-session cost disclosure. ONE writer model, held fixed — this is not a model A/B (that's `scripts/battery`), so there is deliberately no `--arms`. Read-only on the record; artifacts under `data/battery/<session>/phase2/`. **Dry-run by default**; the cap binds CHARGED dollars **per invocation**, so `plan`'s session total is the number to check against a spend authorisation. A 2×2 on an edition with no ledger content is BLOCKED as degenerate rather than spent. |
 
 Coming later (deliberately not stubbed): `read`/`listen`
 (M7 — these log the consumption events the day-30 falsifier is computed from;
@@ -190,6 +192,8 @@ migrations/          numbered .sql files; IF NOT EXISTS everywhere (re-apply saf
 prompts/             every LLM-facing prompt is a versioned file, never inline
 scripts/doctor       health check; works pre-install (stdlib-only bootstrap)
 scripts/sonar_spike  the Sonar reliability gate (passed 2026-07-06; re-runnable)
+scripts/battery      the writer-register model battery (dry-run default)
+scripts/moat-battery the NL-75 Phase-2 moat battery, T1/T2/T3 (dry-run default)
 src/newslens/        paths, db (stdlib-only), config, net, ingest, discovery, ranking, memory, doctor, cli
 sources.yaml         the principal's tiered outlet list + interests (seeded M2)
 memory.md            (gitignored) the hand-editable live-threads surface
