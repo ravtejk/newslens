@@ -8,6 +8,12 @@ audio/
 # Principal-editable memory surface (milestone 4) — personal state, not code.
 memory.md
 
+# Stage-0 M1: every non-default profile's whole world (its own DB, corpus,
+# artifacts, spend log, memory.md and sources.yaml). Reader state, not code —
+# and a tester's reading is the most private state this repo can hold. The
+# committed thing a profile is BORN from is templates/profile-sources.yaml.
+profiles/
+
 # Python
 .venv/
 venv/

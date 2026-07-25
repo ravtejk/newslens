@@ -50,26 +50,31 @@ SEPARATOR = " — "          # topic/note split in file lines (em-dash, spaced)
 
 VALID_STATUSES = ("active", "dormant", "dismissed_user")
 
-# The taxonomy contract's §C live-thread list (14 threads; the 5 marked
-# "acute twin" also hold a standing topic tag in sources.yaml — the thread
-# tracks the CURRENT acute instantiation and should be renamed to the
-# specific live event when one exists). Seeded only by first-run bootstrap.
-SEED_THREADS: List[Tuple[str, str]] = [
-    ("Iran War", ""),
-    ("Ceasefire", ""),
-    ("Ukraine War", ""),
-    ("Government Shutdown", ""),
-    ("DHS Funding", ""),
-    ("ROAD to Housing Act", ""),
-    ("Congressional Gridlock", ""),
-    ("Helium Shortage", ""),
-    ("Redemption Gates", "folds under the Private Credit tag; tracked here while a specific redemption-gate event is live"),
-    ("Strait of Hormuz", "acute twin of the standing tag — rename to the specific live event when one exists"),
-    ("China-Taiwan", "acute twin of the standing tag — rename to the specific live event when one exists"),
-    ("Credit Default Risk", "acute twin of the standing tag — rename to the specific live event when one exists"),
-    ("Recession Risk", "acute twin of the standing tag — rename to the specific live event when one exists"),
-    ("Stagflation", "acute twin of the standing tag — rename to the specific live event when one exists"),
-]
+# FIRST-RUN SEEDING IS KILLED (Stage-0 M1, 2026-07-25; M0 finding F1 / RED-1).
+#
+# What stood here: SEED_THREADS, the taxonomy contract's §C list of 14 live
+# threads (five carrying the principal's steering notes), planted into the
+# `memory` table by seed_if_first_run() on any empty-table + absent-memory.md
+# database. M0's cold-start pass proved mechanically that those 14 rows reach
+# the PAID rank prompt's thread vocabulary, the writer's ACTIVE THREADS block
+# WITH the steering notes, the rendered memory.md ("the live threads it's
+# tracking for you"), and the Following spine — i.e. a second reader's day-one
+# paper would claim a memory they never authored, steered by notes that are
+# not theirs.
+#
+# Killed, not founder-gated: (a) the founder's own install cannot reach it
+# anyway — his memory table has rows AND his memory.md exists, so the function
+# has returned 0 for him since M4; (b) the only surviving caller shape is his
+# own from-zero reinstall, where replanting a 2026-07-04 taxonomy over
+# whatever he actually follows today would be wrong, not helpful; (c) a gate
+# is a thing that can be tripped, and RED-1's contract is that a non-founder
+# profile be structurally unable to trip it. First-run population is now the
+# Stage-0 Commissioning (the reader's own first follow); `newslens profile
+# create` provisions a 0-byte memory.md — a lawful true-zero start, defence in
+# depth on top of this kill.
+#
+# The list is not lost: it lives in git history (last at fa26e45) and in
+# adr/0005-m4-memory-decisions.md §2.
 
 _HEADER = """# NewsLens memory — the live threads it's tracking for you
 <!--
@@ -718,25 +723,6 @@ def apply_dormancy(
     return went_dormant
 
 
-def seed_if_first_run(con: sqlite3.Connection) -> int:
-    """Bootstrap ONLY when the memory table is empty AND memory.md absent —
-    a migration replay or file edit can never resurrect dismissed threads."""
-    count = con.execute("SELECT COUNT(*) AS c FROM memory").fetchone()["c"]
-    if count or paths.MEMORY_FILE.exists():
-        return 0
-    now = _utc_now_iso()
-    with con:
-        for topic, note in SEED_THREADS:
-            con.execute(
-                "INSERT OR IGNORE INTO memory"
-                " (topic, status, principal_note, status_changed_at,"
-                "  created_at, updated_at)"
-                " VALUES (?, 'active', ?, ?, ?, ?)",
-                (topic, note or None, now, now, now),
-            )
-    return len(SEED_THREADS)
-
-
 def _check_stamp(con: sqlite3.Connection, text: str):
     """The recency/pairing precondition (NL-81 §5.2). Returns
     (verdict, detail) where verdict is one of:
@@ -794,7 +780,10 @@ def sync_memory(con: sqlite3.Connection, *,
     STALENESS ONLY — tombstone blocking and the attribution rule hold
     underneath it, always."""
     result = SyncResult()
-    result.seeded = seed_if_first_run(con)
+    # result.seeded stays 0, permanently: first-run seeding was killed in
+    # Stage-0 M1 (see the SEED_THREADS obituary near the top of this module).
+    # The field is kept so every caller, disclosure line and record that reads
+    # "seeded" keeps reading a truthful zero instead of an AttributeError.
 
     if paths.MEMORY_FILE.exists():
         try:

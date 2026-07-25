@@ -29,12 +29,43 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     parser.add_argument("--version", action="version", version=f"newslens {__version__}")
+    # Stage-0 M1: the profile dimension. Global (before the verb) because it
+    # selects WHICH WORLD every verb then operates on — database, corpus,
+    # spend log, memory.md. `default` is the founder's own world, unchanged
+    # and in place; every other profile lives under profiles/<name>/.
+    parser.add_argument(
+        "--profile", default=None, metavar="NAME",
+        help="which reader's world to operate on (default: 'default', the "
+        "founder's own). Overrides NEWSLENS_PROFILE. The profile must exist — "
+        "see `newslens profile create`",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser(
+    migrate_p = sub.add_parser(
         "migrate",
         help="create/upgrade the local SQLite database (idempotent; safe to re-run)",
     )
+    migrate_p.add_argument(
+        "--all-profiles", action="store_true", dest="all_profiles",
+        help="migrate EVERY profile's database, not just the active one",
+    )
+
+    profile_p = sub.add_parser(
+        "profile",
+        help="multi-reader profiles: create/list. Each profile owns its own "
+        "database, corpus, spend log, memory.md and sources.yaml; nothing is "
+        "shared and nothing is inherited",
+    )
+    profile_sub = profile_p.add_subparsers(dest="profile_command", required=True)
+    prof_create = profile_sub.add_parser(
+        "create",
+        help="provision a brand-new profile: fresh fully-migrated database, "
+        "empty memory.md, its own copy of the source catalog. Seeds nothing "
+        "and copies no other reader's state",
+    )
+    prof_create.add_argument("name")
+    profile_sub.add_parser("list", help="every profile and its honest status")
+
     sub.add_parser(
         "doctor",
         help="health check: env, keys, schema, sources (exit 0 = ready for a real run)",
@@ -252,19 +283,52 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args = parser.parse_args(argv)
 
+    # --- Stage-0 M1: resolve the active profile BEFORE any verb runs --------
+    # Every guarded path this process resolves from here on belongs to this
+    # profile. An unknown name is refused rather than created: db.connect()
+    # makes parent directories, so `--profile alcie` would otherwise mint a
+    # silent empty world and bury a reader's writes in it.
+    from . import profiles
+
+    try:
+        # set_profile(None) CLEARS any pin left by an earlier in-process call,
+        # so a second main() without --profile re-resolves from the
+        # environment instead of inheriting the last caller's reader.
+        active_profile = paths.set_profile(args.profile)
+        if args.command != "profile" and active_profile != paths.DEFAULT_PROFILE:
+            profiles.require_exists(active_profile)
+    except (paths.ProfileError, profiles.ProfileMissingError) as exc:
+        print(f"profile: {exc}", file=sys.stderr)
+        return 2
+    for line in profiles.redirection_warnings(active_profile):
+        print(f"warning: {line}", file=sys.stderr)
+
+    if args.command == "profile":
+        return _profile_command(args)
+
     if args.command == "migrate":
-        from . import db, paths
+        from . import db
 
         try:
-            ran = db.migrate()
+            if args.all_profiles:
+                ran_all = profiles.migrate_all()
+            else:
+                # db_path named explicitly, not left to whatever DB_PATH
+                # currently means: `migrate` is the one verb that CREATES a
+                # database, so pointing it at the wrong profile's world would
+                # mint state rather than merely read it.
+                ran_all = {active_profile:
+                           db.migrate(db_path=profiles.db_path_for(active_profile))}
         except Exception as exc:  # CLI boundary: loud, human-readable, nonzero
             print(f"migrate failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
-        if ran:
-            print(f"applied {len(ran)} migration(s): {', '.join(ran)}")
-        else:
-            print("database already up to date — nothing to apply")
-        print(f"database: {paths.DB_PATH}")
+        for slug, ran in ran_all.items():
+            label = "" if len(ran_all) == 1 else f"[{slug}] "
+            if ran:
+                print(f"{label}applied {len(ran)} migration(s): {', '.join(ran)}")
+            else:
+                print(f"{label}database already up to date — nothing to apply")
+            print(f"{label}database: {profiles.db_path_for(slug)}")
         return 0
 
     if args.command == "doctor":
@@ -622,6 +686,52 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     parser.error(f"unknown command: {args.command}")  # unreachable; argparse guards
+    return 2
+
+
+def _profile_command(args) -> int:
+    """`newslens profile create|list` — Stage-0 M1.
+
+    Never touches any profile but the one named. `create` refuses over an
+    existing directory and refuses the founder's own `default` outright."""
+    from . import paths, profiles
+
+    if args.profile_command == "create":
+        try:
+            st = profiles.create(args.name)
+        except (paths.ProfileError, profiles.ProfileExistsError,
+                FileNotFoundError) as exc:
+            print(f"profile create: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:                       # CLI boundary: loud
+            print(f"profile create failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1
+        print(f"created profile {st.slug!r}")
+        print(f"  root:      {st.root}")
+        print(f"  database:  {st.db_path} (fully migrated, empty)")
+        print("  memory.md: 0 bytes — nothing followed, nothing inherited")
+        print(f"  sources:   {paths.profile_layout(st.slug)['SOURCES_FILE']}"
+              " (org catalog; interests EMPTY by design)")
+        print("\nNext: choose this reader's interest tags in that sources.yaml, "
+              "then run:")
+        print(f"  newslens --profile {st.slug} doctor")
+        print(f"  newslens --profile {st.slug} generate")
+        return 0
+
+    if args.profile_command == "list":
+        active = paths.current_profile()
+        for st in profiles.inventory():
+            mark = "*" if st.slug == active else " "
+            print(f"{mark} {st.line()}")
+            for problem in st.problems:
+                print(f"    ! {problem}")
+        for stray in profiles.stray_directories():
+            print(f"  ? {stray}/ — not a valid profile name; ignored")
+        print("\n* = active profile (--profile / NEWSLENS_PROFILE)")
+        return 0
+
+    print(f"unknown profile command: {args.profile_command}", file=sys.stderr)
     return 2
 
 

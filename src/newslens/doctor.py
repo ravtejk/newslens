@@ -39,7 +39,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import config, llm, paths  # config/llm stdlib-only at import time
 
@@ -570,6 +570,35 @@ def check_database() -> List[Result]:
     #    This probe is the doctor's ONE deliberate write to real state — you
     #    cannot verify writability without writing. It cleans up after itself
     #    and never touches the database file.
+    #
+    #    Stage-0 M1, QA fix loop 1 — DEFENCE IN DEPTH at the minting site.
+    #    `mkdir(parents=True)` will happily bring a whole profile world into
+    #    existence, and that is how a typo'd NEWSLENS_PROFILE became a real
+    #    profile that every later verb then accepted. doctor.main and cli.main
+    #    both refuse unknown profiles now; this makes the refusal structural,
+    #    so a future entrypoint that forgets require_exists still cannot mint
+    #    a reader. Scoped precisely: only when the probe target actually lives
+    #    inside the missing profile root. Under a path redirection the fence
+    #    stands down (the target is sandbox by the seam's law) and the probe
+    #    then writes wherever the redirection points — including, if an
+    #    operator deliberately aims it inside the real profiles/ namespace,
+    #    minting a directory require_exists will later accept. That shape is
+    #    the operator's own hand (mkdir -p equivalent), disclosed rather than
+    #    guarded: treating redirected targets as real state would invert the
+    #    seam. (Gate FIX-1, QA charge-2 shapes X/Y/Z/W on the M1 record.)
+    _profile = paths.current_profile()
+    if _profile != paths.DEFAULT_PROFILE:
+        _root = paths.profile_root(_profile)
+        if not _root.is_dir() and _root in paths.DATA_DIR.parents:
+            out.append(
+                Result(
+                    FAIL,
+                    f"profile {_profile!r} does not exist ({_root}) — nothing "
+                    "was created. Check --profile/NEWSLENS_PROFILE for a typo, "
+                    f"or run: newslens profile create {_profile}",
+                )
+            )
+            return out
     try:
         paths.DATA_DIR.mkdir(parents=True, exist_ok=True)
         probe = paths.DATA_DIR / ".doctor-write-probe"
@@ -1000,6 +1029,20 @@ def cost_estimate() -> List[Result]:
 def run_doctor() -> int:
     print(f"NewsLens doctor · {datetime.now().strftime('%Y-%m-%d %H:%M %Z').strip()}")
     print(f"project: {paths.PROJECT_ROOT}")
+    # Stage-0 M1: say WHOSE world was checked. Every line below — database,
+    # sources, cost, TTS — is about this profile and no other; a report that
+    # did not name it would be read as the founder's by default.
+    #
+    # NL-98 (doctor guard-awareness) slots into check_database() below: one
+    # more Result comparing the live memory.md's stamp to this profile's
+    # sync_state row ("memory.md in sync (gen N)" / "STALE — syncs
+    # degrading"). Deliberately NOT built here — it is its own tracker row
+    # with its own QA leg. The profile line is its natural neighbour.
+    _profile = paths.current_profile()
+    print(f"profile: {_profile}"
+          + ("  (founder / default — data/, memory.md, sources.yaml in place)"
+             if _profile == paths.DEFAULT_PROFILE
+             else f"  (profiles/{_profile}/)"))
 
     sections: List[Tuple[str, List[Result]]] = []
 
@@ -1044,8 +1087,49 @@ def run_doctor() -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     paths.allow_real_paths()  # the real entrypoint (incident guard, 2026-07-14)
+    # Stage-0 M1: scripts/doctor is the pre-install entrypoint, so it takes the
+    # same --profile the CLI does (NEWSLENS_PROFILE works too). Hand-parsed:
+    # argparse here would change the doctor's one-flagless-command contract for
+    # every other invocation.
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--profile" in args:
+        i = args.index("--profile")
+        if i + 1 >= len(args):
+            print("--profile needs a name", file=sys.stderr)
+            return 2
+        name = args[i + 1]
+        del args[i:i + 2]
+    else:
+        name = next((a.split("=", 1)[1] for a in args
+                     if a.startswith("--profile=")), None)
+        args = [a for a in args if not a.startswith("--profile=")]
+    if args:
+        print(f"unknown doctor argument(s): {' '.join(args)} — the doctor takes "
+              "only --profile NAME", file=sys.stderr)
+        return 2
+    # QA fix loop 1 (F1/F2): resolve the profile the SAME way cli.main does —
+    # ALWAYS, however it was selected. The earlier version validated only the
+    # --profile flag, so NEWSLENS_PROFILE=ghost (the documented shell/launchd
+    # shape) walked past every check and the writability probe below MINTED
+    # profiles/ghost/data — after which require_exists sees a directory and
+    # every other verb accepts the typo too. set_profile(None) also CLEARS a
+    # pin left by an earlier in-process main(), which is the doctor's half of
+    # the same leak the CLI had.
+    from . import profiles
+    try:
+        active_profile = paths.set_profile(name)
+        if active_profile != paths.DEFAULT_PROFILE:
+            profiles.require_exists(active_profile)
+    except (paths.ProfileError, profiles.ProfileMissingError) as exc:
+        # Malformed names arrive here too (current_profile raises on a bad
+        # env value): a boundary refusal with the CLI's copy, never a
+        # traceback out of a health check.
+        print(f"profile: {exc}", file=sys.stderr)
+        return 2
+    for line in profiles.redirection_warnings(active_profile):
+        print(f"warning: {line}", file=sys.stderr)
     return run_doctor()
 
 

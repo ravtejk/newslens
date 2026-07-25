@@ -1,10 +1,15 @@
 # tests/ — QA-owned (team/ENGINEERING.md)
 
-Run with: `pytest` (installed via `pip install -e ".[dev]"`). ~15s, fully
+Run with: `pytest` (installed via `pip install -e ".[dev]"`). ~2.5 min, fully
 offline: every feed/API interaction hits a local fake server on 127.0.0.1;
 no real endpoint is ever called, no key is ever needed, and the presence of
 a real `.env` cannot change test behavior (sandboxed `ENV_FILE`, scrubbed
 process env, force-emptied key vars in every subprocess test).
+
+Gate/QA passes run the suite twice: ordered, then shuffled via a seeded
+out-of-tree plugin (in-tree from Stage-0 M2); the seed is recorded in the
+loop report. (No randomization plugin lives in the venv itself — a bare
+`pytest` is an ordered run.)
 
 Since M2 the shipped `sources.yaml` is the principal's live outlet list:
 tests pin its *structural* invariants only (never counts, never fetches),
@@ -34,7 +39,9 @@ fixtures.
 | `test_net.py` | Shared fetch seam: 4MB byte cap (loud per-source failure), 308 handler, `head_bytes`, one UA across ingest+doctor |
 | `test_ranking_validation.py` | `validate_payload` hostility (all-problems reporting, invented/reused ids — the 2026-07-04 live class, re-leveled tags, ranges), retry/429/quota/401 money paths via `OPENAI_CHAT_URL` seam, budget pre-call, spend-proof keyless/interest-less refusals, failed-run instrumentation, render-error class |
 | `test_ranking_selection.py` | Principal amendments A (bounded followed boost, generic flag, override-pool exclusion) and B (recency window, own-date exclusion, honesty line), override contract (pool/bar/cap/label), corroboration labels, archive-before-overwrite e2e |
-| `test_memory_sync.py` | The memory.md ⇄ SQLite sync contract (lifecycle v2): seeding guard, file-wins with dismissal audit, annotation round-trips, line-numbered hard stops with the file untouched, dormancy clock (mock-time), context cap/order, revive/reference surfaces, `prior_briefing_context` bounds, 0006 rebuild data survival + re-apply |
+| `test_stage0_m0_coldstart.py` | Cold-start empty-ledger acceptance contracts (M0): virgin profile seeds nothing (RED-1, green since M1), day-one silence, fresh-profile sync never refused, cross-profile identity refusal, strictly-prior rung (a), validators bite on empty, virgin serving logs no phantom read. RED-2 (script continuity net) parked `xfail(strict)` for M2 |
+| `test_stage0_m1_profiles.py` | The guarded profile dimension (M1): zero-move default layout == `_GUARDED`, profile paths refused to an unsanctioned process, `set_profile` sets no redirection var (the seam-inversion pin), slug refusals, provisioning that inherits nothing (fully-migrated DB, 0-byte memory.md, committed catalog with empty interests), per-profile isolation + NL-81 pairing identity, `migrate --all-profiles`, profile-aware doctor, and the re-anchored end-to-end routing proof |
+| `test_memory_sync.py` | The memory.md ⇄ SQLite sync contract (lifecycle v2): the seeding KILL pin, file-wins with dismissal audit, annotation round-trips, line-numbered hard stops with the file untouched, dormancy clock (mock-time), context cap/order, revive/reference surfaces, `prior_briefing_context` bounds, 0006 rebuild data survival + re-apply |
 | `test_memory_ranking.py` | Zero-influence at all three layers (score/selection/vocabulary), revival e2e products (DB + slot JSON + meta.revivals + dated warning + same-run re-render), dismissed_user absent from prompt and unrevivable, sync-first loud + BUG-6-logged, item-11 NULLing, truncation named precisely, Retry-After clamp, `[id=N]` armor, invented-ids hard-reject (no repair extension) |
 
 ## KNOWN-RED convention
@@ -261,8 +268,12 @@ verbs, ranking wiring. Offline-testable surfaces:
   parse problems -> MemorySyncError naming line numbers (duplicate topics,
   unknown headings, pre-section bullets, unreadable file). Rank turns sync
   errors into RankingError (BUG-6-logged).
-- `memory.seed_if_first_run`: fires ONLY on empty-table + absent-file; 14
-  threads (taxonomy §C — the 5 borderline twins are inside the 14).
+- **First-run seeding: KILLED at Stage-0 M1** (2026-07-25, M0 finding F1 /
+  RED-1). `memory.seed_if_first_run` and `memory.SEED_THREADS` no longer
+  exist; a virgin database stays empty through its first embedded sync and
+  `SyncResult.seeded` is a permanent, truthful 0. Pins:
+  `test_memory_sync.py::test_first_run_seeds_nothing_the_m4_bootstrap_is_dead`
+  and `test_stage0_m0_coldstart.py` RED-1.
 - `memory.apply_staleness`: active->stale at >14d from max(created_at,
   referenced briefing's generated_at); note edits do NOT reset the clock;
   transitions surfaced via SyncResult.went_stale -> rank warnings.

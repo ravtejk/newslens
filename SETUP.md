@@ -146,6 +146,42 @@ feed URL live-verified, tiered (`full` / `headline_only` / `cautious` /
 Then: `newslens ingest` pulls everything enabled into the local DB. Re-running
 it the same UTC day updates in place — never duplicates.
 
+## 3b. Profiles — a second reader on the same machine (Stage-0 M1)
+
+Everything above describes **your** world, which NewsLens calls the `default`
+profile. Adding profiles moves none of your files: `data/`, `memory.md` and
+`sources.yaml` stay exactly where they are.
+
+```bash
+newslens profile create tester1     # fresh DB, empty memory.md, own catalog
+newslens profile list               # honest status per profile; * = active
+newslens --profile tester1 doctor   # health check for THAT reader's world
+newslens --profile tester1 generate
+newslens migrate --all-profiles     # upgrade every profile's database at once
+```
+
+What a new profile gets, and what it deliberately does not:
+
+- **Its own** database, corpus, generated artifacts, spend log
+  (`generation_log.jsonl`), `memory.md` and `sources.yaml`, all under
+  `profiles/<name>/` (gitignored — a tester's reading is private state).
+- **Nothing inherited.** No threads (there is no first-run seeding any more),
+  no notes, no interest tags. Its `sources.yaml` is a copy of the committed
+  catalog `templates/profile-sources.yaml` with the interests block empty — so
+  `newslens --profile <name> rank` **refuses by name** until that reader
+  chooses their own tags. That refusal is intentional: choosing is the
+  reader's first act, never something inherited from you.
+- **The same `.env`.** Keys are machine credentials, not reader state, and one
+  machine has one set. Per-reader *spend* still separates, because each
+  profile logs to its own `generation_log.jsonl`.
+- **The same safety guard.** A profile's state is real state: refused to an
+  unsanctioned process exactly like yours, never a sandbox redirection.
+
+`NEWSLENS_PROFILE=tester1` does the same thing as `--profile` for a shell or a
+launchd job; the flag wins when both are set. An unknown or malformed name is
+**refused, never created** — so a typo cannot quietly mint an empty world and
+bury a reader's writes in it.
+
 ## 4. Verify
 
 ```bash

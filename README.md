@@ -34,7 +34,9 @@ idempotent, per-feed graceful degradation), the editorial pass (`newslens
 rank` — clustering, top 1–5 by world + personal impact, bounded
 followed-analyst boost, 1-slot labeled urgency override, recency window with
 an honesty line, corroboration labels, append-only `ranking_runs`
-instrumentation), and live memory: threads seeded from the taxonomy contract,
+instrumentation), and live memory: threads you follow explicitly (the M4
+first-run taxonomy bootstrap was **killed at Stage-0 M1** — a new reader's
+memory starts genuinely empty; ADR-0019 §2.5),
 matched threads scoring at full personal weight and recording their
 referencing briefing, the three-state lifecycle (`active` / `dormant` /
 `dismissed_user`, ADR-0006) with 14-day dormancy and earned-slot
@@ -91,7 +93,10 @@ and every missing item comes with its fix.
 
 | Command | What it does |
 |---|---|
-| `newslens migrate` | Create/upgrade `data/newslens.db`. Idempotent — safe to re-run any time. |
+| `newslens migrate [--all-profiles]` | Create/upgrade `data/newslens.db`. Idempotent — safe to re-run any time. `--all-profiles` upgrades every profile's database (Stage-0 M1). |
+| `newslens --profile <name> <any verb>` | **Stage-0 M1 — the profile dimension.** Run any verb as a different reader. `default` (the flag's default) is *your* world: `data/`, `memory.md`, `sources.yaml` exactly where they have always been, unmoved — adding profiles moves none of your files. Every other profile owns its own database, corpus, artifacts, spend log, `memory.md` and `sources.yaml` under `profiles/<name>/`; nothing is shared and nothing is inherited (`.env` is the one deliberate exception — keys are machine credentials, not reader state). A profile's state sits behind the **same** real-paths guard as yours: it is real state, never a sandbox redirection. An unknown name is refused, never created. `NEWSLENS_PROFILE=<name>` sets the same thing for a shell or a launchd job; the flag wins over the variable. |
+| `newslens profile create <name>` | Provision a new reader: fresh fully-migrated database, a **0-byte `memory.md`**, its own directories, and its own copy of the committed source catalog (`templates/profile-sources.yaml`) with the **interests block empty**. Seeds nothing and copies no other reader's state — so `rank` refuses by name until that reader picks their own interest tags (that choosing is the Stage-0 Commissioning). Refuses over an existing profile, and refuses `default`. |
+| `newslens profile list` | Every profile with honest status: schema up to date or N pending, active thread count, `memory.md` size + sync generation, whether interests are set (i.e. whether that profile has been commissioned yet). `*` marks the active profile. |
 | `newslens diagnose` | **The readout (M8).** Read-only, offline, $0: the day-30 falsifier (trailing-14-day distinct open days, construction traffic flagged) with its three recorded caveats printed alongside, plus the generation record — tiers, framings, override rate, editor tightening + hedge warns, disclosure buckets, cost totals. The day-14 diagnostic runs exactly this. |
 | `newslens serve [--port 8484]` | **The UI (M7).** Local web app at `http://127.0.0.1:8484/` — localhost-only by design. Today (tiered stories, tap-away generation details, play-the-episode, per-story follow), Following (ongoing threads with edit-note/stop/resume/delete, topic and writer editors that round-trip `sources.yaml`), Archive (every edition, tap to reopen). Regenerate lives in Settings. Page views and episode plays land in `consumption_events` (the day-30 falsifier's data — see ADR-0010); thread verbs share the CLI's exact code path. stdlib only, no build step, dies with the terminal. |
 | `newslens doctor` / `scripts/doctor` | Health check: Python/deps, keys (validated with harmless read-only calls), schema, `sources.yaml` (tiers, disabled, reference-only), feed URLs, cost estimate. `scripts/doctor` works even before `pip install`. |
@@ -132,6 +137,7 @@ rule). You fill `.env` yourself; agents only ever touch `.env.example`.
 | `GNEWS_API_KEY` | No — leave blank | Fallback discovery vendor, deliberately ungranted unless the Sonar reliability spike fails. |
 | `NEWSLENS_REAL_DATA` | No — safety override, not a credential | The real-paths guard's explicit opt-in (incident 2026-07-14: an ad-hoc probe script clobbered the real `generation_log.jsonl` through `paths.DATA_DIR`). `DATA_DIR`/`DB_PATH` refuse to resolve outside the real entrypoints (`newslens …`, `scripts/doctor`); set `NEWSLENS_REAL_DATA=1` only for a deliberate one-off ad-hoc use — the setting is transcript-greppable by design. (The guard's former "under pytest" arm is gone — children spawned by tests inherit `PYTEST_CURRENT_TEST`, which silently sanctioned the QA suite's doctor child against the real `data/`; v7-M1 pinhole, 2026-07-14.) LIMIT: a script hardcoding the `data/...` path string bypasses the guard; the "no real-state writes during probing" rule (ENGINEERING.md, 2026-07-07) remains law. |
 | `NEWSLENS_DATA_DIR` / `NEWSLENS_DB_PATH` | No — sandbox redirection, not a credential | Resolve `paths.DATA_DIR`/`paths.DB_PATH` to the given location instead of the checkout's real `data/` — redirection outranks sanction, so no real-data opt-in is involved. This is the only sandbox that crosses a process boundary: the QA suite exports per-test values so every child it spawns (doctor, CLI) lands in the test sandbox (v7-M1 pinhole fix, 2026-07-14). `NEWSLENS_DB_PATH` defaults to `<NEWSLENS_DATA_DIR>/newslens.db` when only the dir is set. **Seam completed 2026-07-16** (after a sandboxed probe rewrote the real `memory.md` through the un-seamed `MEMORY_FILE` path — second pinhole-class instance): `NEWSLENS_SOURCES_FILE` / `NEWSLENS_ENV_FILE` / `NEWSLENS_MEMORY_FILE` redirect the principal-owned files the same way; all five paths sit behind one guard. |
+| `NEWSLENS_PROFILE` | No — a selector, not a credential | **Stage-0 M1.** Which reader's world every verb operates on; same thing `--profile` sets, and the flag wins. Unset (or `default`) = your own world, resolved exactly as it was before profiles existed. Deliberately **not** in `.env.example`: it is a process-environment selector like `NEWSLENS_DATA_DIR`, read before `.env` is ever loaded, and `.env` itself is shared across profiles. A malformed value raises rather than falling back to `default` — silently degrading would route a tester's writes into yours. A well-formed name that has never been created is refused, never provisioned. **This is NOT a redirection var:** it selects a profile *inside* the real-paths guard, so a profile's state is refused to an unsanctioned process exactly like yours (multi-user brief 2026-07-16 §1, "the seam's law is redirection = not real state"). |
 
 ## What's real vs. faked
 
@@ -195,10 +201,12 @@ scripts/doctor       health check; works pre-install (stdlib-only bootstrap)
 scripts/sonar_spike  the Sonar reliability gate (passed 2026-07-06; re-runnable)
 scripts/battery      the writer-register model battery (dry-run default)
 scripts/moat-battery the NL-75 Phase-2 moat battery, T1/T2/T3 (dry-run default)
-src/newslens/        paths, db (stdlib-only), config, net, ingest, discovery, ranking, memory, doctor, cli
-sources.yaml         the principal's tiered outlet list + interests (seeded M2)
-memory.md            (gitignored) the hand-editable live-threads surface
-data/                (gitignored) SQLite DB and generated artifacts
+src/newslens/        paths, db (stdlib-only), config, net, ingest, discovery, ranking, memory, profiles, doctor, cli
+templates/           committed artifacts a new profile is BORN from (profile-sources.yaml)
+sources.yaml         the principal's tiered outlet list + interests (seeded M2) — the DEFAULT profile's
+memory.md            (gitignored) the hand-editable live-threads surface — the DEFAULT profile's
+data/                (gitignored) SQLite DB and generated artifacts — the DEFAULT profile's
+profiles/<name>/     (gitignored) one non-default reader's whole world: data/, memory.md, sources.yaml
 adr/                 one short file per significant technical decision
 NOTES-M2.md          living carryover file between milestones
 tests/               QA-owned; run with: pytest

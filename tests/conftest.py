@@ -188,11 +188,16 @@ _REAL_STATE_FILES = (paths._GUARDED["SOURCES_FILE"],
                      paths._GUARDED["ENV_FILE"],
                      paths._GUARDED["DB_PATH"],
                      _REAL_DATA_DIR / "generation_log.jsonl")
+# Stage-0 M1: profiles/ is real state too — every non-default reader's whole
+# world lives there. No suite test may create, provision or migrate a REAL
+# profile; watching the directory makes that a mechanism instead of a hope
+# (the profile tests provision inside tmp_path, via paths.anchor_dir()).
+_REAL_PROFILES_DIR = paths.PROJECT_ROOT / paths.PROFILES_DIRNAME
 
 
 def _real_state_snapshot():
     snap = {}
-    for d in (_REAL_DATA_DIR, _REAL_DATA_DIR / "briefings"):
+    for d in (_REAL_DATA_DIR, _REAL_DATA_DIR / "briefings", _REAL_PROFILES_DIR):
         try:
             st = os.stat(d)
             snap[str(d)] = (st.st_mtime_ns, tuple(sorted(os.listdir(d))))
@@ -244,6 +249,13 @@ SCRUBBED_ENV_VARS = [
     "NEWSLENS_SOURCES_FILE",
     "NEWSLENS_ENV_FILE",
     "NEWSLENS_MEMORY_FILE",
+    # Stage-0 M1: the profile selector. The principal runs `serve` from a
+    # shell that may legitimately export this, and that ambient value must
+    # never decide which world a test resolves — every test starts as the
+    # founder. (set_profile() deliberately does NOT export it, so there is no
+    # in-test writer; the in-PROCESS half of the leak is handled by the
+    # _PROFILE_OVERRIDE reset in sandbox_paths below.)
+    "NEWSLENS_PROFILE",
     "OPENAI_API_KEY",
     "PERPLEXITY_API_KEY",
     "GNEWS_API_KEY",
@@ -365,6 +377,11 @@ def sandbox_paths(tmp_path, monkeypatch, scrub_env):
     # sanction and nothing unflips it; reset per test so a gap after a CLI
     # test never inherits the sanction of the test that ran before.
     monkeypatch.setattr(paths, "_REAL_PATHS_ALLOWED", False)
+    # Same reasoning for the Stage-0 M1 profile pin: an in-process
+    # cli.main(["--profile", "x", ...]) sets a module-level override that
+    # nothing unsets. Every test starts in the founder's default profile.
+    # (The NEWSLENS_PROFILE env half is handled by scrub_env above.)
+    monkeypatch.setattr(paths, "_PROFILE_OVERRIDE", None)
 
     sources = tmp_path / "sources.yaml"
     sources.write_text(SYNTHETIC_TEMPLATE, encoding="utf-8")

@@ -816,6 +816,42 @@ def _find_interest_list(lines: List[str], level: str) -> Tuple[int, int]:
     return (start, len(lines)) if start >= 0 else (-1, -1)
 
 
+def _open_empty_flow_list(lines: List[str], key_index: int, yaml_level: str) -> bool:
+    """Rewrite `broad: []` in place to the bare-key form, so a block-sequence
+    item can be appended under it. Returns True if it changed the line.
+
+    Stage-0 M1, QA fix loop 1 (F3). An EMPTY flow list has no block sequence
+    to append to: inserting "    - X" beneath it yields invalid YAML, so the
+    editor's own validator reverts and the reader is told the edit failed.
+    That shut the add-your-first-interest door on every freshly provisioned
+    profile — the one act the Commissioning routes a new reader toward — and
+    on any hand-written `broad: []` besides. Bare-key IS this editor's own
+    canonical empty shape: it is exactly what topic_remove leaves behind when
+    you delete your last interest.
+
+    Deliberately narrow. A POPULATED flow list (`broad: [Alpha, Beta]`) is
+    left completely alone: converting it means moving items, which is a
+    different and riskier edit than this fix loop is scoped for, and its
+    current behaviour (honest revert, file restored intact) is already safe.
+    """
+    if not 0 <= key_index < len(lines):
+        return False
+    line = lines[key_index]
+    body, sep, comment = line.partition("#")
+    if body.replace(" ", "") != f"{yaml_level}:[]":
+        return False
+    indent = line[:len(line) - len(line.lstrip())]
+    tail = ""
+    if sep:
+        # Keep the original run of spaces before the '#' so the column stays
+        # aligned — and never drop it to zero: `broad:#note` has no space
+        # before the hash, so YAML reads it as a scalar, not a comment.
+        gap = body[body.rindex("]") + 1:] or "  "
+        tail = f"{gap}{sep}{comment}"
+    lines[key_index] = f"{indent}{yaml_level}:{tail}"
+    return True
+
+
 def _bad_name(name: str) -> str:
     """Structural characters would change sources.yaml's meaning (M7 gate
     finding 1 follow-on): reject with a friendly error before surgery."""
@@ -840,6 +876,7 @@ def topic_add(name: str, level: str) -> Tuple[bool, str]:
         start, end = _find_interest_list(lines, yaml_level)
         if start < 0:
             return False, f"could not locate interests.{yaml_level} in sources.yaml", lines
+        _open_empty_flow_list(lines, start - 1, yaml_level)
         existing = {ln.strip()[1:].split("#")[0].strip().lower()
                     for ln in lines[start:end] if ln.strip().startswith("-")}
         if name.lower() in existing:

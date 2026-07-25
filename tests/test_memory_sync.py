@@ -113,19 +113,31 @@ def minimal(con, line: str) -> str:
 
 
 # --- seeding guard ---------------------------------------------------------------
+#
+# INVERTED at Stage-0 M1 (2026-07-25). This test used to assert the OPPOSITE:
+# that a first run seeds the founder's 14-thread taxonomy (SEED_THREADS) into
+# an empty database. M0's cold-start pass (finding F1 / RED-1) proved that
+# behaviour poisons every profile but the founder's, so the bootstrap was
+# killed outright and this pin now guards the kill. The two tests below it are
+# untouched — they already asserted `seeded == 0` and still do.
 
-def test_first_run_seeds_the_14_taxonomy_threads(migrated_con, memfile):
-    assert len(memory.SEED_THREADS) == 14
+def test_first_run_seeds_nothing_the_m4_bootstrap_is_dead(migrated_con, memfile):
+    """RED-1's law at the unit level: an empty table + absent memory.md is a
+    TRUE-ZERO start. No taxonomy, no notes, no rows — the reader's own first
+    follow is the only sanctioned first write."""
+    assert not hasattr(memory, "SEED_THREADS")
+    assert not hasattr(memory, "seed_if_first_run")
     result = memory.sync_memory(migrated_con)
-    assert result.seeded == 14
-    assert memfile.exists()
+    assert result.seeded == 0
+    assert memfile.exists()          # the file is still rendered, just empty
     text = memfile.read_text(encoding="utf-8")
-    assert "## Active threads" in text and "- Iran War" in text
-    # Second sync: no re-seed, no duplicates.
+    assert [ln for ln in text.splitlines() if ln.startswith("- ")] == []
+    for founder_topic in ("Iran War", "Strait of Hormuz", "Stagflation"):
+        assert founder_topic not in text
     again = memory.sync_memory(migrated_con)
     assert again.seeded == 0
     count = migrated_con.execute("SELECT COUNT(*) FROM memory").fetchone()[0]
-    assert count == 14
+    assert count == 0
 
 
 def test_no_reseed_when_table_has_rows_even_if_file_deleted(migrated_con, memfile):
