@@ -391,6 +391,37 @@ def _estimate_usd(cfg: "llm.SeatConfig", system: str, thread: ThreadInput) -> fl
                  + (RESOLVER_MAX_TOKENS / 1e6) * cfg.usd_per_mtok_out, 6)
 
 
+def resolve_cost_gate(topic: str, env: Optional[Dict[str, str]] = None
+                      ) -> Tuple[bool, float, float]:
+    """The INTERACTIVE resolve's budget gate: `(allowed, est_usd, cap_usd)`.
+
+    R1 (2026-07-25, PREFLIGHT gate order): the web tap (`server._api_follow_
+    resolve`) reached the paid resolver with NO cap check — main()'s cumulative
+    gate below only ever covered the batch falsifier. This is that same
+    arithmetic, exposed once so the two callers cannot drift (the one-validator
+    discipline config.budget_cap_usd_per_run already carries): the SAME
+    _estimate_usd against the SAME cap. The web tap is a SINGLE resolve, so
+    there is no cumulative term — the only question is whether one call's
+    shadow estimate clears the run cap.
+
+    Prices via resolve_seat, NOT effective_seat: this is a COST question, not a
+    lane-availability one. A missing `claude` binary must not raise here — it
+    still degrades through resolve_altitude's own failure path, where the
+    reader's act is preserved as a this-story commit. Seat prices are
+    lane-independent (usd_per_mtok_* live on the seat row, not the lane), so
+    the estimate is identical either way.
+
+    Raises ValueError only from budget_cap_usd_per_run on a malformed cap — the
+    caller surfaces that as a disclosed config error, never a silent pass.
+    """
+    env = os.environ if env is None else env
+    cfg = llm.resolve_seat(SEAT, env)
+    est = _estimate_usd(cfg, _system_law(),
+                        ThreadInput(thread_id=None, topic=topic))
+    cap = config.budget_cap_usd_per_run(env)
+    return est <= cap, est, cap
+
+
 # ---------------------------------------------------------------------------
 # The falsifier instrument (dry-run default; --run principal-executed)
 # ---------------------------------------------------------------------------

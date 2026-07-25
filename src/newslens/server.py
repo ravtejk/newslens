@@ -3782,6 +3782,29 @@ class Handler(BaseHTTPRequestHandler):
                 "altitude": existing.get("altitude") or "",
                 "disclosure": existing.get("disclosure") or "",
                 "alt_label": existing.get("alt_label") or ""})
+        # R1 CAP GATE (2026-07-25, PREFLIGHT gate order). Everything above this
+        # line is free (a read-only guard lookup); everything below can SPEND.
+        # This route used to reach the paid resolver with no budget check at all
+        # — follow_altitude.main's cumulative gate only ever covered the batch
+        # falsifier. resolve_cost_gate is that same arithmetic (one estimate,
+        # one cap, one implementation). Refuse BEFORE any transport, disclosed,
+        # never silent; a refusal commits NOTHING, which is why it must not wear
+        # the FOLLOW_DEGRADE_* copy. 409 matches _api_generate's staleness
+        # refusal: a well-formed request declined on policy.
+        try:
+            allowed, est_usd, cap_usd = follow_altitude.resolve_cost_gate(headline)
+        except ValueError as exc:        # malformed BUDGET_CAP_USD_PER_RUN
+            return self._send_json(
+                {"ok": False, "state": "refused",
+                 "error": labels.FOLLOW_CAP_REFUSAL, "detail": str(exc)}, 409)
+        if not allowed:
+            return self._send_json(
+                {"ok": False, "state": "refused",
+                 "error": labels.FOLLOW_CAP_REFUSAL,
+                 "detail": (f"estimated resolve ${est_usd:.5f} exceeds "
+                            f"BUDGET_CAP_USD_PER_RUN ${cap_usd:.2f} — no call "
+                            "was made and nothing was followed"),
+                 "est_usd": est_usd, "cap_usd": cap_usd}, 409)
         try:
             res = follow_altitude.resolve_altitude(
                 follow_altitude.ThreadInput(thread_id=None, topic=headline),

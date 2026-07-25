@@ -161,6 +161,15 @@ FOLLOW_DEGRADE_COMMITTED = FOLLOW_DEGRADE_LEAD + " " + FOLLOW_DEGRADE_UPGRADE
 # implementer's plainest register candidate, not a settled copy call; the gate /
 # content own the final wording.
 FOLLOW_SWITCH_FAILED = "Couldn't switch just now — try again."
+# Cap refusal (R1, 2026-07-25): the resolve was REFUSED before any call because
+# one resolve's estimate alone exceeds BUDGET_CAP_USD_PER_RUN. Distinct from
+# FOLLOW_DEGRADE_* — nothing was attempted and nothing was committed, so the
+# copy must not imply a transient the reader can retry away. FLAGGED FOR THE
+# GATE: plainest-register candidate, not a settled copy call; content owns the
+# final wording.
+FOLLOW_CAP_REFUSAL = (
+    "Couldn't work out the follow — the run budget cap is set below what one "
+    "resolve costs. Raise BUDGET_CAP_USD_PER_RUN, or follow just this story.")
 # RETIRED 2026-07-18 (M1b), retired-but-kept so nothing imports a dangling name
 # (KICKER_LEAD precedent). The instant-flip toast and static active label are
 # replaced by the inline resolving→committed disclosure; no surface renders them.
