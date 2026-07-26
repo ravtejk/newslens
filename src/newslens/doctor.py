@@ -799,23 +799,32 @@ def check_tts() -> List[Result]:
     problem = audio.kokoro_ready()
     if engine == "openai":
         out.append(Result(INFO, "settings.tts_engine = openai (gpt-4o-mini-tts, "
-                                "~$0.015/min on the OpenAI key) — the default "
-                                "(principal ear-test ruling 2026-07-06)"))
+                                "~$0.015/min on the OpenAI key) — an EXPLICIT "
+                                "pin, and the principal's ear-test pick (voice "
+                                "ruling 2026-07-06). The code default is kokoro "
+                                "($0) per the $0-run law (2026-07-25)"))
         if problem:
             out.append(Result(INFO, f"local kokoro engine not installed ({problem}) "
                                     "— fine while the openai engine is selected"))
         return out
-    # engine == "kokoro" now only happens via an explicit sources.yaml pin
-    # (the default flipped to openai, P3.1 item 4). Nudge on the cap-change
-    # pattern: state the recommended default + the ruling, the pin wins, and
-    # the doctor NEVER edits sources.yaml for the principal.
-    out.append(Result(WARN, (
-        "settings.tts_engine pinned to kokoro — the recommended default is "
-        "now openai (gpt-4o-mini-tts; principal ear-test ruling 2026-07-06). "
-        "kokoro stays fully built as the $0 local fallback; your pin wins — "
-        "switch by editing sources.yaml yourself")))
+    # engine == "kokoro" is the DEFAULT path (NL-96 / the $0-run law,
+    # 2026-07-25) as well as any explicit kokoro pin — and this branch cannot
+    # distinguish the two, because config resolves the default before the
+    # doctor ever sees it. So NOTHING here may nudge toward the paid engine:
+    # against a law that says a run costs $0, that advice would be wrong for
+    # the principal (whose pin is law-compliant) and wrong for every no-pin
+    # fresh profile. A law-compliant default state is not warn-worthy — INFO.
+    # The doctor NEVER edits sources.yaml for the principal.
+    out.append(Result(INFO, (
+        "settings.tts_engine = kokoro (local, $0/episode) — the code default "
+        "per the $0-run law (2026-07-25). The 2026-07-06 ear test preferred "
+        "the openai VOICE (gpt-4o-mini-tts, ~$0.015/min); one explicit "
+        "`settings.tts_engine: openai` line in sources.yaml selects it")))
     if problem:
-        out.append(Result(FAIL, f"tts (kokoro, pinned in sources.yaml): {problem}"))
+        # Same shape-2 correction: "pinned in sources.yaml" was false on the
+        # default path. Name the SELECTED engine, claim nothing about how it
+        # got selected.
+        out.append(Result(FAIL, f"tts (kokoro, the selected engine): {problem}"))
         return out
     if os.environ.get("NEWSLENS_DOCTOR_TTS_SYNTH") == "0":
         out.append(Result(INFO, "tts real-synthesis check skipped "
@@ -1012,11 +1021,12 @@ def cost_estimate() -> List[Result]:
             f"~$0.90-1.30/edition; the budget cap defaults to "
             f"${cap:.2f}/run (the shadow is UNDISCOUNTED — the cap OVER-counts, "
             "the safe direction for a money guard). The exact figure is MEASURED "
-            "at the first real edition + the ~07-24 battery, never assumed. Plus "
-            "~$0.07/run audio on the default TTS — gpt-4o-mini-tts (~$0.015/min; "
-            "the 2026-07-06 ear-test ruling; measured $0.067 on a 4.4-min "
-            "episode). Pin settings.tts_engine: kokoro for the $0 local "
-            "fallback. Real per-step costs land in briefings.token_cost on every "
+            "at the first real edition + the ~07-24 battery, never assumed. "
+            "Audio on the DEFAULT TTS adds $0 — kokoro runs locally (the $0-run "
+            "law, 2026-07-25). Pin settings.tts_engine: openai and audio adds "
+            "~$0.07/run — gpt-4o-mini-tts at ~$0.015/min, measured $0.067 on a "
+            "4.4-min episode (the 2026-07-06 ear-test ruling, on voice). Real "
+            "per-step costs land in briefings.token_cost on every "
             "generate (per-seat model/lane/shadow keys)",
         )
     ]

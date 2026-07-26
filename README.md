@@ -60,11 +60,13 @@ spoken pass under the hard fact-subset/hedge rules with editorial license
 over script attribution (A5). Selection runs on tags + world impact only —
 threads are recorded and woven into continuity, never steering
 (`settings.threads_steer_selection`, A6). Audio ships at M6: `generate` ends by voicing the
-script — gpt-4o-mini-tts by default (~$0.015/min on the OpenAI key; the
-principal's ear-test pick, ruling 2026-07-06) or Kokoro-82M locally as the
-fully built $0 fallback (isolated engine env via `scripts/setup_tts`;
-measured ~4.4x realtime on this machine — below the community 14x floor,
-on record; the 4.4x re-open is moot while kokoro isn't default) via
+script — Kokoro-82M locally by default (NL-96, the $0-run law 2026-07-25: an
+unstated engine fails cheap, never paid; isolated engine env via
+`scripts/setup_tts`; measured ~4.4x realtime on this machine — below the
+community 14x floor, on record, and that re-open is live again now that
+kokoro is the default) or gpt-4o-mini-tts by explicit pin (~$0.015/min on the
+OpenAI key; the principal's ear-test pick, ruling 2026-07-06 — a VOICE ruling
+that stands, superseded on SPEND only), both via
 `settings.tts_engine`; a GPT-4o **editor pass** tightens
 every draft (cut/concretize only, never adds facts, fully re-validated,
 disclosed in the run log) before validation. Spec:
@@ -128,7 +130,7 @@ rule). You fill `.env` yourself; agents only ever touch `.env.example`.
 
 | Var | Required | Why / scope |
 |---|---|---|
-| `OPENAI_API_KEY` | Yes | Text generation on GPT-4o: the narrative (writer), analyst, and synthesis seats (ranking, editorial-tighten, and TTS-script moved to the Claude lane in the B2 depth flip, 2026-07-16 — see `ANTHROPIC_API_KEY`). Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **Audio: gpt-4o-mini-tts on this same key is the default** (~$0.015/min, ~+$0.07/run — the principal's ear-test pick, ruling 2026-07-06); Kokoro-82M local stays fully built as the $0 fallback (`settings.tts_engine: kokoro`). This key is needed for text generation regardless. |
+| `OPENAI_API_KEY` | Yes | Text generation on GPT-4o: the narrative (writer), analyst, and synthesis seats (ranking, editorial-tighten, and TTS-script moved to the Claude lane in the B2 depth flip, 2026-07-16 — see `ANTHROPIC_API_KEY`). Standard key, default permissions; set a hard spend cap in the OpenAI dashboard. **Audio: this key is NOT charged by default** — NL-96 (the $0-run law, 2026-07-25) made Kokoro-82M local the default voice, so an unstated engine fails cheap. gpt-4o-mini-tts on this same key stays fully built and is the principal's ear-test pick (ruling 2026-07-06 — a voice ruling that stands); it costs ~$0.015/min, ~+$0.07/run once pinned with `settings.tts_engine: openai`. This key is needed for text generation regardless. |
 | `ANTHROPIC_API_KEY` | Fall-over only | The Claude **API** lane credential (Claude Haiku 4.5). **B3 (2026-07-16) flipped the ranking, editorial-tighten, and TTS-script seats to the `claude -p` SUBSCRIPTION lane by default** — they ride your Claude subscription (usd_charged $0.00; usd_shadow still ledgered), so the default path needs the CLI installed + logged in, NOT this key (see the Claude CLI row + SETUP.md §2c). The key is required only when a seat runs the API lane: you pin `NEWSLENS_LANE_<SEAT>=api`, or you arm `NEWSLENS_LANE_FALLBACK=api`. **Set a hard monthly cap in the Anthropic console** if you use it. Rollback: flip these seats' lane back to `api` (or GPT-4o) in `llm.py` — one diff. |
 | Claude CLI (`claude`) | Yes (subscription lane) | The subscription lane's transport: `rank`/`editor`/`script` default to `claude -p` against your logged-in CLI. Resolution: `NEWSLENS_CLAUDE_BIN` → `PATH` → `~/.local/bin/claude` (the doctor reports which resolved and the version). Grant it by installing the CLI and running `claude` once to log in — NewsLens never handles your credentials; the subprocess strips `ANTHROPIC_API_KEY`, disables all tools + CLAUDE.md/skills/plugins/hooks/MCP, and runs in an empty scratch dir. A missing/unauthed CLI FAILs the run naming the fix (never a silent API call). |
 | `PERPLEXITY_API_KEY` | Yes | One capped Sonar discovery query per run. Pay-as-you-go; a prepaid credit cap in their dashboard is the primary spend limit. |

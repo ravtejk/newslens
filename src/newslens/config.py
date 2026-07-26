@@ -118,9 +118,20 @@ class SourcesConfig:
     # regardless. Principal-flippable in sources.yaml `settings:`.
     threads_steer_selection: bool = False
     # M6: which generate_audio engine voices the briefing (ADR-0008).
-    # P3.1 item 4: default flipped kokoro -> openai (gpt-4o-mini-tts) per the
-    # principal's ear-test ruling 2026-07-06; kokoro stays the $0 fallback.
-    tts_engine: str = "openai"
+    #
+    # HISTORY, PRESERVED: P3.1 item 4 flipped this default kokoro -> openai
+    # (gpt-4o-mini-tts) on the principal's ear-test ruling 2026-07-06 — "I
+    # prefer the voice of the openai wav". That ruling stands on VOICE and is
+    # superseded in the SPEND dimension only.
+    #
+    # NL-96 (2026-07-25): THE $0-RUN LAW — "I dont want this to ever charge
+    # mine or other users APIs ... making the cost to run $0" — makes a
+    # METERED engine an illegal DEFAULT. The unstated case must fail CHEAP,
+    # never fail PAID. openai stays a fully valid engine and an explicit
+    # `settings.tts_engine: openai` pin is honored verbatim; only the absent
+    # key moves. One-line reversal: "openai" back here (plus the
+    # raw_settings.get default below and audio.DEFAULT_TTS_ENGINE).
+    tts_engine: str = "kokoro"
 
     @property
     def fetchable_sources(self) -> List[Source]:
@@ -330,7 +341,10 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                 cfg.problems.append("settings.threads_steer_selection must be true or false")
             else:
                 cfg.threads_steer_selection = tss
-            engine = raw_settings.get("tts_engine", "openai")
+            # The LIVE default for a settings block that exists but names no
+            # engine — the field default above never runs on this path. Same
+            # NL-96 / $0-run-law reason: absent key = the $0 engine.
+            engine = raw_settings.get("tts_engine", "kokoro")
             if not isinstance(engine, str) or engine not in ("kokoro", "openai"):
                 cfg.problems.append("settings.tts_engine must be kokoro or openai")
             else:

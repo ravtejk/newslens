@@ -3,26 +3,38 @@
 
 ONE function boundary, no provider registry (Remy's seam ruling). Engines:
 
-  * openai (DEFAULT since the 2026-07-06 ear test — principal ruling, P3.1
-    item 4: "I prefer the voice of the openai wav"): gpt-4o-mini-tts on the
-    existing key (~$0.015/min, ~+$0.07/run at current script lengths).
-    Scripts exceed the API's 4,096-char input cap, so the text is chunked on
-    paragraph boundaries and the WAV segments are concatenated losslessly
-    (stdlib wave).
-  * kokoro (the fully built $0 FALLBACK; was the v1 default 2026-07-02 →
-    2026-07-06): Kokoro-82M via kokoro-onnx in an ISOLATED Python 3.12 venv
+  * kokoro (the DEFAULT again since NL-96, 2026-07-25 — see the ruling
+    history below): Kokoro-82M via kokoro-onnx in an ISOLATED Python 3.12 venv
     (data/tts/venv), invoked by subprocess through tools/tts_runner.py — the
     app itself stays on the 3.9 floor (ADR-0008: current Kokoro packaging
     requires >=3.10; the engine venv is the boring resolution, one brew
     dependency, no torch). Local, free, no key. MEASURED on this machine:
     ~4.4x realtime — LOUDLY below the reconvene's 14x M-series floor (Rook's
-    dissent vindicated), while still clearing the operational bar (~71s for
-    a 5-minute episode). The 4.4x re-open is moot while Kokoro isn't the
-    default; the engine question re-opens if voice quality changes
-    (principal: "maybe this can change in the future").
+    dissent vindicated), while still clearing the operational bar (~71s for a
+    5-minute episode). That 4.4x re-open was parked as "moot while Kokoro
+    isn't the default"; with the default back on kokoro it is LIVE again, on
+    record — the number has not changed and it still clears the bar, but the
+    parking reason is gone.
+  * openai (a fully valid engine, now OPT-IN by explicit
+    `settings.tts_engine: openai`; was the default 2026-07-06 → 2026-07-25):
+    gpt-4o-mini-tts on the existing key (~$0.015/min, ~+$0.07/run at current
+    script lengths). Scripts exceed the API's 4,096-char input cap, so the
+    text is chunked on paragraph boundaries and the WAV segments are
+    concatenated losslessly (stdlib wave).
+
+Ruling history — BOTH stand, in different dimensions:
+  * 2026-07-06, principal ear test (P3.1 item 4): "I prefer the voice of the
+    openai wav". A VOICE-quality ruling. It is preserved, not overturned:
+    openai is still the better-sounding engine on his ear and one line of
+    sources.yaml selects it.
+  * 2026-07-25, THE $0-RUN LAW (principal): "I dont want this to ever charge
+    mine or other users APIs ... making the cost to run $0 (not including the
+    cost of the subscription)". A SPEND ruling, later, and it binds the
+    DEFAULT only: a run that was never told which engine to use must not
+    silently pick the metered one. Fail cheap, never fail paid.
 
 Engine choice: settings.tts_engine in sources.yaml (kokoro|openai, default
-openai) — a config flip, not a code fork. Every path has a timeout and a
+kokoro) — a config flip, not a code fork. Every path has a timeout and a
 visible failure; generate degrades to a no-audio run WITH disclosure rather
 than dying (audio is the last step; the text briefing must never be hostage
 to a synth failure).
@@ -43,9 +55,12 @@ from typing import Dict, List, Optional
 from . import paths
 
 VALID_TTS_ENGINES = ("kokoro", "openai")
-# P3.1 item 4 (principal ear-test ruling 2026-07-06): gpt-4o-mini-tts is the
-# default voice; kokoro stays fully built as the $0 local fallback.
-DEFAULT_TTS_ENGINE = "openai"
+# NL-96 (2026-07-25, THE $0-RUN LAW): the code default is the $0 local engine.
+# The 2026-07-06 ear-test ruling (gpt-4o-mini-tts is the better voice) is
+# PRESERVED and superseded in the spend dimension only — openai stays valid
+# and one explicit sources.yaml line selects it. One-line reversal here (plus
+# the two config.py sites).
+DEFAULT_TTS_ENGINE = "kokoro"
 
 # Engine paths resolve DYNAMICALLY from paths.DATA_DIR (not import-time
 # constants): sandboxed suites patch paths.DATA_DIR, and binding at import

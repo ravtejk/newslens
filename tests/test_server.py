@@ -935,23 +935,26 @@ def test_follow_revive_stamps_the_edition_cli_revive_does_not(ui, capsys):
 
 
 def test_settings_engine_display_follows_the_config(ui):
-    # P3.1 item 4 pin FLIP (mechanical, intended): the default engine is now
-    # openai (ear-test ruling 2026-07-06) — the display still follows the
-    # CONFIG (the M7 gate contract), poles swapped.
+    # RE-PIN, poles SWAPPED (NL-96, 2026-07-25): the default engine is kokoro
+    # per THE $0-RUN LAW (DECISIONS 2026-07-25, consequence 6). The contract
+    # this test pins is unchanged and is the point — the display follows the
+    # CONFIG (the M7 gate contract), so BOTH directions stay tested: the
+    # default arm must show Kokoro, and an explicit `tts_engine: openai` pin
+    # must still show OpenAI (the 2026-07-06 ear-test ruling stands on voice).
     con = db.connect()
     seed_briefing(con)
     con.close()
     _, _, body = get(ui, "/")
-    assert "OpenAI gpt-4o-mini-tts (~$0.015/min)" in body.decode("utf-8")  # default
+    assert "Kokoro (local, $0/episode)" in body.decode("utf-8")  # default
     paths.SOURCES_FILE.write_text(
         "sources:\n  - name: A\n    rss_url: https://a.invalid/f\n"
-        "settings:\n  tts_engine: kokoro\n",
+        "settings:\n  tts_engine: openai\n",
         encoding="utf-8",
     )
     _, _, body = get(ui, "/")
     page = body.decode("utf-8")
-    assert "Kokoro (local, $0/episode)" in page
-    assert "OpenAI gpt-4o-mini-tts (~$0.015/min)" not in page
+    assert "OpenAI gpt-4o-mini-tts (~$0.015/min)" in page
+    assert "Kokoro (local, $0/episode)" not in page
 # --- M8 final-pass pins ------------------------------------------------------------------------
 
 def _raw_http(ui, request_bytes):

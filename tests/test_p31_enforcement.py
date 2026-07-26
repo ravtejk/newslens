@@ -447,14 +447,24 @@ def test_editor_guard_discards_an_edit_that_cuts_the_lead_below_floor(
 
 # --- item 4: the TTS default flip ----------------------------------------------
 
-def test_tts_default_is_openai_per_the_ear_test(tmp_paths):
-    """Principal ear-test ruling 2026-07-06: gpt-4o-mini-tts default;
-    kokoro remains a valid engine (the $0 fallback), never removed."""
-    assert audio.DEFAULT_TTS_ENGINE == "openai"
-    assert audio.OPENAI_TTS_MODEL == "gpt-4o-mini-tts"
+def test_tts_default_is_kokoro_per_the_zero_run_law(tmp_paths):
+    """RE-PIN, poles flipped (NL-96, 2026-07-25). THE $0-RUN LAW (principal,
+    DECISIONS 2026-07-25, consequence 6): "making the cost to run $0". A run
+    that was never told which engine to use must not pick the METERED one —
+    fail cheap, never fail paid, so the code default is the local engine.
+
+    The 2026-07-06 ear-test ruling this test used to pin ("I prefer the voice
+    of the openai wav") is NOT overturned: it ruled on VOICE and is superseded
+    in the SPEND dimension only. openai stays a valid, fully built engine —
+    which is why the model constant and the engine set are still pinned here.
+    """
+    assert audio.DEFAULT_TTS_ENGINE == "kokoro"
+    assert audio.OPENAI_TTS_MODEL == "gpt-4o-mini-tts"   # engine intact
     assert set(audio.VALID_TTS_ENGINES) == {"kokoro", "openai"}
-    # settings absent -> openai; explicit kokoro pin still honored.
-    assert config.load_sources().tts_engine == "openai"
+    # settings absent -> kokoro. The other direction (an explicit openai pin
+    # is still honored) is pinned in
+    # test_server.py::test_settings_engine_display_follows_the_config.
+    assert config.load_sources().tts_engine == "kokoro"
 
 
 # =============================================================================

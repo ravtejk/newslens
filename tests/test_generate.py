@@ -1987,12 +1987,13 @@ def test_audio_lands_on_the_record(migrated_con, fake_model, monkeypatch):
         "SELECT audio_file_path FROM briefings WHERE date = ?", (A_DAY,)
     ).fetchone()
     assert row["audio_file_path"] == out_paths[0]  # persisted on the record
-    # P3.1 item 4 pin FLIP (mechanical, intended): the configured default
-    # engine is now openai (ear-test ruling 2026-07-06); the contract this
-    # test pins — config's engine flows through to the step log and the
-    # disclosure line — is unchanged.
-    assert any(s["step"] == "tts_openai" for s in rep.steps)
-    assert any(w.startswith("audio: openai — 5.0 min in 70s") for w in rep.warnings)
+    # RE-PIN, poles flipped (NL-96, 2026-07-25): the configured default engine
+    # is kokoro per THE $0-RUN LAW (DECISIONS 2026-07-25, consequence 6). The
+    # contract this test pins is UNCHANGED and is the reason it re-pins rather
+    # than moves — config's engine flows through to the step log AND the
+    # spoken-cost disclosure line, whatever that engine is.
+    assert any(s["step"] == "tts_kokoro" for s in rep.steps)
+    assert any(w.startswith("audio: kokoro — 5.0 min in 70s") for w in rep.warnings)
     entry = json.loads(
         (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
     )

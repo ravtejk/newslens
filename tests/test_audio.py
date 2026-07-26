@@ -229,17 +229,38 @@ def test_settings_tts_engine_validation(tmp_path):
 
     p.write_text("sources:\n  - name: A\n    rss_url: https://a.example/f\n",
                  encoding="utf-8")
-    # P3.1 item 4 pin FLIP (mechanical, intended): default kokoro -> openai
-    # per the principal ear-test ruling 2026-07-06.
-    assert config.load_sources(p).tts_engine == "openai"  # default
+    # RE-PIN, poles flipped (NL-96, 2026-07-25): default openai -> kokoro per
+    # THE $0-RUN LAW (DECISIONS 2026-07-25, consequence 6) — an unstated
+    # engine must fail CHEAP, never fail PAID. The explicit-openai arm at the
+    # top of this test is the other half: the ear-test ruling stands on VOICE,
+    # a one-line pin still selects it.
+    assert config.load_sources(p).tts_engine == "kokoro"  # settings absent
+
+    # ...and a settings block that EXISTS but names no engine takes the same
+    # $0 default (config.py's raw_settings.get fallback, not the field
+    # default — the live path for any profile that sets only other keys).
+    p.write_text(
+        "sources:\n  - name: A\n    rss_url: https://a.example/f\n"
+        "settings:\n  threads_steer_selection: false\n",
+        encoding="utf-8",
+    )
+    assert config.load_sources(p).tts_engine == "kokoro"
 
 
 def test_doctor_missing_engine_is_hard_fail_even_with_synth_skip(monkeypatch):
     """The QA-ruling condition: the skip marker must NEVER mask engine
-    absence — a listening-primary product with no engine is ✗.
-    P3.1 item 4 flip (mechanical, intended): the SELECTED engine's absence
-    is the ✗; with the default now openai, this contract binds when kokoro
-    is pinned in sources.yaml — so the fixture pins it."""
+    absence — a listening-primary product with no engine is ✗. That half is
+    unchanged.
+
+    RE-PIN, 5th of the NL-96 batch (gate D1, 2026-07-25). This test used to
+    assert the doctor ALSO warned that "the recommended default is now
+    openai" — a pin that enforced a lie once THE $0-RUN LAW (DECISIONS
+    2026-07-25) made kokoro the code default. The branch cannot tell a pin
+    from the default, so that WARN reached the principal (whose kokoro pin is
+    law-compliant) and every no-pin fresh profile, advising both to switch to
+    the METERED engine. It is now an INFO with no switch-advice, and this test
+    pins BOTH halves: the new wording is present, and no nudge toward paid
+    survives anywhere in the results."""
     from newslens import doctor, paths
 
     paths.SOURCES_FILE.write_text(
@@ -251,9 +272,17 @@ def test_doctor_missing_engine_is_hard_fail_even_with_synth_skip(monkeypatch):
     results = doctor.check_tts()
     fails = [r for r in results if r.status == doctor.FAIL]
     assert fails and "run: scripts/setup_tts" in fails[0].text
-    # The pin also draws the recommended-default nudge (cap-change pattern).
-    assert any(r.status == doctor.WARN and "recommended default" in r.text
-               for r in results)
+
+    # The $0 default state is INFO-grade, never a warning.
+    assert any(r.status == doctor.INFO
+               and "the code default per the $0-run law" in r.text
+               for r in results), [r.text for r in results]
+    assert not any(r.status == doctor.WARN for r in results), (
+        "a law-compliant $0 default state drew a warning")
+    # And no result may push the reader at the paid engine.
+    blob = " ".join(r.text for r in results).lower()
+    assert "recommended default" not in blob
+    assert "switch by editing sources.yaml" not in blob
 
 
 def test_doctor_synth_skip_always_renders_its_marker(monkeypatch):
