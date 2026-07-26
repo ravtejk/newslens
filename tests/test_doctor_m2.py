@@ -168,7 +168,10 @@ def test_unreadable_ping_file_fails_friendly_before_any_network(
     ping.chmod(0)
     monkeypatch.setattr(paths, "PROMPTS_DIR", pdir)
     try:
-        results = doctor.check_perplexity_key({"PERPLEXITY_API_KEY": "pplx-x"})
+        # Discovery is PAUSED (2026-07-25) — this case is about the probe
+        # path BEHIND the pause, so it opts in explicitly.
+        results = doctor.check_perplexity_key(
+            {"PERPLEXITY_API_KEY": "pplx-x", config.DISCOVERY_OPT_IN_ENV: "1"})
     finally:
         ping.chmod(0o600)
     assert [r.status for r in results] == [doctor.FAIL]

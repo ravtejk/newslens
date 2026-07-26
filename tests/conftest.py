@@ -273,6 +273,12 @@ SCRUBBED_ENV_VARS = [
     # in-test writer; the in-PROCESS half of the leak is handled by the
     # _PROFILE_OVERRIDE reset in sandbox_paths below.)
     "NEWSLENS_PROFILE",
+    # The NL-102 discovery opt-in (2026-07-25 pause). Every test starts
+    # PAUSED: an ambient `export NEWSLENS_DISCOVERY_ENABLED=1` in the shell the
+    # suite runs from must never arm a metered path inside a test that did not
+    # ask for it. Tests wanting the unpaused path pass it in an explicit env
+    # dict (see tests/test_discovery.py::OPT_IN).
+    "NEWSLENS_DISCOVERY_ENABLED",
     "OPENAI_API_KEY",
     "PERPLEXITY_API_KEY",
     "GNEWS_API_KEY",

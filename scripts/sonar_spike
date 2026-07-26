@@ -1,19 +1,40 @@
 #!/usr/bin/env python3
 """Sonar reliability spike — Rook's gate (DECISIONS.md 2026-07-02 dissent).
 
-ONE command, runnable the moment PERPLEXITY_API_KEY lands in .env:
-
-    scripts/sonar_spike            # 5 probes
-    scripts/sonar_spike 10         # more probes (1-25; each probe is a paid call)
+    scripts/sonar_spike             # DRY RUN (default): plan only, $0, no socket
+    scripts/sonar_spike 10          # dry run for 10 probes (1-25)
+    scripts/sonar_spike --live      # real paid probes (see the two gates below)
+    scripts/sonar_spike --live 10
 
 What it answers: is Sonar reliable enough for unattended on-demand use —
 latency spread, error shape, search_results presence — before we depend on it.
-Each probe is a real discovery-shaped call (the versioned prompt, tiny answer
-budget); total cost for the default run is well under a cent, printed per
-call. Refuses politely (exit 1) with no key: this spike is deliberately gated
-on the principal granting access.
+Each live probe is a real discovery-shaped call (the versioned prompt, tiny
+answer budget) and each may retry once, so N probes is up to 2N paid calls.
 
-Exit codes: 0 = all probes succeeded; 1 = no key / any probe failed (details
+TWO GATES ON SPENDING, both of which must be open (NL-97, gate MAJOR-1
+2026-07-25 — a spend instrument must default to dry run; §6 had claimed all
+three instruments did, and there were four):
+
+  1. --live. Absent, this script builds no request and touches no socket. It
+     prints the plan, the per-probe and total cost estimate, and the budget
+     cap it would be measured against, then exits 0.
+  2. The discovery PAUSE (principal ruling 2026-07-25). While tier-2 discovery
+     is paused, --live is REFUSED — the spike is discovery's instrument and it
+     conforms to discovery's posture. Unpause for NL-102 testing with
+     NEWSLENS_DISCOVERY_ENABLED=1 (config.discovery_enabled is the single
+     reader; this script never re-implements it).
+
+Plus the pre-existing gates, unchanged: no key => polite refusal, zero
+network; probe count validated 1-25 before anything is built.
+
+BUDGET-CAP READ (NL-97, second half): the TOTAL estimated spend for the run
+(probes x the same estimate discovery.py uses, doubled for the one permitted
+retry each) is checked against BUDGET_CAP_USD_PER_RUN before the first call.
+config.budget_cap_usd_per_run is the single validator — a cap that cannot stop
+spending is garbage, and a spend loop that never reads the cap is worse.
+
+Exit codes: 0 = dry run printed, or all live probes succeeded; 1 = refused
+(paused / no key / bad probe count / over cap) or any probe failed (details
 above the summary — a failed spike is a principal checkpoint, not something
 to absorb silently).
 """
@@ -25,6 +46,57 @@ from pathlib import Path
 PROTOTYPE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
 
+MAX_PROBES = 25
+# Each probe is one call plus AT MOST one retry (discovery.call_sonar), so the
+# honest worst case for the cap check is 2x the per-call estimate.
+CALLS_PER_PROBE = 2
+
+
+def _parse_args(argv):
+    """(live, probes, error). Hand-rolled so the money knob's validation
+    message stays the exact documented string (pinned by tests)."""
+    live = False
+    positional = []
+    for arg in argv:
+        if arg in ("--live", "--no-dry-run"):
+            live = True
+        elif arg == "--dry-run":
+            live = False
+        elif arg.startswith("-") and not arg[1:].isdigit():
+            # `-3` stays a POSITIONAL: a negative probe count must still reach
+            # the money-knob validator and get its documented refusal, not an
+            # unknown-option message (pinned by test_spike_validates_probe_
+            # count_before_any_network).
+            return None, None, (
+                f"unknown option {arg!r} — usage: scripts/sonar_spike "
+                f"[--live] [N], N between 1 and {MAX_PROBES}"
+            )
+        else:
+            positional.append(arg)
+    if len(positional) > 1:
+        return None, None, (
+            "too many arguments — usage: scripts/sonar_spike [--live] [N], "
+            f"N between 1 and {MAX_PROBES}"
+        )
+    raw = positional[0] if positional else "5"
+    # M2 review finding 2: the probe count is a money knob — validate it,
+    # floor 1 (zero/negative must not pass vacuously), hard cap 25 (each
+    # probe is a paid call and may retry once).
+    try:
+        probes = int(raw)
+    except ValueError:
+        return None, None, (
+            f"probe count must be a whole number, got {raw!r} — "
+            f"usage: scripts/sonar_spike [--live] [N], N between 1 and {MAX_PROBES}"
+        )
+    if not 1 <= probes <= MAX_PROBES:
+        return None, None, (
+            f"probe count must be between 1 and {MAX_PROBES}, got {probes} — "
+            "refusing: zero probes would pass the reliability gate vacuously, "
+            "and large counts are an unattended spend loop."
+        )
+    return live, probes, None
+
 
 def main() -> int:
     import os
@@ -33,35 +105,33 @@ def main() -> int:
 
     paths.allow_real_paths()  # real entrypoint (seam completion, 2026-07-16)
 
+    live, probes, error = _parse_args(sys.argv[1:])
+    if error:
+        print(error)
+        return 1
+
     try:
         config.load_env()
     except ImportError:
         print("python-dotenv not installed — run pip install -e . first (see SETUP.md)")
         return 1
 
+    # GATE 2 — the pause. Checked before the key, like run_discovery: a paused
+    # instrument reports the ruling, never a missing credential.
+    paused = not config.discovery_enabled()
+    if live and paused:
+        print(f"REFUSED — {config.DISCOVERY_PAUSE_REASON}.")
+        print("The spike is discovery's instrument and conforms to discovery's")
+        print("posture: no paid probe runs under the pause. No network was touched.")
+        return 1
+
     key = (os.environ.get("PERPLEXITY_API_KEY") or "").strip()
-    if not key:
+    if live and not key:
         print("PERPLEXITY_API_KEY not set — the spike is gated on the principal")
         print("granting the key (get one at perplexity.ai/settings/api, add to .env,")
         print("re-run). No network was touched.")
         return 1
 
-    # M2 review finding 2: the probe count is a money knob — validate it,
-    # floor 1 (zero/negative must not pass vacuously), hard cap 25 (each
-    # probe is a paid call and may retry once).
-    MAX_PROBES = 25
-    raw = sys.argv[1] if len(sys.argv) > 1 else "5"
-    try:
-        probes = int(raw)
-    except ValueError:
-        print(f"probe count must be a whole number, got {raw!r} — "
-              f"usage: scripts/sonar_spike [N], N between 1 and {MAX_PROBES}")
-        return 1
-    if not 1 <= probes <= MAX_PROBES:
-        print(f"probe count must be between 1 and {MAX_PROBES}, got {probes} — "
-              "refusing: zero probes would pass the reliability gate vacuously, "
-              "and large counts are an unattended spend loop.")
-        return 1
     try:
         cfg = config.load_sources()
     except config.SourcesParseError as exc:
@@ -69,14 +139,50 @@ def main() -> int:
         return 1
     if cfg.has_interests:
         prompt = discovery.build_prompt(cfg)
+        prompt_source = "the versioned discovery prompt (your interests)"
     else:
         prompt = (
             "In one sentence: name one significant news development from today. "
             "(NewsLens reliability probe — no interests configured yet.)"
         )
+        prompt_source = "the fallback one-liner (no interests configured yet)"
+
+    # NL-97 — the budget-cap read. Same estimate discovery.py uses, times the
+    # worst-case call count. Runs in BOTH modes: the dry run's whole job is to
+    # show this arithmetic before anyone types --live.
+    per_call = discovery.estimate_cost_usd(prompt)
+    worst_case = per_call * CALLS_PER_PROBE * probes
+    try:
+        cap = config.budget_cap_usd_per_run()
+    except ValueError as exc:
+        print(f"BUDGET_CAP_USD_PER_RUN is unusable: {exc}")
+        return 1
 
     print(f"Sonar reliability spike — {probes} probe(s), model=sonar, "
           f"max_tokens={discovery.DISCOVERY_MAX_TOKENS}")
+    print(f"  prompt:      {prompt_source}")
+    print(f"  per call:    ~${per_call:.4f}   (up to {CALLS_PER_PROBE} calls "
+          f"per probe: one attempt + at most one retry)")
+    print(f"  worst case:  ~${worst_case:.4f}  vs BUDGET_CAP_USD_PER_RUN "
+          f"${cap:.2f}")
+    if worst_case > cap:
+        print(f"REFUSED — the worst-case spend ${worst_case:.4f} exceeds the "
+              f"cap ${cap:.2f}. Lower the probe count or raise the cap "
+              "deliberately. No network was touched.")
+        return 1
+
+    if not live:
+        print(f"  discovery:   {'PAUSED' if paused else 'enabled'}")
+        print(f"  key:         {'present' if key else 'not set'}")
+        print()
+        print("DRY RUN — no request was built and no socket was touched.")
+        if paused:
+            print("Live probes are refused while discovery is paused "
+                  f"({config.DISCOVERY_OPT_IN_ENV}=1 opts in for NL-102 testing).")
+        else:
+            print("Re-run with --live to spend the estimate above.")
+        return 0
+
     failures = 0
     latencies = []
     total_tokens = 0
@@ -88,9 +194,18 @@ def main() -> int:
             latencies.append(elapsed)
             usage = (payload.get("usage") or {}).get("total_tokens") or 0
             total_tokens += usage
-            n_results = len(payload.get("search_results") or [])
+            results = payload.get("search_results") or []
+            # NL-101: the spike measured LIVENESS and was read for three weeks
+            # as if it had measured QUALITY. It now reports both signals the
+            # quality bug turned on, so the next reader cannot make that
+            # mistake from this output.
+            disclaimed = discovery.answer_disclaims(discovery._answer_text(payload))
+            junk = sum(1 for r in results
+                       if discovery.url_reject_reason((r.get("url") or "")))
             print(f"  probe {i}: ok — {elapsed:.1f}s, {usage} tokens, "
-                  f"{n_results} search_results")
+                  f"{len(results)} search_results "
+                  f"({junk} non-article, answer "
+                  f"{'DISCLAIMS its set: ' + disclaimed if disclaimed else 'stands behind its set'})")
         except Exception as exc:
             elapsed = time.monotonic() - started
             reason = getattr(exc, "code", None) or getattr(exc, "reason", None) or exc
@@ -108,7 +223,9 @@ def main() -> int:
         print(f"VERDICT: {failures}/{probes} probes failed — take this to the "
               "principal (GNews fallback checkpoint per DECISIONS.md), don't absorb it.")
         return 1
-    print("VERDICT: all probes succeeded — record the spike result in the build log.")
+    print("VERDICT: all probes reached the API and returned a response shape. "
+          "That is LIVENESS, not quality — read the non-article and disclaimer "
+          "columns above before concluding anything about usefulness (NL-101).")
     return 0
 
 

@@ -46,17 +46,17 @@ reach them.
 
 | Transport | File:line | What it bills |
 |---|---|---|
-| OpenAI chat/completions (`_openai_provider`) | `src/newslens/llm.py:472` | metered USD on `OPENAI_API_KEY` |
-| Anthropic Messages API (`_anthropic_provider`) | `src/newslens/llm.py:834` | metered USD on `ANTHROPIC_API_KEY`. **One `urlopen`, two read modes:** the branch at `llm.py:835` takes NL-93 SSE accumulation (`_accumulate_sse`, `llm.py:646`) when the call's `max_tokens >= 5000` (`_should_stream`, `llm.py:533`) and blocking `json.load` otherwise |
-| `claude -p` subprocess — the subscription lane (`_subscription_provider`) | `src/newslens/llm.py:1098` | **no per-call USD**; consumes the principal's Claude subscription. The child env strips `ANTHROPIC_API_KEY` (`llm.py:940`) exactly so a stray key cannot silently bill the API while the ledger records $0 |
-| Perplexity Sonar (`call_sonar`) | `src/newslens/discovery.py:73` | metered USD on `PERPLEXITY_API_KEY` |
+| OpenAI chat/completions (`_openai_provider`) | `src/newslens/llm.py:516` | metered USD on `OPENAI_API_KEY` |
+| Anthropic Messages API (`_anthropic_provider`) | `src/newslens/llm.py:878` | metered USD on `ANTHROPIC_API_KEY`. **One `urlopen`, two read modes:** the branch at `llm.py:879` takes NL-93 SSE accumulation (`_accumulate_sse`, `llm.py:690`) when the call's `max_tokens >= 5000` (`_should_stream`, `llm.py:577`) and blocking `json.load` otherwise |
+| `claude -p` subprocess — the subscription lane (`_subscription_provider`) | `src/newslens/llm.py:1142` | **no per-call USD**; consumes the principal's Claude subscription. The child env strips `ANTHROPIC_API_KEY` (`llm.py:984`) exactly so a stray key cannot silently bill the API while the ledger records $0 |
+| Perplexity Sonar (`call_sonar`) | `src/newslens/discovery.py:92` | metered USD on `PERPLEXITY_API_KEY` |
 | OpenAI TTS (`_synthesize_openai`) | `src/newslens/audio.py:202` | metered USD on `OPENAI_API_KEY`, once per text chunk in a loop |
-| The doctor's Perplexity check | `src/newslens/doctor.py:416` | **a real paid POST** (`max_tokens: 16`; the result line calls it "a fraction of a cent", `doctor.py:422`) — unlike the other two doctor probes, this one is not read-only |
+| The doctor's Perplexity check | `src/newslens/doctor.py` `check_perplexity_key` | **was a real paid POST** (`max_tokens: 16`) on every doctor run with a key present — the one doctor probe that was not read-only. **FIXED 2026-07-26 (discovery pause):** the pause is checked first and no probe fires; the doctor reports the ruling instead. The paid path is reachable only behind `NEWSLENS_DISCOVERY_ENABLED=1` |
 
 Every other socket or subprocess in `src/` is free: `net.py:44` and `net.py:54`
 (feed GETs through a custom 308-following opener, no auth headers),
 `doctor.py:253` and `doctor.py:326` (read-only `GET /v1/models` on OpenAI and
-Anthropic), `audio.py:114` (the local Kokoro TTS subprocess), `doctor.py:868`
+Anthropic), `audio.py:114` (the local Kokoro TTS subprocess), `doctor.py:926`
 (`claude --version`), `server.py:183` (`git rev-parse HEAD`).
 
 **Layer 2 — callers, and the gate standing in front of each.** Sweep scope for
@@ -72,8 +72,8 @@ local Kokoro child and touches no network.
 | Rank | `ranking.py:538` (`_post_chat`) | whole-prompt estimate vs cap before the call, `ranking.py:1668-1675` |
 | Writer / editor / script (shared `_chat`) | `generate.py:398`, via `call_llm` `generate.py:448` | per-step estimate vs *remaining* cap at every step — narrative `generate.py:3314`, narrative retry `generate.py:3372`, editor `generate.py:3454`, script `generate.py:3663`, script retry `generate.py:3741`; run cap read at `generate.py:3174` |
 | Analyst (per-story brief) | `analysis.py:1441` (`_analysis_chat`) | per-slot estimate vs remaining, `analysis.py:1757`; run cap `analysis.py:1859` |
-| Sonar verification inside a brief | `analysis.py:1687` → `discovery.call_sonar` | budget *ladder* — Sonar is what degrades first when headroom is short, `analysis.py:1680` |
-| Discovery Sonar (one per ingest) | `discovery.py:73`, driven from `discovery.py:131` | estimate vs cap, `discovery.py:182-188`; skipped entirely with no key |
+| Sonar verification inside a brief | `analysis.py:1687` → `discovery.call_sonar` | budget *ladder* — Sonar is what degrades first when headroom is short, `analysis.py:1680`. **⚠ REVIEWER: this is now the ONLY metered Sonar caller left live on the default path** (the 2026-07-25 pause ruling named discovery, the doctor probe and `sonar_spike` — not this one). One call per depth-tier story with a key present, ~$0.003/edition measured 2026-07-25. Flagged to the principal, not silently changed |
+| Discovery Sonar (one per ingest) | `discovery.py` `call_sonar`, driven from `run_discovery` | **PAUSED by ruling 2026-07-25** — `run_discovery` returns before the key is read, so no request is built with or without a key. Behind the `NEWSLENS_DISCOVERY_ENABLED=1` opt-in the old gates still apply: estimate vs cap, then skipped entirely with no key |
 | State/memory rewrite | `memory_core.py:1373` | estimate vs remaining, `memory_core.py:1468`; the remaining figure is threaded from the run cap at `generate.py:2173` (edition), `generate.py:2369` (`memory-backfill`), `generate.py:2476` (`memory-repair-state`) |
 | Thread baseline backgrounder (`memory-baseline`) | `generate.py:2792` → `_default_baseline_chat` (`generate.py:2524`) → `analysis.call_analysis_model` | estimate vs remaining, `generate.py:2629`; run cap `generate.py:2786` |
 | Follow-altitude resolver — batch (`scripts/follow-altitude --run`) | `follow_altitude.py:258`, driven from `follow_altitude.py:544` | cumulative cap gate in the CLI: cap read `follow_altitude.py:464`, per-thread check `follow_altitude.py:510` |
@@ -81,14 +81,14 @@ local Kokoro child and touches no network.
 | OpenAI TTS | `audio.py:202` | estimate vs remaining, `audio.py:181-185`; the remaining figure is passed in at `generate.py:3840` |
 | Writer battery (`scripts/battery --run`) | `battery.py:136` → `generate.call_llm` | cap read `battery.py:236`; cumulative pre-flight gate `battery.py:315` |
 | Moat battery (`scripts/moat-battery … --run`) | `moat_battery.py:1206` → `generate.call_llm` | cap read `moat_battery.py:1439` / `moat_battery.py:1901`; plan gate `moat_battery.py:1396`; execute gate `moat_battery.py:1600` |
-| **Sonar reliability spike** (`scripts/sonar_spike [N]`) | `sonar_spike:86` → `discovery.call_sonar` | **NO cap read anywhere in the file, and NO dry-run default.** 1–25 metered Perplexity calls per invocation (probe clamp `sonar_spike:52-64`), and each probe may retry once inside `call_sonar`. It is key-gated (`sonar_spike:42-47`, refuses cleanly with no key) and prints per-run token cost (`sonar_spike:105-106`) — but a bare `scripts/sonar_spike` with a key present **spends on contact**, five paid probes, no plan and no confirmation |
+| **Sonar reliability spike** (`scripts/sonar_spike [--live] [N]`) | `sonar_spike` → `discovery.call_sonar` | **FIXED 2026-07-26 (NL-97).** Was: no cap read, no dry-run default — a bare invocation with a key present fired five paid probes on contact. Now **dry run by default** (prints the plan, the per-call and worst-case estimate, the cap; touches no socket) and it **reads `BUDGET_CAP_USD_PER_RUN`**, refusing when the worst case (probes × 2 calls, one retry each) exceeds it. `--live` is additionally refused while discovery is paused. Probe clamp 1–25 and key gating unchanged |
 
 Two properties are the whole guard, and both deserve a hand-check:
 
 1. **The cap binds on `usd_shadow`, not on dollars actually charged — and
-   since NL-95 every caller does.** `cost_fields` (`llm.py:1340`) always
+   since NL-95 every caller does.** `cost_fields` (`llm.py:1384`) always
    computes `usd_shadow` from the seat's pinned price table and sets
-   `usd_charged` to 0.0 on the subscription lane (`llm.py:1376`). The intent
+   `usd_charged` to 0.0 on the subscription lane (`llm.py:1420`). The intent
    ("Onna's law") is that edition callers accumulate *shadow*, so a $0-charged
    subscription run still spends the run budget at its API-equivalent price. The
    writer/editor/script steps do exactly that (`generate.py:3487`,
@@ -162,7 +162,7 @@ a small diff, not to rule on an accepted risk:**
   pass-through and the guard-before-gate ordering.
 
 The charge was always small (Haiku on the api lane, ~$0.0013/tap measured —
-`llm.py:256`), so this is a guard-completeness fix, not an incident.
+`llm.py:296`), so this is a guard-completeness fix, not an incident.
 
 **Follow-on the reviewer should see, left open deliberately.** The *money* guard
 is closed, but the *reader-facing* half is not. The client's follow-tap callback
@@ -192,19 +192,19 @@ run — `newslens diagnose` sums them at `diagnose.py:301-304`) and the
   descriptions only.
 - **Three keys now, and each lane owns its own credential** (this changed with
   the provider seam). `OPENAI_API_KEY` rides an `Authorization: Bearer` header
-  (`llm.py:467`, `audio.py:197`, `doctor.py:249`). `ANTHROPIC_API_KEY` rides an
+  (`llm.py:511`, `audio.py:197`, `doctor.py:249`). `ANTHROPIC_API_KEY` rides an
   `x-api-key` header and is read by the lane itself, not passed in by the caller
-  (`_anthropic_credential`, `llm.py:551`; used at `llm.py:820`).
-  `PERPLEXITY_API_KEY` rides `Authorization: Bearer` (`discovery.py:67`,
-  `doctor.py:408`). Error paths never echo them: HTTP error bodies are
+  (`_anthropic_credential`, `llm.py:595`; used at `llm.py:864`).
+  `PERPLEXITY_API_KEY` rides `Authorization: Bearer` (`discovery.py:86`,
+  `doctor.py:426`). Error paths never echo them: HTTP error bodies are
   truncated/parsed (`ranking._http_error_detail`, `ranking.py:668`, reused by
   audio per M7 carryover 19).
 - **The subscription lane carries no key at all.** `claude -p` authenticates
   from the CLI's own logged-in session under `HOME`; the child process gets an
-  env *allowlist* (`llm.py:900`), and `ANTHROPIC_API_KEY` is both absent from
-  that allowlist and popped defensively (`llm.py:940`). That is the guard
+  env *allowlist* (`llm.py:944`), and `ANTHROPIC_API_KEY` is both absent from
+  that allowlist and popped defensively (`llm.py:984`). That is the guard
   against silently billing the API while the ledger reports $0 — worth reading
-  as a unit with `_subscription_env` (`llm.py:936`).
+  as a unit with `_subscription_env` (`llm.py:980`).
 - The kokoro TTS subprocess runs with a scrubbed environment —
   `env={"PATH": ..., "HOME": ...}` at `audio.py:118` — so a compromised
   or buggy model runtime never sees API keys.
@@ -222,7 +222,7 @@ no print, no log, no error string. Narrow to the value-reading class with
 and confirm each one's destination is a header, not a message.
 `scripts/doctor` prints validity, never the key — but note from §1 that its
 OpenAI and Anthropic probes are read-only `GET /v1/models` while its
-**Perplexity probe is a paid POST** (`doctor.py:416`).
+**Perplexity probe fires only behind `NEWSLENS_DISCOVERY_ENABLED=1`; when it fires it is a paid POST** (`doctor.py:436`). A default doctor run reports the 2026-07-25 pause ruling and touches no socket.
 
 ## 3. The server surface (`newslens serve`)
 
@@ -320,7 +320,7 @@ in code (never model prose):
 |---|---|---|
 | Migration replay after a mid-migration crash: files carry their own BEGIN/COMMIT and re-apply-safety is by convention (`IF NOT EXISTS`), not enforcement | accepted for single-user SQLite | ADR-0001; `db.py:134` |
 | Coordinated messaging across genuinely distinct outlets reads as strong corroboration — the counter measures independence of *outlet*, not of *narrative* | open, disclosed | ADR-0004 |
-| Model-behavior dependencies: ranking quality, narrative honesty, and editor restraint are prompt-shaped, not guaranteed; a model version change can shift all three. **[2026-07-25: this risk was realised and acted on, not avoided.]** Every content seat changed model AND provider between 2026-07-16 and 2026-07-17 — writer to Claude Opus 4.8, analyst to Sonnet 5, rank/editor/script/state to Haiku 4.5, all on the `claude -p` subscription lane; the follow-altitude resolver sits on the Anthropic api lane. The current roster is the `SEATS` table, `llm.py:234-302` — read it, not this prose | monitored via warnings + diagnose readouts; each seat row carries its own revert-if note in-code | ADR-0007/0009; ADR-0014 (seam), 0015 (subscription lane), 0016 (Opus/Sonnet flips + caching), 0017 (altitude resolver) |
+| Model-behavior dependencies: ranking quality, narrative honesty, and editor restraint are prompt-shaped, not guaranteed; a model version change can shift all three. **[2026-07-25: this risk was realised and acted on, not avoided.]** Every content seat changed model AND provider between 2026-07-16 and 2026-07-17 — writer to Claude Opus 4.8, analyst to Sonnet 5, rank/editor/script/state to Haiku 4.5, all on the `claude -p` subscription lane; the follow-altitude resolver sits on the Anthropic api lane. The current roster is the `SEATS` table, `llm.py:274-346` — read it, not this prose | monitored via warnings + diagnose readouts; each seat row carries its own revert-if note in-code | ADR-0007/0009; ADR-0014 (seam), 0015 (subscription lane), 0016 (Opus/Sonnet flips + caching), 0017 (altitude resolver) |
 | Consumption capture is UI-only: terminal reads of the markdown artifact are invisible to the day-30 metric | by design, self-caveated | ADR-0010 §3; `newslens diagnose` prints the caveat |
 | `consumption_events` grows unbounded | trivial at one-user scale | ADR-0010 |
 | Inline `onclick` single-quote interpolation. **[updated 2026-07-25: no longer two sites — eight now, across three handlers.]** `openEdition` (five): `server.py:2260` and `server.py:2266` (archive rows), `server.py:2442` (arc line), `server.py:2774`, `server.py:3154` (deep-view prior-briefing link). Same pattern, same provenance class, three more sites: `pickDay` (`server.py:2214`) and `navMonth` (`server.py:2317`, `server.py:2322` — these two interpolate the month string with *no* `_e()` at all). Values are system-controlled (DB `date` column, and month strings derived from it behind a `^\d{4}-\d{2}$` match at `server.py:2301`), truncated and HTML-escaped — but note: browsers entity-decode attribute values *before* the JS engine parses an inline handler, so `_e()` escaping alone would not stop a quote breakout if these values were ever attacker-influenced. Safety rests on provenance, not on the escaping | accepted at single-user loopback scale (pattern predates NL-12 — NL-11 archive rows), but the surface **grew** across the v8 archive/deep-view work. Revisit before any external exposure (NL-59 chain). Durable fix is one line per site: interpolate via `_js_str()` (`server.py:962`, json.dumps, already used elsewhere in this file) or a `data-date` attribute + delegated listener | NL-12 gate review 2026-07-10; site count re-counted 2026-07-25 |
@@ -333,7 +333,7 @@ in code (never model prose):
 | **[2026-07-14, v7 build] `restoreViewAfterReload` vs renamed sub-views** (`webui.py:732`, invoked at `webui.py:1464`) — stale 'ongoing' keys degrade gracefully (one glance for a human) | cosmetic-degradation class | v7-M2 final gate 2026-07-14 |
 | **[2026-07-25, Stage-0 M2] The dual-track money return** — `call_analysis_model` hands back `(parsed, usd_charged, usd_shadow)` (`analysis.py:1478-1549`) and every consumer picks a track: caps take shadow, persisted columns take charged. The correctness argument is *which* variable each call site reads, and a wrong pick is silent in both directions (an under-enforced cap, or a fabricated dollar in the money record). Worth reading the three cap sites and the failed-run fold (`generate.fold_late_steps`, `generate.py:2883`) together, once | no schema change; all shadow data under new keys; born-red pins in `tests/test_stage0_m2.py` | Stage-0 M2 2026-07-25 |
 | **[2026-07-25, Stage-0 M2] The spoken-continuity net is regex + heuristics over generated prose** (`generate.py:1248-1359`) — `_SCRIPT_CONTINUITY_RE` plus a self-reference test that deliberately WITHHOLDS the source-attribution exemption from first-person claims ("As we reported" is the show, not a source). Warn-grade by design, tuned toward firing. A human should judge the vocabulary's false-positive surface against real episode prose — it is the one part of this milestone whose correctness is editorial, not mechanical | contract + non-firing floor pinned in `tests/test_stage0_m2_script_net.py`; narrative-side nets untouched | Stage-0 M2 2026-07-25 |
-| **[2026-07-25, Stage-0 M2] Five entrypoints, two copies of the profile boundary** — `profiles.resolve_entrypoint_profile` (`profiles.py:210`) is now the single implementation and the three side entrypoints use it, but `cli.main` (`cli.py:293-304`) and `doctor.main` (`doctor.py:1120-1132`) still carry hand-rolled copies. They are M1-pinned and correct today; the duplicated-validator class is how BUG-1 shipped in two places at once | flagged, not taken — folding them on is a follow-up one-liner each | Stage-0 M2 2026-07-25 |
+| **[2026-07-25, Stage-0 M2] Five entrypoints, two copies of the profile boundary** — `profiles.resolve_entrypoint_profile` (`profiles.py:210`) is now the single implementation and the three side entrypoints use it, but `cli.main` (`cli.py:320-331`) and `doctor.main` (`doctor.py:1155-1167`) still carry hand-rolled copies. They are M1-pinned and correct today; the duplicated-validator class is how BUG-1 shipped in two places at once | flagged, not taken — folding them on is a follow-up one-liner each | Stage-0 M2 2026-07-25 |
 
 ## 6. How to verify
 
@@ -352,20 +352,21 @@ today runs every content seat on the `claude -p` subscription lane, so the
 (API-equivalent compute, which is what the run cap actually guards) is
 ~$0.90-1.30/edition against a $1.50 default cap. The doctor derives and prints
 these figures from the live seat table rather than hardcoding them
-(`cost_estimate`, `doctor.py:965-993`) — trust that output over any prose,
+(`cost_estimate`, `doctor.py:1023`) — trust that output over any prose,
 including this paragraph. Audio adds ~$0.07/run only if `settings.tts_engine`
 is `openai`; the shipped config is `kokoro` ($0, local).
 
-There are **four** spend-capable scripts, and they do not behave alike. Three
-default to dry-run and make zero calls and zero writes without `--run` —
-`scripts/battery`, `scripts/moat-battery`, `scripts/follow-altitude` — each
-printing its plan and cost estimate first, each bounded by
-`BUDGET_CAP_USD_PER_RUN`. The fourth, **`scripts/sonar_spike`, has no dry-run
-mode and reads no cap: a bare invocation with `PERPLEXITY_API_KEY` present
-fires five paid Perplexity probes immediately** (up to 25 with an argument, each
-able to retry once). It is cheap — well under a cent for the default run — but
-it is the one instrument here that spends on contact, so do not run it to "see
-what it does."
+There are **four** spend-capable scripts and, as of 2026-07-26, all four
+behave alike: each defaults to dry run, makes zero calls and zero writes
+without its explicit run flag, prints its plan and cost estimate first, and is
+bounded by `BUDGET_CAP_USD_PER_RUN`. `scripts/battery`, `scripts/moat-battery`
+and `scripts/follow-altitude` use `--run`; `scripts/sonar_spike` uses `--live`.
+**The fourth was the exception until this batch** (NL-97, gate MAJOR-1): a bare
+`scripts/sonar_spike` with `PERPLEXITY_API_KEY` present used to fire five paid
+Perplexity probes immediately, up to 25 with an argument, each able to retry
+once — cheap, well under a cent, but spending on contact. It now prints a plan
+like the others, and its `--live` mode is refused outright while tier-2
+discovery is paused.
 
 Suggested review order: §1 spend paths (45 min now — the seam and the two
 batteries are new since the last revision) → §3 server surface (45 min, the
@@ -381,9 +382,9 @@ commits landed after it. The ones that touch a spend or trust claim above:
 | When | Commit | What it changed, and which claim it broke |
 |---|---|---|
 | 2026-07-16 | `33193e1` | **B1 — the provider seam.** `src/newslens/llm.py` created; `ranking._post_chat`, `generate._chat` and `analysis._analysis_chat` stopped owning transport and started delegating to `llm.chat`. This is why the old §1 line numbers (`ranking.py:332`, `generate.py:217`) now land on unrelated code |
-| 2026-07-16 | `e60ba14` | **B2 — the Claude API lane.** A second HTTP transport (`_anthropic_provider`, `llm.py:834`) and a second key (`ANTHROPIC_API_KEY`, `x-api-key` header). The old "four call sites, all `Authorization` headers" claim died here |
+| 2026-07-16 | `e60ba14` | **B2 — the Claude API lane.** A second HTTP transport (`_anthropic_provider`, `llm.py:878`) and a second key (`ANTHROPIC_API_KEY`, `x-api-key` header). The old "four call sites, all `Authorization` headers" claim died here |
 | 2026-07-16 | `65a5a57`, `6cc5e9a` | **The money-touching memory commands.** `memory-repair-state` (`generate.run_state_repair`) and `memory-baseline` (`generate.run_baseline_backfill`) — each spends LLM dollars from the CLI outside a `generate` run, each with its own cap read |
-| 2026-07-17 | `83bd979` | **B3 — the `claude -p` subscription lane.** A third transport, and the first that is a **subprocess, not an HTTP call** (`llm.py:1098`). The old §1 check (`grep urlopen`) could not have found it |
+| 2026-07-17 | `83bd979` | **B3 — the `claude -p` subscription lane.** A third transport, and the first that is a **subprocess, not an HTTP call** (`llm.py:1142`). The old §1 check (`grep urlopen`) could not have found it |
 | 2026-07-17 | `cf706bb` | **B4 — Opus writer + Sonnet analyst + prompt caching + the writer battery.** `src/newslens/battery.py` created: a principal-invoked experiment harness that spends real money through `generate.call_llm` |
 | 2026-07-17 | `383baa5` | **The follow-altitude resolver + falsifier CLI.** `src/newslens/follow_altitude.py`, `prompts/follow_altitude.txt`, `scripts/follow-altitude`, ADR-0017 — a new seat with a cap-gated batch runner. **No UI reachability yet:** this commit touches no `server.py` |
 | 2026-07-17 | `6c78578`, `b5e93c4` | **Everything content moved to the subscription lane** (writer, analyst, then state on Haiku). This is what makes a default edition ~$0 charged and invalidated §6's dollar figure. `6c78578` also added the lane-aware timeouts and the JSON-extraction fix on both Claude lanes |
@@ -392,7 +393,7 @@ commits landed after it. The ones that touch a spend or trust claim above:
 | 2026-07-18 → 07-22 | `1472008`, `80dac48`, `c1d5322`, `c7338d8`, `a918862`, `a2a4f0d` | Archive calendar + month nav, arc line, arc candidate logging, editor-preservation teeth, live-progress surface. Net effect on this document: the inline-`onclick` interpolation surface grew from two sites to eight (§5) |
 | 2026-07-20 | `d431277` | **Resolver lane fix** — the follow-altitude seat is the one seat whose default is the Anthropic *api* lane, not subscription (interactive latency). It therefore charges real cents per tap, which is why the missing cap check on that route mattered at all (closed 2026-07-25 — §1 "Closed gap") |
 | 2026-07-24 | `03e99cc` | **NL-70 rank keys** — `[id=N]` became a Crockford base32 + mod-37 check symbol. Strengthens the closed-vocabulary/prompt-injection claim in §4; the check symbol catches a mis-copied id before the vocab lookup |
-| 2026-07-24 | `ce5bb46` | **NL-93 SSE streaming** — long api-lane calls (`max_tokens >= 5000`) now POST with `"stream": true` and accumulate SSE deltas. Same single `urlopen`, different read mode, and `cfg.timeout_s` changes meaning from a total-wall bound to a per-read idle bound on that path (`llm.py:826-835`). A reviewer auditing timeouts must read that comment |
+| 2026-07-24 | `ce5bb46` | **NL-93 SSE streaming** — long api-lane calls (`max_tokens >= 5000`) now POST with `"stream": true` and accumulate SSE deltas. Same single `urlopen`, different read mode, and `cfg.timeout_s` changes meaning from a total-wall bound to a per-read idle bound on that path (`llm.py:870-879`). A reviewer auditing timeouts must read that comment |
 | 2026-07-24 | `a5033a5` | **NL-75 Phase-2 moat battery** — `src/newslens/moat_battery.py`, the second spend-capable experiment harness, with its own cap arithmetic |
 
 **One thing this pass FIXED, and one it could not** (neither is silently
@@ -421,7 +422,7 @@ dropped):
      analyst seat (gpt-4o/api — not a subscription seat), so
      `usd_charged == usd_shadow`". It does ride the analyst seat
      (`_default_baseline_chat` → `analysis.call_analysis_model`), but that seat
-     is Claude Sonnet 5 on the **subscription** lane (`llm.py:242`), so both the
+     is Claude Sonnet 5 on the **subscription** lane (`llm.py:282`), so both the
      parenthetical and the equality it rested on were wrong. Corrected in place
      (`generate.py:2793-2802`), along with two more GPT-4o-era comments in the
      same family.

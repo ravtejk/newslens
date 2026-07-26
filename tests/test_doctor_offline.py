@@ -47,6 +47,10 @@ PERPLEXITY_HINT = (
     "PERPLEXITY_API_KEY not set — deferred by choice; ingest runs RSS-only "
     "and says so. To add discovery later: perplexity.ai/settings/api → .env"
 )  # M8 ruling: deferred-by-principal-choice = ○ informational, not ✗ required
+# The pause (2026-07-25) replaces the hint above on the DEFAULT path: with
+# discovery paused there is no key to ask for, so the doctor reports the ruling
+# instead of nagging. PERPLEXITY_HINT is still the right line once unpaused.
+PERPLEXITY_UNPAUSED = {config.DISCOVERY_OPT_IN_ENV: "1"}
 SCRATCH_TABLES_LINE = (
     "migrations apply cleanly to a scratch DB — tables: "
     "analysis_briefs, analysis_retrieval, briefings, briefings_history, concept_explanations, consumption_events, follow_altitude_events, memory, memory_tombstones, ranking_runs, source_items, sync_state"
@@ -73,7 +77,12 @@ def test_keyless_template_run_exits_1_with_fix_hints_and_zero_network(
     # ANTHROPIC_API_KEY the required one.
     assert "OPENAI_API_KEY not needed — no live seat routes to OpenAI" in out
     assert "ANTHROPIC_API_KEY not set" in out          # the real required failure
-    assert PERPLEXITY_HINT in out
+    # Discovery PAUSED (2026-07-25): the doctor reports the RULING here, not a
+    # missing-key hint — a key-shaped nag under a pause is how a paused feature
+    # gets helpfully un-paused. (PERPLEXITY_HINT returns once unpaused; pinned
+    # in test_nl101_discovery_pause.py.)
+    assert "tier-2 Sonar discovery is PAUSED by ruling" in out
+    assert PERPLEXITY_HINT not in out
     assert ".env not found — run: cp .env.example .env" in out
     assert config.NO_ACTIVE_SOURCES_MSG in out
     assert "Doctor exit 1 — fix the ✗ lines above" in out
@@ -214,7 +223,8 @@ def test_perplexity_check_passes_and_sends_the_versioned_minimal_ping(
     monkeypatch.setattr(
         doctor, "PERPLEXITY_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
-    results = doctor.check_perplexity_key({"PERPLEXITY_API_KEY": fake_api.good_key})
+    results = doctor.check_perplexity_key(
+        dict(PERPLEXITY_UNPAUSED, PERPLEXITY_API_KEY=fake_api.good_key))
     assert [r.status for r in results] == [doctor.PASS]
     assert "minimal sonar query OK" in results[0].text
 
@@ -233,7 +243,8 @@ def test_perplexity_check_401_names_the_fix(fake_api, monkeypatch):
     monkeypatch.setattr(
         doctor, "PERPLEXITY_CHAT_URL", fake_api.base_url + "/chat/completions"
     )
-    results = doctor.check_perplexity_key({"PERPLEXITY_API_KEY": "pplx-wrong"})
+    results = doctor.check_perplexity_key(
+        dict(PERPLEXITY_UNPAUSED, PERPLEXITY_API_KEY="pplx-wrong"))
     assert [r.status for r in results] == [doctor.FAIL]
     assert "rejected (401)" in results[0].text
 
@@ -242,7 +253,8 @@ def test_perplexity_missing_ping_file_fails_before_any_network(
     tmp_path, no_network, monkeypatch
 ):
     monkeypatch.setattr(paths, "PROMPTS_DIR", tmp_path / "empty-prompts")
-    results = doctor.check_perplexity_key({"PERPLEXITY_API_KEY": "pplx-any"})
+    results = doctor.check_perplexity_key(
+        dict(PERPLEXITY_UNPAUSED, PERPLEXITY_API_KEY="pplx-any"))
     assert [r.status for r in results] == [doctor.FAIL]
     assert "checkout is incomplete" in results[0].text
     assert no_network == []  # never built the request
@@ -300,12 +312,17 @@ def test_exit_0_with_warnings_once_everything_required_passes(
     # Gate ruling 2 (2026-07-17): the set OpenAI key is INERT — no live seat routes
     # to gpt-4o, so it renders INFO 'unused' and is never probed.
     assert "OPENAI_API_KEY set but no live seat currently routes to OpenAI" in out
-    # Exactly the two required key validations hit the network — nothing else. The
-    # anthropic GET /v1/models (the Claude API lane's read-only key check) and the
-    # perplexity POST; the openai key is unused and probe-free (ruling 2).
+    # DISCOVERY PAUSED (2026-07-25): a set PERPLEXITY_API_KEY is now reported,
+    # not probed. This is the pause's teeth on the doctor — the paid probe used
+    # to fire on every doctor run against a present key.
+    assert "tier-2 Sonar discovery is PAUSED by ruling" in out
+    assert "present in the environment but unused" in out
+    # Exactly ONE required key validation hits the network now — the anthropic
+    # GET /v1/models (the Claude API lane's read-only key check). The openai key
+    # is unused and probe-free (ruling 2); the perplexity POST is gone with the
+    # pause (it returns behind NEWSLENS_DISCOVERY_ENABLED=1).
     assert [(r["method"], r["path"]) for r in fake_api.recorded] == [
         ("GET", "/v1/models"),      # anthropic key check (B2)
-        ("POST", "/chat/completions"),  # perplexity key check
     ]
 
 

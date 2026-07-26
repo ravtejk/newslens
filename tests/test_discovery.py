@@ -20,7 +20,13 @@ import pytest
 from newslens import config, db, discovery, ingest, paths
 
 NOW = "2026-07-03T09:00:00.000Z"
-KEY_ENV = {"PERPLEXITY_API_KEY": "pplx-qa-fake-key"}
+# Tier-2 discovery is PAUSED by ruling (2026-07-25). This whole file tests the
+# module's BEHAVIOUR ONCE UNPAUSED — the retry discipline, the budget guard,
+# the storage contract — so every case here carries the explicit NL-102 testing
+# opt-in. The pause itself (and the fact that NOTHING below is reachable
+# without the opt-in) is pinned in test_nl101_discovery_pause.py.
+OPT_IN = {config.DISCOVERY_OPT_IN_ENV: "1"}
+KEY_ENV = dict(OPT_IN, PERPLEXITY_API_KEY="pplx-qa-fake-key")
 
 
 def cfg_with_interests():
@@ -59,7 +65,11 @@ def sonar_rows(con):
 # --- skip states: no request is ever built ---------------------------------------
 
 def test_keyless_skips_with_zero_network(migrated_con, no_network):
-    status = discovery.run_discovery(migrated_con, cfg_with_interests(), env={}, now_iso=NOW)
+    """UNPAUSED but keyless: the cold-seam skip still reports the KEY, not the
+    pause (the pause is checked first and is opted out of here)."""
+    status = discovery.run_discovery(
+        migrated_con, cfg_with_interests(), env=dict(OPT_IN), now_iso=NOW
+    )
     assert status.startswith("skipped — PERPLEXITY_API_KEY not set")
     assert no_network == []
 

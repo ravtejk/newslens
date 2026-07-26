@@ -548,7 +548,16 @@ def test_doctor_cost_line_matches_the_measured_pipeline():
     # is real and high, never summarized as "free".
     from newslens import config, doctor, llm
 
-    (line,) = doctor.cost_estimate()
+    # 2026-07-26: cost_estimate now returns TWO lines — the seat-derived line
+    # (the subject of this test) plus a metered-spend honesty line. "~$0
+    # charged" is true of the seats and, since the pause, of tier-2 discovery;
+    # it is NOT true of analysis verification, which still makes a metered
+    # Sonar call per depth story when PERPLEXITY_API_KEY is set. The count is
+    # asserted so a third line cannot appear here silently.
+    lines = doctor.cost_estimate()
+    assert len(lines) == 2
+    line = lines[0]
+    assert "Metered spend outside the subscription" in lines[1].text
     text = line.text
     w, a = llm.SEATS["writer"], llm.SEATS["analyst"]
     # derivation pins: the seats' own model strings and prices, rendered

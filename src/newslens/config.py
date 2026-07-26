@@ -59,6 +59,46 @@ NO_INTERESTS_MSG = (
 DEFAULT_BUDGET_CAP_USD_PER_RUN = 1.50
 DEFAULT_GENERATE_HOUR_LOCAL = 6
 
+# --- Tier-2 discovery: PAUSED BY RULING (principal 2026-07-25) ----------------
+# "Approve the recommended sonar ruling" (DECISIONS.md "[2026-07-25] SONAR
+# RULED: discovery PAUSED"). The evidence: 0.41% lifetime citation contribution,
+# ~1 usable item per ~180 returns across THREE vendor configurations, and the
+# recency falsifier failed to rescue it (debates/2026-07-25--newslens--
+# engineering-5.md §1-9). Discovery is the one place the product spent metered
+# money outside the subscription, so under THE $0-RUN LAW the pause is also the
+# default spend posture, not merely a quality call.
+#
+# WHY THIS LIVES IN config.py: the single-validator rule (see
+# budget_cap_usd_per_run below). discovery.py enforces it, the doctor RENDERS
+# it, scripts/sonar_spike reads it — none of them re-implement it.
+#
+# STRICT "1": the comparison runs after .strip(), so a whitespace-padded "1"
+# (" 1 ") unpauses; any other value ("true", "yes", "on", "01", whitespace-only)
+# leaves discovery PAUSED. Fail-cheap, never fail-paid — the same
+# direction NL-96 flipped the TTS default. The opt-in exists for NL-102's
+# testing phase (Claude-web-search comparison, rate limits, the discovery-off
+# A/B); it is not a configuration the principal is expected to fill, so it is
+# deliberately NOT in .env.example (the NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE
+# precedent — operational opt-ins are named by the doctor, not by the template).
+DISCOVERY_OPT_IN_ENV = "NEWSLENS_DISCOVERY_ENABLED"
+DISCOVERY_PAUSE_REASON = (
+    "tier-2 Sonar discovery is PAUSED by ruling (2026-07-25): 0.41% lifetime "
+    "contribution, ~1 usable item per ~180 returns across three vendor "
+    "configurations. No metered discovery call runs on the default path. Opt "
+    f"in for NL-102 testing with {DISCOVERY_OPT_IN_ENV}=1"
+)
+
+
+def discovery_enabled(env: Optional[dict] = None) -> bool:
+    """Is tier-2 discovery unpaused? Default False — the 2026-07-25 ruling.
+
+    THE single reader of DISCOVERY_OPT_IN_ENV. Exactly "1" unpauses; every
+    other value (empty, "0", "true", "TRUE", whitespace-only) stays paused,
+    so a typo costs nothing and a stray shell export cannot start spending.
+    """
+    src = env if env is not None else os.environ
+    return (src.get(DISCOVERY_OPT_IN_ENV) or "").strip() == "1"
+
 _VALID_SOURCE_KEYS = {
     "name", "rss_url", "wire_syndication", "tier", "enabled", "note",
     "followed_analyst",  # M3: personal-impact ranking boost for followed writers

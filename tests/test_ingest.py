@@ -404,7 +404,14 @@ def test_run_ingest_keyless_discovery_reports_skip_and_sends_nothing(
     cfg = config.SourcesConfig(
         sources=[mk_source(name="K", url=url)], interests_broad=["tech"]
     )
-    report = ingest.run_ingest(con=migrated_con, cfg=cfg, env={}, with_discovery=True)
+    # Discovery is PAUSED by ruling (2026-07-25); this case is about the
+    # KEYLESS cold seam that lives BEHIND the pause, so it opts in explicitly.
+    # What the un-opted-in default path does is pinned in
+    # test_nl101_discovery_pause.py::test_ingest_reports_the_pause_by_default.
+    report = ingest.run_ingest(
+        con=migrated_con, cfg=cfg,
+        env={config.DISCOVERY_OPT_IN_ENV: "1"}, with_discovery=True,
+    )
     assert report.discovery_status.startswith("skipped — PERPLEXITY_API_KEY not set")
     posts = [r for r in fake_api.recorded if r["method"] == "POST"]
     assert posts == []  # cold seam: no request was ever built

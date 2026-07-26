@@ -22,10 +22,11 @@ from conftest import PROTOTYPE_ROOT
 
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 
-PERPLEXITY_HINT = (
-    "PERPLEXITY_API_KEY not set — deferred by choice; ingest runs RSS-only "
-    "and says so. To add discovery later: perplexity.ai/settings/api → .env"
-)  # M8 ruling: deferred-by-principal-choice = ○ informational, not ✗ required
+# Discovery is PAUSED by ruling (2026-07-25), so the pre-install doctor reports
+# the ruling instead of the old missing-key hint. The pause reaches even this
+# path — the doctor with no deps installed, no keys and no venv — because the
+# predicate is stdlib-only in config.py and is read before anything else.
+PERPLEXITY_HINT = "tier-2 Sonar discovery is PAUSED by ruling (2026-07-25)"
 
 SITECUSTOMIZE_TEMPLATE = """\
 import socket

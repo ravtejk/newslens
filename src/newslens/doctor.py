@@ -356,6 +356,26 @@ def check_anthropic_key(env: Dict[str, str]) -> List[Result]:
 
 def check_perplexity_key(env: Dict[str, str]) -> List[Result]:
     key = (env.get("PERPLEXITY_API_KEY") or "").strip()
+    # THE PAUSE (principal 2026-07-25) comes first, and it fires a PAID probe
+    # for nobody. The doctor's job here changes shape: while discovery is
+    # paused there is no key to validate for, so it REPORTS THE RULING instead
+    # of nagging for a credential the product has decided not to use. A
+    # key-shaped nag under a pause is how a paused feature quietly gets
+    # un-paused by a helpful reader.
+    if not config.discovery_enabled(env):
+        held = (
+            " A PERPLEXITY_API_KEY is present in the environment but unused — "
+            "nothing here spends it; you can leave it or comment it out."
+            if key else
+            " No key needed, and none is being asked for."
+        )
+        return [
+            Result(
+                INFO,
+                f"{config.DISCOVERY_PAUSE_REASON}. No probe was fired and "
+                f"nothing was charged.{held}",
+            )
+        ]
     if not key:
         # M8 ruling: the principal DEFERRED this key by choice (RSS-only
         # discovery is the product's actual running state), so its absence
@@ -1028,7 +1048,22 @@ def cost_estimate() -> List[Result]:
             "4.4-min episode (the 2026-07-06 ear-test ruling, on voice). Real "
             "per-step costs land in briefings.token_cost on every "
             "generate (per-seat model/lane/shadow keys)",
-        )
+        ),
+        # HONESTY LINE (2026-07-25/26). "~$0 charged" is true of the LLM seats
+        # and, since the pause, of tier-2 discovery. It is NOT the whole run:
+        # analysis verification still makes one METERED Sonar call per
+        # depth-tier story whenever PERPLEXITY_API_KEY is set. The pause ruling
+        # named discovery, the doctor probe and sonar_spike — not this caller —
+        # so it is reported here rather than silently changed.
+        Result(
+            INFO,
+            "Metered spend outside the subscription, complete list: tier-2 "
+            "discovery is PAUSED ($0). Analysis VERIFICATION is not — "
+            "`analyze`/`generate` still make one Sonar call per depth-tier "
+            "story when PERPLEXITY_API_KEY is set (logged as analysis_usd; "
+            "~$0.003/edition on the 2026-07-25 run). Comment the key out of "
+            ".env and every Sonar path in the product is cold",
+        ),
     ]
 
 

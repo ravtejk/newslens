@@ -72,13 +72,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     ingest_p = sub.add_parser(
         "ingest",
-        help="pull enabled sources into source_items (idempotent per UTC fetch-day); "
-        "adds the capped Sonar discovery call when PERPLEXITY_API_KEY is set",
+        help="pull enabled sources into source_items (idempotent per UTC "
+        "fetch-day). Tier-2 Sonar discovery is PAUSED by ruling (2026-07-25) — "
+        "runs are RSS-only and say so; no metered call is made even with a key "
+        "present",
     )
     ingest_p.add_argument(
         "--no-discovery",
         action="store_true",
-        help="skip the Sonar discovery call even if a key is present (RSS only)",
+        help="skip the Sonar discovery call (redundant while discovery is "
+        "paused; kept so the flag keeps meaning if it is ever unpaused)",
     )
     rank_p = sub.add_parser(
         "rank",
@@ -279,6 +282,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--date", default=None, metavar="YYYY-MM-DD",
         help="baseline as-of date (default: today, local; a pending intent's "
         "own date wins when one exists)",
+    )
+
+    dc_p = sub.add_parser(
+        "discovery-clean",
+        help="NL-101 retro-clean: find the historical tier-2 discovery rows "
+        "that were never news (sitemap/feed files, homepages, section and "
+        "author listings, AV pages, social posts) and remove them. DRY RUN BY "
+        "DEFAULT — prints the plan and changes nothing; --apply performs the "
+        "deletion. Rows cited by a shipped briefing are RETAINED and reported, "
+        "never deleted. $0, offline, no LLM call.",
+    )
+    dc_p.add_argument(
+        "--apply", action="store_true",
+        help="actually delete the rows the dry run listed (default: dry run)",
+    )
+    dc_p.add_argument(
+        # NAMED --show, NOT --limit (gate ruling 2026-07-26). It was always
+        # display-only, but "--apply --limit 3" reads like "delete three" and
+        # deletes all of them — the gate's own run did exactly that. A flag
+        # that sits next to --apply must not look like it bounds --apply.
+        "--show", type=int, default=20, metavar="N", dest="show",
+        help="how many example rows to PRINT per bucket (default 20). Display "
+        "only — it never bounds what --apply deletes; the COUNTS above the "
+        "lists are always complete",
     )
 
     args = parser.parse_args(argv)
@@ -688,8 +715,56 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         return 0
 
+    if args.command == "discovery-clean":
+        return _discovery_clean_command(args)
+
     parser.error(f"unknown command: {args.command}")  # unreachable; argparse guards
     return 2
+
+
+def _discovery_clean_command(args) -> int:
+    """`newslens discovery-clean [--apply]` — NL-101's retro-clean.
+
+    DRY RUN BY DEFAULT. The dry run and the apply run share ONE classifier
+    (discovery.scan_discovery_rows), so what --apply deletes is exactly what
+    the dry run listed — there is no second, drifted predicate."""
+    from . import db, discovery
+
+    con = db.connect()
+    try:
+        result = discovery.clean_discovery_rows(con, apply=bool(args.apply))
+    finally:
+        con.close()
+
+    removable = result["removable"]
+    cited = result["cited"]
+    kept = result["kept"]
+    total = len(removable) + len(cited) + len(kept)
+    show = max(0, int(getattr(args, "show", 20) or 0))   # display only
+
+    print(f"discovery-clean: {total} stored tier-2 (sonar) row(s) examined")
+    print(f"  {len(kept)} look like articles — untouched")
+    print(f"  {len(cited)} junk-classed but CITED by a shipped briefing — "
+          f"retained (a shipped citation must keep resolving)")
+    verb = "deleted" if result["applied"] else "would delete"
+    print(f"  {len(removable)} junk-classed and uncited — {verb}")
+
+    for label, rows in (("removable", removable), ("cited", cited)):
+        if not rows:
+            continue
+        print(f"\n  {label}:")
+        for entry in rows[:show]:
+            print(f"    [{entry['reason']}] {entry['url']}")
+        if len(rows) > show:
+            print(f"    … and {len(rows) - show} more "
+                  f"(--show {len(rows)} to see them all)")
+
+    if result["applied"]:
+        print(f"\nAPPLIED — {result['deleted']} row(s) deleted.")
+    else:
+        print("\nDRY RUN — nothing was changed. Re-run with --apply to delete "
+              "the rows listed above.")
+    return 0
 
 
 def _profile_command(args) -> int:

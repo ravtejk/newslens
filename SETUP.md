@@ -56,11 +56,26 @@ then fix the leak. `.env` is gitignored.
    roughly ~$2/month at daily cadence).
 3. Put the key in `.env` as `OPENAI_API_KEY=...`
 
-### 2b. PERPLEXITY_API_KEY (optional — deferred by choice, 2026-07-05)
+### 2b. PERPLEXITY_API_KEY (not needed — tier-2 discovery is PAUSED)
 
-You deferred this key: ingest runs RSS-only and says so on every run, and
-the doctor reports the absence as informational (○), not failing — the
-product's actual running state. If you want the daily discovery query later:
+**Ruling 2026-07-25: tier-2 Sonar discovery is paused.** Over three weeks it
+contributed 0.41% of cited items, and three vendor configurations each
+returned roughly one usable item per 180 results. `ingest` no longer makes a
+discovery call at all — key present or absent — and the doctor reports the
+pause rather than asking you for a key.
+
+**One Sonar caller is still live and still metered when this key IS set:**
+analysis *verification*, one call per depth-tier story on `analyze` /
+`generate` (~$0.003 on the 2026-07-25 edition, logged as `analysis_usd`).
+That caller was outside the pause ruling's scope. **If you want every Sonar
+path in the product cold, comment `PERPLEXITY_API_KEY` out of `.env`** — key
+gating stops all of it instantly, with no code change.
+
+Discovery can be re-armed for testing (NL-102: the Claude-web-search
+comparison) with `NEWSLENS_DISCOVERY_ENABLED=1`. It is deliberately not in
+`.env.example`: it is a testing opt-in, not a setting to fill in.
+
+If you ever do want a key:
 
 1. Go to <https://www.perplexity.ai/settings/api> → generate an API key.
 2. Sonar is pay-as-you-go against a **prepaid credit balance — that balance is
@@ -205,7 +220,7 @@ still runs (stdlib-only) and exits `1` with, in short:
 ✗ missing Python deps: PyYAML, python-dotenv — fix: python3 -m venv .venv && ...
 ○ .env not found — run: cp .env.example .env  (then fill keys in; ...)
 ✗ OPENAI_API_KEY not set — get one at platform.openai.com/api-keys, then add to .env
-✗ PERPLEXITY_API_KEY not set — get one at perplexity.ai/settings/api, then add to .env
+○ tier-2 Sonar discovery is PAUSED by ruling (2026-07-25) ... No probe was fired and nothing was charged.
 ✓ migrations apply cleanly to a scratch DB — tables: briefings, briefings_history, memory, source_items
 ⚠ sources.yaml validation skipped (PyYAML not installed — see the missing-deps line above)
 ```
