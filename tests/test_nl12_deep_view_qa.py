@@ -485,7 +485,10 @@ def test_arc_line_inside_archived_edition_fragment_scoped_and_navigable(ui):
     code, _, body = get(ui, "/edition?date=2026-07-06")
     frag = body.decode("utf-8")
     assert code == 200
-    assert "← Back to Archive" in frag
+    # NL-103 row 17 RE-PIN: the visible label is the bare destination now; the
+    # accessible name carries "Back to <destination>" (§3 aria law).
+    assert "← Archive" in frag
+    assert 'aria-label="Back to Archive"' in frag
     assert 'id="ed2026-07-06-story-0-facts"' in frag     # date-scoped ids
     assert 'id="ed2026-07-06-story-0-open"' in frag
     assert "openEdition('2026-07-05', event)" in frag    # continuity target

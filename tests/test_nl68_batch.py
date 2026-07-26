@@ -453,7 +453,13 @@ def test_topics_interface_hint_is_removed():
     con.close()
     assert "suggestions draw from everything coverage has matched" not in page
     assert "Suggestions recall writers the system already knows" not in page
-    # item-14 BOUNDARY pin: the functional-consequence disclosure stays —
-    # following a writer STEERS ranking (ranking.py FOLLOWED_BOOST); telling
-    # the user that is honesty, not interface narration.
-    assert "boosts their pieces in ranking" in page
+    # NL-103 row 7 SUPERSEDES the item-14 boundary pin (ratified register
+    # 2026-07-26, C6): the ranking clause is system explanation and "ranking" is
+    # internal vocabulary, so it DIED with the rest of the narration. The two
+    # functional facts stay, one sentence each. The now-undisclosed ranking
+    # effect (ranking.FOLLOWED_BOOST is still real) is a RULED SILENCE with an
+    # armed falsifier — register §6.6: if testers are confused why a followed
+    # writer's pieces dominate, the fact returns in register form.
+    assert "boosts their pieces in ranking" not in page
+    assert "Following a writer adds their feed to your sources." in page
+    assert "Adding someone new takes their feed link." in page

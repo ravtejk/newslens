@@ -379,7 +379,10 @@ def test_a_non_empty_flow_list_is_left_exactly_as_it_behaved_before(tmp_path):
             "interests:\n  broad: [Alpha, Beta]\n  granular: []\n")
     src.write_text(text, encoding="utf-8")
     ok, msg = server.topic_add("Shipping", "broad")
-    assert not ok and "reverted" in msg
+    # NL-103 FIX-2 RE-PIN: the revert refusal is reader copy now — same
+    # behaviour (nothing saved, file restored), register wording.
+    assert not ok and msg == ("Nothing was saved — that change would have "
+                              "broken your sources file.")
     assert src.read_text(encoding="utf-8") == text
 
 

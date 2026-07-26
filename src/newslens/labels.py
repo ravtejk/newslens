@@ -15,6 +15,13 @@ absence asserts — the red tests only the wiring can flip).
 
 Stdlib-only by design (see newslens/__init__.py). No f-strings, no logic — a
 table, deliberately boring so the re-pin is a one-line diff per name.
+
+RETIRED-NOT-RENDERED (the sweep marker, NL-103 row 21): a constant whose string
+no surface renders any more is kept — so nothing imports a dangling name — and
+carries that exact marker on its own line. A copy/vocabulary sweep greps the
+marker and SKIPS those strings: they are record-keeping, not live copy, and
+reading them as live is how a dead phrase gets "fixed" into a ruling it no
+longer belongs to. Live constants never carry the marker.
 """
 
 # --- Nav destinations (the section line: Today · Following · Archive) --------
@@ -26,7 +33,7 @@ NAV_ARCHIVE = "Archive"
 # NL-68 item 6: the visible "The Lead" kicker DIED — the design carries the
 # hierarchy (largest type, top-left). The constant is retired-but-kept so nothing
 # imports a dangling name; no surface renders it (grep server.py for KICKER_LEAD).
-KICKER_LEAD = "The Lead"          # RETIRED (NL-68 item 6) — not rendered anywhere
+KICKER_LEAD = "The Lead"          # RETIRED-NOT-RENDERED (NL-68 item 6)
 IN_BRIEF = "In brief"             # the quick-tier cluster heading
 
 # --- The edition bar (§6 — the podcast player is edition-level furniture) -----
@@ -70,7 +77,11 @@ BASELINE_PENDING = ("Preparing the background for this new thread — check back
 # extends the §12.5 fold grammar); "→ The whole thread" is the fallback control
 # label for that action (its accessible/link purpose + the row's control name).
 THREAD_WHOLE = "→ The whole thread"
-THREAD_BACK = "← Back to Following"        # the thread page's back affordance
+# NL-103 row 17: the VISIBLE back label is the bare destination (mockup form);
+# the accessible name ("Back to Following") is derived at render time by
+# server._back_link — §3 aria law: it names the destination and CONTAINS the
+# visible label (WCAG 2.5.3).
+THREAD_BACK = "← Following"                # the thread page's back affordance
 # NOTE: DECISIONS 2026-07-14 lists an "open question / next fixed point" on the
 # thread page, but no thread-persisted field carries it (it lives per-edition in
 # a brief's watch/unknowns, not in thread_state/thread_deltas/memory). Per A8
@@ -111,7 +122,12 @@ QUIET_FOLD_SUFFIX = "no movement this edition"
 # Lifecycle sections below the active spine (status != active).
 FOLLOWING_DORMANT_H = "Quiet for now"
 FOLLOWING_DISMISSED_H = "You stopped following"
-FOLLOWING_EMPTY = "Nothing yet"
+# NL-103 row 20: the Threads sub-view's empty state names its own class. The
+# nearest heading is the page-title "Following" (h1), but the triad nav and the
+# follow-a-story combobox sit between them and THREE sub-views share that h1 —
+# no programmatic adjacency, so the class noun rides in-string (§3 empty-state
+# rule).
+FOLLOWING_EMPTY = "No threads yet"
 # Row verbs (the thread editor / lifecycle controls).
 VERB_STOP = "Stop"
 VERB_RESUME = "Resume"
@@ -162,19 +178,30 @@ FOLLOW_DEGRADE_COMMITTED = FOLLOW_DEGRADE_LEAD + " " + FOLLOW_DEGRADE_UPGRADE
 # content own the final wording.
 FOLLOW_SWITCH_FAILED = "Couldn't switch just now — try again."
 # Cap refusal (R1, 2026-07-25): the resolve was REFUSED before any call because
-# one resolve's estimate alone exceeds BUDGET_CAP_USD_PER_RUN. Distinct from
-# FOLLOW_DEGRADE_* — nothing was attempted and nothing was committed, so the
-# copy must not imply a transient the reader can retry away. FLAGGED FOR THE
-# GATE: plainest-register candidate, not a settled copy call; content owns the
-# final wording.
+# one resolve's estimate alone exceeds the run's budget cap. Distinct from
+# FOLLOW_DEGRADE_* — nothing was attempted, so the copy must not imply a
+# transient the reader can retry away.
+# NL-103 row 4 (RATIFIED register 2026-07-26, §3 global law: reader copy never
+# contains an env-var name — doctor/SETUP own that name, and the budget figures
+# live on the meter). The ratified wording is the register's "if a blocking
+# pre-commit branch survives anywhere" fallback, verbatim.
+# PRECONDITION, flagged with the batch: its second sentence ("The follow stands")
+# is true in the register's post-v11/M1c world, where the tap commits the narrow
+# follow BEFORE the resolve and only the broadening can be refused. TODAY the
+# route refuses pre-commit and commits nothing (test_r1_resolve_cap_gate
+# ::test_refusal_commits_nothing) — and no surface renders this string at all
+# (the client's `ok === false` branch reverts to resting silently, the known gap
+# flagged to the R1 gate). So nothing lies on screen today; but whoever wires a
+# refusal reason into the UI must land the commit-narrow behaviour first, or cut
+# the second sentence. Not an implementer's unilateral call — M1c's lane.
 FOLLOW_CAP_REFUSAL = (
-    "Couldn't work out the follow — the run budget cap is set below what one "
-    "resolve costs. Raise BUDGET_CAP_USD_PER_RUN, or follow just this story.")
+    "Couldn’t choose a broader follow — it costs more than this run’s budget "
+    "allows. The follow stands — this story.")
 # RETIRED 2026-07-18 (M1b), retired-but-kept so nothing imports a dangling name
 # (KICKER_LEAD precedent). The instant-flip toast and static active label are
 # replaced by the inline resolving→committed disclosure; no surface renders them.
-FOLLOW_STORY_ACTIVE = "Following this story"   # RETIRED (M1b) — composed now
-FOLLOW_STORY_CONFIRM = "✓ Following — see it under Following → Threads"  # RETIRED (M1b)
+FOLLOW_STORY_ACTIVE = "Following this story"   # RETIRED-NOT-RENDERED (M1b)
+FOLLOW_STORY_CONFIRM = "✓ Following — see it under Following → Threads"  # RETIRED-NOT-RENDERED (M1b)
 TRACKED_ONGOING_PREFIX = "Tracked ongoing story —"
 
 # --- Staleness guard (2026-07-16 stale-server incident -> a mechanism) --------
@@ -190,11 +217,18 @@ STALENESS_REFUSAL = (
     "to generate a new edition: newslens serve")
 
 # --- Deep-back labels (the one-line back affordances) ------------------------
-BACK_TO_TODAY = "← Back to today’s edition"
-BACK_TO_EDITION = "← Back to this edition"
-BACK_TO_ARCHIVE = "← Back to Archive"
+# NL-103 row 17 (B8): visible label = the bare destination, matching the mockup;
+# the accessible name ("Back to <destination>") is derived at render time by
+# server._back_link so a re-pin here re-pins the aria too (§3 aria law).
+BACK_TO_TODAY = "← Today"
+BACK_TO_EDITION = "← This edition"
+BACK_TO_ARCHIVE = "← Archive"
 
 # --- Archive (§14 step-back redesign; supersedes the §8 list-primary law) -----
+# NL-103 row 20: KEPT bare. This one renders as the immediate next sibling of
+# the page's own <h1 class="page-title">Archive</h1> inside the same .page
+# container, nothing between them (server._render_archive) — the section head is
+# programmatically adjacent, which is exactly the case §3 licenses.
 ARCHIVE_EMPTY = "Nothing yet"
 # NL-68 item 14: ARCHIVE_CAL_INDEX_NOTE ("The grid is an index of the list below
 # it.") REMOVED — interface-explaining copy the principal named as condescension.

@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from newslens import config, db, memory, paths, ranking, server, webui
+from newslens import config, db, labels, memory, paths, ranking, server, webui
 
 from conftest import PROTOTYPE_ROOT
 
@@ -485,7 +485,12 @@ def test_exception_branch_reverts_byte_identical(replica, monkeypatch):
 
     monkeypatch.setattr(config, "load_sources", boom)
     ok, msg = server.topic_add("Perfectly Fine Topic", "broad")
-    assert not ok and "reverted" in msg and "synthetic parse explosion" in msg
+    # NL-103 FIX-2 RE-PIN: this message renders in the popup, so it states the
+    # outcome in reader terms — the exception text and the word "reverted" are
+    # both gone (doctor prints diagnostics). The behaviour it guards is
+    # unchanged: byte-identical revert, asserted below.
+    assert not ok and msg == ("Nothing was saved — that change would have "
+                              "broken your sources file.")
     assert replica.read_text(encoding="utf-8") == before
 
 
@@ -502,7 +507,10 @@ def test_problems_state_branch_reverts_byte_identical(replica, monkeypatch):
 
     monkeypatch.setattr(config, "load_sources", problematic)
     ok, msg = server.topic_add("Another Fine Topic", "broad")
-    assert not ok and "reverted" in msg and "synthetic problem" in msg
+    # NL-103 FIX-2 RE-PIN: same reader-facing outcome for both revert branches;
+    # the problems list no longer rides into the popup.
+    assert not ok and msg == ("Nothing was saved — that change would have "
+                              "broken your sources file.")
     assert replica.read_text(encoding="utf-8") == before
 
 
@@ -510,15 +518,20 @@ def test_surgery_on_comments_only_file_fails_without_writing(tmp_paths):
     text = "# just comments\n# nothing else\n"
     paths.SOURCES_FILE.write_text(text, encoding="utf-8")
     ok, msg = server.topic_add("anything", "broad")
-    assert not ok and "could not locate" in msg
+    # NL-103 FIX-2 RE-PIN: the locate failure is a reader-facing refusal now —
+    # it names the reader's own level, not `interests.granular in sources.yaml`.
+    assert not ok and msg == ("Didn’t add it — your sources file has no "
+                              "section for broad topics.")
     assert paths.SOURCES_FILE.read_text(encoding="utf-8") == text
 
 
 def test_writer_add_validates_and_dedups(replica):
     ok, msg = server.writer_add("", "ftp://nope")
-    assert not ok and "http(s)" in msg
+    # NL-103 FIX-2 RE-PIN: "http(s)://" was shorthand no reader writes; the
+    # refusal now shows the two prefixes that actually work.
+    assert not ok and "http:// or https://" in msg
     ok, msg = server.writer_add("Chartbook (Adam Tooze)", "https://new.example/feed")
-    assert not ok and "already in your sources" in msg
+    assert not ok and "already in your sources" in msg   # survives FIX-2 unchanged
     ok, msg = server.writer_add("Noahpinion", "https://www.noahpinion.blog/feed")
     assert ok, msg
     cfg = config.load_sources()
@@ -824,12 +837,15 @@ def test_csrf_guard_rejects_non_json_content_types(ui):
     assert obj["ok"] is True
 
 
+# NL-103 FIX-2 RE-PIN: the fragments are the landed refusal strings — the
+# mechanism clauses ("it changes the file's structure", "that's a comment")
+# died, and the apostrophes are typographic.
 @pytest.mark.parametrize(
     "name, fragment",
     [
-        ("bad: colon", "can't contain ':'"),
-        ("two\nlines", "line breaks"),
-        ("# looks-like-comment", "start with '#'"),
+        ("bad: colon", "Nothing was added — a name can’t contain ':'."),
+        ("two\nlines", "Nothing was added — a name can’t contain line breaks."),
+        ("# looks-like-comment", "Nothing was added — a name can’t start with '#'."),
     ],
 )
 def test_bad_name_precheck_rejects_before_surgery(replica, name, fragment):
@@ -1075,35 +1091,71 @@ def test_ride25_enabled_rewrite_is_key_anchored(replica):
     assert entry.enabled is False and entry.followed_analyst is False
 
 
-ERROR_PANEL_SENTENCE = (
-    "No half-written edition ever goes out: a failure before the save\n"
-    "     publishes nothing; one during file export after the save leaves the\n"
-    "     saved edition intact."
-)
+# NL-103 row 9 RE-PIN (ratified register 2026-07-26). WAS: one invariant
+# sentence, identical in both positions ("No half-written edition ever goes out:
+# a failure before the save publishes nothing; one during file export after the
+# save leaves the saved edition intact."). The register rules that narration off
+# the panel — the reader gets the FACT of the position they are actually in. So
+# the pin inverts: the positions must render DIFFERENT, true sentences, and none
+# may carry another's.
+# GATE FIX-1 (2026-07-26, QA-1): THREE states, not two. A briefings row exists
+# from the rank stage onward while no readable edition does, so row existence
+# alone cannot carry "intact" — the panel reads the edition renderer's own
+# _stories_for. Position 3 is that window.
+ERROR_PANEL_NOTHING = "Nothing was published."
+ERROR_PANEL_INTACT = "The saved edition is intact."
+ERROR_PANEL_EMPTY = "The saved edition is empty."
+ERROR_PANEL_DEAD_NARRATION = "No half-written edition ever goes out"
 
 
 def test_ride23_error_panel_wording_in_both_failure_positions(ui):
-    """The recovery sentence must be TRUE and identical whether the failure
-    happened with no edition at all or on a day that already has one."""
+    """The failure panel states THIS run's outcome, and it must be true in all
+    three positions: no row for today → nothing was published; a row with a
+    readable body → that edition is intact; a row with no body (the whole
+    post-rank window of a run, and a failed regenerate) → it is empty. The
+    three are pairwise exclusive, and the old invariant sentence is gone from
+    every one of them."""
     server.GEN_JOB.state = "error"
     server.GEN_JOB.error = "synthetic failure for the wording pin"
     # Position 1: no briefing row exists.
     _, _, body = get(ui, "/")
     page1 = body.decode("utf-8")
     assert "Today’s edition failed" in page1
-    assert ERROR_PANEL_SENTENCE in page1
-    # Position 2: a briefing row exists (the panel replaces it).
+    assert ERROR_PANEL_NOTHING in page1
+    assert ERROR_PANEL_INTACT not in page1
+    assert ERROR_PANEL_EMPTY not in page1
+    assert ERROR_PANEL_DEAD_NARRATION not in page1
+    # Position 2: today's briefing row exists WITH a body (the panel replaces it).
     con = db.connect()
     seed_briefing(con)
     con.close()
     _, _, body = get(ui, "/")
     page2 = body.decode("utf-8")
-    assert ERROR_PANEL_SENTENCE in page2
+    assert ERROR_PANEL_INTACT in page2
+    assert ERROR_PANEL_NOTHING not in page2
+    assert ERROR_PANEL_EMPTY not in page2
+    assert ERROR_PANEL_DEAD_NARRATION not in page2
     # the panel replaced the Today edition body — scope the check to the Today
     # view (the v7-M2 archive list surfaces every edition's lead headline, §8).
     today_view = page2.split('id="view-today"')[1].split('id="view-following"')[0]
     assert "Chip export controls pass" not in today_view
-    # And neither render logged a read (read-honesty holds here too).
+    # Position 3 (gate FIX-1): the row survives but its body is gone — the shape
+    # ranking.persist()'s re-rank branch leaves behind, and the shape a fresh
+    # run wears from the rank stage until persist_generation. The reader can
+    # open today's edition and find nothing in it, so neither sibling sentence
+    # is true.
+    con = db.connect()
+    con.execute("UPDATE briefings SET narrative_text = NULL WHERE date = ?",
+                (DATE,))
+    con.commit()
+    con.close()
+    _, _, body = get(ui, "/")
+    page3 = body.decode("utf-8")
+    assert ERROR_PANEL_EMPTY in page3
+    assert ERROR_PANEL_INTACT not in page3
+    assert ERROR_PANEL_NOTHING not in page3
+    assert ERROR_PANEL_DEAD_NARRATION not in page3
+    # And no render logged a read (read-honesty holds here too).
     con = db.connect()
     try:
         assert con.execute("SELECT COUNT(*) FROM consumption_events").fetchone()[0] == 0
@@ -1276,7 +1328,12 @@ def test_edition_fragment_renders_in_place_and_logs_a_read(ui):
     code, _, body = get(ui, "/edition?date=2020-01-02")
     assert code == 200
     frag = body.decode("utf-8")
-    assert "Back to Archive" in frag and 'id="view-edition"' in frag
+    # NL-103 row 17 RESTATED (this assert stayed green off the aria name alone —
+    # "Back to Archive" now lives in aria-label, not in the visible label — so it
+    # no longer proved what it was written to prove). Both halves, explicitly.
+    assert labels.BACK_TO_ARCHIVE in frag                  # visible: "← Archive"
+    assert 'aria-label="Back to Archive"' in frag          # accessible name
+    assert 'id="view-edition"' in frag
     assert "Chip export controls pass" in frag             # the edition body renders
     assert 'id="ed2020-01-02-story-0"' in frag             # date-scoped id (no collision)
     assert "<!DOCTYPE html>" not in frag                   # a fragment, not a full page

@@ -392,7 +392,10 @@ h2.month-title { font-size: 2.2rem; }
 .thread-verbs button { font-size: 0.8rem; background: transparent; border: 1px solid var(--rule);
   color: var(--ink-soft); padding: 0.35rem 0.75rem; border-radius: 7px; cursor: pointer; }
 .thread-verbs button:hover { border-color: var(--ink); color: var(--ink); }
-.thread-verbs button.delete-action:hover { border-color: var(--danger); color: var(--danger); }
+/* NL-103 row 5 (RATIFIED register, C7): the Delete verb's --danger hover DIED.
+   Delete is ink, never danger — the confirm's counts line carries the weight and
+   color is never the channel. The generic .thread-verbs button:hover above
+   supplies the ink hover; .delete-action stays as the render hook only. */
 
 .token-search { width: 100%; font-size: 0.92rem; font-family: var(--font-sans); color: var(--ink);
   background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
@@ -407,7 +410,10 @@ h2.month-title { font-size: 2.2rem; }
   padding: 0.3rem 0.5rem 0.3rem 0.85rem; }
 .token button.token-remove { background: transparent; border: none; padding: 0;
   color: var(--ink-faint); font-size: 0.85rem; line-height: 1; cursor: pointer; }
-.token button.token-remove:hover { color: var(--danger); }
+/* NL-103 FIX-4 (gate 2026-07-26): --ink, not --danger. Remove is list
+   membership only — nothing is destroyed — so danger color on it inverted the
+   law the same batch settled for Delete. The hover affordance stays. */
+.token button.token-remove:hover { color: var(--ink); }
 
 /* NL-11: the shared suggestion combobox (replaces the native datalist).
    House-styled per DIRECTION law — outlined, spaced, uncolored, no chips;
@@ -628,7 +634,10 @@ POPUPS = """
 <div class="popup-scrim" id="popup-edit-note" role="dialog" aria-modal="true" aria-labelledby="popup-edit-note-title">
   <div class="popup-card">
     <h3 id="popup-edit-note-title">Edit note — <span id="edit-note-topic-name"></span></h3>
-    <label for="edit-note-textarea">This note shapes how future editions frame this story. It never appears on the card or in the edition itself.</label>
+    <!-- NL-103 row 8: tightened to the two facts. The second one is a NON-EFFECT
+         sentence, licensed here by §4 row 8 — it kills a false assumption about
+         where the note shows up that is both likely and costly. -->
+    <label for="edit-note-textarea">This note shapes future editions. It never appears in them.</label>
     <textarea id="edit-note-textarea" rows="4"></textarea>
     <div class="popup-actions">
       <button class="cta-outline" onclick="closePopup('popup-edit-note')">Cancel</button>
@@ -639,8 +648,12 @@ POPUPS = """
 <div class="popup-scrim" id="popup-add-topic" role="dialog" aria-modal="true" aria-labelledby="popup-add-topic-title">
   <div class="popup-card">
     <h3 id="popup-add-topic-title">Add topic — <span id="add-topic-name"></span></h3>
-    <p style="font-size:0.85rem;color:var(--ink-soft);margin:0 0 1rem;">Add this as a broad interest or a specific one?</p>
-    <p class="popup-status err" id="add-topic-status"></p>
+    <!-- NL-103 row 16 (A5): topic everywhere in reader copy; the config names
+         behind it never render. -->
+    <p style="font-size:0.85rem;color:var(--ink-soft);margin:0 0 1rem;">Add this as a broad topic or a specific one?</p>
+    <!-- NL-103 FIX-2: refusals announce (§3's refusal-loud floor). polite
+         matches the house pattern used elsewhere for status regions. -->
+    <p class="popup-status err" id="add-topic-status" aria-live="polite"></p>
     <div class="popup-actions">
       <button class="cta-outline" onclick="closePopup('popup-add-topic')">Cancel</button>
       <button class="cta-outline" onclick="addTopic('broad')">Add as broad</button>
@@ -653,10 +666,15 @@ POPUPS = """
     <h3 id="popup-add-writer-title">Follow a writer</h3>
     <label for="add-writer-input">Name or publication</label>
     <input type="text" id="add-writer-input" placeholder="e.g. Byrne Hobart">
-    <p class="popup-status" id="add-writer-status"></p>
+    <!-- NL-103 FIX-2: same floor — this element carries both the refusal and
+         the follow receipt, so it announces either way. -->
+    <p class="popup-status" id="add-writer-status" aria-live="polite"></p>
     <label for="add-writer-url">Paste a link to their feed or site</label>
     <input type="text" id="add-writer-url" placeholder="https://…/feed">
-    <p class="popup-note">Name-only lookup is coming; pasting a feed link works today.</p>
+    <!-- NL-103 row 10 (C7a): the static lookup note DIED — a roadmap promise,
+         and a second wording of one fact. The two field labels above carry the
+         affordance; the ONE refusal-class string lives in addWriter() and fires
+         only when the reader actually hits the limit. -->
     <div class="popup-actions">
       <button class="cta-outline" onclick="closePopup('popup-add-writer')">Cancel</button>
       <button class="cta-quiet" onclick="addWriter()">Follow</button>
@@ -669,7 +687,10 @@ POPUPS = """
     <p style="font-size:0.88rem;color:var(--ink-soft);margin:0 0 1.25rem;">This removes it permanently from your list. Past editions that mentioned it are unaffected.</p>
     <div class="popup-actions">
       <button class="cta-outline" onclick="closePopup('popup-delete-confirm')">Cancel</button>
-      <button class="cta-quiet" style="background:var(--danger);" onclick="deleteThread()">Delete</button>
+      <!-- NL-103 row 5: ink, never danger — the inline background override is
+           gone and .cta-quiet is already the ink button. The confirm's grammar
+           carries the weight; color is never the channel. -->
+      <button class="cta-quiet" onclick="deleteThread()">Delete</button>
     </div>
   </div>
 </div>
@@ -1242,7 +1263,9 @@ function addWriter() {
   var url = document.getElementById('add-writer-url').value.trim();
   var s = document.getElementById('add-writer-status');
   if (!url) {
-    s.textContent = 'Name-only lookup is coming \\u2014 paste their feed link to follow today.';
+    /* NL-103 row 10: the ONE writer-lookup string, refusal class (§3): states
+       what did NOT happen + the honest next act, no roadmap promise. */
+    s.textContent = 'Name lookup isn\\u2019t available yet \\u2014 paste a link to their feed.';
     s.classList.add('showing'); s.classList.remove('found'); s.classList.add('err');
     return;
   }
@@ -1250,7 +1273,9 @@ function addWriter() {
   api('/api/writer/add', {name: name, url: url}, function (d) {
     if (d.ok) {
       s.classList.add('found');
-      s.textContent = 'Following ' + (name || 'them') + ' \\u2014 ' + d.detail;
+      /* NL-103 row 11 (C7b): a receipt never takes a pronoun object — the
+         nameless fallback is the class noun (what was actually followed). */
+      s.textContent = 'Following ' + (name || 'the feed') + ' \\u2014 ' + d.detail;
       setTimeout(function () { closePopup('popup-add-writer'); reloadPreservingView(); }, 1200);
     } else { s.classList.add('err'); s.textContent = d.error || 'Could not add that feed.'; }
   });

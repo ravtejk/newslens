@@ -782,17 +782,22 @@ def _yaml_edit(mutate) -> Tuple[bool, str]:
         _write("\n".join(lines) + "\n")
         try:
             cfg = config.load_sources()
-        except Exception as exc:
+        except Exception:
             _write(original)
-            return False, f"edit produced an invalid sources.yaml — reverted ({exc})"
+            # NL-103 FIX-2: reader-rendered. The exception text (and the
+            # problems list below) named the file and its internals; the
+            # reader gets the outcome — nothing saved, nothing broken.
+            # `doctor.py:740` is where the diagnostics live.
+            return False, ("Nothing was saved — that change would have broken "
+                           "your sources file.")
         if cfg.problems:
             # M7 gate finding 1: load_sources reports most malformations via
             # cfg.problems WITHOUT raising — shipping a problems-state file
             # would brick every later pipeline run until a hand-edit. Treat
             # problems as validation failure, same as an exception.
             _write(original)
-            return False, ("edit produced an invalid sources.yaml — reverted "
-                           f"({'; '.join(cfg.problems[:2])})")
+            return False, ("Nothing was saved — that change would have broken "
+                           "your sources file.")
         return True, msg
 
 
@@ -853,14 +858,21 @@ def _open_empty_flow_list(lines: List[str], key_index: int, yaml_level: str) -> 
 
 
 def _bad_name(name: str) -> str:
-    """Structural characters would change sources.yaml's meaning (M7 gate
-    finding 1 follow-on): reject with a friendly error before surgery."""
+    """Structural characters would change the sources file's meaning (M7 gate
+    finding 1 follow-on): reject before surgery.
+
+    NL-103 FIX-2 (gate 2026-07-26): these strings reach the reader — both popup
+    status elements render the API's `error` — so they are REFUSALS under §3:
+    what did not happen, in reader-world terms, no config paths, no filenames,
+    no internal vocabulary. The mechanism ("it changes the file's structure")
+    is the machine's business, not the reader's.
+    """
     if ":" in name:
-        return "names can't contain ':' (it changes the file's structure)"
+        return "Nothing was added — a name can’t contain ':'."
     if "\n" in name or "\r" in name:
-        return "names can't contain line breaks"
+        return "Nothing was added — a name can’t contain line breaks."
     if name.lstrip().startswith("#"):
-        return "names can't start with '#' (that's a comment)"
+        return "Nothing was added — a name can’t start with '#'."
     return ""
 
 
@@ -875,17 +887,23 @@ def topic_add(name: str, level: str) -> Tuple[bool, str]:
     def mutate(lines):
         start, end = _find_interest_list(lines, yaml_level)
         if start < 0:
-            return False, f"could not locate interests.{yaml_level} in sources.yaml", lines
+            # NL-103 FIX-2: reader-rendered refusal — no config path, no
+            # filename, and it names the reader's level, never `yaml_level`.
+            return False, (f"Didn’t add it — your sources file has no section "
+                           f"for {level} topics."), lines
         _open_empty_flow_list(lines, start - 1, yaml_level)
         existing = {ln.strip()[1:].split("#")[0].strip().lower()
                     for ln in lines[start:end] if ln.strip().startswith("-")}
         if name.lower() in existing:
-            return False, f"{name!r} is already in your {level} interests", lines
+            return False, (f"Didn’t add it — {name} is already in your "
+                           f"{level} topics."), lines
         insert_at = end
         while insert_at > start and not lines[insert_at - 1].strip():
             insert_at -= 1
         lines.insert(insert_at, f"    - {name}")
-        return True, f"added {name!r} as a {level} interest", lines
+        # Not reader-rendered today (addTopic discards `detail` on ok), but it
+        # was the last live `interest` in the module — FIX-2 kills it too.
+        return True, f"added {name} as a {level} topic", lines
 
     return _yaml_edit(mutate)
 
@@ -910,7 +928,10 @@ def writer_add(name: str, url: str) -> Tuple[bool, str]:
     """Paste-a-link path: append a followed_analyst source entry at the end
     of the sources list (just before the interests block)."""
     if not url.lower().startswith(("http://", "https://")):
-        return False, "that doesn't look like a link — feed URLs start with http(s)://"
+        # NL-103 FIX-2: refusal form — what didn't happen, why in reader-world
+        # terms, and the shape of the thing that would work.
+        return False, ("Didn’t follow — that doesn’t look like a link. Feed "
+                       "links start with http:// or https://.")
     bad = _bad_name(name.strip() or url)
     if bad:
         return False, bad
@@ -918,13 +939,16 @@ def writer_add(name: str, url: str) -> Tuple[bool, str]:
     display = name.strip() or url
     for s in cfg.sources:
         if s.name.lower() == display.lower() or s.rss_url == url:
-            return False, f"{s.name!r} is already in your sources"
+            return False, f"Didn’t follow — {s.name} is already in your sources."
 
     def mutate(lines):
         anchor = next((i for i, ln in enumerate(lines)
                        if ln.startswith("interests:")), -1)
         if anchor < 0:
-            return False, "could not locate the interests block to anchor the insert", lines
+            # NL-103 FIX-2: the anchor is an implementation detail; the reader
+            # gets the standing condition in their own terms.
+            return False, ("Didn’t follow — your sources file is missing its "
+                           "topics section."), lines
         insert_at = anchor
         while insert_at > 0 and (not lines[insert_at - 1].strip()
                                  or lines[insert_at - 1].lstrip().startswith("#")):
@@ -937,7 +961,10 @@ def writer_add(name: str, url: str) -> Tuple[bool, str]:
             f"    note: \"principal-followed analyst: added via web UI {today}\"",
         ]
         lines[insert_at:insert_at] = entry
-        return True, "their feed is in your sources pool now", lines
+        # READER-RENDERED (gate-found): the handler returns this as `detail`
+        # and row 11's receipt renders it — "Following <name> — added to your
+        # sources". "pool" was internal vocabulary on a live reader surface.
+        return True, "added to your sources", lines
 
     return _yaml_edit(mutate)
 
@@ -1506,6 +1533,31 @@ def _e_attr(v: str) -> str:
     return '"' + escape(str(v or ""), quote=True) + '"'
 
 
+def _back_link(label: str, onclick: str) -> str:
+    """The one-line back affordance — deep views, archive editions, thread page.
+
+    NL-103 row 17 (B8, RATIFIED register): the VISIBLE label is the bare
+    destination (`← Today` · `← This edition` · `← Archive` · `← Following`),
+    matching the mockup. The ACCESSIBLE name names the destination and CONTAINS
+    the visible label verbatim — §3 aria law / WCAG 2.5.3 label-in-name — so a
+    reader who says "back to today" and a reader who hears the link agree.
+
+    The aria name is DERIVED (drop the arrow, prefix "Back to") rather than
+    tabled, for two reasons: a labels.py re-pin re-pins the accessible name with
+    it (the table's one-place contract, gate FIX-2), and containment is exact by
+    construction, so no future back label can silently lose or contradict its
+    name. Every deep-back anchor in this module goes through here.
+    """
+    dest = label.lstrip("←").strip()
+    if not dest:
+        # QA-4 / gate FIX-6: an empty or arrow-only label would render
+        # `aria-label="Back to "` — a nameless link, the exact failure this
+        # derivation exists to prevent. Fail loudly at the re-pin instead.
+        raise ValueError(f"back label must name a destination: {label!r}")
+    return (f'<a class="deep-back" href="#" aria-label="Back to {_e(dest)}" '
+            f'onclick="{onclick}">{_e(label)}</a>')
+
+
 def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
                   gen_state: Dict[str, str],
                   briefs: Optional[Dict[int, Dict]] = None) -> str:
@@ -1531,25 +1583,57 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         _model_suffix = f" · {_e(_stage_model)}" if _stage_model else ""
         _total0 = gen_state.get("total_elapsed_s") or 0
         _stage0 = gen_state.get("stage_elapsed_s") or 0
+        # NL-103 row 18: the stage tour ("Fetching your sources, ranking,
+        # writing, editing, and recording the episode.") DIED — the live status
+        # line below states the stage it is actually in, so enumerating the
+        # pipeline in prose narrates the interface and duplicates the fact.
+        # Kept: the duration fact, the pointer to the live status, the refresh
+        # fact.
         body = f"""
 <div class="state-panel" id="gen-running">
   <h2>Generating today’s edition…</h2>
-  <p>Fetching your sources, ranking, writing, editing, and recording the
-     episode. A full edition takes a while — the live status below shows
-     exactly where it is; the page refreshes itself when it’s ready.</p>
+  <p>A full edition takes a while — the live status below shows exactly where
+     it is; the page refreshes itself when it’s ready.</p>
   <p class="gen-live" id="gen-live" data-total="{_total0}" data-stage-el="{_stage0}">
     <span class="gen-live-stage" id="gen-live-stage">{_e(_stage_label)}</span><span class="gen-live-model" id="gen-live-model">{_model_suffix}</span>
     <span class="gen-live-clock" id="gen-live-clock"></span>
   </p>
 </div>"""
     elif gen_state["state"] == "error":
+        # NL-103 row 9: the invariant narration ("No half-written edition ever
+        # goes out: a failure before the save publishes nothing; one during file
+        # export after the save leaves the saved edition intact.") DIED — it
+        # recited the system's guarantee in BOTH positions instead of stating
+        # this run's fact. The panel states which position the reader is in.
+        # The subject is TODAY's edition (the panel's own h2) and GEN_JOB always
+        # generates today, so the fact is read for today's date — never for
+        # whatever date the page was addressed with (?date= renders an archive
+        # day inside this view). The already-resolved row is reused when it IS
+        # today's, so the common path adds no query.
+        # THREE states, not two (gate FIX-1 / QA-1, 2026-07-26). Row existence
+        # is NOT publication: ranking.persist() commits today's row at the rank
+        # stage and a re-rank NULLs the body on the live row, while the body
+        # UPDATE lands last (generate.persist_generation) — so a row exists for
+        # the whole post-rank window with nothing readable behind it, and a
+        # failed run's log entry carries no `stories` fallback either. The
+        # readability predicate is therefore the EDITION RENDERER'S OWN
+        # `_stories_for` — reused, never re-derived — so the panel and the body
+        # the reader can open cannot disagree. Pinned by
+        # tests/test_nl103_row9_acceptance.py (claim == what /edition returns).
+        _today = datetime.now().strftime("%Y-%m-%d")
+        _saved = (row if (row is not None and row["date"] == _today)
+                  else _briefing_row(con, _today))
+        if _saved is None:
+            _outcome = "Nothing was published."
+        elif _stories_for(_saved, _log_entry_for(_today))[0]:
+            _outcome = "The saved edition is intact."
+        else:
+            _outcome = "The saved edition is empty."
         body = f"""
 <div class="state-panel">
   <h2>Today’s edition failed</h2>
   <p class="error-text">{_e(gen_state["error"])}</p>
-  <p>No half-written edition ever goes out: a failure before the save
-     publishes nothing; one during file export after the save leaves the
-     saved edition intact.</p>
+  <p>{_e(_outcome)}</p>
   <button class="cta-quiet" onclick="generateAgain()">Try again</button>
 </div>"""
     elif row is None:
@@ -1557,13 +1641,24 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         # dressed as current. If the archive has earlier editions, point there.
         has_archive = con.execute(
             "SELECT 1 FROM briefings LIMIT 1").fetchone() is not None
+        # NL-103 row 18: both panels lose the pipeline enumeration ("it fetches
+        # your sources, picks the stories, writes the briefing, and records the
+        # episode") — a tour of machinery the reader did not ask for. What stays
+        # is what a first run needs: the absence, the duration, and the act (plus
+        # the Archive pointer where earlier editions exist).
+        # The duration is "about half an hour" (gate FIX-3, 2026-07-26): the
+        # ratified "a couple of minutes" was off by an order of magnitude on six
+        # of six logged runs. Soft-figured on purpose — honest across the taxed
+        # era (~40 min) and the post-NL-99 regime (~20 min, n=1). The h2
+        # "Nothing yet"
+        # below is NOT the bare empty state §3 bans — its own panel body names
+        # the class in the next sentence.
         if has_archive:
             body = """
 <div class="state-panel">
   <h2>Nothing for today yet</h2>
-  <p>No edition has been generated for today. A new one takes a couple of
-     minutes: it fetches your sources, picks the stories, writes the briefing,
-     and records the episode.</p>
+  <p>No edition has been generated for today. Generating one takes about half
+     an hour.</p>
   <button class="cta-quiet" onclick="generateAgain()">Generate today’s edition</button>
   <p class="empty-note" style="margin-top:1rem;">Earlier editions are in your
      <a href="#" onclick="showView('archive'); return false;">Archive</a>.</p>
@@ -1572,9 +1667,8 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
             body = """
 <div class="state-panel">
   <h2>Nothing yet</h2>
-  <p>No edition has been generated. The first one takes a couple of minutes:
-     it fetches your sources, picks the stories, writes the briefing, and
-     records the episode.</p>
+  <p>No edition has been generated. Generating one takes about half an
+     hour.</p>
   <button class="cta-quiet" onclick="generateAgain()">Generate today’s edition</button>
 </div>"""
     else:
@@ -2131,7 +2225,15 @@ def _render_following(con: sqlite3.Connection) -> str:
                       f'{label} ({len(group)})</p><div class="token-list">')
         topics.extend(token(n, "topic") for n in group)
         if not group:
-            topics.append('<p class="empty-note">Nothing yet</p>')
+            # NL-103 row 20: bare "Nothing yet" DIED here. The only adjacent
+            # text is the group name ("Broad (0)"), a <p> with no heading
+            # semantics and no aria linkage — no programmatic section context —
+            # so the class noun rides in-string. It carries the group adjective
+            # too (the register's own row-16 vocabulary): under "Broad (0)" a
+            # flat "No topics yet" would read as "no topics at all" for a reader
+            # who has specific ones, which is not what IS.
+            topics.append(f'<p class="empty-note">No {label.lower()} topics '
+                          f'yet</p>')
         topics.append("</div></div>")
 
     # NL-68 item 14: the "Suggestions recall writers the system already knows…"
@@ -2141,9 +2243,18 @@ def _render_following(con: sqlite3.Connection) -> str:
     writers = [
         _render_suggest("writer", "writer-suggest", "Search or add a writer…",
                         "Search or add a writer", _writer_suggestions(cfg)),
+        # NL-103 row 7 (C6): the ranking clause ("boosts their pieces in
+        # ranking") DIED — system explanation, and "ranking" is internal
+        # vocabulary. Two facts survive, one sentence each: what a follow DOES,
+        # and what adding a new writer REQUIRES.
+        # HONEST-BASIS NOTE (register convention): the ranking effect is real
+        # (ranking.FOLLOWED_BOOST) and now goes UNDISCLOSED. That is a ruled
+        # silence with an armed falsifier (§6.6) — if testers are confused why a
+        # followed writer's pieces dominate, the fact returns in register form.
+        # It reverses the NL-68 item-14 boundary pin, which the ratified register
+        # supersedes.
         '<p class="token-search-hint">Following a writer adds their feed to '
-        'your sources and boosts their pieces in ranking; adding someone '
-        'new takes their feed link.</p>',
+        'your sources. Adding someone new takes their feed link.</p>',
         '<div class="token-group"><div class="token-list">',
     ]
     followed = cfg.followed_analyst_sources
@@ -2153,7 +2264,10 @@ def _render_following(con: sqlite3.Connection) -> str:
             display = f"{m.group(2)} — {m.group(1)}" if m else s.name
             writers.append(token(s.name, "writer", label=display))
     else:
-        writers.append('<p class="empty-note">Nothing yet</p>')
+        # NL-103 row 20: this group has no name row at all (the div above is a
+        # bare token-group/token-list pair) — nothing programmatic to sit under,
+        # so the class noun rides in-string.
+        writers.append('<p class="empty-note">No writers yet</p>')
     writers.append("</div></div>")
 
     # v7-M2 (§4 + §12.4): mini-masthead + section line, the LOUD page-title, then
@@ -2573,8 +2687,8 @@ def _render_thread_page(con: sqlite3.Connection, mrow) -> str:
     tid, topic, status = mrow["id"], mrow["topic"], mrow["status"]
     anchor = f"thread-{tid}"
     out = [f'<section id="view-{anchor}" class="view">']
-    out.append('<a class="deep-back" href="#" '
-               f'onclick="closeThread(event); return false;">{_e(labels.THREAD_BACK)}</a>')
+    out.append(_back_link(labels.THREAD_BACK,
+                          "closeThread(event); return false;"))
     out.append('<div class="deep-title-block">'
                f'<p class="deep-eyebrow">{_e(labels.NAV_FOLLOWING)}</p>'
                f'<h1 class="deep-title">{_e(topic)}</h1></div>')
@@ -2634,8 +2748,12 @@ def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict]) -> str
     engine = ("Kokoro (local, $0/episode)" if cfg.tts_engine == "kokoro"
               else "OpenAI gpt-4o-mini-tts (~$0.015/min)")
     cap = config.budget_cap_usd_per_run()
+    # NL-103 row 20: the Settings row VALUE names its own class. The row label
+    # ("Today's edition") is adjacent but is a plain <p> with no aria linkage,
+    # and a value slot is not an empty state under a head — so the class noun
+    # rides in-string.
     gen_val = ("Generated " + _fmt_local(row["generated_at"])) if row is not None \
-        else "Nothing yet"
+        else "No edition yet"
     # Sources / Voice / Budget rows show VALUES only — their editors aren't
     # built in M7, and a dead "Edit" button that looks operable would be an
     # accessibility miss by the addendum's own standard. Values are honest;
@@ -3004,8 +3122,7 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
 
     out = [f'<section id="view-deep-{story_anchor}" class="view">']
     ret = "" if return_view == "view-today" else f", '{_e(return_view)}'"
-    out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
-               f'{_e(back_label)}</a>')
+    out.append(_back_link(back_label, f"closeDeepView(event{ret})"))
     # THE ARC-LINE CONTRACT v1 (2026-07-18): the deep-view continuity line is the
     # memory pass's AUTHORED, contracted arc_line, rendered VERBATIM under render
     # condition §B (the deep view is a record surface — Q3: the render stays dumb).
@@ -3285,8 +3402,7 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
     back_label = labels.BACK_TO_TODAY if back_label is None else back_label
     out = [f'<section id="view-deep-{story_anchor}" class="view">']
     ret = "" if return_view == "view-today" else f", '{_e(return_view)}'"
-    out.append(f'<a class="deep-back" href="#" onclick="closeDeepView(event{ret})">'
-               f'{_e(back_label)}</a>')
+    out.append(_back_link(back_label, f"closeDeepView(event{ret})"))
     out.append('<div class="deep-title-block">'
                f'<p class="deep-eyebrow">{_e(labels.SOURCES_CONTEXT)}</p>'
                f'<h1 class="deep-title">{_e(headline)}</h1></div>')
@@ -3392,9 +3508,8 @@ def build_edition_fragment(con: sqlite3.Connection,
     row = _briefing_row(con, date)
     if row is None:
         return ('<section class="view active" id="view-edition">'
-                '<a class="deep-back" href="#" onclick="backToArchive(event)">'
-                f'{_e(labels.BACK_TO_ARCHIVE)}</a>'
-                '<p class="empty-note">That edition is unavailable.</p>'
+                + _back_link(labels.BACK_TO_ARCHIVE, "backToArchive(event)")
+                + '<p class="empty-note">That edition is unavailable.</p>'
                 '</section>', None)
     entry = _log_entry_for(row["date"])
     slug_prefix = f"ed{date}-"
@@ -3413,8 +3528,7 @@ def build_edition_fragment(con: sqlite3.Connection,
     body = _render_briefing_body(con, row, entry, briefs, slug_prefix,
                                  "view-edition")
     head = (f'<section class="view active" id="view-edition">'
-            f'<a class="deep-back" href="#" onclick="backToArchive(event)">'
-            f'{_e(labels.BACK_TO_ARCHIVE)}</a>'
+            f'{_back_link(labels.BACK_TO_ARCHIVE, "backToArchive(event)")}'
             f'<h1 class="view-title">{_e(_human_date(row["date"]))}</h1>'
             f'{episode}{body}</section>')
     return head + "".join(deep_sections), row["date"]
