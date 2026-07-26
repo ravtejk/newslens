@@ -229,9 +229,9 @@ interests:
     - East Asia
     - Civic Tech
     - Independent Media
+    - Diplomacy
   granular:       # topic-level (full-weight personalization signal)
     - US-Israel Relations
-    - Diplomacy
     - War Crimes
     - Proxy Conflicts
     - India Politics
