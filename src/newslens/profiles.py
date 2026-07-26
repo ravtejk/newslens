@@ -118,15 +118,25 @@ def profile_names(anchor: Optional[Path] = None) -> List[str]:
 
 
 def stray_directories(anchor: Optional[Path] = None) -> List[str]:
-    """Directory names under profiles/ that are NOT valid profile slugs.
+    """Directory names under profiles/ that no profile in `profile_names()`
+    owns — invalid slugs, PLUS the one valid slug that is never a profile root.
 
     Reported rather than hidden: something put them there, and a listing that
-    quietly omits state is the dishonest kind."""
+    quietly omits state is the dishonest kind.
+
+    Stage-0 M2 (M1 gate rider): `profiles/default` fell through BOTH listings.
+    It is a valid slug, so the invalid-name filter skipped it; and
+    profile_names() excludes DEFAULT_PROFILE by construction, because the
+    founder's profile root is the CHECKOUT, not a directory under profiles/.
+    So a directory holding a whole reader's state could sit there permanently
+    invisible — and worse, invisibly ignored: nothing reads it, and its owner
+    would have no way to find out why."""
     root = paths.profiles_dir(anchor)
     if not root.is_dir():
         return []
     return sorted(c.name for c in root.iterdir()
-                  if c.is_dir() and not _is_slug(c.name))
+                  if c.is_dir() and (not _is_slug(c.name)
+                                     or c.name == paths.DEFAULT_PROFILE))
 
 
 def redirection_warnings(profile: Optional[str] = None) -> List[str]:
@@ -195,6 +205,46 @@ def require_exists(profile: str, anchor: Optional[Path] = None) -> str:
             f"no profile named {slug!r} — create it with "
             f"`newslens profile create {slug}` (existing: {known})")
     return slug
+
+
+def resolve_entrypoint_profile(name: Optional[str] = None):
+    """The profile boundary EVERY real entrypoint owes, as one implementation.
+
+    Returns `(slug, None)` when the active profile is usable, or
+    `(None, message)` when it must be refused — the caller prints the message
+    to stderr and exits 2. Both refusal classes land here: a malformed name
+    (paths.ProfileError, which current_profile raises rather than degrading to
+    the founder's world) and a name nobody created (ProfileMissingError).
+
+    `set_profile(name)` is called even when `name` is None, deliberately: that
+    CLEARS a pin an earlier in-process main() left behind, so a second
+    entrypoint call in one process re-resolves from the environment instead of
+    silently inheriting the previous caller's reader. That leak is a real one
+    — it was found in the CLI during M1's own probe and again in the doctor
+    (QA fix loop 1, F2).
+
+    Stage-0 M2 (M1 gate rider): battery / moat_battery / follow_altitude
+    self-sanction with allow_real_paths() exactly like cli.main and
+    doctor.main, but had no profile boundary at all — so an exported typo'd
+    NEWSLENS_PROFILE plus a deliberate paid `--run` would write their
+    artifacts under a world nobody created, after which require_exists sees a
+    directory and every other verb accepts the typo too (F1's cascade,
+    through a side door). Dry-run defaults are why that was zero-writes; a
+    default is not a guard.
+
+    NOTE: cli.main (cli.py:293-304) and doctor.main (doctor.py:1120-1132)
+    still carry their own hand-rolled copies of this logic. They are M1-pinned
+    and working, so this milestone did not rewrite them — but three copies
+    became five without this function, and the duplicated-validator class is
+    exactly how BUG-1 shipped in two places at once. Folding those two onto
+    this helper is a clean follow-up one-liner each, flagged not taken."""
+    try:
+        slug = paths.set_profile(name)
+        if slug != paths.DEFAULT_PROFILE:
+            require_exists(slug)
+    except (paths.ProfileError, ProfileMissingError) as exc:
+        return None, f"profile: {exc}"
+    return slug, None
 
 
 def status(profile: str, anchor: Optional[Path] = None) -> ProfileStatus:

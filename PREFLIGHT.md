@@ -1,11 +1,14 @@
 # PREFLIGHT — human review guide for NewsLens
 
-**Current as of 2026-07-25, at commit `a5033a5`.** Every `file:line` citation
-below was re-verified against that commit on 2026-07-25. The prior revision was
-written against commit `3c79c36` (2026-07-16) and had drifted badly — §7 lists
-what changed in between and what this pass corrected. If you are reading this at
-a later HEAD, re-check a line before trusting it; the citations are a map, not a
-contract.
+**Current as of 2026-07-25, at the Stage-0 M2 commit** (the one whose message
+begins "Stage-0 M2"; the prior revision of this file was written at `a5033a5`,
+and the one before that at `3c79c36`, 2026-07-16, which had drifted badly).
+Every `file:line` citation below was re-verified mechanically against the tree
+at that commit — including a full re-sweep of the ~175 citations after the M2
+diff shifted line numbers in `analysis.py`, `generate.py`, `battery.py`,
+`follow_altitude.py` and `tests/conftest.py`. §7 lists what changed and what
+each pass corrected. If you are reading this at a later HEAD, re-check a line
+before trusting it; the citations are a map, not a contract.
 
 **Written for a human engineer.** Everything in this repo was built,
 tested, and reviewed by an AI product org — the review was real, but it
@@ -67,46 +70,61 @@ local Kokoro child and touches no network.
 | Caller (seat) | Enters the seam at | Gate |
 |---|---|---|
 | Rank | `ranking.py:538` (`_post_chat`) | whole-prompt estimate vs cap before the call, `ranking.py:1668-1675` |
-| Writer / editor / script (shared `_chat`) | `generate.py:403`, via `call_llm` `generate.py:442` | per-step estimate vs *remaining* cap at every step — narrative `generate.py:3077`, narrative retry `generate.py:3135`, editor `generate.py:3217`, script `generate.py:3426`, script retry `generate.py:3504`; run cap read at `generate.py:2945` |
-| Analyst (per-story brief) | `analysis.py:1461` (`_analysis_chat`) | per-slot estimate vs remaining, `analysis.py:1728`; run cap `analysis.py:1824` |
-| Sonar verification inside a brief | `analysis.py:1547` → `discovery.call_sonar` | budget *ladder* — Sonar is what degrades first when headroom is short, `analysis.py:1657` |
+| Writer / editor / script (shared `_chat`) | `generate.py:398`, via `call_llm` `generate.py:448` | per-step estimate vs *remaining* cap at every step — narrative `generate.py:3314`, narrative retry `generate.py:3372`, editor `generate.py:3454`, script `generate.py:3663`, script retry `generate.py:3741`; run cap read at `generate.py:3174` |
+| Analyst (per-story brief) | `analysis.py:1441` (`_analysis_chat`) | per-slot estimate vs remaining, `analysis.py:1757`; run cap `analysis.py:1859` |
+| Sonar verification inside a brief | `analysis.py:1687` → `discovery.call_sonar` | budget *ladder* — Sonar is what degrades first when headroom is short, `analysis.py:1680` |
 | Discovery Sonar (one per ingest) | `discovery.py:73`, driven from `discovery.py:131` | estimate vs cap, `discovery.py:182-188`; skipped entirely with no key |
-| State/memory rewrite | `memory_core.py:1373` | estimate vs remaining, `memory_core.py:1468`; the remaining figure is threaded from the run cap at `generate.py:2012` (edition), `generate.py:2208` (`memory-backfill`), `generate.py:2324` (`memory-repair-state`) |
-| Thread baseline backgrounder (`memory-baseline`) | `generate.py:2464` → `_default_baseline_chat` (`generate.py:2360`) → `analysis.call_analysis_model` | estimate vs remaining, `generate.py:2458`; run cap `generate.py:2603` |
-| Follow-altitude resolver — batch (`scripts/follow-altitude --run`) | `follow_altitude.py:258`, driven from `follow_altitude.py:544` | cumulative cap gate in the CLI: cap read `follow_altitude.py:452`, per-thread check `follow_altitude.py:498` |
+| State/memory rewrite | `memory_core.py:1373` | estimate vs remaining, `memory_core.py:1468`; the remaining figure is threaded from the run cap at `generate.py:2173` (edition), `generate.py:2369` (`memory-backfill`), `generate.py:2476` (`memory-repair-state`) |
+| Thread baseline backgrounder (`memory-baseline`) | `generate.py:2792` → `_default_baseline_chat` (`generate.py:2524`) → `analysis.call_analysis_model` | estimate vs remaining, `generate.py:2629`; run cap `generate.py:2786` |
+| Follow-altitude resolver — batch (`scripts/follow-altitude --run`) | `follow_altitude.py:258`, driven from `follow_altitude.py:544` | cumulative cap gate in the CLI: cap read `follow_altitude.py:464`, per-thread check `follow_altitude.py:510` |
 | Follow-altitude resolver — interactive (`POST /api/follow/resolve`) | `follow_altitude.py:258`, via `server.py:3809` | single-resolve cap gate at `server.py:3785-3807`, refusing 409 **before any transport**; the arithmetic is shared with the CLI through `follow_altitude.resolve_cost_gate` (`follow_altitude.py:394`) so the two cannot drift. **New 2026-07-25 — see below** |
-| OpenAI TTS | `audio.py:202` | estimate vs remaining, `audio.py:181-185`; the remaining figure is passed in at `generate.py:3596` |
-| Writer battery (`scripts/battery --run`) | `battery.py:136` → `generate.call_llm` | cap read `battery.py:225`; cumulative pre-flight gate `battery.py:304` |
+| OpenAI TTS | `audio.py:202` | estimate vs remaining, `audio.py:181-185`; the remaining figure is passed in at `generate.py:3840` |
+| Writer battery (`scripts/battery --run`) | `battery.py:136` → `generate.call_llm` | cap read `battery.py:236`; cumulative pre-flight gate `battery.py:315` |
 | Moat battery (`scripts/moat-battery … --run`) | `moat_battery.py:1206` → `generate.call_llm` | cap read `moat_battery.py:1439` / `moat_battery.py:1901`; plan gate `moat_battery.py:1396`; execute gate `moat_battery.py:1600` |
 | **Sonar reliability spike** (`scripts/sonar_spike [N]`) | `sonar_spike:86` → `discovery.call_sonar` | **NO cap read anywhere in the file, and NO dry-run default.** 1–25 metered Perplexity calls per invocation (probe clamp `sonar_spike:52-64`), and each probe may retry once inside `call_sonar`. It is key-gated (`sonar_spike:42-47`, refuses cleanly with no key) and prints per-run token cost (`sonar_spike:105-106`) — but a bare `scripts/sonar_spike` with a key present **spends on contact**, five paid probes, no plan and no confirmation |
 
 Two properties are the whole guard, and both deserve a hand-check:
 
-1. **The cap is *supposed* to bind on `usd_shadow`, not on dollars actually
-   charged — and two callers don't.** `cost_fields` (`llm.py:1340`) always
+1. **The cap binds on `usd_shadow`, not on dollars actually charged — and
+   since NL-95 every caller does.** `cost_fields` (`llm.py:1340`) always
    computes `usd_shadow` from the seat's pinned price table and sets
    `usd_charged` to 0.0 on the subscription lane (`llm.py:1376`). The intent
    ("Onna's law") is that edition callers accumulate *shadow*, so a $0-charged
    subscription run still spends the run budget at its API-equivalent price. The
-   writer/editor/script steps do exactly that (`generate.py:3250`,
+   writer/editor/script steps do exactly that (`generate.py:3487`,
    `spent += step_e["usd_shadow"]`), as does the state seat
-   (`generate.py:2016`, `spent += sr.shadow_usd`).
-   **Two callers accumulate `usd_charged` instead, and both are open work:**
-   - the **analyst path** — `call_analysis_model` sums
-     `llm.cost_fields(...)["usd_charged"]` (`analysis.py:1512-1513`), which is
-     0.0 on the subscription lane the analyst rides today. So the edition cap
-     decrements by roughly the Sonar spend alone across the whole analysis
-     stage;
-   - the **baseline backgrounder** — `spent += gr.cost_usd`
-     (`generate.py:2613`), where `cost_usd` traces back to that same
-     `usd_charged`, so it adds 0.0 per thread.
+   (`generate.py:2177`, `spent += sr.shadow_usd`).
 
-   Charged dollars are not misstated by this (subscription genuinely is $0, and
-   the api fall-over is correct — by coincidence, since there
-   `usd_charged == usd_shadow`). What is not enforced is the **shadow cap** on
-   those two paths. Tracked as open work under **NL-95**; see §7 item 2. The two
-   batteries are a *different* and deliberate case: they cap CHARGED dollars by
-   design (named in-code at `battery.py:287`, implemented at
+   **NL-95 CLOSED 2026-07-25 (Stage-0 M2).** Two callers used to accumulate
+   `usd_charged` — 0.0 on the subscription lane both of them ride — so the
+   edition cap decremented by roughly the Sonar spend alone across an entire
+   analysis stage, and by *nothing at all* per thread on the baseline path
+   (a `memory-baseline --all` backlog sweep was effectively uncapped). Both
+   now accumulate shadow, via a dual-track return rather than a meaning flip:
+   - the **analyst path** — `call_analysis_model` returns
+     `(parsed, usd_charged, usd_shadow)`, both accumulated from ONE
+     `cost_fields` call per attempt (`analysis.py:1535-1536`); `run_analysis`'s
+     cap ladder adds `sa.shadow_usd` while a separate accumulator carries
+     charged (`analysis.py:1902-1903`), reported as `total_usd` (charged) and
+     `total_usd_shadow` (`analysis.py:1916-1917`); the generate-side edition cap
+     adds the shadow total (`generate.py:3271`);
+   - the **baseline backgrounder** — `spent += gr.shadow_usd`
+     (`generate.py:2804`).
+
+   **Charged dollars were never at risk and still aren't.** Every persisted
+   `cost_usd` column (`analysis_briefs`, `thread_baselines`, `thread_state`)
+   still stores charged money; every pre-existing `generation_log` key keeps
+   its meaning; and the failed-run money fold (`generate.fold_late_steps`,
+   `generate.py:2883`) still sums `usd` = charged, so a failed subscription run
+   cannot fabricate dollars. All shadow data landed under NEW keys
+   (`usd_shadow`, `total_usd_shadow`, `analysis_usd_shadow`), so no historical
+   row diverges from a new one and **no schema migration was needed**. Born-red
+   pins in `tests/test_stage0_m2.py`: `test_nl95_analysis_cap_binds_shadow`,
+   `test_nl95_baseline_cap_binds_shadow`,
+   `test_nl95_failed_run_fold_never_fabricates_charged_dollars`.
+
+   The two batteries remain a *different* and deliberate case: they cap
+   CHARGED dollars by design (named in-code at `battery.py:298`, implemented at
    `moat_battery.py:1396`) — a stated, ratification-pending choice, not a bug.
 2. **`BUDGET_CAP_USD_PER_RUN` is per *invocation*, never per day.** The single
    validator is `config.budget_cap_usd_per_run` (`config.py:366`); it rejects
@@ -309,10 +327,13 @@ in code (never model prose):
 | ~~`<details class="cite-fold">` nested inside `<span class="fact-cite">`~~ — **RESOLVED, row kept for the paper trail.** The inline cite-fold apparatus was removed by v8-M1 item 4 (commit `88cbeb3`, 2026-07-17): the verified-specifics run folds into the facts list carrying a plain end-of-line outlet count instead (`server.py:2822-2830`). Neither `cite-fold` nor `fact-cite` exists in `server.py`/`webui.py` at this commit. The surviving `<details>` uses (`server.py:1980` quiet-fold, `server.py:2885` discrepancy drawer) are ordinary block-level ones | no action | NL-12 gate review 2026-07-10; closed out 2026-07-25 |
 | Source URLs render as live hrefs with no scheme constraint — one site: the deep-view source table, `_render_deep_view` sources loop (`<a href={_e_attr(s["url"])}>`, the non-prior-briefing branch; **`server.py:3158`**). `_e_attr` HTML-escapes but a `javascript:alert(1)` value contains nothing to escape, so it survives as a click-executable link. Provenance: URLs arrive from configured RSS feeds (attacker-influenceable in principle — a feed controls its own item links) and Sonar retrieval; the network layer refuses to FETCH non-http(s) URLs (`analysis.py:431`) but nothing constrains the scheme of what lands in the validator-built source table or at render. Every other anchor in `server.py` is internal (`#…`/`/?date=…`). Pre-existing at HEAD; NL-60 changed the adjacent prior-briefing branch only | **still open, re-verified 2026-07-25.** Accepted at single-user loopback scale (same threat model as the inline-`onclick` row above); routed here by the NL-60 QA pass. Revisit before any external exposure (NL-59 chain). Durable fix is one line at the render site: linkify only when `s["url"].startswith(("http://", "https://"))`, else render the plain title — or allowlist the scheme at source-table ingest | NL-60 gate review 2026-07-13 |
 | **[2026-07-16, Stage-1 gate order] HTTP layer accepts free-text topic/thread strings** — routes registered at `server.py:3677` (`/api/topic/add`) and `server.py:3669` (`/api/follow`); handlers at `server.py:3907` and `server.py:3711`. Both take `body["name"]` / the topic argument as arbitrary text with only an emptiness check. Enforcement is UI-only (`data-suggest-only`, set at `server.py:1860`, honoured by the client at `webui.py:1371`); localhost-acceptable today (the principal curling his own port is not an adversary; the CLI's open-vocabulary contract is deliberate). **Decide server-side vocabulary policy BEFORE any non-principal can reach the port** | **still open, re-verified 2026-07-25** — mandatory Stage-1 item, ordered by the server-batch gate | server-batch gate 2026-07-16 |
-| **[2026-07-14, v7 build] The PEP 562 real-paths guard** — `paths.py` module `__getattr__` (`paths.py:54`), the sanction escape hatch `allow_real_paths` (`paths.py:29`, called by the battery/falsifier entry points), the conftest module-dict shadow (`monkeypatch.setitem`, `tests/conftest.py:362-377`) and the autouse stat tripwire (`tests/conftest.py:211`), plus the `NEWSLENS_DATA_DIR` env-seam precedence chain (redirection > sanction > refusal, `paths.py:48`). Subtle import-time/bookkeeping machinery; a human engineer should read the module + `tests/conftest.py` end-to-end once. Known limits documented in-module: hardcoded `data/...` strings bypass it; the conftest tripwire is stat-based (mtime_ns+size, `tests/conftest.py:198-204`) — an equal-size in-place flip with restored mtime evades it (acceptable for the accident class it guards) | guard born from two real incidents same-day (generation_log clobber; pytest-arm pinhole) | v7-M2 final gate 2026-07-14 |
+| **[2026-07-14, v7 build] The PEP 562 real-paths guard** — `paths.py` module `__getattr__` (`paths.py:54`), the sanction escape hatch `allow_real_paths` (`paths.py:29`, called by the battery/falsifier entry points), the conftest module-dict shadow (`monkeypatch.setitem`, `tests/conftest.py:386-416`) and the autouse stat tripwire (`tests/conftest.py:233`), plus the `NEWSLENS_DATA_DIR` env-seam precedence chain (redirection > sanction > refusal, `paths.py:48`). Subtle import-time/bookkeeping machinery; a human engineer should read the module + `tests/conftest.py` end-to-end once. Known limits documented in-module: hardcoded `data/...` strings bypass it; the conftest tripwire is stat-based (mtime_ns+size, `tests/conftest.py:223-228`) — an equal-size in-place flip with restored mtime evades it (acceptable for the accident class it guards) | guard born from two real incidents same-day (generation_log clobber; pytest-arm pinhole) | v7-M2 final gate 2026-07-14 |
 | **[2026-07-14, v7 build] The hand-rolled `_e(_js_str(...))`-inside-onclick escaping convention** — live at `server.py:2074` (token remove), `server.py:2459` (edit-note), `server.py:2463`/`2467`/`2470` (thread actions), `server.py:2472` (delete confirm). Verified sound at the gate (`html.escape` quote=True over `json.dumps`; the thread-action handlers are int-only, shrinking the surface), but it is a hand-built HTML/JS boundary and belongs on the human read-list with the plain-`_e()` onclick row above | same threat model; single-user loopback | v7-M2 final gate 2026-07-14; sites re-listed 2026-07-25 |
 | **[2026-07-14, v7 build] Mechanical dark palette** (design ratification pending — the `--danger` token was gate-patched for AA; the dark register lives at `webui.py:47`, the light one at `webui.py:24`; the designed dark register is open work) and the **masthead settings-gear placement** (implementer judgment, no mockup guidance — rendered at `server.py:428`, styled at `webui.py:69`) | flagged by the M1 report as the two UI judgment calls worth a human eye | v7-M1 gate 2026-07-14 |
 | **[2026-07-14, v7 build] `restoreViewAfterReload` vs renamed sub-views** (`webui.py:732`, invoked at `webui.py:1464`) — stale 'ongoing' keys degrade gracefully (one glance for a human) | cosmetic-degradation class | v7-M2 final gate 2026-07-14 |
+| **[2026-07-25, Stage-0 M2] The dual-track money return** — `call_analysis_model` hands back `(parsed, usd_charged, usd_shadow)` (`analysis.py:1478-1549`) and every consumer picks a track: caps take shadow, persisted columns take charged. The correctness argument is *which* variable each call site reads, and a wrong pick is silent in both directions (an under-enforced cap, or a fabricated dollar in the money record). Worth reading the three cap sites and the failed-run fold (`generate.fold_late_steps`, `generate.py:2883`) together, once | no schema change; all shadow data under new keys; born-red pins in `tests/test_stage0_m2.py` | Stage-0 M2 2026-07-25 |
+| **[2026-07-25, Stage-0 M2] The spoken-continuity net is regex + heuristics over generated prose** (`generate.py:1248-1359`) — `_SCRIPT_CONTINUITY_RE` plus a self-reference test that deliberately WITHHOLDS the source-attribution exemption from first-person claims ("As we reported" is the show, not a source). Warn-grade by design, tuned toward firing. A human should judge the vocabulary's false-positive surface against real episode prose — it is the one part of this milestone whose correctness is editorial, not mechanical | contract + non-firing floor pinned in `tests/test_stage0_m2_script_net.py`; narrative-side nets untouched | Stage-0 M2 2026-07-25 |
+| **[2026-07-25, Stage-0 M2] Five entrypoints, two copies of the profile boundary** — `profiles.resolve_entrypoint_profile` (`profiles.py:210`) is now the single implementation and the three side entrypoints use it, but `cli.main` (`cli.py:293-304`) and `doctor.main` (`doctor.py:1120-1132`) still carry hand-rolled copies. They are M1-pinned and correct today; the duplicated-validator class is how BUG-1 shipped in two places at once | flagged, not taken — folding them on is a follow-up one-liner each | Stage-0 M2 2026-07-25 |
 
 ## 6. How to verify
 
@@ -385,29 +406,39 @@ dropped):
    (`follow_altitude.py:394`) plus the route gate at `server.py:3785-3807`.
    Written up in §1 under "Closed gap"; tests in
    `tests/test_r1_resolve_cap_gate.py`. Suite 2318 → 2326, all green.
-2. **The shadow cap is not enforced on the analyst path — tracked as NL-95.**
-   This is wider than a stale comment, and it is live in the ordinary
-   `newslens generate` run, not just in a CLI corner:
-   - **Single source.** `call_analysis_model` accumulates
-     `llm.cost_fields(...)["usd_charged"]` (`analysis.py:1512-1513`). On the
-     subscription lane the analyst rides today, that is 0.0 per call — so the
-     per-slot `est > remaining_usd` check (`analysis.py:1728`) is measured
-     against a `remaining_usd` that barely moves, and the edition's analysis
-     stage decrements the cap by roughly its Sonar spend alone.
-   - **Same root, second site.** `memory-baseline` inherits it:
-     `spent += gr.cost_usd` (`generate.py:2613`) adds 0.0 per thread.
-   - **The stale comment that hides it** sits at `generate.py:2611` — "rides the
+2. **FIXED 2026-07-25 (Stage-0 M2) — the shadow cap was not enforced on the
+   analyst path. NL-95, closed.** It was wider than a stale comment and live in
+   the ordinary `newslens generate` run, not just a CLI corner:
+   - **Single source.** `call_analysis_model` accumulated
+     `llm.cost_fields(...)["usd_charged"]`. On the subscription lane the analyst
+     rides, that is 0.0 per call — so the per-slot `est > remaining_usd` check
+     was measured against a `remaining_usd` that barely moved, and an edition's
+     whole analysis stage decremented the cap by roughly its Sonar spend alone.
+   - **Same root, second site.** `memory-baseline` inherited it:
+     `spent += gr.cost_usd` added 0.0 per thread, leaving a `--all` backlog
+     sweep effectively uncapped.
+   - **The stale comment that hid it** sat at the baseline cap site — "rides the
      analyst seat (gpt-4o/api — not a subscription seat), so
      `usd_charged == usd_shadow`". It does ride the analyst seat
      (`_default_baseline_chat` → `analysis.call_analysis_model`), but that seat
      is Claude Sonnet 5 on the **subscription** lane (`llm.py:242`), so both the
-     parenthetical and the equality it rests on are wrong.
+     parenthetical and the equality it rested on were wrong. Corrected in place
+     (`generate.py:2793-2802`), along with two more GPT-4o-era comments in the
+     same family.
 
-   **What is and isn't at risk.** Charged dollars are *not* misstated: on
-   subscription the real charge genuinely is $0, and on the api fall-over the
-   figure is right — though only by coincidence, since there
-   `usd_charged == usd_shadow` (`llm.py:1376`). The hole is **shadow-cap
-   enforcement**: the runaway-compute guard is not binding on these paths. Fixing
-   it is a code change (accumulate shadow, as the writer and state seats already
-   do at `generate.py:3250` and `generate.py:2016`), deliberately out of scope
-   for a docs patch.
+   **The fix shape: dual-track, not a meaning flip.** The same float was being
+   persisted downstream as charged money, so `call_analysis_model` now returns
+   `(parsed, usd_charged, usd_shadow)` — both derived from ONE `cost_fields`
+   call per attempt, so the two figures cannot be computed from different seat
+   resolutions. Caps accumulate shadow; every persisted `cost_usd` and every
+   pre-existing log key still means charged. Shadow rides beside them under new
+   keys only, so **no historical row's meaning moved and no migration was
+   needed**. See §1 property 1 for the landed call sites.
+
+   **What was never at risk: charged dollars.** On subscription the real charge
+   genuinely is $0, and on the api fall-over the figures agree — and now by
+   construction rather than coincidence, pinned by
+   `test_nl95_api_lane_keeps_charged_and_shadow_equal`. The failed-run money
+   fold still sums charged only (`test_nl95_failed_run_fold_never_fabricates_charged_dollars`).
+   Born-red teeth for the two cap sites: `test_nl95_analysis_cap_binds_shadow`
+   and `test_nl95_baseline_cap_binds_shadow` (`tests/test_stage0_m2.py`).

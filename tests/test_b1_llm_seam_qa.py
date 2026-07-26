@@ -267,8 +267,13 @@ def test_analysis_request_bytes_identical_and_historical_url(monkeypatch):
      "json_mode: 'bool') -> 'Dict'"),
     (ranking._post_chat, "(key: 'str', prompt: 'str') -> 'Dict'"),
     (analysis._analysis_chat, "(key: 'str', prompt: 'str') -> 'Dict'"),
+    # NL-95 (Stage-0 M2): a DELIBERATE arity change, re-pinned in the same
+    # change that made it. The analyst path returns (parsed, usd_charged,
+    # usd_shadow) because edition caps bind SHADOW while the persisted
+    # cost_usd columns mean CHARGED — one float could not carry both. Still a
+    # monkeypatch target; still signature-pinned (ADR-0014 §2).
     (analysis.call_analysis_model,
-     "(key: 'str', prompt: 'str') -> 'Tuple[Dict, float]'"),
+     "(key: 'str', prompt: 'str') -> 'Tuple[Dict, float, float]'"),
 ])
 def test_signatures_preserved(fn, expected):
     assert str(inspect.signature(fn)) == expected

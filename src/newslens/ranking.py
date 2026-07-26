@@ -1521,6 +1521,49 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
     return revived
 
 
+def _sources_file_path() -> str:
+    """The sources file THIS process resolves — for error messages only.
+
+    Degrades to the bare name rather than raising: paths.SOURCES_FILE goes
+    through the PEP 562 guard, which raises RuntimeError in an unsanctioned
+    process, and an error message must never turn one error into a different,
+    worse one."""
+    try:
+        return str(paths.SOURCES_FILE)
+    except Exception:                       # noqa: BLE001 — message-only path
+        return "sources.yaml"
+
+
+def _sources_label() -> str:
+    """How to NAME the sources file in a refusal. Byte-identical to the
+    pre-M2 wording for the founder (the default profile) — his messages do not
+    move — and profile-qualified for everyone else."""
+    try:
+        slug = paths.current_profile()
+    except Exception:                       # noqa: BLE001 — message-only path
+        return "sources.yaml"
+    if slug == paths.DEFAULT_PROFILE:
+        return "sources.yaml"
+    return f"profile {slug!r}'s sources.yaml"
+
+
+def _profile_label() -> str:
+    """How to NAME the acting profile in a refusal — same degrade idiom as
+    _sources_label(), and for the same reason.
+
+    Gate F6 (2026-07-25): the no-interests refusal interpolated
+    paths.current_profile() bare. current_profile() RAISES on a malformed
+    NEWSLENS_PROFILE (normalize_profile's slug refusal), so a library caller
+    that reached this branch — run_rank(cfg=..., env={}) with a bad profile
+    env — got a ProfileError out of the message-building step instead of the
+    RankingError refusal it was owed. A refusal must never turn one error into
+    a different, worse one; the degraded label says so out loud."""
+    try:
+        return repr(paths.current_profile())
+    except Exception:                       # noqa: BLE001 — message-only path
+        return "<unresolved>"
+
+
 def log_failed_run(
     con: sqlite3.Connection,
     date: str,
@@ -1559,12 +1602,22 @@ def run_rank(
     date = date or local_today()
 
     cfg = cfg if cfg is not None else config.load_sources()
+    # Stage-0 M2: NAME the profile and the resolved file in both refusals. The
+    # M1 posture is unchanged — a profile with no tags refuses to rank, and
+    # that refusal IS the Commissioning's door — but "sources.yaml" stopped
+    # being a unique noun the moment a second profile could exist, and a reader
+    # told to edit "sources.yaml" has several to choose from. The wrong one is
+    # the founder's.
     if cfg.problems:
-        raise RankingError("sources.yaml has problems: " + "; ".join(cfg.problems))
+        raise RankingError(
+            f"{_sources_label()} has problems: " + "; ".join(cfg.problems))
     if not cfg.has_interests:
         raise RankingError(
-            "no interests configured in sources.yaml — ranking needs your tags "
-            "(the personal-impact axis has nothing to match without them)"
+            f"profile {_profile_label()} has no interests configured "
+            "— ranking needs THIS reader's own tags (the personal-impact axis "
+            f"has nothing to match without them). Add them under `interests:` "
+            f"in {_sources_file_path()}, or through the served UI's interest "
+            "editor."
         )
     key = (src_env.get("OPENAI_API_KEY") or "").strip()
     # A″ (2026-07-17): rank is anthropic (Haiku on subscription, api the fall-over)

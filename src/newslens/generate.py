@@ -270,7 +270,13 @@ class GenReport:
     artifact_path: str = ""
     ingest_summary: str = ""
     continuity_status: str = "none"   # ok | none | corrupt
-    analysis_usd: float = 0.0          # M9-M3: the analysis stage's spend
+    analysis_usd: float = 0.0          # M9-M3: the analysis stage's spend (CHARGED)
+    # NL-95: the analysis stage's SHADOW spend (always api-priced). Equals
+    # analysis_usd on the api lane; on a subscription-lane analyst analysis_usd
+    # is 0.0 while this stays non-zero — the edition cap keys off THIS, and the
+    # failed-run ledger row records it beside (never inside) the money figure.
+    # Exact twin of memory_usd / memory_shadow_usd below.
+    analysis_shadow_usd: float = 0.0
     deep_views: Dict[str, str] = field(default_factory=dict)  # slot -> availability (Axel instrumentation)
     memory_usd: float = 0.0            # NL-63: state-rewrite spend charged (real money)
     # R-B3a (B3): the state-rewrite SHADOW spend (always API-priced). Equals
@@ -1222,6 +1228,147 @@ def repetition_antecedent_findings(con, stories: List[Dict], slots: List[Dict],
     return out
 
 
+# ---------------------------------------------------------------------------
+# SPOKEN continuity — the script lane's net (Stage-0 M2; M0 QA finding F2)
+#
+# Distinct from _REPETITION_RE, and deliberately so. That vocabulary is about
+# the WORLD repeating ("reinstated", "resumed", "again"); this one is about the
+# SHOW claiming to have said something before ("as we covered", "we've been
+# tracking", "regular listeners will remember"). A day-one episode can carry
+# the second with none of the first, which is exactly what F2 found: the
+# narrative-side nets never see script text, validate_script had no continuity
+# check at all, and a first-ever episode saying "As we covered last week"
+# shipped with zero hard problems and zero warnings.
+#
+# Why this is warn-grade and not hard: a false positive costs a line in the run
+# record, a false negative ships a fabricated relationship with the listener —
+# the one thing a memory product cannot be caught doing. Conservative direction
+# is to fire.
+# ---------------------------------------------------------------------------
+_SCRIPT_CONTINUITY_RE = re.compile(
+    r"("
+    # the show's own prior coverage, first person
+    r"as (?:we|i) (?:covered|reported|discussed|noted|mentioned|said|flagged|told you)"
+    r"|(?:we|i)(?:'ve|'d| have| had)? been (?:tracking|following|covering|watching|reporting on)"
+    r"|(?:we|i) (?:first |last )?(?:covered|reported on|told you|flagged) "
+    r"|(?:we|i) (?:keep|kept) (?:coming back|returning) to"
+    # ordinal arc claims ("the third week we've tracked this")
+    r"|(?:second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth"
+    r"|\d+(?:st|nd|rd|th)) (?:week|day|month|time) (?:we|i)(?:'ve| have)?\s*"
+    r"(?:tracked|covered|followed|reported)"
+    # audience-memory claims
+    r"|(?:regular|longtime|long-time) listeners"
+    r"|(?:you'll|you will|you may) (?:remember|recall)"
+    r"|(?:as|like) (?:you|listeners) (?:may |might )?(?:recall|remember)"
+    # explicit prior-edition references
+    r"|(?:last|previous) (?:week|month|time),? (?:we|i)\b"
+    r"|(?:yesterday|last week)'s (?:episode|briefing|edition)"
+    r")", re.I)
+
+
+# The show talking about itself, or addressing its audience's memory. Used to
+# withhold the source-attribution exemption: "we"/"our"/"listeners"/"you'll
+# remember" name the SPEAKER and the LISTENER, never a source.
+#
+# Gate F4 (2026-07-25): bare `you` closes an ESCAPE. The contracted forms alone
+# left "As you recall, officials said…" self-referential-negative, so the
+# attribution marker ("said") exempted a claim the SHOW was making about the
+# listener's memory — the exact fabrication class this net exists to catch.
+# Blast radius is scoped by construction: this RE is searched against
+# `m.group(0)`, i.e. only inside phrases _SCRIPT_CONTINUITY_RE already matched,
+# never the whole sentence — a source's own "you" cannot reach it. The
+# `you'll|you will|you may` forms are now subsumed but stay: they name the
+# shapes on record, and the alternation's truth value is order-independent.
+_SELF_REFERENTIAL_RE = re.compile(r"\b(we|i|our|listeners|you'll|you will"
+                                  r"|you may|you)\b"
+                                  r"|\bwe['’]", re.I)
+
+
+def _has_real_prior_coverage(inputs: Dict) -> bool:
+    """Does this edition have prior coverage the show can honestly point at?
+
+    TWO conditions, and both are load-bearing:
+      * a readable PRIOR BRIEFING exists (continuity_status 'ok' — 'corrupt'
+        deliberately does not count: continuity is suspended for that run, the
+        same call build_narrative_prompt makes), and
+      * some story on this edition carries REAL thread history — a dated ledger
+        delta predating today (thread_ledger, built strictly before_date), or a
+        revived thread, which by definition was covered before.
+
+    The second condition is why "we have shipped an edition before" is not
+    enough: on edition 2, "the third week we've tracked this" is still a
+    fabrication. This is the same predicate the prompt's callback license uses
+    — one law, evaluated in one place, so the thing the model is invited to do
+    and the thing the validator permits can never drift apart.
+    """
+    if inputs.get("continuity_status") != "ok":
+        return False
+    return any(s.get("thread_ledger") or s.get("revived_threads")
+               for s in inputs.get("slots", []))
+
+
+def _demanded_revival_dates(inputs: Dict) -> List[str]:
+    """Every spoken form of a revival date this run REQUIRES the script to
+    voice. validate_script warns when one is missing, so the continuity net
+    must never flag one for being present — a validator that fights a mandatory
+    disclosure is worse than no validator."""
+    out: List[str] = []
+    for s in inputs.get("slots", []):
+        for rv in (s.get("revived_threads") or []):
+            if rv.get("last_covered"):
+                out.extend(_date_spoken_forms(rv["last_covered"]))
+    return [f.lower() for f in out]
+
+
+def script_continuity_findings(con, script: str, inputs: Dict,
+                               edition_date: str) -> List[str]:
+    """Unsupported SPOKEN continuity claims, named one per claim.
+
+    Returns warn-grade findings for the run record. `con` is accepted for
+    symmetry with the narrative-side nets (and so a future rung can consult the
+    ledger directly); the licensing evidence it would read is already carried
+    on `inputs` by load_briefing_inputs, which built it from that same
+    connection strictly before this edition's date.
+    """
+    if _has_real_prior_coverage(inputs):
+        return []                      # the callback is licensed; say nothing
+    demanded = _demanded_revival_dates(inputs)
+    out: List[str] = []
+    seen: set = set()
+    for sent in re.split(r"(?<=[.!?])\s+", script or ""):
+        m = _SCRIPT_CONTINUITY_RE.search(sent)
+        if not m:
+            continue
+        low = sent.lower()
+        # A claim handed to a SOURCE is the source's, not the show's — the
+        # exemption repetition_antecedent_findings already grants.
+        #
+        # But it must not apply to a claim the show makes about ITSELF. The
+        # attribution-marker vocabulary contains "reported" and "told", so
+        # "As we reported on Tuesday" and "We told you this would come back"
+        # both read as source-attributed to that helper — and those are
+        # exactly the fabrications this net exists to catch. A first-person or
+        # audience-addressed claim is never attributable to a source: the
+        # show is the speaker, and the speaker cannot be its own citation.
+        if not _SELF_REFERENTIAL_RE.search(m.group(0)) \
+                and _is_source_attributed(sent, m):
+            continue
+        # A mandatory dated revival disclosure is never a finding.
+        if any(d in low for d in demanded):
+            continue
+        phrase = " ".join(m.group(0).split())
+        if phrase.lower() in seen:
+            continue
+        seen.add(phrase.lower())
+        out.append(
+            f"spoken continuity claim {phrase!r} has no prior coverage on "
+            "record — this edition has no readable prior briefing carrying "
+            "thread history, so the episode is claiming a relationship with "
+            "the listener that does not exist. Cut it, or attribute it to a "
+            "source (M0 finding F2).")
+    return out
+
+
 _BASELINE_REF_RE = re.compile(r"\bbaseline\b", re.I)
 
 
@@ -1713,9 +1860,34 @@ def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -
         weekday=weekday,
         spoken_date=human,
         epistemic_rule=epistemic,
+        continuity_license=_continuity_license_block(inputs),
         labels_block=build_labels_block(inputs, covered),
         narrative_text=narrative,
     )
+
+
+def _continuity_license_block(inputs: Dict) -> str:
+    """The thread-arc callback license, DATA-GATED (Stage-0 M2; M0 finding F2).
+
+    The template used to license this unconditionally, exemplar and all — and
+    the exemplar ("third week we've tracked this") is precisely the shape a
+    day-one episode must never produce. Every other cold-start surface got its
+    day-one silence at M0 (the writer's prior block, the analyst's prior
+    channel, the editor's protect block); the spoken lane was the one still
+    handing out an invitation with no data behind it.
+
+    Gated on the SAME predicate the validator uses, so the model is never
+    invited to do a thing the run record will then flag it for."""
+    if _has_real_prior_coverage(inputs):
+        return ('thread-arc callbacks from real thread data ("third week '
+                "we've tracked this — first time it's moved\");")
+    return (
+        "NO thread-arc callbacks — this edition has no prior coverage on\n"
+        "record. Never imply this show has said anything before: no \"as we\n"
+        "covered\", no \"we've been tracking\", no \"regular listeners will\n"
+        "remember\", no week/day counts. This is the first time any of it is\n"
+        "being said out loud, and saying otherwise invents a relationship with\n"
+        "the listener that does not exist;")
 
 
 def _date_spoken_forms(iso_date: str) -> List[str]:
@@ -2347,8 +2519,11 @@ def run_state_repair(
 # ===========================================================================
 # NL-77 the thread cold-start backgrounder — the generator + the retroactive
 # command driver. The generation is ONE analyst-model call (the existing analyst
-# machinery pointed backwards; ~$0.01-0.02, GPT-4o via call_analysis_model), the
-# same seam ANALYSIS_MODEL/STATE_MODEL ride. Refusal never fabricates; the spend
+# machinery pointed backwards, via call_analysis_model), the same seam
+# ANALYSIS_MODEL/STATE_MODEL ride. (Stale comment corrected at NL-95: the seat
+# is Claude Sonnet 5 on the subscription lane with an armed api fall-over, not
+# "GPT-4o, ~$0.01-0.02" — the GPT-4o-era figure was three model changes old and
+# it is the same wrong premise that left this path's cap unenforced.) Refusal never fabricates; the spend
 # is durable on the thread_baselines row. DO NOT run the retroactive sweep
 # against real data — it is a principal checkpoint (and waits on the junk-sweep
 # ruling); the command exists so it CAN be run, under his word, against the
@@ -2357,11 +2532,14 @@ def run_state_repair(
 _BASELINE_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")   # a plausible year, not any 4-digit quantity
 
 
-def _default_baseline_chat(key: str, prompt: str) -> Tuple[Dict, float]:
+def _default_baseline_chat(key: str, prompt: str) -> Tuple[Dict, float, float]:
     """The real backgrounder call on the ANALYSIS_MODEL seam (the existing
     analyst machinery — call_analysis_model: one retry, then raises; cost
     accumulates every billed attempt). Injectable so the offline suite exercises
-    this exact path without spending."""
+    this exact path without spending.
+
+    NL-95: passes the analyst's (parsed, usd_charged, usd_shadow) straight
+    through — the caller's tolerant unpack keeps 2-tuple injected chats working."""
     from . import analysis
     return analysis.call_analysis_model(key, prompt)
 
@@ -2424,7 +2602,9 @@ class BaselineGenResult:
     topic: str
     outcome: str              # written | rejected | skipped-budget | failed
     detail: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0     # usd_CHARGED — persisted to thread_baselines
+    # NL-95: usd_SHADOW — the cap figure. Twin of StateRewriteResult.shadow_usd.
+    shadow_usd: float = 0.0
 
 
 def generate_thread_baseline(
@@ -2437,7 +2617,9 @@ def generate_thread_baseline(
     marked external-synthesis, spend durable on the row) or a 'failed' baseline
     (honest refusal — never fabricated). On a budget skip NO row is written and
     the 'pending' intent stands for a later run. `chat(key, prompt) -> (raw,
-    cost)` is injectable so the suite spends nothing."""
+    charged[, shadow])` is injectable so the suite spends nothing; a 2-tuple
+    chat still works and its shadow defaults to charged (NL-95 tolerant
+    unpack, the api-lane invariant)."""
     from . import memory_core as mc
     res = BaselineGenResult(thread_id=thread_id, topic=topic, outcome="failed")
     chat = chat or _default_baseline_chat
@@ -2461,13 +2643,17 @@ def generate_thread_baseline(
                       f"${remaining_usd:.4f} — pending intent kept, nothing written")
         return res
     try:
-        raw, cost = chat(key, prompt)
+        raw, cost, *rest = chat(key, prompt)
+        shadow = rest[0] if rest else cost
     except Exception as exc:  # noqa: BLE001 — degrade to an honest failed row
         # A transport failure is a FAILURE, not a "stale" (there is no prior
         # baseline to keep — unlike a state rewrite; the misleading borrowed name
         # is dropped). The row lands 'failed'; the spend (if any billed) rides on
-        # the result (BUG-32 money-honesty class).
+        # the result (BUG-32 money-honesty class). NL-95: the shadow figure
+        # rides too, mirroring memory_core.rewrite_state's exception arm — a
+        # failed subscription-lane attempt still consumed cap headroom.
         res.cost_usd = float(getattr(exc, "usd_spent", 0.0) or 0.0)
+        res.shadow_usd = float(getattr(exc, "usd_shadow", res.cost_usd) or 0.0)
         res.outcome = "failed"
         res.detail = f"baseline call failed ({type(exc).__name__}: {exc})"
         mc.record_baseline(
@@ -2475,6 +2661,7 @@ def generate_thread_baseline(
             model=analysis.ANALYSIS_MODEL, cost_usd=res.cost_usd)
         return res
     res.cost_usd = cost
+    res.shadow_usd = shadow
     # Post-paid: never let the spend escape as an exception (BUG-32 money-honesty
     # class) — every path below records a row carrying the cost.
     try:
@@ -2511,7 +2698,14 @@ class BaselineBackfillReport:
     refused: bool = False
     reason: str = ""
     cap: float = 0.0
+    # NL-95: spent_usd is the CAP figure (SHADOW) — it is what `cap - spent`
+    # is computed from, and it matches its state-family sibling
+    # (StateRepairReport.spent_usd, which has been the shadow figure since
+    # R-B3a). charged_usd is the real money. In-memory only; never persisted,
+    # so no historical row's meaning moves — but cli.py's memory-baseline
+    # printer is a reader of spent_usd and moves in the same change.
     spent_usd: float = 0.0
+    charged_usd: float = 0.0
     generated: List[Dict] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
@@ -2603,21 +2797,33 @@ def run_baseline_backfill(
         cap = config.budget_cap_usd_per_run(src_env)
         rep.cap = cap
         spent = 0.0
+        charged = 0.0
         for t in targets:
             as_of = t["as_of"] or date
             gr = generate_thread_baseline(
                 con, t["thread_id"], t["topic"], t["note"], as_of, key,
                 remaining_usd=cap - spent, chat=chat)
-            # Baseline rides the analyst seat (gpt-4o/api — not a subscription
-            # seat), so usd_charged == usd_shadow; cost_usd is the cap figure.
-            spent += gr.cost_usd
+            # NL-95 ENFORCEMENT FIX #3 (and stale comment #1 corrected): the
+            # comment here claimed the baseline rides "gpt-4o/api — not a
+            # subscription seat", so charged == shadow and cost_usd was the cap
+            # figure. That has been false since B4: the baseline rides the
+            # ANALYST seat, which is Claude Sonnet 5 on the SUBSCRIPTION lane
+            # with an armed api fall-over (llm.py). On that lane cost_usd is
+            # $0, so `spent` never moved and the cap bound nothing at all —
+            # a --all sweep over a long backlog was uncapped. The run cap binds
+            # SHADOW (Onna's law); the charged figure rides the row.
+            spent += gr.shadow_usd
+            charged += gr.cost_usd
             rep.generated.append({"thread": t["topic"], "thread_id": t["thread_id"],
                                   "outcome": gr.outcome, "detail": gr.detail,
-                                  "usd": round(gr.cost_usd, 6), "as_of": as_of})
+                                  "usd": round(gr.cost_usd, 6),
+                                  "usd_shadow": round(gr.shadow_usd, 6),
+                                  "as_of": as_of})
             if gr.outcome != "written":
                 rep.warnings.append(
                     f"baseline for {t['topic']!r} {gr.outcome} — {gr.detail}")
         rep.spent_usd = round(spent, 6)
+        rep.charged_usd = round(charged, 6)
         return rep
     finally:
         if own_con:
@@ -2683,6 +2889,44 @@ def _fold_cost_steps(con: sqlite3.Connection, date: str,
         total = round(sum(s.get("usd") or 0 for s in all_steps), 6)
         con.execute("UPDATE briefings SET token_cost = ? WHERE id = ?",
                     (json.dumps({"steps": all_steps, "total_usd": total}), row["id"]))
+
+
+def fold_late_steps(report: "GenReport") -> List[Dict]:
+    """The failed-run money record: call_llm's raw per-attempt ledger plus the
+    two stages that bill in their own modules (analysis, memory).
+
+    THE LAW THIS FUNCTION EXISTS TO HOLD (NL-95): `usd` is REAL MONEY. The
+    failed entry's `total_usd` is a plain sum over these rows' `usd`, so a
+    shadow figure folded into that key would invent dollars the principal never
+    spent — on the subscription lane, an entire failed run's worth of them. The
+    shadow figure rides under its own key instead, and a row is emitted when
+    EITHER figure is non-zero, so a $0-charged subscription stage can no longer
+    vanish from the record entirely (the R-B3a reasoning, applied to the fold).
+
+    Extracted from _run_generate's except arm at M2 so the law is testable
+    without staging a mid-pipeline failure; the except arm calls this and
+    nothing else builds that ledger.
+
+    SCOPE, deliberately narrow (engineering-3 §2 row 10 ruled the ANALYSIS row
+    only): the memory row is untouched — same single `usd` key, same
+    emit-if-charged condition it has had since NL-63. That leaves a known
+    asymmetry: on a subscription-lane state seat memory_usd is $0 while
+    memory_shadow_usd is not, so a failed run's memory spend still vanishes
+    from this record entirely. report.memory_shadow_usd already exists and the
+    fix is the same two lines applied one tuple down — flagged as a candidate,
+    NOT taken here, because widening a money-record contract past what was
+    adjudicated is the kind of quiet scope drift this fold is being fixed for."""
+    ledger = list(report.attempt_ledger)
+    # Analysis: BOTH figures, and emitted when EITHER is non-zero — on the
+    # subscription lane charged is $0, and an emit-if-charged condition would
+    # make the shadow key unreachable on the only lane where it differs.
+    if report.analysis_usd or report.analysis_shadow_usd:
+        ledger.append({"step": "analysis",
+                       "usd": round(report.analysis_usd, 6),
+                       "usd_shadow": round(report.analysis_shadow_usd, 6)})
+    if report.memory_usd:
+        ledger.append({"step": "memory", "usd": round(report.memory_usd, 6)})
+    return ledger
 
 
 def log_generation(entry: Dict) -> None:
@@ -2852,11 +3096,7 @@ def run_generate(
             # call_llm's raw per-attempt cost record; the analysis stage runs
             # in its own module, so its spend is folded from report.analysis_usd
             # (and any pre-abort memory spend from report.memory_usd).
-            ledger = list(report.attempt_ledger)
-            for late_step, usd in (("analysis", report.analysis_usd),
-                                   ("memory", report.memory_usd)):
-                if usd:
-                    ledger.append({"step": late_step, "usd": round(usd, 6)})
+            ledger = fold_late_steps(report)
             log_generation({"date": date, "variant": variant, "sample": sample,
                             "status": "failed", "error": str(exc)[:500],
                             "steps": ledger,
@@ -3033,8 +3273,16 @@ def _run_generate_body(
             a_rep = analysis_mod.run_analysis(
                 date=date, con=con, env=src_env, already_spent=spent,
                 tiers_override=["full", "medium", "medium"])
-            spent += a_rep.get("total_usd") or 0.0
+            # NL-95 ENFORCEMENT FIX #2: the edition cap decrements by the
+            # analysis stage's SHADOW total. It used to add the CHARGED total,
+            # which is $0 on the subscription lane — so an entire analysis
+            # stage could run and leave the writer's cap headroom untouched.
+            # The .get fallback degrades to the old behaviour for shape-stubbed
+            # test reports; never worse than today.
+            spent += a_rep.get("total_usd_shadow",
+                               a_rep.get("total_usd") or 0.0) or 0.0
             report.analysis_usd = a_rep.get("total_usd") or 0.0
+            report.analysis_shadow_usd = a_rep.get("total_usd_shadow") or 0.0
             for w in a_rep.get("warnings", []):
                 report.warnings.append(f"analysis: {w}")
             if a_rep.get("derating"):
@@ -3545,6 +3793,13 @@ def _run_generate_body(
                     "shipped with disclosure: " + " | ".join(structural))
 
     report.warnings.extend(shipped_script_warns)
+    # Stage-0 M2 (M0 finding F2 / RED-2): the spoken continuity net, run on the
+    # script that actually SHIPS — after the structural retry has resolved
+    # which attempt that is, and before tts_safe_pass, so the validator sees
+    # the model's own words (the P3 #8 ordering rule). Warn-grade: a fabricated
+    # continuity claim becomes a FINDING in the run record instead of silence.
+    for finding in script_continuity_findings(con, script, inputs, date):
+        report.warnings.append(f"script continuity: {finding}")
     # P3.1 anchor fix (QA contract 2026-07-09): a shipped script with no
     # detectable dateline has no cold-open boundary to measure — the HARD
     # cap is unenforceable. Never a silent exemption: disclose it (the
@@ -3701,7 +3956,10 @@ def _run_generate_body(
         "tiers": [s.get("tier") for s in stories],
         "framings": [s.get("why_label") for s in stories],
         "editor": editor_note,
-        "analysis_usd": round(report.analysis_usd, 6),
+        "analysis_usd": round(report.analysis_usd, 6),          # CHARGED
+        # NL-95: the cap figure beside the money figure. Equal on the api lane;
+        # on the subscription lane analysis_usd is 0 and this is not.
+        "analysis_usd_shadow": round(report.analysis_shadow_usd, 6),
         "memory_usd": round(report.memory_usd, 6),   # NL-63: state-rewrite spend
         "memory": report.memory,                     # NL-63: ledger/state instrumentation
         "deep_views": report.deep_views,  # Axel's asymmetry instrumentation

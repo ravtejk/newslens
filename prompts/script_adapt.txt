@@ -114,8 +114,7 @@ ADAPTATION MOVES:
   stories; at most one dry touch per episode elsewhere. Zero is always fine.
 
 LICENSED CREATIVE TOUCHES (closed list): the crafted self-answering cold
-open; transitions that surface real connections; thread-arc callbacks from
-real thread data ("third week we've tracked this — first time it's moved");
+open; transitions that surface real connections; {continuity_license}
 at most one well-turned phrase or image per story — style on top of facts,
 never new facts in costume; the outro watch-list as a forward-looking beat;
 EDITORIAL-JUDGMENT PERSONALITY (P3 #6): you may voice selection judgment —

@@ -11,11 +11,11 @@ was relaxed, reordered or deleted:
     `memory.SEED_THREADS` were deleted outright (see the obituary comment in
     memory.py), so there is no seeding path left to gate, dodge or trip. The
     test is unchanged from the form it failed in.
-  * RED-2 is PARKED as xfail(strict=True) tagged STAGE0-M2 — the script
-    continuity net is M2's charge, not M1's. strict=True is the whole point:
-    the day the net lands, this xpasses and the SUITE GOES RED until someone
-    removes the marker and re-adopts the pin. A parked contract that could rot
-    into a permanent yellow line would be worse than no pin at all.
+  * RED-2 now PASSES, and the strict marker is GONE. It was parked at M1 as
+    xfail(strict=True) tagged STAGE0-M2 precisely so it could not rot into a
+    permanent yellow line: the day the net landed it xpassed, the suite went
+    red, and the pin was re-adopted as a normal green in the same change
+    (Stage-0 M2). The test is unchanged from the form it failed in.
 
 BORN-RED AT HEAD fa26e45 (2 of 10 — the HEAD-run fail list travels in the M0
 report per the born-red law, and was re-measured by the M1 implementer before
@@ -51,10 +51,16 @@ carried-invariant, born green):
          repetition-word vocabulary; attribution exemption may apply). Green
          when the run record names the claim; the narrative-side nets must
          not be weakened to get there.
-         PARKED at Stage-0 M1 as xfail(strict=True), tag STAGE0-M2 — the
-         script net is M2's scope. It still RUNS every suite pass, so the
-         moment the net lands it xpasses and the suite fails until the marker
-         comes off.
+         PARKED at Stage-0 M1 as xfail(strict=True), tag STAGE0-M2.
+         DISCHARGED at Stage-0 M2: generate.script_continuity_findings names
+         each unsupported spoken claim into the run record, and the script
+         prompt's thread-arc callback license is now data-gated on the same
+         predicate (_has_real_prior_coverage) rather than issued
+         unconditionally. The strict marker did its job on the way out — it
+         xpassed the moment the net landed and reddened the suite until this
+         pin was re-adopted as a normal green. Narrative-side nets untouched;
+         the net's own contract (what it catches, what it must NOT) lives in
+         tests/test_stage0_m2_script_net.py.
 
 Sandbox: the tree conftest's autouse fixtures apply (sandboxed paths incl.
 child-env seams, loopback-only network, real-state tripwire). $0 by
@@ -117,15 +123,10 @@ def test_stage0_virgin_profile_first_contact_seeds_nothing(virgin_con):
 # RED-2 — the script lane's continuity net (fails at HEAD: no finding at all)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="STAGE0-M2: the script lane's continuity net is M2's charge "
-           "(M0 finding F2). Strict on purpose — when the net lands this "
-           "xpasses and the suite goes RED until the marker is removed and "
-           "the pin re-adopted as a normal green.")
 def test_stage0_day_one_script_continuity_claim_reaches_the_record(
         virgin_con, monkeypatch):
-    """BORN-RED at fa26e45 — fix contract in the module docstring (RED-2).
+    """BORN-RED at fa26e45; ADOPTED GREEN at Stage-0 M2 — fix contract in the
+    module docstring (RED-2).
 
     Edition 1 on a virgin profile; the script model fabricates spoken
     continuity ("As we covered last week", "we've been tracking"). The run

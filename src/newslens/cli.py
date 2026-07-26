@@ -573,8 +573,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if rep.refused:
             print(f"memory-baseline — nothing to do: {rep.reason}")
             return 0
-        print(f"memory-baseline — cap ${rep.cap:.2f} | "
-              f"backgrounder spend ${rep.spent_usd:.4f}")
+        # NL-95: spent_usd is now the SHADOW figure (what the cap binds), so
+        # this printer states both rather than labelling a shadow number
+        # "spend". On the api lane they are the same number.
+        print(f"memory-baseline — cap ${rep.cap:.2f} | backgrounder charged "
+              f"${rep.charged_usd:.4f} · shadow vs cap ${rep.spent_usd:.4f}")
         for g in rep.generated:
             print(f"  baseline[{g['thread']}]: {g['outcome']} (as of "
                   f"{g['as_of']}) — {g['detail']}")
@@ -727,7 +730,10 @@ def _profile_command(args) -> int:
             for problem in st.problems:
                 print(f"    ! {problem}")
         for stray in profiles.stray_directories():
-            print(f"  ? {stray}/ — not a valid profile name; ignored")
+            why = ("the founder's profile IS this checkout — nothing reads "
+                   "this directory" if stray == paths.DEFAULT_PROFILE
+                   else "not a valid profile name")
+            print(f"  ? {stray}/ — {why}; ignored")
         print("\n* = active profile (--profile / NEWSLENS_PROFILE)")
         return 0
 

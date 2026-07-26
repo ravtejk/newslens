@@ -543,7 +543,10 @@ class StoryAnalysis:
     outcome: str            # ok | rejected | skipped-budget | skipped-thin |
                             # demoted-quick | failed
     detail: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0     # usd_CHARGED — real money; persisted as-is
+    # NL-95: usd_SHADOW — what this slot would cost at api prices. The edition
+    # cap binds THIS (Onna's law); nothing persists it as money.
+    shadow_usd: float = 0.0
     fetch_ok: int = 0
     fetch_attempted: int = 0
     sonar_status: str = "skipped"
@@ -1472,27 +1475,42 @@ def _analysis_chat(key: str, prompt: str) -> Dict:
     ).raw
 
 
-def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float]:
-    """(parsed JSON, cost USD). One retry on network/parse failure, then
-    raises — the caller's ladder turns that into a disclosed no-brief.
+def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float, float]:
+    """(parsed JSON, usd_CHARGED, usd_SHADOW). One retry on network/parse
+    failure, then raises — the caller's ladder turns that into a disclosed
+    no-brief.
 
-    BUG13: the returned cost accumulates EVERY attempt that returned usage
-    — attempt 1 that completed HTTP (tokens paid) and then failed
-    truncation/parse still spent real money against the $0.25 cap, and the
-    log must carry real spend (BUG-6 money-honesty class).
+    NL-95 (Stage-0 M2): DUAL-TRACK, not a meaning flip. The two figures answer
+    two different questions and both callers need both:
+      * usd_charged is REAL MONEY. It is what lands in analysis_briefs.cost_usd
+        and thread_baselines.cost_usd, and what the failed-run money record
+        sums. On the subscription lane it is 0.00.
+      * usd_shadow is what the run WOULD cost at api prices, and it is what
+        edition-scoped CAPS bind (Onna's law). On the subscription lane it is
+        the only non-zero figure — so a cap that decremented by charged never
+        decremented at all, and the whole degradation ladder was inert.
+    Flipping the single return to shadow was rejected precisely because the
+    same float is persisted downstream as charged money; both are returned so
+    neither consumer has to guess.
 
-    B2 (dispatch item 4): the float accumulator DERIVES from the seam's shadow
-    ledger — llm.cost_fields(cfg, usage)["usd_charged"] — not the module
-    ANALYSIS_USD_* constants, so the analyst cost path re-prices automatically.
-    B4: the analyst is Claude Sonnet 5 on the api lane (SEATS["analyst"]).
+    BUG13 applies to BOTH accumulators: an attempt that completed HTTP (tokens
+    paid) and then failed truncation/parse accumulates charged AND shadow, and
+    the log must carry real spend (BUG-6 money-honesty class).
+
+    B2 (dispatch item 4): both accumulators DERIVE from ONE
+    llm.cost_fields(cfg, usage) call per attempt — not the module
+    ANALYSIS_USD_* constants — so the analyst cost path re-prices
+    automatically and the two figures can never be computed from different
+    resolutions. B4: the analyst is Claude Sonnet 5 (SEATS["analyst"]).
 
     FIX-1 (B4-D1): the ONE resolution the transport, this cost_fields ledger, and
     run_analysis's report lane all ride is published on _ACTIVE_ANALYST
     (effective_seat = gate + armed fall). When a stage (generate/run_analysis)
     already published it, this reuses it; a direct call owns + tears down its own
     scope. The fallback_reason rides cost_fields so a fallen row is labeled
-    api(fallback:…). Signature preserved (ADR-0014 §2, test_signatures_preserved
-    pins it — a monkeypatch target)."""
+    api(fallback:…). The RETURN ARITY moved at NL-95 (2 -> 3); the deliberate
+    re-pin lives at tests/test_b1_llm_seam_qa.py, and it is still a monkeypatch
+    target (ADR-0014 §2, test_signatures_preserved)."""
     global _ACTIVE_ANALYST
     _own = _ACTIVE_ANALYST is None
     if _own:
@@ -1503,18 +1521,24 @@ def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float]:
         _publish_analyst()
     analyst_cfg, analyst_fb = _ACTIVE_ANALYST
     last: Exception = RuntimeError("unreachable")
-    total_cost = 0.0
+    total_charged = 0.0
+    total_shadow = 0.0
     try:
         for attempt in (1, 2):
             try:
                 payload = _analysis_chat(key, prompt)
                 usage = payload.get("usage") or {}
-                total_cost += llm.cost_fields(
-                    analyst_cfg, usage, fallback_reason=analyst_fb)["usd_charged"]
+                # ONE cost_fields call feeding BOTH accumulators — two calls
+                # could disagree if the resolution moved between them.
+                cf = llm.cost_fields(
+                    analyst_cfg, usage, fallback_reason=analyst_fb)
+                total_charged += cf["usd_charged"]
+                total_shadow += cf["usd_shadow"]
                 choice = payload["choices"][0]
                 if choice.get("finish_reason") == "length":
                     raise ValueError(f"truncated at {ANALYSIS_MAX_TOKENS} tokens")
-                return json.loads(choice["message"]["content"]), total_cost
+                return (json.loads(choice["message"]["content"]),
+                        total_charged, total_shadow)
             except Exception as exc:  # noqa: BLE001 — one retry for the whole class
                 last = exc
                 if attempt == 1:
@@ -1663,6 +1687,11 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         sonar_results, s_cost, sa.sonar_status = sonar(
             pplx_key, slot.get("story_title", ""), claims)
         sa.cost_usd += s_cost
+        # NL-95: Sonar is a METERED api — charged == shadow by construction,
+        # so the same figure lands on both tracks. `remaining_usd` is now
+        # shadow-denominated, which is what the API-priced est_synth_probe
+        # above and estimate_synthesis_usd below were always comparing against.
+        sa.shadow_usd += s_cost
         remaining_usd -= s_cost
 
     # NL-63 item 3: thread-scoped P-material. When this slot's threads carry a
@@ -1734,12 +1763,18 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         return sa
 
     try:
-        raw, cost = chat(openai_key, prompt)
+        # NL-95 tolerant unpack (memory_core.py's pattern): the default chat is
+        # call_analysis_model, which returns (raw, charged, shadow); an
+        # INJECTED 2-tuple chat (every offline test's seam) still works and its
+        # shadow defaults to charged — the api-lane invariant.
+        raw, cost, *rest = chat(openai_key, prompt)
+        shadow = rest[0] if rest else cost
     except Exception as exc:
         sa.outcome = "failed"
         sa.detail = f"synthesis call failed after one retry ({type(exc).__name__}: {exc})"
         return sa
     sa.cost_usd += cost
+    sa.shadow_usd += shadow
 
     corpus = " ".join((s.get("text") or "") for s in sources.values())
     header = {
@@ -1825,7 +1860,15 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
         # M3: when generate hosts this stage, its prior spend rides in so
         # ONE cap governs the whole run (the ladder still degrades analysis
         # before the writer — analysis runs first and leaves headroom).
+        #
+        # NL-95 ENFORCEMENT FIX #1: this ladder accumulates usd_SHADOW. It used
+        # to accumulate charged, which on the subscription lane is $0 — so
+        # `cap - spent` never shrank, every slot saw the full cap, and the
+        # degradation ladder this stage exists to run could not fire. The
+        # figure passed in as already_spent is shadow-denominated too (the
+        # generate-side `spent`, fixed at its own site).
         spent = float(already_spent)
+        charged_total = 0.0
         memory_lines = memory_mod.active_context(con)
         prior = _prior_briefing_material(con, date)
         # FIX-1 (B4-D1): publish the analyst's ONE resolution for the whole stage
@@ -1856,16 +1899,22 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
             sa = analyze_story(con, date, i, slot, tier, cfg, openai_key,
                                pplx_key, cap - spent, memory_lines, prior,
                                fetch=fetch, chat=chat, sonar=sonar, sleep=sleep)
-            spent += sa.cost_usd
+            spent += sa.shadow_usd          # the CAP ladder (NL-95 fix #1)
+            charged_total += sa.cost_usd    # the MONEY record
             report["per_story"].append({
                 "slot": sa.slot, "tier": sa.tier, "outcome": sa.outcome,
                 "detail": sa.detail, "cost_usd": round(sa.cost_usd, 6),
+                # NL-95: charged keeps the key it has always had (and the
+                # meaning every historical jsonl row carries); shadow rides
+                # BESIDE it under a new one. No row's meaning moves.
+                "usd_shadow": round(sa.shadow_usd, 6),
                 "fetch_ok": sa.fetch_ok, "fetch_attempted": sa.fetch_attempted,
                 "sonar": sa.sonar_status})
             report["warnings"].extend(sa.warnings)
             if any(w.startswith("derating:") for w in sa.warnings):
                 report["derating"] = True
-        report["total_usd"] = round(spent - already_spent, 6)
+        report["total_usd"] = round(charged_total, 6)          # REAL money
+        report["total_usd_shadow"] = round(spent - already_spent, 6)  # the cap figure
         if not report["per_story"]:
             report["status"] = "no-depth-stories"
         else:

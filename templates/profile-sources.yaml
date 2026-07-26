@@ -15,10 +15,22 @@
 # Commissioning's job, and per-profile interests move out of this file
 # entirely in Stage-0 M2.
 #
+# NOBODY IS FOLLOWED HERE EITHER (Stage-0 M2, M1 gate rider). Three outlets
+# below carry a `# followed_analyst: true` that is COMMENTED OUT. A followed
+# analyst gets a personal-impact ranking boost independent of topic match —
+# it is a statement about whose writing THIS reader has decided to follow, and
+# the three in question (Tooze, Smith, Yglesias) are the founder's follows.
+# Shipping them live meant every new profile was born reading his people. The
+# OUTLETS stay in the catalog — they are good sources and a reader can pick
+# them; the FOLLOW is a choice, and choices are not inherited.
+#   To follow one: uncomment its `followed_analyst: true` line. That is the
+#   whole reversal, one line per source.
+#
 # Everything below the header, down to `interests:`, is the ORG SOURCE
-# CATALOG verbatim. It drifts from sources.yaml only when the catalog is
-# edited; test_stage0_m1_profiles.py pins that this file still parses clean
-# with active sources and zero interests.
+# CATALOG verbatim apart from those three commented lines. It drifts from
+# sources.yaml only when the catalog is edited; test_stage0_m1_profiles.py
+# pins that this file still parses clean with active sources and zero
+# interests, and tests/test_stage0_m2.py pins the zero-follows posture.
 # =============================================================================
 
 # =============================================================================
@@ -47,15 +59,21 @@
 # =============================================================================
 
 # --- Settings ------------------------------------------------------------------
+# These two values are DECIDED for a new profile (Stage-0 M2), not inherited:
+# both are what a reader who has chosen nothing yet should get.
+#
 # threads_steer_selection (A6, principal editorial review 2026-07-05):
 # false = briefings-of-record select on interest tags + world impact only;
 # your live threads are still matched, recorded, and woven into continuity —
 # they just don't boost what gets picked. Flip to true to restore steering.
 settings:
   threads_steer_selection: false
-  # tts_engine: which voice reads the briefing — kokoro (local, free,
-  # default) or openai (gpt-4o-mini-tts, ~$0.015/min on your OpenAI key).
-  # Pick by ear at the M6 checkpoint; flipping is just editing this line.
+  # tts_engine: which voice reads the briefing — kokoro (local, free) or
+  # openai (gpt-4o-mini-tts, ~$0.015/min on your OpenAI key). A new profile
+  # starts on the $0 LOCAL voice deliberately: nobody should start spending
+  # on audio they have not chosen to spend on. Flipping is editing this line.
+  # (Note this differs from the package default in config.py, which is the
+  # principal's own ear-test ruling for HIS install, 2026-07-06.)
   tts_engine: kokoro
 
 sources:
@@ -206,18 +224,23 @@ sources:
     rss_url: https://www.economist.com/latest/rss.xml
     tier: headline_only
     note: "weekly cadence — expect fewer, older items than dailies (CoS-suggested, approved 2026-07-03)"
+  # --- Analyst newsletters ---------------------------------------------------
+  # Uncomment `followed_analyst: true` on any of these to follow that writer:
+  # their items then get a personal-impact ranking boost independent of topic
+  # match. Left OFF by default — whose analysis you follow is your call, not
+  # the org's and not the founder's (Stage-0 M2, M1 gate rider).
   - name: Chartbook (Adam Tooze)
     rss_url: https://adamtooze.substack.com/feed
-    followed_analyst: true
-    note: "principal-followed analyst: personal-impact ranking boost independent of topic match (taxonomy contract 2026-07-03)"
+    # followed_analyst: true
+    note: "analyst newsletter — uncomment followed_analyst to follow (taxonomy contract 2026-07-03)"
   - name: Noahpinion (Noah Smith)
     rss_url: https://www.noahpinion.blog/feed
-    followed_analyst: true
-    note: "principal-followed analyst: personal-impact ranking boost independent of topic match (taxonomy contract 2026-07-03)"
+    # followed_analyst: true
+    note: "analyst newsletter — uncomment followed_analyst to follow (taxonomy contract 2026-07-03)"
   - name: Slow Boring (Matt Yglesias)
     rss_url: https://www.slowboring.com/feed
-    followed_analyst: true
-    note: "principal-followed analyst: personal-impact ranking boost independent of topic match (taxonomy contract 2026-07-03)"
+    # followed_analyst: true
+    note: "analyst newsletter — uncomment followed_analyst to follow (taxonomy contract 2026-07-03)"
 
 # --- Interests ---------------------------------------------------------------
 # EMPTY BY DESIGN (see the header). Fill these in with THIS reader's tags:

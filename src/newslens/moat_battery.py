@@ -1948,6 +1948,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # sandboxed run (env overrides set) resolves those overrides regardless —
     # redirection outranks sanction — so the offline tests stay hermetic.
     paths.allow_real_paths()
+    # Stage-0 M2 (M1 gate rider): the profile boundary, BEFORE any guarded
+    # path resolves or the record opens. Same reasoning as battery.main — the
+    # paid arms write artifacts under a profile-resolved DATA_DIR, so a typo'd
+    # NEWSLENS_PROFILE must be refused, never provisioned.
+    from . import profiles
+    active_profile, refusal = profiles.resolve_entrypoint_profile()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
+    for line in profiles.redirection_warnings(active_profile):
+        print(f"warning: {line}", file=sys.stderr)
     config.load_env()
     if args.cmd in ("t1", "t2"):
         return _cmd_paid(args, args.cmd)

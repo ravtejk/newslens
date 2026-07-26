@@ -944,13 +944,20 @@ def test_BUG13_retry_must_account_for_both_paid_attempts(monkeypatch):
                         lambda key, prompt: (calls.append(1),
                                              responses[len(calls) - 1])[1])
     monkeypatch.setattr(analysis.time, "sleep", lambda s: None)
-    parsed, cost = analysis.call_analysis_model("sk-test-not-real", "p")
+    # NL-95 (Stage-0 M2) incidental re-pin: the return is now
+    # (parsed, usd_charged, usd_shadow). BUG13's law is unchanged and now
+    # asserted on BOTH tracks — an attempt that paid and then failed must be
+    # accounted on each, or the money record under-reports on the api lane and
+    # the CAP under-counts on the subscription lane.
+    parsed, charged, shadow = analysis.call_analysis_model("sk-test-not-real", "p")
     assert parsed == {"ok": True} and len(calls) == 2
     cost_attempt1 = (1000 / 1e6 * analysis.ANALYSIS_USD_IN_PER_MTOK
                      + 1400 / 1e6 * analysis.ANALYSIS_USD_OUT_PER_MTOK)
     cost_attempt2 = (1000 / 1e6 * analysis.ANALYSIS_USD_IN_PER_MTOK
                      + 100 / 1e6 * analysis.ANALYSIS_USD_OUT_PER_MTOK)
-    assert cost == pytest.approx(cost_attempt1 + cost_attempt2)
+    assert charged == pytest.approx(cost_attempt1 + cost_attempt2)
+    # api lane pinned above, so shadow == charged (the fall-over invariant)
+    assert shadow == pytest.approx(charged)
 
 
 def test_estimate_formula_is_conservative_chars_over_four_plus_full_output():

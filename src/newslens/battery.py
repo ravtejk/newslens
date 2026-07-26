@@ -217,6 +217,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # run (env overrides set) resolves those overrides regardless — redirection
     # outranks sanction — so the offline tests stay hermetic.
     paths.allow_real_paths()
+    # Stage-0 M2 (M1 gate rider): the profile boundary, BEFORE anything
+    # resolves a guarded path or opens the record. A ghost profile is refused
+    # here so this instrument can never be the side door that mints one — its
+    # `--run` writes artifacts under DATA_DIR, which IS profile-resolved.
+    from . import profiles
+    active_profile, refusal = profiles.resolve_entrypoint_profile()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
+    for line in profiles.redirection_warnings(active_profile):
+        print(f"warning: {line}", file=sys.stderr)
     config.load_env()
     env = os.environ
     date = args.date or ranking.local_today()
@@ -285,7 +296,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # discloses BOTH lanes' plans + costs — api bills usd_real; subscription is
     # $0 CHARGED (usd_shadow still recorded, the honest compute cost).
     # NAMED DIVERGENCE (gate FIX-1, 2026-07-17): generate's edition cap binds on
-    # SHADOW (Onna's law, generate.py:1947 + DECISIONS 2026-07-17) — this gate
+    # SHADOW (Onna's law, generate.py:3345 + DECISIONS 2026-07-17) — this gate
     # DELIBERATELY binds on CHARGED dollars instead: the battery is a
     # principal-invoked bounded experiment, so the cap bounds real spend while
     # each subscription arm's shadow is disclosed per-arm (QA-proven no smuggle

@@ -17,6 +17,7 @@ import http.server
 import json
 import os
 import socket
+import sys
 import threading
 from pathlib import Path
 
@@ -25,6 +26,22 @@ import pytest
 from newslens import db, paths
 
 PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
+
+# Stage-0 M2 (R5 convention, in-tree residency): the seeded shuffle plugin.
+# Implementation lives in tools/pytest_shuffle.py — reviewable on its own,
+# untangled from these fixtures — and is re-exported HERE because this file is
+# an initial conftest (testpaths = ["tests"]), the only place pytest honours
+# pytest_addoption. Loading it never reorders an ordered run: the hooks are
+# inert unless --shuffle is passed.
+if str(PROTOTYPE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROTOTYPE_ROOT))
+from tools.pytest_shuffle import (  # noqa: E402
+    pytest_addoption,               # noqa: F401
+    pytest_collection_modifyitems,  # noqa: F401
+    pytest_configure,               # noqa: F401
+    pytest_report_header,           # noqa: F401
+    pytest_terminal_summary,        # noqa: F401
+)
 
 # B3 subscription-lane safety: a DEFAULT stub `claude` shim, created ONCE and
 # pointed at by NEWSLENS_CLAUDE_BIN in sandbox_paths. It emits a canned

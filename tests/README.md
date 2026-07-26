@@ -6,10 +6,28 @@ no real endpoint is ever called, no key is ever needed, and the presence of
 a real `.env` cannot change test behavior (sandboxed `ENV_FILE`, scrubbed
 process env, force-emptied key vars in every subprocess test).
 
-Gate/QA passes run the suite twice: ordered, then shuffled via a seeded
-out-of-tree plugin (in-tree from Stage-0 M2); the seed is recorded in the
-loop report. (No randomization plugin lives in the venv itself — a bare
-`pytest` is an ordered run.)
+Gate/QA passes run the suite twice: ordered, then shuffled under a logged
+seed. **The shuffle plugin is IN-TREE since Stage-0 M2** — `tools/pytest_shuffle.py`,
+re-exported from `conftest.py` so no `-p` flag is needed:
+
+```
+pytest                                     # ordered
+pytest --shuffle                           # shuffled, seed auto-picked + printed
+pytest --shuffle --shuffle-seed 20260726   # replay an exact order
+```
+
+The seed is printed in the run header AND the terminal summary, so a report
+quoting a seed can be replayed from the repo alone. Loading the plugin does
+**not** reorder anything without `--shuffle`, so a bare `pytest` is still an
+ordered run. It shuffles the WHOLE collected list, not within-module: the
+coupling worth catching here is cross-file (module-level seat resolutions, the
+`paths` module-dict shadows, the `_ACTIVE_ANALYST`/`_ACTIVE_STEP_SEATS`
+globals). No dependency was added — stdlib `random`, not pytest-randomly.
+
+(Before M2 the plugin lived out of tree and was hand-carried into each pass;
+historical `-p no:randomly` flags in older reports were silent no-ops against a
+venv that has no randomization plugin at all, so pre-M0 "ordered+randomized"
+claims were ordered-only. See DECISIONS 2026-07-25, R5.)
 
 Since M2 the shipped `sources.yaml` is the principal's live outlet list:
 tests pin its *structural* invariants only (never counts, never fetches),
@@ -39,7 +57,10 @@ fixtures.
 | `test_net.py` | Shared fetch seam: 4MB byte cap (loud per-source failure), 308 handler, `head_bytes`, one UA across ingest+doctor |
 | `test_ranking_validation.py` | `validate_payload` hostility (all-problems reporting, invented/reused ids — the 2026-07-04 live class, re-leveled tags, ranges), retry/429/quota/401 money paths via `OPENAI_CHAT_URL` seam, budget pre-call, spend-proof keyless/interest-less refusals, failed-run instrumentation, render-error class |
 | `test_ranking_selection.py` | Principal amendments A (bounded followed boost, generic flag, override-pool exclusion) and B (recency window, own-date exclusion, honesty line), override contract (pool/bar/cap/label), corroboration labels, archive-before-overwrite e2e |
-| `test_stage0_m0_coldstart.py` | Cold-start empty-ledger acceptance contracts (M0): virgin profile seeds nothing (RED-1, green since M1), day-one silence, fresh-profile sync never refused, cross-profile identity refusal, strictly-prior rung (a), validators bite on empty, virgin serving logs no phantom read. RED-2 (script continuity net) parked `xfail(strict)` for M2 |
+| `test_stage0_m0_coldstart.py` | Cold-start empty-ledger acceptance contracts (M0): virgin profile seeds nothing (RED-1, green since M1), day-one silence, fresh-profile sync never refused, cross-profile identity refusal, strictly-prior rung (a), validators bite on empty, virgin serving logs no phantom read. RED-2 (script continuity net) green since Stage-0 M2 — the `xfail(strict)` marker is gone |
+| `test_stage0_m2.py` | Stage-0 M2 per-profile plumbing + the NL-95 shadow-cap fix: interests/ingest/rank read the ACTIVE profile (and a non-default profile provably never opens the founder's sources.yaml), zero-interest profiles rank-refuse by name, spend ledgers and DB rows bind the acting profile, edition caps bind `usd_shadow` while persisted `cost_usd` stays charged, the three side entrypoints refuse ghost/malformed profiles, a fresh profile follows nobody, `profiles/default` is visible |
+| `test_stage0_m2_script_net.py` | The spoken-continuity net's own contract: seven day-one claim shapes named in the findings, the non-firing floor on a clean script, real thread history licenses the callback, a prior edition alone does not, source attribution exempts, and the script prompt's thread-arc license is data-gated both ways |
+| `test_shuffle_plugin.py` | The in-tree seeded shuffle (`tools/pytest_shuffle.py`): inert without `--shuffle`, same seed = same order, different seeds differ, the seed is reported so a run can be replayed |
 | `test_stage0_m1_profiles.py` | The guarded profile dimension (M1): zero-move default layout == `_GUARDED`, profile paths refused to an unsanctioned process, `set_profile` sets no redirection var (the seam-inversion pin), slug refusals, provisioning that inherits nothing (fully-migrated DB, 0-byte memory.md, committed catalog with empty interests), per-profile isolation + NL-81 pairing identity, `migrate --all-profiles`, profile-aware doctor, and the re-anchored end-to-end routing proof |
 | `test_memory_sync.py` | The memory.md ⇄ SQLite sync contract (lifecycle v2): the seeding KILL pin, file-wins with dismissal audit, annotation round-trips, line-numbered hard stops with the file untouched, dormancy clock (mock-time), context cap/order, revive/reference surfaces, `prior_briefing_context` bounds, 0006 rebuild data survival + re-apply |
 | `test_memory_ranking.py` | Zero-influence at all three layers (score/selection/vocabulary), revival e2e products (DB + slot JSON + meta.revivals + dated warning + same-run re-render), dismissed_user absent from prompt and unrevivable, sync-first loud + BUG-6-logged, item-11 NULLing, truncation named precisely, Retry-After clamp, `[id=N]` armor, invented-ids hard-reject (no repair extension) |

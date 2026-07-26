@@ -630,12 +630,16 @@ def test_flap_window_cannot_fork_analyst_transport_from_its_cost(monkeypatch):
                                 finish_reason="stop", raw=raw)
 
     monkeypatch.setattr(llm, "chat", fake_chat)
-    payload, cost = analysis.call_analysis_model("k", "p")
+    # NL-95 (Stage-0 M2) incidental re-pin: (parsed, usd_charged, usd_shadow).
+    payload, charged, shadow = analysis.call_analysis_model("k", "p")
     assert n["calls"] == 1, (
         "effective_seat resolved more than once — the analyst flap window "
         "is open")
     assert seen["transport_cfg"].lane == "subscription"   # rode resolution #1
-    assert cost == 0.0                                    # $0 sub, not api $$
+    assert charged == 0.0                                 # $0 sub, not api $$
+    # ...and the cap figure is NOT zero: this is precisely the run that used to
+    # decrement nothing (NL-95). One resolution, both tracks off it.
+    assert shadow > 0.0
     assert analysis._ACTIVE_ANALYST is None               # own-scope teardown
 
 

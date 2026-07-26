@@ -447,6 +447,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # regardless — redirection outranks sanction — so the offline tests stay
     # hermetic.
     paths.allow_real_paths()
+    # Stage-0 M2 (M1 gate rider): the profile boundary, BEFORE the record is
+    # opened. This instrument only READS the record, but --run writes its
+    # per-thread report under a profile-resolved DATA_DIR — and the refusal
+    # must precede the "cannot open the record read-only" exit, or a ghost
+    # profile is merely masked by an unrelated error instead of being named.
+    from . import profiles
+    active_profile, refusal = profiles.resolve_entrypoint_profile()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
+    for line in profiles.redirection_warnings(active_profile):
+        print(f"warning: {line}", file=sys.stderr)
     config.load_env()
     env = os.environ
     cap = config.budget_cap_usd_per_run(env)
