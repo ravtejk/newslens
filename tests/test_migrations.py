@@ -37,6 +37,7 @@ MIGRATION_0019 = "0019_memory_follow_altitude.sql"    # NL-17-M1b: the follow-al
 MIGRATION_0020 = "0020_follow_altitude_events.sql"    # NL-17-M1b: Axel's medium-confidence instrument (append-only event log)
 MIGRATION_0021 = "0021_memory_follow_origin.sql"      # NL-17-M1b FIX LOOP 1: the origin-story bridge (recognize an altitude-renamed follow on its origin card)
 MIGRATION_0022 = "0022_memory_sync_guard.sql"          # NL-81: the sync resurrection guard (tombstones + generation stamp + dismissal provenance)
+MIGRATION_0023 = "0023_briefings_pending.sql"          # NL-106: stage-and-promote — a regenerate no longer destroys the readable edition
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
@@ -44,6 +45,7 @@ ALL_MIGRATIONS = [
     MIGRATION_0011, MIGRATION_0012, MIGRATION_0013, MIGRATION_0014,
     MIGRATION_0015, MIGRATION_0016, MIGRATION_0017, MIGRATION_0018,
     MIGRATION_0019, MIGRATION_0020, MIGRATION_0021, MIGRATION_0022,
+    MIGRATION_0023,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
@@ -56,6 +58,10 @@ EXPECTED_TABLES = {
     # pairing state. Both DB-resident on purpose — the file is the untrusted
     # side, so nothing tombstone-shaped is ever rendered into memory.md.
     "memory_tombstones", "sync_state",
+    # NL-106 (0023): the regenerate staging area. A new selection lands here
+    # instead of destroying the live row, and persist_generation promotes it
+    # atomically with the new body. Server/UI code never reads it.
+    "briefings_pending",
 }
 
 

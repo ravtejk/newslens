@@ -1375,11 +1375,56 @@ def select_slots(
 # Persistence (idempotent per date; prior version archived first)
 # ---------------------------------------------------------------------------
 
+def pending_selection(
+    con: sqlite3.Connection, date: str
+) -> Optional[sqlite3.Row]:
+    """The STAGED selection for `date` (NL-106), or None when nothing is staged.
+
+    A staged row exists only between a regenerate's rank stage and its promote
+    (generate.persist_generation) — or forever after, if that run died. Mid-run
+    readers prefer it over the live row's slots; the server never calls this,
+    because the reader's world is the live row and only the live row.
+
+    Table-guarded — but MISSING-TABLE ONLY (gate finding G-1). On a pre-0023
+    database the table is simply absent, which is positive evidence that nothing
+    was ever staged, so the read degrades to the live row rather than killing a
+    run. Every OTHER member of sqlite3.OperationalError — locked, disk I/O,
+    malformed — is evidence of nothing at all, and this read DECIDES WHICH WRITE
+    PATH THE PROMOTE TAKES: a freak error swallowed here silently selects the
+    plain path, installing a new narrative against the OLD slots on the live row
+    while the staged row survives. That is exactly the mixture this table exists
+    to prevent, produced with no error surfaced anywhere. So: degrade on absence,
+    propagate on everything else.
+
+    This is deliberately NARROWER than the house 0012/0013 degrade pattern
+    (memory.py, server.py), and the difference is the point — those degrades gate
+    read-only rendering, where swallowing an error costs a blank pane. This one
+    gates a write, where swallowing an error costs the invariant. The staging
+    WRITE takes the same stance from the other end and fails loud (see persist).
+    """
+    try:
+        return con.execute(
+            "SELECT date, story_slots, corroboration_labels, token_cost,"
+            " created_at FROM briefings_pending WHERE date = ?", (date,)
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return None
+        raise
+
+
 def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dict]:
     """Upsert the briefings row for the date. If one exists, its current state
     is archived to briefings_history BEFORE overwrite (the idempotent-re-run
     rule binds from the first overwritable briefing — ADR-0001, live now).
     Every run also appends a ranking_runs instrumentation row.
+
+    NL-106 amendment (stage-and-promote): when the existing row is READABLE (it
+    has a narrative), this function no longer archives or overwrites anything.
+    It stages the new selection in briefings_pending and leaves the live row
+    alone, so the reader's edition survives the whole run; the archive-then-
+    overwrite happens atomically with the new body in persist_generation. The
+    bodyless and no-row arms are unchanged.
 
     Lifecycle v2: applies earned-slot auto-revival here — POST-selection by
     construction (only slots that already won on merits reach this function),
@@ -1455,7 +1500,50 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
         existing = con.execute(
             "SELECT * FROM briefings WHERE date = ?", (report.date,)
         ).fetchone()
-        if existing is not None:
+        if existing is not None and existing["narrative_text"]:
+            # NL-106 STAGE: a READABLE edition already exists for this date, so
+            # this is a regenerate — and the old edition must survive the whole
+            # run. Do not archive, do not touch the live row: STAGE the new
+            # selection and let persist_generation promote it in one transaction
+            # once a replacement body exists (the promote does the archive, so
+            # ADR-0001 still gets exactly one history row per replaced edition,
+            # carrying the old slots WITH the old body).
+            #
+            # This is the fix for the ~30-minute window in which a regenerate
+            # left a listed-but-blank edition in the Archive (NL-103 QA-1). The
+            # M3-gate rule the old NULL enforced — old narrative must never live
+            # against new slots on the live row — is honoured MORE strictly here:
+            # the live row keeps BOTH its old slots and its old narrative until
+            # they are replaced together, atomically.
+            #
+            # INSERT OR REPLACE (not ON CONFLICT DO UPDATE): `date` is the whole
+            # primary key, nothing references this table and it carries no
+            # triggers, so replace IS the upsert — and it needs no SQLite
+            # version floor beyond the one the rest of the schema already sets.
+            try:
+                con.execute(
+                    "INSERT OR REPLACE INTO briefings_pending (date, story_slots,"
+                    " corroboration_labels, token_cost, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (report.date, story_slots, corroboration, token_cost, now),
+                )
+            except sqlite3.OperationalError as exc:
+                # A staging write that cannot land must NOT fall back to the
+                # destructive path — that would silently re-open the exact hole
+                # this table closes. Fail loud; `with con:` rolls the whole
+                # transaction back, so the saved edition is untouched.
+                raise RankingError(
+                    "cannot stage this re-rank: the briefings_pending table is "
+                    "missing (migration 0023 has not been applied) — run "
+                    "`newslens migrate`, then rank again. Your saved edition "
+                    f"was left exactly as it was ({exc})"
+                ) from exc
+            briefing_id = existing["id"]
+        elif existing is not None:
+            # A row with NO body: nothing readable to protect (a failed FIRST
+            # run, or a rank that never got published). Byte-for-byte the
+            # pre-NL-106 behaviour — archive the husk, overwrite in place, and
+            # stage nothing.
             con.execute(
                 "INSERT INTO briefings_history (briefing_id, date, story_slots,"
                 " corroboration_labels, narrative_text, script_text,"

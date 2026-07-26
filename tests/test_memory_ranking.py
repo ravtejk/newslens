@@ -432,9 +432,23 @@ def test_thread_reference_recording_e2e(migrated_con, memfile, llm):
     assert "(last referenced: 2026-07-04)" in memfile.read_text(encoding="utf-8")
 
 
-def test_item11_rerank_nulls_generation_fields(migrated_con, memfile, llm):
-    """NOTES item 11: a narrative written for OLD slots must never survive a
-    re-rank — the fields NULL on overwrite; history archives the originals."""
+def test_item11_rerank_never_pairs_old_narrative_with_new_slots(
+    migrated_con, memfile, llm
+):
+    """NOTES item 11, AS AMENDED BY NL-106 (was
+    test_item11_rerank_nulls_generation_fields).
+
+    The law is unchanged: a narrative written for OLD slots must never live
+    against NEW slots. The MECHANISM is inverted. It used to be enforced by
+    destruction — rank archived the edition and NULLed the live body, leaving
+    the reader a blank edition for the ~30 minutes until a body arrived (the
+    NL-103 QA-1 finding). It is now enforced by ATOMICITY: a re-rank of a
+    READABLE edition touches nothing, stages its new selection in
+    briefings_pending, and persist_generation swaps slots and body together.
+
+    So the old narrative survives this re-rank — paired, as it always was, with
+    its OWN old slots. That pairing is the invariant; the NULL was only ever one
+    way to protect it, and the destructive one."""
     _seed_revival_world(migrated_con)
     payload = {"clusters": [cluster([1], title="V1", tags=TOPIC, impact=5)]}
     llm.add_route("/v1/messages", status=200, body=anthropic_envelope(payload, input_tokens=900),
@@ -447,19 +461,32 @@ def test_item11_rerank_nulls_generation_fields(migrated_con, memfile, llm):
             " script_text = 'old script', audio_file_path = '/tmp/old.mp3'"
             " WHERE date = ?", (DATE,),
         )
+    before = dict(migrated_con.execute(
+        "SELECT * FROM briefings WHERE date = ?", (DATE,)).fetchone())
+    hist_before = migrated_con.execute(
+        "SELECT COUNT(*) c FROM briefings_history").fetchone()["c"]
+
+    # the re-rank picks a DIFFERENT story, so "which slots are live" is decidable
+    payload2 = {"clusters": [cluster([1], title="V2", tags=TOPIC, impact=5)]}
+    llm.add_route("/v1/messages", status=200,
+                  body=anthropic_envelope(payload2, input_tokens=900),
+                  content_type="application/json")
     ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(), env=env)
-    row = migrated_con.execute(
-        "SELECT narrative_text, script_text, audio_file_path FROM briefings"
-        " WHERE date = ?", (DATE,),
-    ).fetchone()
-    assert row["narrative_text"] is None
-    assert row["script_text"] is None
-    assert row["audio_file_path"] is None
-    hist = migrated_con.execute(
-        "SELECT narrative_text FROM briefings_history WHERE date = ?"
-        " ORDER BY id DESC LIMIT 1", (DATE,),
-    ).fetchone()
-    assert hist["narrative_text"] == "old narrative"  # archive keeps the past
+
+    after = dict(migrated_con.execute(
+        "SELECT * FROM briefings WHERE date = ?", (DATE,)).fetchone())
+    assert after == before, "the re-rank touched the readable live row"
+    assert after["narrative_text"] == "old narrative"
+    assert "V1" in after["story_slots"] and "V2" not in after["story_slots"]
+
+    # nothing archived yet: the edition has not been replaced, only challenged
+    assert migrated_con.execute(
+        "SELECT COUNT(*) c FROM briefings_history").fetchone()["c"] == hist_before
+
+    # and the new selection is waiting in the staging area
+    pend = migrated_con.execute(
+        "SELECT * FROM briefings_pending WHERE date = ?", (DATE,)).fetchone()
+    assert pend is not None and "V2" in pend["story_slots"]
 
 
 # --- M4 gate-fix pins 3-4: mid-run mtime guard; bracket sanitize ------------------------------

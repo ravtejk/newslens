@@ -119,6 +119,17 @@ def test_row9_intact_matches_what_the_reader_can_actually_open(ui, errjob):
         "fixture broken: the edition was not readable to begin with"
 
     # ranking.persist()'s re-rank branch, verbatim in shape
+    #
+    # NL-106 NOTE (2026-07-26): the pipeline can no longer PRODUCE this state on
+    # the regenerate path — rank now stages its new selection in
+    # briefings_pending and leaves the readable live row alone. This hand-built
+    # construction is kept DELIBERATELY, unchanged: it is a renderer-level pin
+    # (the panel must never claim intact for an unreadable edition, whatever put
+    # the DB in that state), and changing it would destroy the regression-red
+    # signature captured in the NL-103 QA report §7. The pipeline-level version
+    # of this scenario, with its outcome flipped to old-edition-intact, lives in
+    # tests/test_nl106_stage_and_promote.py::
+    #   test_g6_a_failed_regenerate_leaves_the_old_edition_intact_end_to_end
     row = con.execute("SELECT * FROM briefings WHERE date=?", (today,)).fetchone()
     con.execute(
         "INSERT INTO briefings_history (briefing_id, date, story_slots,"

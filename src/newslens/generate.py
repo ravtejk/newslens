@@ -649,7 +649,29 @@ def _step_ledger(step: str, usage: Dict) -> Dict:
 # Context gathering
 # ---------------------------------------------------------------------------
 
-def load_briefing_inputs(con: sqlite3.Connection, date: str) -> Dict:
+def load_briefing_inputs(con: sqlite3.Connection, date: str,
+                         prefer_pending: bool = False) -> Dict:
+    """The stage inputs for `date`, built from the briefings row.
+
+    prefer_pending (NL-106) is the MID-RUN reading: when a regenerate has staged
+    a new selection (briefings_pending), the stages consume the STAGED slots and
+    corroboration while the live row still holds the readable old edition for
+    the reader. Everything else — row id, date, every error — is unchanged.
+
+    It defaults OFF, and exactly one caller turns it on: _run_generate_body, the
+    in-flight run — and there, only for runs that can PROMOTE (gate FIX-2: a
+    sample cannot, and must keep its standing promise that it consumes the
+    existing row). The other callers (backfill, the prompt/cost batteries) are
+    reading the PUBLISHED edition of record, and must keep seeing what the
+    reader sees — a backfill that built ledger deltas from a staged selection
+    against a published narrative would be the mixture this whole change exists
+    to prevent, one table over.
+
+    Returns `staged_created_at`: when a staged payload was consumed, the moment
+    it was staged; None otherwise. That is how a caller can tell it is finishing
+    someone else's run (gate FIX-3) — the key is additive and inert for the three
+    default callers, which never consume a staged payload at all.
+    """
     row = con.execute(
         "SELECT * FROM briefings WHERE date = ?", (date,)
     ).fetchone()
@@ -659,8 +681,19 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str) -> Dict:
             "(a plain `newslens generate`), then request samples or "
             "narrative-only re-runs against it"
         )
+    slots_json = row["story_slots"]
+    corroboration_json = row["corroboration_labels"]
+    pending = ranking.pending_selection(con, date) if prefer_pending else None
+    if pending is not None:
+        slots_json = pending["story_slots"]
+        corroboration_json = pending["corroboration_labels"]
     try:
-        slots = json.loads(row["story_slots"] or "[]")
+        # NOTE (NL-106): the two refusals below are byte-identical whichever
+        # payload was read — deliberately, so no new reader-facing string enters
+        # under the ratified register. They still fire on the payload actually
+        # consumed, which is the part that matters: a corrupt or empty STAGED
+        # selection refuses the run exactly as a corrupt live row does.
+        slots = json.loads(slots_json or "[]")
     except ValueError as exc:
         raise GenerateError(f"briefings.story_slots for {date} is corrupt: {exc}") from exc
     if not slots:
@@ -717,7 +750,7 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str) -> Dict:
             window_meta = None
 
     try:
-        corroboration = json.loads(row["corroboration_labels"] or "{}")
+        corroboration = json.loads(corroboration_json or "{}")
     except ValueError:
         corroboration = {}
 
@@ -785,6 +818,10 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str) -> Dict:
         "continuity_status": continuity_status,
         "window_meta": window_meta,
         "corroboration": corroboration,
+        # NL-106 FIX-3: the staging stamp of the payload this call consumed,
+        # None when the live row was read. The one fact a caller needs to know
+        # it is completing a run it did not start.
+        "staged_created_at": pending["created_at"] if pending is not None else None,
     }
 
 
@@ -2836,12 +2873,63 @@ def persist_generation(
 ) -> None:
     """Write narrative/script onto the briefing row. If a narrative already
     exists (re-generation), archive the row to briefings_history first —
-    same rule persist() applies on re-rank."""
+    same rule persist() applies on re-rank.
+
+    NL-106 — THE PROMOTE. When a regenerate staged a new selection at rank time
+    (briefings_pending), this is where the swap happens, in ONE transaction:
+    archive the displaced edition, install the staged slots together with the
+    new body, drop the staged row. Before this instant the reader has the whole
+    old edition; after it they have the whole new one; there is no instant in
+    between. A run that dies before reaching here leaves the staged row behind
+    and the reader's edition untouched — the next re-rank writes over it."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     with con:
         row = con.execute("SELECT * FROM briefings WHERE date = ?", (date,)).fetchone()
         if row is None:
             raise GenerateError(f"briefing row for {date} vanished mid-run")
+        pending = ranking.pending_selection(con, date)
+        if pending is not None:
+            # (a) Archive UNCONDITIONALLY. A staged row is only ever created
+            # against a readable live row, so what is being displaced here is
+            # always a real edition — and ADR-0001 wants exactly one history
+            # row per replaced edition, carrying the OLD slots WITH the OLD
+            # body (the pairing the old rank-time archive used to produce).
+            con.execute(
+                "INSERT INTO briefings_history (briefing_id, date, story_slots,"
+                " corroboration_labels, narrative_text, script_text,"
+                " audio_file_path, token_cost, generated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (row["id"], row["date"], row["story_slots"],
+                 row["corroboration_labels"], row["narrative_text"],
+                 row["script_text"], row["audio_file_path"],
+                 row["token_cost"], row["generated_at"]),
+            )
+            # (b) The new ledger is built on the STAGED token_cost — the rank
+            # step this edition actually paid for — NOT the live row's, which
+            # belongs to the edition being displaced and has just been archived
+            # with it. Folding the old edition's spend in here would invent
+            # money against the new edition (NL-95: `usd` is real money);
+            # dropping the staged base would lose the new rank step. Same fold
+            # shape as the plain path below.
+            try:
+                staged_cost = json.loads(pending["token_cost"] or "{}")
+            except ValueError:
+                staged_cost = {}
+            all_steps = (staged_cost.get("steps") or []) + steps
+            total = round(sum(s.get("usd") or 0 for s in all_steps), 6)
+            con.execute(
+                "UPDATE briefings SET story_slots = ?, corroboration_labels = ?,"
+                " narrative_text = ?, script_text = ?, audio_file_path = ?,"
+                " token_cost = ?, generated_at = ? WHERE id = ?",
+                (pending["story_slots"], pending["corroboration_labels"],
+                 narrative, script, audio_path,
+                 json.dumps({"steps": all_steps, "total_usd": total}), now,
+                 row["id"]),
+            )
+            # (c) The staging row has done its job. Dropping it inside the same
+            # transaction is what makes "staged" mean "not yet published".
+            con.execute("DELETE FROM briefings_pending WHERE date = ?", (date,))
+            return
         if row["narrative_text"]:
             con.execute(
                 "INSERT INTO briefings_history (briefing_id, date, story_slots,"
@@ -3155,7 +3243,33 @@ def _run_generate_body(
             raise GenerateError(f"rank stage failed: {exc}") from exc
         report.warnings.extend(rank_rep.warnings)
 
-    inputs = load_briefing_inputs(con, date)
+    # NL-106: THE mid-run read. The staged selection is what this run writes
+    # about while the reader still holds the old edition. On a run with nothing
+    # staged (first run, or a narrative-only re-run of an uninterrupted edition)
+    # it reads the live row exactly as before.
+    #
+    # FIX-2 (gate, from QA-2): staged reads belong to runs that CAN PROMOTE. A
+    # sample never reaches persist_generation (`if not report.sample` at the
+    # persist block) and forces refresh=False above, so an unconditional
+    # preference had it narrating a stale staged selection while its own warning
+    # promised the reader "the briefing of record is untouched … samples always
+    # consume the existing row". No data damage — but a sample that misreports
+    # what it sampled is exactly the class of small lie this product does not get
+    # to tell.
+    inputs = load_briefing_inputs(con, date, prefer_pending=not report.sample)
+    # FIX-3 (gate ruling R1): consuming a staged payload this run did not create
+    # must never be silent. A refresh run consumes its OWN staging, seconds old —
+    # nothing to disclose. A `--no-refresh` run consuming one is by definition
+    # finishing an earlier, interrupted regenerate, and the principal is entitled
+    # to know whose stories are about to be published under today's date.
+    if not refresh and inputs.get("staged_created_at"):
+        report.warnings.append(
+            "completing an earlier interrupted regenerate: this run is "
+            f"publishing the story selection ranked at "
+            f"{inputs['staged_created_at']}, not a fresh one — run a plain "
+            "`newslens generate` instead if you want today's stories re-ranked "
+            "from scratch"
+        )
     if no_threads:
         # Cold-start view (ADR-0007 amendment): tags stay; every thread/memory
         # trace is stripped from a COPY of the inputs — thread list, per-story

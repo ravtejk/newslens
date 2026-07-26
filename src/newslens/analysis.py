@@ -1850,7 +1850,17 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
                 raise RuntimeError("no ranked briefing to analyze — run "
                                    "`newslens generate` (or rank) first")
             date = row["date"]
-        slots = json.loads(row["story_slots"] or "[]")
+        # NL-106: the staged selection wins, AFTER the date is resolved (the
+        # latest-row fallback above resolves the date first, then this asks about
+        # THAT date). A regenerate stages its new slots at rank time and leaves
+        # the live row holding the reader's old edition, so mid-run this stage
+        # must analyse what the run is about to publish, not what is published.
+        # Nothing staged (the common case, and every pre-0023 database) reads
+        # the live row exactly as before.
+        pending = ranking.pending_selection(con, date)
+        slots = json.loads(
+            (pending["story_slots"] if pending is not None
+             else row["story_slots"]) or "[]")
         # tiers: the generation log's recorded tiers for the date; positional
         # default when absent (pre-M7 rows)
         tiers = tiers_override[:len(slots)] if tiers_override \
