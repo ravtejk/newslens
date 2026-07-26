@@ -94,16 +94,20 @@ def _seed_db(rows):
 # seat registration (the seam law)
 # --------------------------------------------------------------------------
 
-def test_seat_registered_haiku_api_default():
-    # RESOLVER LANE FIX (2026-07-20): this interactive, reader-waiting seat is the
-    # ONE anthropic seat whose code default is the API lane (measured 1.2s vs the
-    # ~48s subscription resolve) — subscription is now the registered fall-over /
-    # airbag, not the default. Model/provider/knobs unchanged.
+def test_seat_registered_haiku_subscription_default():
+    # NL-99 (THE $0-RUN LAW): the seat comes HOME to the subscription lane. The
+    # 2026-07-20 api exception existed because a subscription resolve took
+    # 9-46s — and eng-4 proved that was never the lane, it was the transport
+    # ignoring cfg.thinking. With thinking suppressed the same seat on the same
+    # lane resolves in 1.85-2.89s, at $0. Model/provider/knobs unchanged.
     cfg = llm.SEATS["follow_altitude"]
     assert cfg.model == "claude-haiku-4-5"
     assert cfg.provider == "anthropic"
-    assert cfg.lane == "api"                    # the interactive-seat exception
+    assert cfg.lane == "subscription"           # the exception is retired
     assert cfg.thinking is None and cfg.effort is None   # mechanical, not reasoning
+    # ...and the declaration is now ENFORCED on this lane, which is the whole
+    # reason the flip is safe.
+    assert "follow_altitude" in llm._THINKING_OFF_SUB_SEATS
 
 
 def test_seat_is_not_a_generate_step():
@@ -114,12 +118,12 @@ def test_seat_is_not_a_generate_step():
         llm.seat_for_step("follow_altitude")
 
 
-def test_effective_seat_resolves_on_the_api_lane_by_default():
-    # RESOLVER LANE FIX: with no lane override the seat gates on the API lane
-    # (its code default now) — check_lane's api arm needs no binary, so it
-    # resolves cleanly with reason None.
+def test_effective_seat_resolves_on_the_subscription_lane_by_default():
+    # NL-99: with no lane override the seat gates on the SUBSCRIPTION lane (its
+    # code default again). No automatic fall — the api lane is reachable only by
+    # the principal's deliberate per-instance sanction under the $0-RUN LAW.
     cfg, reason = llm.effective_seat("follow_altitude")
-    assert cfg.seat == "follow_altitude" and cfg.lane == "api"
+    assert cfg.seat == "follow_altitude" and cfg.lane == "subscription"
     assert reason is None
 
 
@@ -221,13 +225,14 @@ def test_resolver_parses_entity_pick(monkeypatch):
     # the stable law rides the system prefix; the title rides the user prompt
     assert "THREAD TITLE: Volkswagen" in chat.prompts[0]
     assert chat.systems[0] and "altitude" in chat.systems[0].lower()
-    # cost_sink carries the full shadow-ledger keys. RESOLVER LANE FIX: the seat
-    # defaults to the api lane now, so a real resolve BILLS (charged == shadow > 0,
-    # Haiku-priced); the $0 subscription path is the escape hatch (tested elsewhere).
+    # cost_sink carries the full shadow-ledger keys. NL-99: the seat defaults to
+    # the SUBSCRIPTION lane, so a real resolve charges NOTHING while the shadow
+    # (API-equivalent compute, what the cap binds on) is still ledgered in full.
+    # That pair — shadow > 0 AND charged == 0 — is the $0-RUN LAW on the record.
     assert len(sink) == 1
     assert sink[0]["usd_shadow"] > 0
-    assert sink[0]["usd_charged"] == sink[0]["usd_shadow"]
-    assert sink[0]["lane"] == "api"
+    assert sink[0]["usd_charged"] == 0.0
+    assert sink[0]["lane"] == "subscription"
     assert sink[0]["model"] == "claude-haiku-4-5"
 
 
@@ -305,7 +310,7 @@ def test_dryrun_makes_zero_calls_and_zero_writes(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "followed threads: 2" in out         # dismissed excluded from the count
     assert "DRY RUN" in out
-    assert "api" in out                         # the resolved lane is disclosed (api default now)
+    assert "subscription" in out                # the resolved lane is disclosed (NL-99 default)
 
 
 def test_dryrun_refuses_absent_record(capsys):
@@ -338,8 +343,11 @@ def test_run_resolves_followed_threads_and_writes_report(monkeypatch, capsys):
     assert report["followed_total"] == 2
     names = {r["primary_entity"] for r in report["results"]}
     assert names == {"Volkswagen", "Fed policy"}      # dismissed excluded
-    # RESOLVER LANE FIX: the api default BILLS (charged == shadow > 0)
-    assert report["usd_charged_total"] == report["usd_shadow_total"] > 0
+    # NL-99 / THE $0-RUN LAW: the falsifier instrument itself is now free to
+    # run. Shadow is still ledgered in full (the cap binds on it); charged is
+    # zero because the subscription covers the call.
+    assert report["usd_shadow_total"] > 0
+    assert report["usd_charged_total"] == 0.0
 
 
 def test_run_adds_zero_rows_to_the_record(monkeypatch):

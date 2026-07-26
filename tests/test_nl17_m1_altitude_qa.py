@@ -203,11 +203,16 @@ def test_mid_call_lane_and_model_flap_cannot_fork_transport_or_ledger(monkeypatc
     sink = []
     res = fa.resolve_altitude(fa.ThreadInput(1, "Volkswagen"), cost_sink=sink)
     assert res.attempts == 2
-    assert seen_cfgs == [("api", "claude-haiku-4-5", "follow_altitude")] * 2
-    assert [e["lane"] for e in sink] == ["api", "api"]
+    # NL-99: the resolver's code default is the SUBSCRIPTION lane again. The
+    # one-resolution-per-call property is unchanged and is what this test owns —
+    # only the lane it resolves TO moved.
+    assert seen_cfgs == [("subscription", "claude-haiku-4-5", "follow_altitude")] * 2
+    assert [e["lane"] for e in sink] == ["subscription", "subscription"]
     assert [e["model"] for e in sink] == ["claude-haiku-4-5"] * 2
-    assert all(e["usd_charged"] == e["usd_shadow"] > 0 for e in sink)   # api bills
-    assert res.lane == "api"
+    # Both attempts ledger shadow and charge nothing — including the RETRY,
+    # which is where a lane fork would have shown up as real money.
+    assert all(e["usd_shadow"] > 0 and e["usd_charged"] == 0.0 for e in sink)
+    assert res.lane == "subscription"
 
 
 def test_armed_fall_is_labeled_on_every_row_and_survives_midcall_disarm(monkeypatch):
@@ -263,16 +268,19 @@ def test_falsifier_run_rides_one_resolution_across_all_threads(monkeypatch):
     monkeypatch.setattr(llm, "chat", chat)
     rc = fa.main(["--run"])
     assert rc == 0
-    # RESOLVER LANE FIX: the --run gate resolves ONCE on the api default; the
-    # hostile mid-run flap toward subscription must not re-lane later threads.
-    assert lanes_seen == ["api"] * 3
+    # NL-99: the --run gate resolves ONCE on the subscription default; the
+    # hostile mid-run flap must not re-lane later threads. The flap direction
+    # inverts with the default (a flap toward api is now the dangerous one — it
+    # would start charging mid-run), and the property being pinned is the same.
+    assert lanes_seen == ["subscription"] * 3
     report = json.loads(
         (paths.DATA_DIR / "follow_altitude" / ranking.local_today()
          / "report.json").read_text())
-    assert report["seat"]["lane"] == "api"
-    assert {e["lane"] for e in report["cost_attempts"]} == {"api"}
-    # api lane bills: charged total == shadow total > 0 (was $0 on subscription)
-    assert report["usd_charged_total"] == report["usd_shadow_total"] > 0
+    assert report["seat"]["lane"] == "subscription"
+    assert {e["lane"] for e in report["cost_attempts"]} == {"subscription"}
+    # NL-99: the falsifier instrument runs at $0 charged, shadow fully ledgered.
+    assert report["usd_shadow_total"] > 0
+    assert report["usd_charged_total"] == 0.0
 
 
 # --------------------------------------------------------------------------

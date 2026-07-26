@@ -277,7 +277,7 @@ def test_fix3_follow_altitude_seat_has_a_short_interactive_timeout():
     re-degrading at the old 12s wall. BORN-RED on the 45 (was 12)."""
     cfg = llm.SEATS["follow_altitude"]
     assert cfg.timeout_s == 8                                # api-lane interactive (default, unchanged)
-    assert cfg.timeout_sub_s == 45                           # subscription-lane FALLBACK airbag (12->45)
+    assert cfg.timeout_sub_s == 20                           # subscription DEFAULT wall (12->45->20, gate 2026-07-26)
     # the BATCH seats stay generous — only this interactive seat is short
     # (rank 300 -> 600 in the 2026-07-26 re-tune; the CONTRAST is the contract
     # here, and it widened rather than narrowed)

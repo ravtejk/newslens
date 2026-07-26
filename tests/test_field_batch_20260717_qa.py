@@ -15,7 +15,7 @@ Pinned here:
     implementer pinned only the subscription side).
   * TIMEOUTS: the full timeout_sub_s map pinned exactly (the exact-set roster
     guard did not grow the new knob); the subscription provider uses the sub
-    knob for state (300) and follow_altitude (45, the subscription escape-hatch
+    knob for state (300) and follow_altitude (20, the subscription escape-hatch
     knob — explicit selection only, no automatic api->subscription fall — RESOLVER
     LANE FIX 2026-07-20); the api provider still passes the api
     knob (rank 90).
@@ -318,7 +318,7 @@ def test_timeout_sub_map_is_pinned_exactly():
     # writer 900 / analyst 540 stand (standing ratifications).
     sub = {"rank": 600, "analyst": 540, "writer": 900, "editor": 180,
            "script": 120, "synthesis": None, "state": 60,
-           "follow_altitude": 45}
+           "follow_altitude": 20}
     api = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
            "script": 120, "synthesis": 120, "state": 60, "follow_altitude": 8}
     assert set(sub) == set(llm.SEATS)
@@ -329,7 +329,7 @@ def test_timeout_sub_map_is_pinned_exactly():
 
 @pytest.mark.parametrize("seat,expect,force_lane", [
     ("state", 60, None),
-    ("follow_altitude", 45, "subscription"),   # the subscription escape-hatch knob (explicit selection; no auto-fall)
+    ("follow_altitude", 20, "subscription"),   # the subscription escape-hatch knob (explicit selection; no auto-fall)
 ])
 def test_subscription_provider_uses_the_sub_knob_per_seat(
         monkeypatch, seat, expect, force_lane):

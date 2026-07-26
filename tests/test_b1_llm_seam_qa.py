@@ -864,10 +864,10 @@ def test_seat_table_pins_the_b3_stack_exactly():
             assert cfg.thinking == "adaptive" and cfg.effort == "high"
             assert cfg.sampling is False
         elif name == "follow_altitude":
-            # RESOLVER LANE FIX: Haiku like the batch seats, but the API lane by
-            # default (the interactive-seat exception) — same model/price/knobs,
-            # only the transport differs. Subscription is its registered fall-over.
-            assert cfg.lane == "api", name
+            # NL-99: Haiku like the batch seats, and now on their lane too — the
+            # interactive-seat exception is retired (the transport, not the lane,
+            # was what made a resolve take 9-46s). Same model/price/knobs.
+            assert cfg.lane == "subscription", name
             assert cfg.provider == "anthropic"
             assert cfg.model == "claude-haiku-4-5"
             assert cfg.usd_per_mtok_in == 1.00
@@ -978,11 +978,12 @@ def test_doctor_lanes_default_env_renders_all_seats_no_fail():
             for line in seat_lines), name
     sub_lines = [l for l in seat_lines if "lane=subscription" in l]
     # item C (2026-07-17): writer/analyst joined the subscription default too.
-    # RESOLVER LANE FIX (2026-07-20): follow_altitude LEFT the subscription default
-    # for the api lane, so the subscription-default set is back to 6.
-    assert len(sub_lines) == 6  # rank/editor/script/state/writer/analyst
+    # NL-99 (2026-07-26): follow_altitude CAME BACK — the 07-20 api exception is
+    # retired, so every anthropic seat is subscription-default and synthesis
+    # (gpt-4o) is the only api line left.
+    assert len(sub_lines) == 7  # rank/editor/script/state/writer/analyst/follow_altitude
     api_lines = [l for l in seat_lines if "lane=api" in l]
-    assert any(l.startswith("follow_altitude:") for l in api_lines)  # now api-default
+    assert [l.split(":")[0] for l in api_lines] == ["synthesis"]
     assert "fallback unarmed" in results[len(llm.SEATS)].text
 
 
@@ -1021,18 +1022,20 @@ def test_doctor_lanes_missing_binary_fails_the_subscription_seats(
     """The doctor's fail-loud twin of check_lane's binary gate: with the
     binary unresolvable (check_lane reads os.environ), the SIX subscription-default
     seats FAIL naming the fix; the api seats stay INFO. (NL-17-M1 added
-    follow_altitude; 2026-07-17 added state, then writer/analyst via item C — but
-    RESOLVER LANE FIX 2026-07-20 moved follow_altitude to the api default, so six
-    sub seats fail and synthesis + follow_altitude are the two api INFO seats.)"""
+    follow_altitude; 2026-07-17 added state, then writer/analyst via item C; the
+    07-20 resolver exception moved follow_altitude to api and NL-99 moved it
+    back, so SEVEN sub seats fail and synthesis is the lone api INFO seat.)"""
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
     results = doctor.check_llm_lanes({})
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
-    assert len(fails) == 6  # rank/editor/script/state/writer/analyst
+    # NL-99: follow_altitude joins the seats that need the binary — it is on
+    # the subscription lane again, so a missing CLI is now its problem too.
+    assert len(fails) == 7  # + follow_altitude
     for r in fails:
         assert "NEWSLENS_CLAUDE_BIN" in r.text
-    # synthesis (gpt-4o/api) + follow_altitude (Haiku/api default) need no binary
-    assert len([r for r in seat_results if r.status == doctor.INFO]) == 2
+    # synthesis (gpt-4o/api) is the ONLY seat left that needs no binary
+    assert len([r for r in seat_results if r.status == doctor.INFO]) == 1
 
 
 def test_doctor_lanes_armed_fallback_warns():

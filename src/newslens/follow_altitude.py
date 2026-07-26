@@ -32,10 +32,14 @@ without a code change the QA pin flips red on.
 
 SEAM (ADR-0014/0015/0016 law): the resolver's model call goes through the
 `follow_altitude` seat in llm.SEATS (Haiku 4.5; the ONE seat whose code default
-is the API lane — RESOLVER LANE FIX 2026-07-20 — because it is interactive and
-reader-waiting: ~1.2s api vs a ~48s claude -p resolve; subscription is the
-registered fall-over / airbag, forced via NEWSLENS_LANE_FOLLOW_ALTITUDE=
-subscription). ONE effective_seat resolution
+is the SUBSCRIPTION lane, like every other anthropic seat — NL-99 / THE $0-RUN
+LAW, 2026-07-26. The 07-20 api exception was a correct read of a symptom
+(a subscription resolve took 9-46s) and a wrong read of the cause: the
+transport was ignoring the seat's declared thinking=None. With thinking
+suppressed the same call on the same lane measures 1.85-2.89s at $0 charged.
+The api lane is reachable only by the principal's deliberate per-instance
+sanction, NEWSLENS_LANE_FOLLOW_ALTITUDE=api — an out-of-law path, never a
+fall-over, never armed automatically). ONE effective_seat resolution
 per call, threaded through the gate + both transport attempts + every cost row
 (the B3-D6 fix); prompt-shaped JSON rides the corrected-retry law (rank's twin).
 Read-only DB via db.connect_readonly; the instrument self-sanctions real paths
@@ -526,7 +530,8 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"est total usd_shadow ${cumulative:.5f}")
     charged_note = ("$0 charged (subscription lane; shadow-priced above)"
                     if cfg.lane == "subscription"
-                    else f"~${cumulative:.5f} charged (api lane)")
+                    else f"~${cumulative:.5f} charged (api lane — the "
+                         f"sanctioned-exception path; the default lane is $0)")
     print(f"  a --run would spend: {charged_note}")
 
     if not args.run:

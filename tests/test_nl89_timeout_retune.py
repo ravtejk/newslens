@@ -163,7 +163,7 @@ def test_the_retune_touches_nothing_but_watchdogs_and_the_thinking_env():
     # The interactive seat is NOT a batch seat and must never drift into this
     # family — a reader waits on it (fix loop 1 FIX-3).
     assert llm.SEATS["follow_altitude"].timeout_s == 8
-    assert llm.SEATS["follow_altitude"].timeout_sub_s == 45
+    assert llm.SEATS["follow_altitude"].timeout_sub_s == 20
 
 
 def test_a_raised_wall_cannot_slow_a_healthy_call(monkeypatch):

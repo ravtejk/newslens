@@ -230,12 +230,13 @@ def test_seat_map_after_b2_haiku_flip():
             assert cfg.model == "claude-haiku-4-5", name
             assert cfg.lane == "subscription", name
         elif name == "follow_altitude":
-            # RESOLVER LANE FIX (2026-07-20): the interactive resolver seat is the
-            # one anthropic seat defaulting to the API lane (subscription is its
-            # fall-over) — same Haiku model, different transport by design.
+            # NL-99 (2026-07-26): the 2026-07-20 api exception is RETIRED. The
+            # subscription lane was never the slow one — the transport was
+            # ignoring cfg.thinking. Same Haiku model, same knobs, and now the
+            # same lane as every other anthropic seat.
             assert cfg.provider == "anthropic", name
             assert cfg.model == "claude-haiku-4-5", name
-            assert cfg.lane == "api", name
+            assert cfg.lane == "subscription", name
         elif name == "writer":
             assert cfg.provider == "anthropic" and cfg.lane == "subscription"
             assert cfg.model == "claude-opus-4-8"
