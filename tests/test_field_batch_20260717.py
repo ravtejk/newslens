@@ -187,21 +187,23 @@ def test_api_lane_fenced_resolves_on_the_first_attempt_field_run36(monkeypatch, 
 
 def test_subscription_seat_timeouts_are_generous():
     # RE-TUNED 2026-07-26 (measured, not padded — the ruling permits RAISES).
-    # Observed per-CALL production output ceilings vs the measured 71-106 tok/s
-    # subscription throughput band: editor 28,772 tok = 406s @71, script 22,707
-    # = 321s, rank 22,748 = 321s — all three THROUGH the old 300s wall at the
-    # bottom of the band, and the editor seat took a real 300.02s timeout in
-    # the thinking-tax probe. 300 -> 600 leaves 1.5-1.9x margin at 71 tok/s,
-    # and state joins them uniformly (see below).
-    assert llm.SEATS["rank"].timeout_sub_s == 600      # was 300 (90s api was too tight)
-    assert llm.SEATS["editor"].timeout_sub_s == 600    # was 300 — a live timeout at 300.02s
-    assert llm.SEATS["script"].timeout_sub_s == 600    # was 300
-    # state joins them at 600 (gate ruling): its ~16,183 figure is an EDITION
-    # AVERAGE, not a per-call ceiling, and this lane applies no output cap at
-    # all — so nothing bounds a single state call below ~80k tokens (~1140s).
-    assert llm.SEATS["state"].timeout_sub_s == 600
+    # TWO ERAS, and the difference is the thinking seam.
+    # rank is still TAXED (excluded from the flip pending its n>=10 validity
+    # measurement), so it keeps the taxed wall: its observed per-CALL ceiling is
+    # 22,748 tok = 321s at the 71 tok/s throughput floor, which went straight
+    # through the old 300s wall.
+    assert llm.SEATS["rank"].timeout_sub_s == 600
+    # editor/script/state are FLIPPED (thinking suppressed), so their walls come
+    # down to >=3x their MEASURED off-arm ceilings — a 600s watchdog on a 45s
+    # path is a blindfold, which is the mistake the resolver made at 45s on a
+    # 14-48s path. editor 54.5s -> 180 (3.3x); script 28.5s -> 120 (4.2x);
+    # state 6.0s -> 60 (10x). Each also outlasts a call that trips its own
+    # token band, so the alarm can be read before the wall lands.
+    assert llm.SEATS["editor"].timeout_sub_s == 180
+    assert llm.SEATS["script"].timeout_sub_s == 120
+    assert llm.SEATS["state"].timeout_sub_s == 60
     # follow_altitude is the INTERACTIVE exception (fix loop 1 FIX-3): a reader
-    # waits on it, so it runs a SHORT timeout (12s sub) that degrades a stuck
+    # waits on it, so it runs a SHORT timeout (45s sub since 2026-07-20; 12s until then) that degrades a stuck
     # provider fast — pinned in test_nl17_m1b_fixloop1, NOT here among the
     # generous batch seats.
     # item C (2026-07-17): writer/analyst joined the subscription lane — sub

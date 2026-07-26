@@ -35,19 +35,30 @@ from newslens import llm
 THROUGHPUT_FLOOR_TOK_S = 71
 CLI_STARTUP_S = 1.0
 
-# seat -> (observed per-call output-token ceiling, where it was read)
-OBSERVED_CEILING = {
-    "editor": (28772, "generation_log.jsonl editor_pass, n=7, 2026-07-18"),
-    "script": (22707, "generation_log.jsonl script_adapt, n=7, 2026-07-23"),
+# TWO ERAS, and every seat below belongs to exactly one of them. The taxed
+# ceilings are what production emitted while the subscription lane was silently
+# adding extended thinking; they are the right yardstick ONLY for a seat still
+# in that state. For a flipped seat they are archaeology — the seat no longer
+# emits anything like that, and holding its wall against a number it can no
+# longer produce is how a 600s blindfold survives on a 45s path.
+
+# TAXED seats — thinking still on. Per-call ceilings read read-only from the
+# principal's own record.
+TAXED_CEILING = {
     "rank":   (22748, "ranking_runs.meta.llm_attempts rank_select, n=6, 2026-07-25"),
+    # writer DECLARES adaptive thinking: its deliberation was ordered, so it is
+    # not "taxed" in the defect sense — it just belongs to the same yardstick.
     "writer": (36842, "generation_log.jsonl narrative_A, n=7, 2026-07-24"),
-    # state has NO per-call record. 16,183 is an EDITION AVERAGE (worst
-    # edition's derived total / that edition's rewrite count) — it is used here
-    # only as a floor for the margin check, and it is explicitly NOT a ceiling:
-    # an average cannot bound a single call, and on the subscription lane no
-    # output cap does either (STATE_MAX_TOKENS is api-only, llm.py). That is
-    # why state's wall is 600 like its siblings rather than held at 300.
-    "state":  (16183, "EDITION AVERAGE, not a ceiling: total / rewrites, 2026-07-20"),
+}
+
+# FLIPPED seats — thinking suppressed 2026-07-26 (llm._THINKING_OFF_SUB_SEATS).
+# Ceilings are the MEASURED off-arm observations, eng-6 §3.1 (n=2 per seat, on
+# real production prompts), expressed in SECONDS because that is how they were
+# observed — no token conversion needed or wanted.
+FLIPPED_CEILING_S = {
+    "editor": (54.5, "eng-6 §3.1 off-arm: 45.4s / 54.5s"),
+    "script": (28.5, "eng-6 §3.1 off-arm: 28.5s / 18.6s"),
+    "state":  (6.0,  "eng-6 §3.1 off-arm: 5.7s / 6.0s"),
 }
 
 # The margin each wall must keep at the bottom of the band. 1.25x is not a
@@ -62,9 +73,9 @@ def seconds_at_floor(out_tokens: int) -> float:
     return out_tokens / THROUGHPUT_FLOOR_TOK_S + CLI_STARTUP_S
 
 
-@pytest.mark.parametrize("seat", sorted(OBSERVED_CEILING))
-def test_every_subscription_wall_clears_its_observed_ceiling(seat):
-    tokens, provenance = OBSERVED_CEILING[seat]
+@pytest.mark.parametrize("seat", sorted(TAXED_CEILING))
+def test_a_taxed_seats_wall_clears_its_observed_token_ceiling(seat):
+    tokens, provenance = TAXED_CEILING[seat]
     cfg = llm.SEATS[seat]
     wall = cfg.timeout_sub_s or cfg.timeout_s
     needed = seconds_at_floor(tokens)
@@ -77,25 +88,65 @@ def test_every_subscription_wall_clears_its_observed_ceiling(seat):
     )
 
 
-def test_the_old_300s_wall_would_fail_that_check_for_three_seats():
-    """The finding, executable: this is WHY the raise happened. editor, script
-    and rank were all through a 300s wall at the bottom of the band — editor
-    by 35%, and it has a real 300.02s timeout on the record to prove it."""
+# A flipped seat's wall is judged against its measured off-arm LATENCY, and the
+# bar is higher (3x, not 1.25x) precisely because these walls came down: a tight
+# wall on a fast path is cheap to get wrong, so it must be provably generous.
+FLIPPED_REQUIRED_MARGIN = 3.0
+
+
+@pytest.mark.parametrize("seat", sorted(FLIPPED_CEILING_S))
+def test_a_flipped_seats_wall_clears_its_measured_off_arm_latency(seat):
+    ceiling_s, provenance = FLIPPED_CEILING_S[seat]
+    cfg = llm.SEATS[seat]
+    wall = cfg.timeout_sub_s or cfg.timeout_s
+    margin = wall / ceiling_s
+    assert margin >= FLIPPED_REQUIRED_MARGIN, (
+        f"{seat}: wall {wall}s vs a measured {ceiling_s}s off-arm ceiling "
+        f"= {margin:.2f}x (need {FLIPPED_REQUIRED_MARGIN}x). Evidence: "
+        f"{provenance}"
+    )
+
+
+@pytest.mark.parametrize("seat", sorted(FLIPPED_CEILING_S))
+def test_a_flipped_seats_wall_outlasts_its_own_token_band(seat):
+    """The property that makes the alarm readable. If a CLI upgrade stops
+    honoring MAX_THINKING_TOKENS, the seat's output jumps back into the taxed
+    range — and the token-band alarm is supposed to SAY so. A wall shorter than
+    the band's own runtime would kill that call first and report a timeout
+    instead of the cause."""
+    band = llm._TOKEN_BANDS[seat]
+    wall = llm.SEATS[seat].timeout_sub_s
+    needed = seconds_at_floor(band)
+    assert wall > needed, (
+        f"{seat}: wall {wall}s does not outlast its own >{band:,}-token band "
+        f"({needed:.0f}s at {THROUGHPUT_FLOOR_TOK_S} tok/s) — a band trip "
+        f"would surface as a timeout, hiding the cause it exists to name"
+    )
+
+
+def test_the_old_300s_wall_would_have_failed_for_the_taxed_seats():
+    """The finding that produced the raise, kept executable. Every seat's TAXED
+    output needed more than 300s at the bottom of the band — which is why the
+    stopgap went to 600 before the flip made most of it unnecessary."""
     breached = {
         seat: round(seconds_at_floor(tokens))
-        for seat, (tokens, _) in OBSERVED_CEILING.items()
+        for seat, (tokens, _) in TAXED_CEILING.items()
         if seconds_at_floor(tokens) > 300
     }
-    assert breached == {"editor": 406, "script": 321, "rank": 321,
-                        "writer": 520}, breached
+    assert breached == {"rank": 321, "writer": 520}, breached
+    # rank still lives there: it is excluded from the flip, so it keeps 600.
+    assert llm.SEATS["rank"].timeout_sub_s == 600
+    assert "rank" not in llm._THINKING_OFF_SUB_SEATS
     # ...and the writer was never in danger, because its wall was already 900.
     assert llm.SEATS["writer"].timeout_sub_s == 900
 
 
-def test_the_raise_is_watchdog_only_and_touches_nothing_else():
-    """The ruling's constraint, mechanically. A timeout re-tune that quietly
-    moved a lane, a model, a price or an api-lane timeout would be a different
-    diff wearing this one's clothes."""
+def test_the_retune_touches_nothing_but_watchdogs_and_the_thinking_env():
+    """The constraint, mechanically. A timeout re-tune that quietly moved a
+    lane, a model, a price or an api-lane timeout would be a different diff
+    wearing this one's clothes. NOTE what is deliberately NOT asserted here any
+    more: `thinking is None` on the seat rows is unchanged and still true — the
+    flip did not touch the seat rows at all, it made the TRANSPORT obey them."""
     for seat in ("rank", "editor", "script", "state"):
         cfg = llm.SEATS[seat]
         assert cfg.lane == "subscription", seat
@@ -130,4 +181,4 @@ def test_a_raised_wall_cannot_slow_a_healthy_call(monkeypatch):
     llm.chat(llm.LaneRequest(
         cfg=llm.resolve_seat("editor"), prompt="p", temperature=0,
         max_tokens=10, json_mode=True, user_agent="ua", api_key="k"))
-    assert seen["timeout"] == 600
+    assert seen["timeout"] == 180   # editor, post-flip

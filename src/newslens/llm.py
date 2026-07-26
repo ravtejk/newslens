@@ -66,11 +66,12 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
 # The OpenAI chat endpoint (the seam's single copy — ranking.OPENAI_CHAT_URL
 # and analysis's inline literal both named this same URL before B1).
@@ -271,6 +272,30 @@ _SONNET_ANALYST_SUB = dict(
 # healthy generation's wall clock, because the value is only ever
 # subprocess.run(..., timeout=) (llm.py `_subscription_provider`). api-lane
 # timeouts (timeout_s) are untouched, so no api pinned path moves.
+#
+# --- DOWN-TUNE 2026-07-26, riding the thinking-seam flip -----------------------
+# The 600s above were a STOPGAP for the TAXED present, and the gate attached a
+# rider to them: re-tune DOWNWARD in the same diff as any flip. That rider fires
+# now. Leaving a 600s watchdog on a 45s path is not caution, it is a blindfold —
+# the exact mistake the resolver made with 45s on a 14-48s path.
+#
+# Sized off the MEASURED off-arm observations (eng-6 §3.1, n=2 per seat on real
+# production prompts), at >=3x the observed ceiling:
+#
+#   seat    off-arm observed   ceiling   x3      SHIPPED   margin vs ceiling
+#   editor  45.4s / 54.5s       54.5s   163.5s     180s        3.30x
+#   script  28.5s / 18.6s       28.5s    85.5s     120s        4.21x
+#   state    5.7s /  6.0s        6.0s    18.0s      60s       10.00x
+#
+# SECOND PROPERTY, deliberately checked: each wall also has to outlast a call
+# that TRIPS this seat's token band, or the watchdog would kill the very call
+# the alarm exists to report. At the band ceiling and the throughput FLOOR (71
+# tok/s): editor 6,000 tok = 86s < 180s; script 4,000 = 57s < 120s; state 1,200
+# = 18s < 60s. The alarm can always fire and be read before the wall lands.
+#
+# rank KEEPS 600 — it is excluded from the flip (see _THINKING_OFF_SUB_SEATS),
+# so it is still taxed and still needs the taxed wall. writer 900 / analyst 540
+# untouched: they declare adaptive thinking and were never in this family.
 SEATS: Dict[str, SeatConfig] = {
     "rank":      SeatConfig("rank",      timeout_s=90,  timeout_sub_s=600, **_HAIKU_SUB),
     # item C (2026-07-17): writer/analyst on the subscription lane. timeout_sub_s
@@ -281,8 +306,8 @@ SEATS: Dict[str, SeatConfig] = {
     # system; edition 7 ran fine but uninstrumented — pad the tax generously).
     "analyst":   SeatConfig("analyst",   timeout_s=240, timeout_sub_s=540, **_SONNET_ANALYST_SUB),
     "writer":    SeatConfig("writer",    timeout_s=600, timeout_sub_s=900, **_OPUS_WRITER_SUB),
-    "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=600, **_HAIKU_SUB),
-    "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=600, **_HAIKU_SUB),
+    "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=180, **_HAIKU_SUB),
+    "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=120, **_HAIKU_SUB),
     # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver
     # seat. A cheap mechanical single-turn classification (given a followed
     # thread, pick entity|storyline + the primary entity + a disclosure line) —
@@ -331,18 +356,23 @@ SEATS: Dict[str, SeatConfig] = {
     # the anthropic lanes (the only remaining gpt-4o seat, synthesis, has no live
     # call site in the generate path). STATE_MODEL + the STATE_USD_* price
     # constants derive from this row (memory_core R-B4a), so model/price/transport
-    # follow with no other module edit. timeout_sub_s 300 -> 600 (2026-07-26),
-    # UNIFORM with its Haiku siblings per the gate. Honest basis: NO per-call
-    # token record exists for this seat, an average-derived figure cannot bound
-    # a single call, and this lane applies no output cap (STATE_MAX_TOKENS is
-    # api-only). Revisit with a per-call record — and revisit DOWNWARD on any
-    # thinking-flip, which is what shrinks the need. Ships with a MANDATORY
-    # spot-check + pre-registered revert-if (DECISIONS 2026-07-17 "state seat
-    # flips to Haiku/subscription; audio held" — the durable record): any
-    # validate_state trip / photocopy-suspect flag / quality miss -> revert this
-    # row to **_GPT4O_API in one clean diff (needs the OpenAI key restored) or
-    # escalate to the battery's state arm.
-    "state":     SeatConfig("state",     timeout_s=60,  timeout_sub_s=600, **_HAIKU_SUB),
+    # follow with no other module edit. timeout_sub_s 300 -> 600 -> 60: the 600
+    # was a stopgap for the taxed present and carried a revisit-DOWNWARD-on-any-
+    # thinking-flip rider. That flip is THIS diff, so the rider fires — 60s is
+    # 10x the measured off-arm ceiling (5.7-6.0s) and still outlasts a call that
+    # trips the >1,200-token band (~18s at the throughput floor).
+    # THE PRE-REGISTERED GATE, ARMED FOR THIS FLIP: the MANDATORY spot-check +
+    # revert-if from DECISIONS 2026-07-17 ("state seat flips to Haiku/
+    # subscription; audio held" — the durable record) now covers the THINKING
+    # flip as well as the original model/lane flip. Any validate_state trip /
+    # photocopy-suspect flag / quality miss on the next generates -> either drop
+    # "state" from _THINKING_OFF_SUB_SEATS (the cheap, targeted revert — one
+    # line, restores today's behavior exactly) or revert this row to
+    # **_GPT4O_API in one clean diff (needs the OpenAI key restored), or
+    # escalate to the battery's state arm. The thinking revert is the FIRST
+    # rung now: it is smaller than the lane revert and it is the thing that
+    # changed.
+    "state":     SeatConfig("state",     timeout_s=60,  timeout_sub_s=60,  **_HAIKU_SUB),
 }
 
 # Seats DECLARED in the roster but with no live call site anywhere in the product
@@ -977,11 +1007,65 @@ def resolve_claude_bin(env: Optional[Dict[str, str]] = None) -> Tuple[Optional[s
     )
 
 
-def _subscription_env(env: Dict[str, str]) -> Dict[str, str]:
+# ---------------------------------------------------------------------------
+# THE THINKING SEAM (eng-4 §6 C1; flips authorized by the principal 2026-07-26)
+# ---------------------------------------------------------------------------
+# THE BUG THIS CLOSES: the api transport honors `SeatConfig.thinking` (it sends
+# the `thinking` param only when the seat declares one). The subscription
+# transport never did — so every seat declaring `thinking=None` was silently
+# paying for extended thinking it explicitly did not ask for. Measured, n=16 on
+# real production prompts (debates/2026-07-26--newslens--engineering.md §3):
+# 84-97% of these seats' output tokens were deliberation, and the ANSWER was
+# the same size in both arms. state spent ~14,000 output tokens to write five
+# sentences.
+#
+# THE MECHANISM: `MAX_THINKING_TOKENS=0` in the child env. It is INJECTED BY
+# THIS CODE, never passed through from the parent — deliberately absent from
+# _SUBSCRIPTION_ENV_ALLOW, so the principal's own shell cannot silently change
+# product behavior in either direction.
+#
+# THE ALLOWLIST is per-seat because the flip is a QUALITY decision per seat,
+# not a transport cleanup: these seats emit content he reads and hears.
+#   * state / script / editor — AUTHORIZED 2026-07-26 (DECISIONS "FLIPS
+#     AUTHORIZED"), each with its quality gate ARMED not blocking: state's
+#     pre-registered spot-check + revert-if (its seat row), script's
+#     validate_script + script_structural_check + his ear test, editor's
+#     A9-preservation instruments (hedge-ratio tripwire, tier/A7-label
+#     immutability, before/after word discipline).
+#   * rank — DELIBERATELY EXCLUDED. Rook's gate, adopted by the principal: its
+#     off-arm first-attempt VALIDITY is unmeasured at usable n, a format miss
+#     costs a whole extra call, and a second miss kills the generate. It stays
+#     taxed until an n>=10-per-arm measurement clears it, and its 600s watchdog
+#     stays with it.
+#   * writer / analyst — never candidates. They DECLARE thinking="adaptive";
+#     their deliberation was ordered and is doing work.
+# ADA'S DISSENT, ON RECORD AND STILL UNRESOLVED (eng-4 §5.5): a per-seat
+# allowlist is a temporary lie; the correct end state is cfg.thinking honored
+# unconditionally on both lanes with no exception list. This set is scaffolding
+# and should shrink to nothing, not grow a governance process.
+_THINKING_OFF_SUB_SEATS: FrozenSet[str] = frozenset({
+    "state",
+    "script",
+    "editor",
+})
+_MAX_THINKING_TOKENS_VAR = "MAX_THINKING_TOKENS"
+
+
+def _subscription_env(env: Dict[str, str],
+                      cfg: Optional[SeatConfig] = None) -> Dict[str, str]:
     """The child process env — an allowlist with ANTHROPIC_API_KEY guaranteed
-    absent (Rook #1). Defensive pop in case a future allowlist entry aliases it."""
+    absent (Rook #1). Defensive pop in case a future allowlist entry aliases it.
+
+    When `cfg` names an armed seat, MAX_THINKING_TOKENS=0 is INJECTED (see the
+    seam block above). cfg stays optional so existing callers and tests that
+    only assert the allowlist keep working unchanged."""
     child = {k: env[k] for k in _SUBSCRIPTION_ENV_ALLOW if k in env}
     child.pop("ANTHROPIC_API_KEY", None)
+    # Injection, not pass-through: the var is set from the seat table, and a
+    # parent-env value can never reach the child (it is not in the allowlist,
+    # and this assignment is unconditional for an armed seat).
+    if cfg is not None and cfg.seat in _THINKING_OFF_SUB_SEATS:
+        child[_MAX_THINKING_TOKENS_VAR] = "0"
     return child
 
 
@@ -1141,7 +1225,7 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
     try:
         proc = subprocess.run(
             args, input=req.prompt, cwd=scratch,
-            env=_subscription_env(dict(os.environ)),
+            env=_subscription_env(dict(os.environ), cfg),
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
@@ -1381,6 +1465,60 @@ def fallback_armed(env: Optional[Dict[str, str]] = None) -> bool:
 # Cost attribution — the shadow ledger keys (JSON, additive, no migration)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# TOKEN-BAND ALARMS — Rook's regression armor (eng-6 §9, carried from eng-4 §5.4)
+# ---------------------------------------------------------------------------
+# The thinking seam rests on ONE environment variable that a `claude` CLI
+# release could stop honoring without telling anyone. If that happens the seats
+# go quietly back to spending 20 minutes an edition on deliberation, and the
+# only symptom is a slower night. These bands are the detector: each is sized
+# off the seat's MEASURED off-arm output (eng-6 §3.1) with headroom, and each
+# is blown 3-11x by the taxed arm — so the alarm cannot half-fire.
+#
+#   seat    off-arm observed   band     taxed arm (what trips it)
+#   editor  3,277-3,875        >6,000   22,384
+#   script  1,111-1,639        >4,000   15,929-17,047
+#   state     349-  378        >1,200   13,465-14,509
+#
+# WARN-GRADE, never a gate: a band trip means "investigate the transport", not
+# "this call is wrong". The call's own validators decide correctness.
+#
+# WHY HERE: cost_fields is the ONE place every seat's (cfg, usage) pair meets,
+# on every lane and every caller — generate.call_llm, memory_core's state
+# rewrite, analysis, follow_altitude. A per-caller copy would be four copies
+# that drift, and a new call site would silently miss the armor. (eng-4 C3
+# proposed follow_altitude.py's own cost_sink block; one chokepoint covers that
+# seat and every other for the same line count.)
+#
+# FREE HISTORICAL BASELINE, already on disk: generation_log.jsonl carries
+# usd_shadow per step, and usd_shadow / the seat's out-rate IS an output-token
+# count. The day a band fires, nine days of per-step history are available to
+# diff against without adding a table.
+_TOKEN_BANDS: Dict[str, int] = {
+    "editor": 6000,
+    "script": 4000,
+    "state": 1200,
+}
+
+
+def _check_token_band(cfg: SeatConfig, completion_tokens: int) -> None:
+    """One comparison per billed attempt. Fires only on the SUBSCRIPTION lane:
+    the api transport has always honored cfg.thinking, so a band trip there
+    would mean something else entirely and this alarm would be lying about the
+    cause."""
+    band = _TOKEN_BANDS.get(cfg.seat)
+    if band is None or cfg.lane != "subscription" or completion_tokens <= band:
+        return
+    print(
+        f"⚠ token-band alarm: seat '{cfg.seat}' emitted {completion_tokens:,} "
+        f"output tokens on the subscription lane (band >{band:,}). The seat "
+        f"declares thinking=None; this is the shape of extended thinking "
+        f"coming back — check that MAX_THINKING_TOKENS=0 still suppresses it "
+        f"in this `claude` CLI version. Warn only; the call was not changed.",
+        file=sys.stderr,
+    )
+
+
 def cost_fields(cfg: SeatConfig, usage: Optional[Dict], *,
                 fallback_reason: Optional[str] = None) -> Dict:
     """The lane/shadow ledger keys for one billed attempt, added ALONGSIDE the
@@ -1408,6 +1546,7 @@ def cost_fields(cfg: SeatConfig, usage: Optional[Dict], *,
     usage = usage or {}
     pt = usage.get("prompt_tokens") or 0
     ct = usage.get("completion_tokens") or 0
+    _check_token_band(cfg, ct)   # Rook's regression armor; warn only
     details = usage.get("prompt_tokens_details") or {}
     cached = details.get("cached_tokens") if isinstance(details, dict) else 0
     creation = usage.get("cache_creation_tokens") or 0

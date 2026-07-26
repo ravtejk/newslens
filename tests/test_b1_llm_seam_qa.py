@@ -936,8 +936,11 @@ def test_llm_module_source_imports_only_stdlib():
     # B3 (conscious): shutil/subprocess/tempfile join for the `claude -p`
     # subprocess transport — all stdlib, so the zero-SDK leaf law holds; the
     # allowlist grows only by name so the NEXT import is a deliberate flip too.
-    allowed = {"json", "os", "urllib.error", "urllib.request", "dataclasses",
-               "typing", "__future__", "shutil", "subprocess", "tempfile"}
+    # 2026-07-26 (conscious, one name): `sys` joins for the token-band alarm's
+    # stderr warn line (llm._check_token_band — Rook's regression armor).
+    allowed = {"json", "os", "sys", "urllib.error", "urllib.request",
+               "dataclasses", "typing", "__future__", "shutil", "subprocess",
+               "tempfile"}
     assert imported <= allowed, f"non-leaf imports: {imported - allowed}"
 
 
@@ -1527,10 +1530,34 @@ def test_exhaustive_lane_env_sweep_no_transport_with_mismatched_ledger(
                                             f"{label}: {flag} missing")
                                     assert "ANTHROPIC_API_KEY" not in sp["env"], (
                                         f"{label}: the D1 key leak")
-                                    assert set(sp["env"]) <= allow, (
+                                    # 2026-07-26 thinking seam: the child env
+                                    # is the allowlist PLUS exactly one
+                                    # code-injected var, and only for an armed
+                                    # seat. Checked as a per-seat exact set so
+                                    # the sweep still fails on ANY other
+                                    # addition, and so an unarmed seat cannot
+                                    # quietly acquire it.
+                                    # NB `armed` is already this test's
+                                    # fallback-arming flag — do not shadow it.
+                                    think_off = (
+                                        gate_seat in llm._THINKING_OFF_SUB_SEATS)
+                                    permitted = allow | (
+                                        {"MAX_THINKING_TOKENS"} if think_off
+                                        else set())
+                                    assert set(sp["env"]) <= permitted, (
                                         f"{label}: child env beyond the "
                                         f"allowlist: "
-                                        f"{set(sp['env']) - allow}")
+                                        f"{set(sp['env']) - permitted}")
+                                    if think_off:
+                                        assert sp["env"].get(
+                                            "MAX_THINKING_TOKENS") == "0", (
+                                            f"{label}: armed seat lost its "
+                                            f"thinking suppression")
+                                    else:
+                                        assert "MAX_THINKING_TOKENS" not in sp["env"], (
+                                            f"{label}: UNARMED seat got "
+                                            f"thinking suppression — the "
+                                            f"allowlist is not real")
                                 for row in sink:
                                     assert row["lane"] == "subscription", (
                                         f"{label}: row lane={row['lane']!r} "

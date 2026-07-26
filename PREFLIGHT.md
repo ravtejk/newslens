@@ -46,9 +46,9 @@ reach them.
 
 | Transport | File:line | What it bills |
 |---|---|---|
-| OpenAI chat/completions (`_openai_provider`) | `src/newslens/llm.py:516` | metered USD on `OPENAI_API_KEY` |
-| Anthropic Messages API (`_anthropic_provider`) | `src/newslens/llm.py:878` | metered USD on `ANTHROPIC_API_KEY`. **One `urlopen`, two read modes:** the branch at `llm.py:879` takes NL-93 SSE accumulation (`_accumulate_sse`, `llm.py:690`) when the call's `max_tokens >= 5000` (`_should_stream`, `llm.py:577`) and blocking `json.load` otherwise |
-| `claude -p` subprocess — the subscription lane (`_subscription_provider`) | `src/newslens/llm.py:1142` | **no per-call USD**; consumes the principal's Claude subscription. The child env strips `ANTHROPIC_API_KEY` (`llm.py:984`) exactly so a stray key cannot silently bill the API while the ledger records $0 |
+| OpenAI chat/completions (`_openai_provider`) | `src/newslens/llm.py:546` | metered USD on `OPENAI_API_KEY` |
+| Anthropic Messages API (`_anthropic_provider`) | `src/newslens/llm.py:908` | metered USD on `ANTHROPIC_API_KEY`. **One `urlopen`, two read modes:** the branch at `llm.py:909` takes NL-93 SSE accumulation (`_accumulate_sse`, `llm.py:720`) when the call's `max_tokens >= 5000` (`_should_stream`, `llm.py:607`) and blocking `json.load` otherwise |
+| `claude -p` subprocess — the subscription lane (`_subscription_provider`) | `src/newslens/llm.py:1226` | **no per-call USD**; consumes the principal's Claude subscription. The child env strips `ANTHROPIC_API_KEY` (`llm.py:1063`) exactly so a stray key cannot silently bill the API while the ledger records $0 |
 | Perplexity Sonar (`call_sonar`) | `src/newslens/discovery.py:92` | metered USD on `PERPLEXITY_API_KEY` |
 | OpenAI TTS (`_synthesize_openai`) | `src/newslens/audio.py:202` | metered USD on `OPENAI_API_KEY`, once per text chunk in a loop |
 | The doctor's Perplexity check | `src/newslens/doctor.py` `check_perplexity_key` | **was a real paid POST** (`max_tokens: 16`) on every doctor run with a key present — the one doctor probe that was not read-only. **FIXED 2026-07-26 (discovery pause):** the pause is checked first and no probe fires; the doctor reports the ruling instead. The paid path is reachable only behind `NEWSLENS_DISCOVERY_ENABLED=1` |
@@ -86,9 +86,9 @@ local Kokoro child and touches no network.
 Two properties are the whole guard, and both deserve a hand-check:
 
 1. **The cap binds on `usd_shadow`, not on dollars actually charged — and
-   since NL-95 every caller does.** `cost_fields` (`llm.py:1384`) always
+   since NL-95 every caller does.** `cost_fields` (`llm.py:1522`) always
    computes `usd_shadow` from the seat's pinned price table and sets
-   `usd_charged` to 0.0 on the subscription lane (`llm.py:1420`). The intent
+   `usd_charged` to 0.0 on the subscription lane (`llm.py:1570`). The intent
    ("Onna's law") is that edition callers accumulate *shadow*, so a $0-charged
    subscription run still spends the run budget at its API-equivalent price. The
    writer/editor/script steps do exactly that (`generate.py:3487`,
@@ -192,19 +192,19 @@ run — `newslens diagnose` sums them at `diagnose.py:301-304`) and the
   descriptions only.
 - **Three keys now, and each lane owns its own credential** (this changed with
   the provider seam). `OPENAI_API_KEY` rides an `Authorization: Bearer` header
-  (`llm.py:511`, `audio.py:197`, `doctor.py:249`). `ANTHROPIC_API_KEY` rides an
+  (`llm.py:541`, `audio.py:197`, `doctor.py:249`). `ANTHROPIC_API_KEY` rides an
   `x-api-key` header and is read by the lane itself, not passed in by the caller
-  (`_anthropic_credential`, `llm.py:595`; used at `llm.py:864`).
+  (`_anthropic_credential`, `llm.py:620`; used at `llm.py:894`).
   `PERPLEXITY_API_KEY` rides `Authorization: Bearer` (`discovery.py:86`,
   `doctor.py:426`). Error paths never echo them: HTTP error bodies are
   truncated/parsed (`ranking._http_error_detail`, `ranking.py:668`, reused by
   audio per M7 carryover 19).
 - **The subscription lane carries no key at all.** `claude -p` authenticates
   from the CLI's own logged-in session under `HOME`; the child process gets an
-  env *allowlist* (`llm.py:944`), and `ANTHROPIC_API_KEY` is both absent from
-  that allowlist and popped defensively (`llm.py:984`). That is the guard
+  env *allowlist* (`llm.py:974`), and `ANTHROPIC_API_KEY` is both absent from
+  that allowlist and popped defensively (`llm.py:1063`). That is the guard
   against silently billing the API while the ledger reports $0 — worth reading
-  as a unit with `_subscription_env` (`llm.py:980`).
+  as a unit with `_subscription_env` (`llm.py:1054`).
 - The kokoro TTS subprocess runs with a scrubbed environment —
   `env={"PATH": ..., "HOME": ...}` at `audio.py:118` — so a compromised
   or buggy model runtime never sees API keys.
@@ -229,7 +229,7 @@ OpenAI and Anthropic probes are read-only `GET /v1/models` while its
 Single-user local web UI; stdlib `http.server`. Threat model: hostile
 web pages in the same browser, not hostile networks.
 
-- **Binding:** `127.0.0.1` only (`server.py:3953`, in `serve()` — the
+- **Binding:** `127.0.0.1` only (`server.py:4025`, in `serve()` — the
   `ThreadingHTTPServer(("127.0.0.1", port), Handler)` line). Nothing
   listens beyond loopback. Check: `lsof -nP -iTCP:8484 -sTCP:LISTEN`.
 - **CSRF:** all POSTs require `Content-Type: application/json`
@@ -326,7 +326,7 @@ in code (never model prose):
 | Inline `onclick` single-quote interpolation. **[updated 2026-07-25: no longer two sites — eight now, across three handlers.]** `openEdition` (five): `server.py:2260` and `server.py:2266` (archive rows), `server.py:2442` (arc line), `server.py:2774`, `server.py:3154` (deep-view prior-briefing link). Same pattern, same provenance class, three more sites: `pickDay` (`server.py:2214`) and `navMonth` (`server.py:2317`, `server.py:2322` — these two interpolate the month string with *no* `_e()` at all). Values are system-controlled (DB `date` column, and month strings derived from it behind a `^\d{4}-\d{2}$` match at `server.py:2301`), truncated and HTML-escaped — but note: browsers entity-decode attribute values *before* the JS engine parses an inline handler, so `_e()` escaping alone would not stop a quote breakout if these values were ever attacker-influenced. Safety rests on provenance, not on the escaping | accepted at single-user loopback scale (pattern predates NL-12 — NL-11 archive rows), but the surface **grew** across the v8 archive/deep-view work. Revisit before any external exposure (NL-59 chain). Durable fix is one line per site: interpolate via `_js_str()` (`server.py:962`, json.dumps, already used elsewhere in this file) or a `data-date` attribute + delegated listener | NL-12 gate review 2026-07-10; site count re-counted 2026-07-25 |
 | ~~`<details class="cite-fold">` nested inside `<span class="fact-cite">`~~ — **RESOLVED, row kept for the paper trail.** The inline cite-fold apparatus was removed by v8-M1 item 4 (commit `88cbeb3`, 2026-07-17): the verified-specifics run folds into the facts list carrying a plain end-of-line outlet count instead (`server.py:2822-2830`). Neither `cite-fold` nor `fact-cite` exists in `server.py`/`webui.py` at this commit. The surviving `<details>` uses (`server.py:1980` quiet-fold, `server.py:2885` discrepancy drawer) are ordinary block-level ones | no action | NL-12 gate review 2026-07-10; closed out 2026-07-25 |
 | Source URLs render as live hrefs with no scheme constraint — one site: the deep-view source table, `_render_deep_view` sources loop (`<a href={_e_attr(s["url"])}>`, the non-prior-briefing branch; **`server.py:3158`**). `_e_attr` HTML-escapes but a `javascript:alert(1)` value contains nothing to escape, so it survives as a click-executable link. Provenance: URLs arrive from configured RSS feeds (attacker-influenceable in principle — a feed controls its own item links) and Sonar retrieval; the network layer refuses to FETCH non-http(s) URLs (`analysis.py:431`) but nothing constrains the scheme of what lands in the validator-built source table or at render. Every other anchor in `server.py` is internal (`#…`/`/?date=…`). Pre-existing at HEAD; NL-60 changed the adjacent prior-briefing branch only | **still open, re-verified 2026-07-25.** Accepted at single-user loopback scale (same threat model as the inline-`onclick` row above); routed here by the NL-60 QA pass. Revisit before any external exposure (NL-59 chain). Durable fix is one line at the render site: linkify only when `s["url"].startswith(("http://", "https://"))`, else render the plain title — or allowlist the scheme at source-table ingest | NL-60 gate review 2026-07-13 |
-| **[2026-07-16, Stage-1 gate order] HTTP layer accepts free-text topic/thread strings** — routes registered at `server.py:3677` (`/api/topic/add`) and `server.py:3669` (`/api/follow`); handlers at `server.py:3907` and `server.py:3711`. Both take `body["name"]` / the topic argument as arbitrary text with only an emptiness check. Enforcement is UI-only (`data-suggest-only`, set at `server.py:1860`, honoured by the client at `webui.py:1371`); localhost-acceptable today (the principal curling his own port is not an adversary; the CLI's open-vocabulary contract is deliberate). **Decide server-side vocabulary policy BEFORE any non-principal can reach the port** | **still open, re-verified 2026-07-25** — mandatory Stage-1 item, ordered by the server-batch gate | server-batch gate 2026-07-16 |
+| **[2026-07-16, Stage-1 gate order] HTTP layer accepts free-text topic/thread strings** — routes registered at `server.py:3677` (`/api/topic/add`) and `server.py:3669` (`/api/follow`); handlers at `server.py:3979` and `server.py:3711`. Both take `body["name"]` / the topic argument as arbitrary text with only an emptiness check. Enforcement is UI-only (`data-suggest-only`, set at `server.py:1860`, honoured by the client at `webui.py:1371`); localhost-acceptable today (the principal curling his own port is not an adversary; the CLI's open-vocabulary contract is deliberate). **Decide server-side vocabulary policy BEFORE any non-principal can reach the port** | **still open, re-verified 2026-07-25** — mandatory Stage-1 item, ordered by the server-batch gate | server-batch gate 2026-07-16 |
 | **[2026-07-14, v7 build] The PEP 562 real-paths guard** — `paths.py` module `__getattr__` (`paths.py:54`), the sanction escape hatch `allow_real_paths` (`paths.py:29`, called by the battery/falsifier entry points), the conftest module-dict shadow (`monkeypatch.setitem`, `tests/conftest.py:386-416`) and the autouse stat tripwire (`tests/conftest.py:233`), plus the `NEWSLENS_DATA_DIR` env-seam precedence chain (redirection > sanction > refusal, `paths.py:48`). Subtle import-time/bookkeeping machinery; a human engineer should read the module + `tests/conftest.py` end-to-end once. Known limits documented in-module: hardcoded `data/...` strings bypass it; the conftest tripwire is stat-based (mtime_ns+size, `tests/conftest.py:223-228`) — an equal-size in-place flip with restored mtime evades it (acceptable for the accident class it guards) | guard born from two real incidents same-day (generation_log clobber; pytest-arm pinhole) | v7-M2 final gate 2026-07-14 |
 | **[2026-07-14, v7 build] The hand-rolled `_e(_js_str(...))`-inside-onclick escaping convention** — live at `server.py:2074` (token remove), `server.py:2459` (edit-note), `server.py:2463`/`2467`/`2470` (thread actions), `server.py:2472` (delete confirm). Verified sound at the gate (`html.escape` quote=True over `json.dumps`; the thread-action handlers are int-only, shrinking the surface), but it is a hand-built HTML/JS boundary and belongs on the human read-list with the plain-`_e()` onclick row above | same threat model; single-user loopback | v7-M2 final gate 2026-07-14; sites re-listed 2026-07-25 |
 | **[2026-07-14, v7 build] Mechanical dark palette** (design ratification pending — the `--danger` token was gate-patched for AA; the dark register lives at `webui.py:47`, the light one at `webui.py:24`; the designed dark register is open work) and the **masthead settings-gear placement** (implementer judgment, no mockup guidance — rendered at `server.py:428`, styled at `webui.py:69`) | flagged by the M1 report as the two UI judgment calls worth a human eye | v7-M1 gate 2026-07-14 |
@@ -382,9 +382,9 @@ commits landed after it. The ones that touch a spend or trust claim above:
 | When | Commit | What it changed, and which claim it broke |
 |---|---|---|
 | 2026-07-16 | `33193e1` | **B1 — the provider seam.** `src/newslens/llm.py` created; `ranking._post_chat`, `generate._chat` and `analysis._analysis_chat` stopped owning transport and started delegating to `llm.chat`. This is why the old §1 line numbers (`ranking.py:332`, `generate.py:217`) now land on unrelated code |
-| 2026-07-16 | `e60ba14` | **B2 — the Claude API lane.** A second HTTP transport (`_anthropic_provider`, `llm.py:878`) and a second key (`ANTHROPIC_API_KEY`, `x-api-key` header). The old "four call sites, all `Authorization` headers" claim died here |
+| 2026-07-16 | `e60ba14` | **B2 — the Claude API lane.** A second HTTP transport (`_anthropic_provider`, `llm.py:908`) and a second key (`ANTHROPIC_API_KEY`, `x-api-key` header). The old "four call sites, all `Authorization` headers" claim died here |
 | 2026-07-16 | `65a5a57`, `6cc5e9a` | **The money-touching memory commands.** `memory-repair-state` (`generate.run_state_repair`) and `memory-baseline` (`generate.run_baseline_backfill`) — each spends LLM dollars from the CLI outside a `generate` run, each with its own cap read |
-| 2026-07-17 | `83bd979` | **B3 — the `claude -p` subscription lane.** A third transport, and the first that is a **subprocess, not an HTTP call** (`llm.py:1142`). The old §1 check (`grep urlopen`) could not have found it |
+| 2026-07-17 | `83bd979` | **B3 — the `claude -p` subscription lane.** A third transport, and the first that is a **subprocess, not an HTTP call** (`llm.py:1226`). The old §1 check (`grep urlopen`) could not have found it |
 | 2026-07-17 | `cf706bb` | **B4 — Opus writer + Sonnet analyst + prompt caching + the writer battery.** `src/newslens/battery.py` created: a principal-invoked experiment harness that spends real money through `generate.call_llm` |
 | 2026-07-17 | `383baa5` | **The follow-altitude resolver + falsifier CLI.** `src/newslens/follow_altitude.py`, `prompts/follow_altitude.txt`, `scripts/follow-altitude`, ADR-0017 — a new seat with a cap-gated batch runner. **No UI reachability yet:** this commit touches no `server.py` |
 | 2026-07-17 | `6c78578`, `b5e93c4` | **Everything content moved to the subscription lane** (writer, analyst, then state on Haiku). This is what makes a default edition ~$0 charged and invalidated §6's dollar figure. `6c78578` also added the lane-aware timeouts and the JSON-extraction fix on both Claude lanes |
@@ -393,8 +393,9 @@ commits landed after it. The ones that touch a spend or trust claim above:
 | 2026-07-18 → 07-22 | `1472008`, `80dac48`, `c1d5322`, `c7338d8`, `a918862`, `a2a4f0d` | Archive calendar + month nav, arc line, arc candidate logging, editor-preservation teeth, live-progress surface. Net effect on this document: the inline-`onclick` interpolation surface grew from two sites to eight (§5) |
 | 2026-07-20 | `d431277` | **Resolver lane fix** — the follow-altitude seat is the one seat whose default is the Anthropic *api* lane, not subscription (interactive latency). It therefore charges real cents per tap, which is why the missing cap check on that route mattered at all (closed 2026-07-25 — §1 "Closed gap") |
 | 2026-07-24 | `03e99cc` | **NL-70 rank keys** — `[id=N]` became a Crockford base32 + mod-37 check symbol. Strengthens the closed-vocabulary/prompt-injection claim in §4; the check symbol catches a mis-copied id before the vocab lookup |
-| 2026-07-24 | `ce5bb46` | **NL-93 SSE streaming** — long api-lane calls (`max_tokens >= 5000`) now POST with `"stream": true` and accumulate SSE deltas. Same single `urlopen`, different read mode, and `cfg.timeout_s` changes meaning from a total-wall bound to a per-read idle bound on that path (`llm.py:870-879`). A reviewer auditing timeouts must read that comment |
+| 2026-07-24 | `ce5bb46` | **NL-93 SSE streaming** — long api-lane calls (`max_tokens >= 5000`) now POST with `"stream": true` and accumulate SSE deltas. Same single `urlopen`, different read mode, and `cfg.timeout_s` changes meaning from a total-wall bound to a per-read idle bound on that path (`llm.py:900-909`). A reviewer auditing timeouts must read that comment |
 | 2026-07-24 | `a5033a5` | **NL-75 Phase-2 moat battery** — `src/newslens/moat_battery.py`, the second spend-capable experiment harness, with its own cap arithmetic |
+| 2026-07-26 | `fbc0c20` → THIS BATCH | **The thinking seam.** `_subscription_provider` never honored `SeatConfig.thinking`, so every seat declaring `thinking=None` was silently paying for extended thinking (measured: 84-97% of output tokens, n=16). The child env now carries `MAX_THINKING_TOKENS=0` for an explicit per-seat allowlist (`llm._THINKING_OFF_SUB_SEATS` — state/script/editor; **rank deliberately excluded** pending an n≥10 validity measurement). A reviewer auditing subscription-lane behaviour must read `_subscription_env` **and** that allowlist: the var is INJECTED by code and is deliberately absent from `_SUBSCRIPTION_ENV_ALLOW`, so a parent shell can neither set nor clear it. Two riders in the same diff: `timeout_sub_s` re-tuned DOWN for the three flipped seats (600 → editor 180 / script 120 / state 60, ≥3.3x their measured off-arm ceilings; rank keeps 600 because rank stays taxed), and warn-grade **token-band alarms** in `llm.cost_fields` (editor >6,000 · script >4,000 · state >1,200 output tokens) that fire if a CLI upgrade ever stops honoring the mechanism |
 
 **One thing this pass FIXED, and one it could not** (neither is silently
 dropped):
@@ -422,7 +423,7 @@ dropped):
      analyst seat (gpt-4o/api — not a subscription seat), so
      `usd_charged == usd_shadow`". It does ride the analyst seat
      (`_default_baseline_chat` → `analysis.call_analysis_model`), but that seat
-     is Claude Sonnet 5 on the **subscription** lane (`llm.py:282`), so both the
+     is Claude Sonnet 5 on the **subscription** lane (`llm.py:307`), so both the
      parenthetical and the equality it rested on were wrong. Corrected in place
      (`generate.py:2793-2802`), along with two more GPT-4o-era comments in the
      same family.
