@@ -186,9 +186,20 @@ def test_api_lane_fenced_resolves_on_the_first_attempt_field_run36(monkeypatch, 
 # --------------------------------------------------------------------------
 
 def test_subscription_seat_timeouts_are_generous():
-    assert llm.SEATS["rank"].timeout_sub_s == 300      # 90s api timeout was too tight
-    assert llm.SEATS["editor"].timeout_sub_s == 300
-    assert llm.SEATS["script"].timeout_sub_s == 300
+    # RE-TUNED 2026-07-26 (measured, not padded — the ruling permits RAISES).
+    # Observed per-CALL production output ceilings vs the measured 71-106 tok/s
+    # subscription throughput band: editor 28,772 tok = 406s @71, script 22,707
+    # = 321s, rank 22,748 = 321s — all three THROUGH the old 300s wall at the
+    # bottom of the band, and the editor seat took a real 300.02s timeout in
+    # the thinking-tax probe. 300 -> 600 leaves 1.5-1.9x margin at 71 tok/s,
+    # and state joins them uniformly (see below).
+    assert llm.SEATS["rank"].timeout_sub_s == 600      # was 300 (90s api was too tight)
+    assert llm.SEATS["editor"].timeout_sub_s == 600    # was 300 — a live timeout at 300.02s
+    assert llm.SEATS["script"].timeout_sub_s == 600    # was 300
+    # state joins them at 600 (gate ruling): its ~16,183 figure is an EDITION
+    # AVERAGE, not a per-call ceiling, and this lane applies no output cap at
+    # all — so nothing bounds a single state call below ~80k tokens (~1140s).
+    assert llm.SEATS["state"].timeout_sub_s == 600
     # follow_altitude is the INTERACTIVE exception (fix loop 1 FIX-3): a reader
     # waits on it, so it runs a SHORT timeout (12s sub) that degrades a stuck
     # provider fast — pinned in test_nl17_m1b_fixloop1, NOT here among the
@@ -206,9 +217,9 @@ def test_subscription_seat_timeouts_are_generous():
 
 
 def test_subscription_provider_uses_the_lane_timeout(monkeypatch):
-    """The subprocess timeout is (timeout_sub_s or timeout_s) — 300 for rank on
-    the subscription lane, not the 90s api-calibrated value that timed his rank
-    out twice live."""
+    """The subprocess timeout is (timeout_sub_s or timeout_s) — 600 for rank on
+    the subscription lane since the 2026-07-26 re-tune, not the 90s
+    api-calibrated value that timed his rank out twice live."""
     captured = {}
     real_run = llm.subprocess.run
 
@@ -220,4 +231,4 @@ def test_subscription_provider_uses_the_lane_timeout(monkeypatch):
     llm.chat(llm.LaneRequest(
         cfg=llm.resolve_seat("rank"), prompt="p", temperature=0, max_tokens=10,
         json_mode=True, user_agent="ua", api_key="k"))
-    assert captured["timeout"] == 300
+    assert captured["timeout"] == 600

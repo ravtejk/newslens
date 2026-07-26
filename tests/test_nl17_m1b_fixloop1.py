@@ -279,7 +279,9 @@ def test_fix3_follow_altitude_seat_has_a_short_interactive_timeout():
     assert cfg.timeout_s == 8                                # api-lane interactive (default, unchanged)
     assert cfg.timeout_sub_s == 45                           # subscription-lane FALLBACK airbag (12->45)
     # the BATCH seats stay generous — only this interactive seat is short
-    assert llm.SEATS["rank"].timeout_sub_s == 300
+    # (rank 300 -> 600 in the 2026-07-26 re-tune; the CONTRAST is the contract
+    # here, and it widened rather than narrowed)
+    assert llm.SEATS["rank"].timeout_sub_s == 600
     assert llm.SEATS["writer"].timeout_sub_s == 900
 
 

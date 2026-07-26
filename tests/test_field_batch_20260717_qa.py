@@ -307,8 +307,15 @@ def test_timeout_sub_map_is_pinned_exactly():
     # knob was raised 12->45s (RESOLVER LANE FIX, 2026-07-20 — Rook's airbag: a
     # median ~14s / tail ~48s subscription resolve can actually complete instead
     # of instantly re-degrading), still far below the generous batch ceilings.
-    sub = {"rank": 300, "analyst": 540, "writer": 900, "editor": 300,
-           "script": 300, "synthesis": None, "state": 300,
+    # 2026-07-26 re-tune (watchdog-only): ALL FOUR mechanical Haiku batch seats
+    # 300 -> 600. rank/editor/script against their OBSERVED per-call ceilings at
+    # the measured 71-106 tok/s band (editor 28,772 tok = 406s @71 against a
+    # 300s wall, plus one real 300.02s timeout on the record); state uniformly
+    # with them (gate ruling) because its only figure is an EDITION AVERAGE and
+    # this lane applies no output cap — nothing bounds one state call below
+    # ~80k tokens. writer 900 / analyst 540 stand (standing ratifications).
+    sub = {"rank": 600, "analyst": 540, "writer": 900, "editor": 600,
+           "script": 600, "synthesis": None, "state": 600,
            "follow_altitude": 45}
     api = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
            "script": 120, "synthesis": 120, "state": 60, "follow_altitude": 8}
@@ -319,7 +326,7 @@ def test_timeout_sub_map_is_pinned_exactly():
 
 
 @pytest.mark.parametrize("seat,expect,force_lane", [
-    ("state", 300, None),
+    ("state", 600, None),
     ("follow_altitude", 45, "subscription"),   # the subscription escape-hatch knob (explicit selection; no auto-fall)
 ])
 def test_subscription_provider_uses_the_sub_knob_per_seat(

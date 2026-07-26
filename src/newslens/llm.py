@@ -231,8 +231,48 @@ _SONNET_ANALYST_SUB = dict(
     thinking="adaptive", effort="high", sampling=False,
 )
 
+# TIMEOUT RE-TUNE 2026-07-26 (principal ruling: per-seat subscription timeouts
+# may be RAISED; watchdog-only — no retry-count, thinking or lane change rides
+# it). The 300s walls were set in 2026-07-17 as "api ceiling + ~300s lane tax",
+# before anyone had measured what the subscription lane actually emits. The
+# thinking-tax measurement did (debates/2026-07-26--newslens--engineering.md):
+# subscription latency is output-token-linear at 71-106 tok/s (n=11, mean 88)
+# plus ~1s of CLI startup, and 84-97% of these seats' output tokens are
+# deliberation the seat row explicitly declined. The seats were therefore
+# sitting against walls calibrated for a much smaller output.
+#
+# THE ARITHMETIC, per seat, against its OBSERVED per-call production ceiling
+# (read read-only from generation_log.jsonl n=7 and ranking_runs n=6; these are
+# per-CALL ledger rows, not per-edition sums):
+#
+#   seat    max out-tok   @71 tok/s   @88   @106   old wall   margin@71
+#   editor       28,772        406s   328s   272s       300s      0.74x  <- BREACHED
+#   script       22,707        321s   259s   215s       300s      0.94x  <- BREACHED
+#   rank         22,748        321s   260s   216s       300s      0.93x  <- BREACHED
+#   state       ~16,183        229s   185s   154s       300s   NOT A CEILING (avg)
+#   writer       36,842        520s   420s   349s       900s      1.73x     holds
+#
+# editor is not a projection: the measurement's own shipped-arm probe hit
+# `timeout_sub_s=300` at 300.02s exactly, and production has emitted 28,772
+# editor tokens in one call (2026-07-18) — it completed only because that day
+# ran near the top of the throughput band.
+#
+# RAISED 300 -> 600 on all four Haiku batch seats, state included (I first held
+# state for want of a measurement; the gate overruled that, correctly). state's
+# ~16,183 is an EDITION AVERAGE, and an average cannot bound a single CALL — nor
+# does anything else on this lane: STATE_MAX_TOKENS binds the api lane only, so
+# an uncapped state call has no ceiling short of ~80k tokens (~1140s @ 71/s).
+#
+# THE TRADE, stated: on a genuinely HUNG call, detection now takes 600s
+# instead of 300s (and a two-attempt seat's worst case doubles with it). Bought
+# with that: a legitimately slow ~320s pass that today times out, retries, and
+# may still die — burning ~600s and possibly the edition — now simply finishes
+# at ~320s. A timeout is an airbag, not a schedule: raising it CANNOT extend a
+# healthy generation's wall clock, because the value is only ever
+# subprocess.run(..., timeout=) (llm.py `_subscription_provider`). api-lane
+# timeouts (timeout_s) are untouched, so no api pinned path moves.
 SEATS: Dict[str, SeatConfig] = {
-    "rank":      SeatConfig("rank",      timeout_s=90,  timeout_sub_s=300, **_HAIKU_SUB),
+    "rank":      SeatConfig("rank",      timeout_s=90,  timeout_sub_s=600, **_HAIKU_SUB),
     # item C (2026-07-17): writer/analyst on the subscription lane. timeout_sub_s
     # = the api-calibrated ceiling + a ~300s subscription lane tax (claude -p
     # subprocess spin-up + agentic-harness verbosity — the same absolute tax the
@@ -241,8 +281,8 @@ SEATS: Dict[str, SeatConfig] = {
     # system; edition 7 ran fine but uninstrumented — pad the tax generously).
     "analyst":   SeatConfig("analyst",   timeout_s=240, timeout_sub_s=540, **_SONNET_ANALYST_SUB),
     "writer":    SeatConfig("writer",    timeout_s=600, timeout_sub_s=900, **_OPUS_WRITER_SUB),
-    "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=300, **_HAIKU_SUB),
-    "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=300, **_HAIKU_SUB),
+    "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=600, **_HAIKU_SUB),
+    "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=600, **_HAIKU_SUB),
     # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver
     # seat. A cheap mechanical single-turn classification (given a followed
     # thread, pick entity|storyline + the primary entity + a disclosure line) —
@@ -291,14 +331,18 @@ SEATS: Dict[str, SeatConfig] = {
     # the anthropic lanes (the only remaining gpt-4o seat, synthesis, has no live
     # call site in the generate path). STATE_MODEL + the STATE_USD_* price
     # constants derive from this row (memory_core R-B4a), so model/price/transport
-    # follow with no other module edit. timeout_sub_s=300 matches the other
-    # mechanical Haiku seats (subprocess startup overhead). Ships with a MANDATORY
+    # follow with no other module edit. timeout_sub_s 300 -> 600 (2026-07-26),
+    # UNIFORM with its Haiku siblings per the gate. Honest basis: NO per-call
+    # token record exists for this seat, an average-derived figure cannot bound
+    # a single call, and this lane applies no output cap (STATE_MAX_TOKENS is
+    # api-only). Revisit with a per-call record — and revisit DOWNWARD on any
+    # thinking-flip, which is what shrinks the need. Ships with a MANDATORY
     # spot-check + pre-registered revert-if (DECISIONS 2026-07-17 "state seat
     # flips to Haiku/subscription; audio held" — the durable record): any
     # validate_state trip / photocopy-suspect flag / quality miss -> revert this
     # row to **_GPT4O_API in one clean diff (needs the OpenAI key restored) or
     # escalate to the battery's state arm.
-    "state":     SeatConfig("state",     timeout_s=60,  timeout_sub_s=300, **_HAIKU_SUB),
+    "state":     SeatConfig("state",     timeout_s=60,  timeout_sub_s=600, **_HAIKU_SUB),
 }
 
 # Seats DECLARED in the roster but with no live call site anywhere in the product
