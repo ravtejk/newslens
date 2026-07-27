@@ -492,9 +492,20 @@ def test_a_fresh_regenerate_consuming_its_own_staging_stays_silent(
 def test_the_reader_facing_surfaces_never_mention_the_staging_table():
     """STRUCTURAL PIN, vacuously green at f4510fa (the table did not exist
     there) — it exists to bite the day someone wires the reader to the staging
-    area. Isolation by construction: the reader's world is the live row and only
-    the live row. If the server could see staged rows, the invariant would be a
-    convention instead of a structure."""
+    area. Isolation by construction: staged CONTENT never reaches a reader
+    surface. If the server could render staged rows, the invariant would be a
+    convention instead of a structure.
+
+    CARVE-OUT, recorded by the NL-107 gate ruling R1 (2026-07-27): the reader
+    may consult staging EXISTENCE — one bit, through `analysis.rival_exists`,
+    which reads no column of the staged row and fails OPEN on any
+    OperationalError. The bit only chooses between two reads of honestly
+    persisted `analysis_briefs` rows, so its degraded answer is the pre-NL-107
+    newest-valid read and can never show a lie. That is deliberately the
+    opposite arm from FIX-1's fail-CLOSED staged read at the promote, which
+    gated a WRITE. This test's assertions are unchanged and still bind:
+    `server.py`/`webui.py` name the staging table nowhere; the existence check
+    lives in `analysis.py`."""
     for name in ("server.py", "webui.py"):
         assert "briefings_pending" not in (SRC / name).read_text(encoding="utf-8")
 

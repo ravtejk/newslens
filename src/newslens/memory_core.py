@@ -408,6 +408,7 @@ def photocopy_suspect_significance(
 def write_deltas_for_edition(
     con: sqlite3.Connection, date: str, briefing_id: Optional[int],
     briefs_by_slot: Dict[int, Optional[Dict]], slots: List[Dict],
+    published_at: Optional[str] = None,
 ) -> DeltaWriteReport:
     """Pax's economy: each analyzed slot's VALIDATED arc becomes a ledger entry
     for every thread the slot matched. Gates (the trust story):
@@ -417,6 +418,11 @@ def write_deltas_for_edition(
       * idempotent — one entry per (thread, edition), so re-generation never
         double-writes (append-only: we never UPDATE, we just don't duplicate).
     Returns a report; moved_thread_ids feeds the state-rewrite pass.
+
+    `published_at` (NL-107) is the edition stamp the caller read
+    `briefs_by_slot` against; it decides only which brief row the delta CITES,
+    so the cited brief is the one the arc actually came from. None = the live
+    inline pass's post-promote reading (newest wins) — see _brief_id_for.
     """
     report = DeltaWriteReport()
     slot_by_n = {int(s["slot"]): s for s in slots}
@@ -460,7 +466,7 @@ def write_deltas_for_edition(
                 "refused (Rook's loop guard)")
             continue
         cites_json = json.dumps(_all_cites(arc), ensure_ascii=False)
-        brief_id = _latest_valid_brief_id(con, date, int(n))
+        brief_id = _brief_id_for(con, date, int(n), published_at)
         for topic in threads:
             tid = resolve_thread_id(con, topic)
             if tid is None:
@@ -561,6 +567,24 @@ def _latest_valid_brief_id(con: sqlite3.Connection, date: str,
         "SELECT id FROM analysis_briefs WHERE date = ? AND slot = ?"
         " AND status = 'valid' ORDER BY id DESC LIMIT 1", (date, slot)).fetchone()
     return row["id"] if row else None
+
+
+def _brief_id_for(con: sqlite3.Connection, date: str, slot: int,
+                  published_at: Optional[str]) -> Optional[int]:
+    """The brief row a delta cites.
+
+    NL-107, the timing that makes the default safe: the LIVE inline pass runs
+    AFTER persist_generation (the M1 gate-F orphan-delta reorder — no delta is
+    written until its edition is published), so at that moment the newest valid
+    brief IS the published edition's own and the unbounded read is coherent by
+    construction. The BACKFILL has no such guarantee — it runs against an
+    edition published earlier, in a world where a later regenerate may have
+    written briefs and died — so it passes the edition's publish stamp and gets
+    the same brief the reader is shown."""
+    if published_at:
+        from . import analysis
+        return analysis.coherent_valid_brief_id(con, date, slot, published_at)
+    return _latest_valid_brief_id(con, date, slot)
 
 
 def _table_exists(con: sqlite3.Connection, name: str) -> bool:

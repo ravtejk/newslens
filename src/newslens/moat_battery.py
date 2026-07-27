@@ -151,12 +151,17 @@ def load_inputs(con: sqlite3.Connection, date: str) -> Dict:
     """The EXISTING record's narrative inputs for `date`, read-only — the same
     load the live narrative pass and scripts/battery use.  Raises
     generate.GenerateError when there is no briefing row / no slots: the
-    harness refuses, it never fabricates an edition."""
+    harness refuses, it never fabricates an edition.
+
+    NL-107: outside any generating run, so the briefs are bound to the
+    edition's publish stamp — the ablation cells must differ in the memory
+    block alone, not in which run's analysis they happened to pick up."""
     inputs = generate.load_briefing_inputs(con, date)
+    published_at = inputs["row"]["generated_at"]
     briefs: Dict[int, Optional[Dict]] = {}
     for s in inputs["slots"]:
         n = int(s["slot"])
-        doc = analysis.latest_valid_brief(con, date, n)
+        doc = analysis.coherent_valid_brief(con, date, n, published_at)
         if doc:
             briefs[n] = doc
     inputs["briefs_by_slot"] = briefs

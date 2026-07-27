@@ -501,7 +501,7 @@ def fetch_stats(records: List[FetchRecord]) -> Dict:
 # in the run log, never absorbed silently.
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # B4 (R-B4a): the analyst seat flipped to Claude Sonnet 5 on the Claude API lane
 # (adaptive thinking, effort high). These names DERIVE from SEATS["analyst"]
@@ -1642,10 +1642,178 @@ def analyst_slot3_tier(con: sqlite3.Connection, date: str) -> Optional[str]:
 
 def latest_valid_brief(con: sqlite3.Connection, date: str,
                        slot: int) -> Optional[Dict]:
+    """The RUN's reading: newest valid brief for (date, slot), unbounded.
+
+    Correct for a run reading its own work — the analysis stage has just
+    written these rows and every later stage of that run must see them,
+    including a `--no-refresh` completion finishing an interrupted regenerate.
+    Every reader OUTSIDE the generating run wants coherent_valid_brief below
+    (NL-107); this function is deliberately unchanged so run semantics are not
+    silently narrowed."""
     row = con.execute(
         "SELECT brief_json FROM analysis_briefs WHERE date = ? AND slot = ?"
         " AND status = 'valid' ORDER BY id DESC LIMIT 1", (date, slot)).fetchone()
     return json.loads(row["brief_json"]) if row else None
+
+
+# ---------------------------------------------------------------------------
+# NL-107 — which briefs belong to the edition of record. TWO REGIMES.
+# ---------------------------------------------------------------------------
+#
+# `analysis_briefs` is append-only (migration 0009 — the forensic record) and
+# keyed (date, slot) with no story identity, so "newest row wins" is the RUN's
+# reading. For every consumer OUTSIDE the generating run — the server's deep
+# view, the memory backfill, the prompt batteries — newest-wins is wrong the
+# moment a RIVAL generation context writes briefs it never publishes: since
+# NL-106 a failed regenerate leaves the old edition intact and readable, so the
+# reader's stories would sit next to the dead run's "full picture".
+#
+# The thing to exclude is a RIVAL's brief — not a brief that merely postdates
+# the promote. Those are not the same set, and the difference is live data:
+#
+#   2026-07-05 in the principal's archive is a published edition
+#   (generated_at 22:11:45.000Z) whose only briefs were written the NEXT
+#   MORNING, 07:04–07:45, when the analysis organ was first built and run
+#   against an already-published edition. No later rank, no staging, no rival
+#   ever existed. Those briefs ARE that edition's own. A pure time bound hid
+#   two of the archive's 34 live (date, slot) panes and made that date's
+#   backfill refuse — the gate reproduced it end-to-end (QA-1, ruling R1).
+#
+# So: the earlier premise that "a published edition's own briefs are at or
+# before its stamp" is FALSE in general, and it is deleted rather than patched.
+# What holds instead:
+#
+#   REGIME A — no rival staged (`rival_exists` False): newest valid wins, byte
+#   for byte the pre-NL-107 read. Post-hoc analysis, first runs, every
+#   post-promote date, and every pre-0023 database land here. Nothing to
+#   disambiguate, so nothing is hidden.
+#
+#   REGIME B — a rival IS staged: the bound applies, because a staged row means
+#   a run ranked against this readable edition and has not promoted. Its briefs
+#   postdate the surviving edition's promote; the edition's own precede it. The
+#   staged row's CONTENT is never read — only that it exists (see rival_exists).
+#
+# Regime B's evidence is sufficient because every run that can displace a
+# readable edition stages before it analyses (ranking.py's stage arm fires
+# exactly when narrative_text is present) and only a promote consumes the
+# staged row (generate.py, the sole DELETE). Dead rival ⇒ the row persists;
+# in-flight rival ⇒ the row is present; no rival ⇒ no row. Reading only the
+# EXISTENCE bit is also immune to the INSERT-OR-REPLACE stamp advance: two
+# consecutive failed regenerates move the staged stamp forward but the bit
+# stays on, so the second dead run cannot re-admit the first one's briefs.
+#
+# No new state, no new table, no trigger: append-only stays untouchable and
+# this is a read-side predicate over columns that already exist.
+#
+# REGIME B's STAMP HAS A ONE-SECOND ERROR BAR, and the bound carries it
+# explicitly. BOTH writers of generated_at floor the milliseconds to zero —
+# persist_generation at generate.py:2929 (the promote) and ranking.persist at
+# ranking.py:1498 (rank time, the stamp a bodyless row carries) — while a
+# brief's created_at carries real milliseconds (migration 0008). So the
+# recorded stamp is not the promote moment: the promote happened somewhere in
+# [stamp, stamp + 1s), and a brief written just before it can legitimately read
+# up to 999ms LATER than the stamp that published it. An exact
+# `created_at <= generated_at` compare therefore hides the run's OWN brief;
+# measured, it takes 27 tests in this suite down. `stamp + 1s, exclusive` is
+# the tightest bound that is sound given the flooring, and it is
+# quantisation-free: a brief written δ before the promote passes for every δ,
+# instead of passing or failing on whether the two writes happened to straddle
+# a second boundary. What it costs: on the rival arm only, a brief written
+# within one second AFTER a publish counts as published with it — and reaching
+# that needs a rival's rank → ingest → fetch → analysis inside one second of
+# the prior promote, which is minutes wide in reality.
+_COHERENT_WITH_EDITION = (
+    " AND status = 'valid' AND created_at < ?")
+
+_NEWEST_VALID = " AND status = 'valid' ORDER BY id DESC LIMIT 1"
+
+_STAMP_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+def rival_exists(con: sqlite3.Connection, date: str) -> bool:
+    """Is a RIVAL generation context staged for `date` — a run that ranked
+    against the live edition and has not promoted?
+
+    EXISTENCE ONLY. The staged row's columns are never read here and staged
+    content never reaches a reader surface; this returns one bit, and that bit
+    only decides which of two honestly-persisted brief reads runs.
+
+    FAIL-OPEN, deliberately — and this is the OPPOSITE arm from NL-106's FIX-1,
+    which made the promote's staged read fail closed. The difference is what
+    the read decides. FIX-1 gated a WRITE: an error swallowed there silently
+    chose a write path and installed the banned mixture. This gates a READ
+    between two persisted-brief queries, and the open answer is the pre-NL-107
+    newest-valid read — it can only ever show a brief some real run really
+    wrote, never staged content, never a lie.
+
+    `no such table` in particular is positive evidence: on a pre-0023 database
+    no rival CAN exist, because a re-rank of a readable edition fails loud
+    there (ranking.py, pinned by NL-106's
+    test_staging_fails_loud_when_the_table_is_missing_and_saves_the_edition).
+    That is not hypothetical — the principal's live DB is pre-0023 until his
+    next migrate, so this is the arm that runs on his data today, and it must
+    render his archive exactly as it renders now. NL-106's
+    test_reads_degrade_to_the_live_row_on_a_database_without_0023 takes the
+    same stance for the mid-run readers."""
+    try:
+        return con.execute(
+            "SELECT 1 FROM briefings_pending WHERE date = ? LIMIT 1",
+            (date,)).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+
+
+def publish_bound(published_at: str) -> str:
+    """The exclusive upper bound on "written before this edition published":
+    the recorded stamp plus its own one-second flooring error bar, in the same
+    millisecond-ISO shape `created_at` uses so the comparison stays a plain
+    string compare. An unparseable stamp (hand-edited or pre-ISO legacy) falls
+    back to the raw value — the strictest reading, never a wider one."""
+    try:
+        t = datetime.strptime(published_at, _STAMP_FMT) + timedelta(seconds=1)
+    except (TypeError, ValueError):
+        return published_at
+    return t.strftime(_STAMP_FMT)[:23] + "Z"
+
+
+def coherent_valid_brief(con: sqlite3.Connection, date: str, slot: int,
+                         published_at: Optional[str]) -> Optional[Dict]:
+    """The valid brief for (date, slot) that belongs to the edition of record.
+
+    Regime A (no rival staged): newest valid wins — the pre-NL-107 read.
+    Regime B (a rival is staged): newest valid that predates this edition's
+    publish stamp. None when no edition of record exists — nothing belongs to
+    an edition that was never published."""
+    if not published_at:
+        return None
+    if rival_exists(con, date):
+        row = con.execute(
+            "SELECT brief_json FROM analysis_briefs WHERE date = ? AND slot = ?"
+            + _COHERENT_WITH_EDITION + " ORDER BY id DESC LIMIT 1",
+            (date, slot, publish_bound(published_at))).fetchone()
+    else:
+        row = con.execute(
+            "SELECT brief_json FROM analysis_briefs WHERE date = ? AND slot = ?"
+            + _NEWEST_VALID, (date, slot)).fetchone()
+    return json.loads(row["brief_json"]) if row else None
+
+
+def coherent_valid_brief_id(con: sqlite3.Connection, date: str, slot: int,
+                            published_at: Optional[str]) -> Optional[int]:
+    """The row id of the brief coherent_valid_brief would return — so a ledger
+    row citing a brief cites the SAME brief the reader is shown."""
+    if not published_at:
+        return None
+    if rival_exists(con, date):
+        row = con.execute(
+            "SELECT id FROM analysis_briefs WHERE date = ? AND slot = ?"
+            + _COHERENT_WITH_EDITION + " ORDER BY id DESC LIMIT 1",
+            (date, slot, publish_bound(published_at))).fetchone()
+    else:
+        row = con.execute(
+            "SELECT id FROM analysis_briefs WHERE date = ? AND slot = ?"
+            + _NEWEST_VALID, (date, slot)).fetchone()
+    return row["id"] if row else None
 
 
 def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,

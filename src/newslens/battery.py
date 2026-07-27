@@ -86,13 +86,20 @@ def _arm_estimate(prompt: str, model: str) -> float:
 def _load_narrative_prompt(con, date: str, variant: str) -> Tuple[str, Dict]:
     """Build the variant-A narrative prompt for `date` from the EXISTING record
     (read-only): the same inputs the live narrative pass uses — load_briefing_
-    inputs + briefs_by_slot from latest_valid_brief. Raises generate.GenerateError
-    if there is no briefing row / no slots (the runner refuses, never fabricates)."""
+    inputs + the briefs of the published edition. Raises generate.GenerateError
+    if there is no briefing row / no slots (the runner refuses, never fabricates).
+
+    NL-107: this harness is OUTSIDE any generating run, so its briefs are bound
+    to the edition's publish stamp exactly as the reader's are — otherwise an
+    arm's prompt would pair the record's slots with a dead regenerate's briefs
+    and every cost/quality number in the comparison would describe a mixture
+    that was never published."""
     inputs = generate.load_briefing_inputs(con, date)
+    published_at = inputs["row"]["generated_at"]
     briefs_by_slot: Dict[int, Optional[Dict]] = {}
     for s in inputs["slots"]:
         n = int(s["slot"])
-        doc = analysis.latest_valid_brief(con, date, n)
+        doc = analysis.coherent_valid_brief(con, date, n, published_at)
         if doc:
             briefs_by_slot[n] = doc
     inputs["briefs_by_slot"] = briefs_by_slot

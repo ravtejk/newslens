@@ -3459,11 +3459,18 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
 def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
                         slug_prefix: str, back_label: str,
                         return_view: str) -> Tuple[Dict[int, Dict], List[str]]:
-    """Newest-valid-wins brief reads for one edition (M9-M3); renders FROM the
-    persisted row, never regenerates. Returns ({slot_no: doc}, [sections]).
+    """Brief reads for one edition (M9-M3); renders FROM the persisted row,
+    never regenerates. Returns ({slot_no: doc}, [sections]).
     Shared by Today and the archive-in-place edition (NL-11). NL-66(b): a quick-
     tier In-Brief slot with no analyst brief gets the $0 sources-&-context view
-    (a failed full/medium brief stays degraded-hidden — only quick tier does)."""
+    (a failed full/medium brief stays degraded-hidden — only quick tier does).
+
+    NL-107: newest valid wins, EXCEPT where a rival generation context is
+    staged for this date — then the read is bounded by the row's own publish
+    stamp, so a regenerate that died after its analysis stage can never hang
+    its "full picture" under the stories of the edition that survived it. The
+    stamp comes off `row` itself; the rival check is an existence bit inside
+    `analysis.coherent_valid_brief`, and no staged content enters here."""
     briefs: Dict[int, Dict] = {}
     sections: List[str] = []
     from . import analysis as analysis_mod
@@ -3481,7 +3488,8 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
         # the collected view agree for every slot (no link without a view).
         tier = tiers[i] if i < len(tiers) else (
             "full" if i == 0 else "medium" if i <= 2 else "quick")
-        doc = analysis_mod.latest_valid_brief(con, row["date"], i + 1)
+        doc = analysis_mod.coherent_valid_brief(con, row["date"], i + 1,
+                                                row["generated_at"])
         if doc and doc.get("brief"):
             briefs[i + 1] = doc
             sections.append(_render_deep_view(
@@ -3595,8 +3603,9 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
     # rendered INTO the Today view by _render_today/_masthead — no shared top-bar
     # date label or top-level episode player anymore (DIRECTION-v5 §4).
 
-    # M9-M3: newest-valid-wins brief reads; the view renders FROM the
-    # persisted row (never regenerates); date-addressed like briefings.
+    # M9-M3 / NL-107: brief reads bounded to this edition (newest valid wins
+    # unless a rival run is staged — see _collect_deep_views); the view renders
+    # FROM the persisted row (never regenerates); date-addressed like briefings.
     briefs: Dict[int, Dict] = {}
     deep_sections: List[str] = []
     if row is not None and gen_state["state"] != "running":

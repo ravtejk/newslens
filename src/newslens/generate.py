@@ -734,12 +734,42 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str,
     else:
         continuity_status = "none"
 
+    # NL-107 tooth (d), F-a — rival-gated by gate fix F2. The fetch window
+    # belongs to the rank that chose the slots being read, so this read follows
+    # the payload, but ONLY where the two can actually disagree:
+    #   * consuming a STAGED selection (the in-flight regenerate) -> the newest
+    #     ok run IS that run's own rank; take it, unbounded.
+    #   * reading the LIVE row while a rival is staged -> bound the rank by the
+    #     edition's publish stamp, exactly as the briefs are bound. Without it a
+    #     date carrying a dead regenerate's rank hands default readers the OLD
+    #     slots with the NEW run's window — the same pairing defect one column
+    #     over.
+    #   * reading the LIVE row with NO rival -> unbounded, byte for byte the
+    #     pre-batch read. This is gate fix F2, and it is not cosmetic: bounding
+    #     here bit the ORDINARY first run, whose ranking_runs row lands with
+    #     real milliseconds just after a rank stamp floored to the second
+    #     (ranking.py:1498). QA measured ~0.1%/run of first runs losing their
+    #     own window that way, and a missing window degrades the footer line to
+    #     the render WALL CLOCK — the de-blinding channel gate F-B closed in
+    #     the moat harness. No rival means nothing to disambiguate, so the read
+    #     that cannot be wrong is the one that ran before this batch.
+    # The gate's ruling that this metadata is advisory stands; the rival gate
+    # is what makes pairing it free.
+    from . import analysis as _analysis
     window_meta = None
-    run_row = con.execute(
-        "SELECT meta, ran_at FROM ranking_runs WHERE date = ? AND"
-        " json_extract(meta, '$.status') = 'ok' ORDER BY id DESC LIMIT 1",
-        (date,),
-    ).fetchone()
+    if pending is None and _analysis.rival_exists(con, date):
+        run_row = con.execute(
+            "SELECT meta, ran_at FROM ranking_runs WHERE date = ? AND"
+            " json_extract(meta, '$.status') = 'ok' AND ran_at < ?"
+            " ORDER BY id DESC LIMIT 1",
+            (date, _analysis.publish_bound(row["generated_at"])),
+        ).fetchone()
+    else:
+        run_row = con.execute(
+            "SELECT meta, ran_at FROM ranking_runs WHERE date = ? AND"
+            " json_extract(meta, '$.status') = 'ok' ORDER BY id DESC LIMIT 1",
+            (date,),
+        ).fetchone()
     if run_row:
         try:
             window_meta = {
@@ -2177,19 +2207,27 @@ def validate_script(
 def run_memory_pass(con: sqlite3.Connection, date: str, key: str, cap: float,
                     spent: float, briefs_by_slot: Dict[int, Optional[Dict]],
                     slots: List[Dict], report: "GenReport",
-                    state_chat=None) -> float:
+                    state_chat=None,
+                    published_at: Optional[str] = None) -> float:
     """NL-63 M1 memory pass. Two writes: (1) the delta LEDGER — Pax's economy,
     ~$0, the validated arc persists as the thread's delta; (2) the standing
     STATE — the ONLY new LLM spend, and ONLY for threads that advanced/reversed
     today (write law), pre-checked against the $0.25 cap, stale-but-honest on
     any failure. Returns the updated `spent`. `state_chat` is injectable so the
-    offline suite exercises this exact path without spending."""
+    offline suite exercises this exact path without spending.
+
+    `published_at` (NL-107) is the edition stamp the CALLER's briefs_by_slot
+    was read against, and it only travels so the delta's cited brief_id is the
+    same brief. The inline pass leaves it None on purpose: it runs AFTER
+    persist_generation (the promote), so for that run newest IS coherent —
+    see the ordering comment at the call site in _run_generate_body."""
     from . import memory_core
     brow = con.execute("SELECT id FROM briefings WHERE date = ?",
                        (date,)).fetchone()
     briefing_id = brow["id"] if brow else None
     delta_rep = memory_core.write_deltas_for_edition(
-        con, date, briefing_id, briefs_by_slot, slots)
+        con, date, briefing_id, briefs_by_slot, slots,
+        published_at=published_at)
     report.warnings.append("memory: " + delta_rep.summary())
     # Delta-7 photocopy gap (Content council 2026-07-16): a near-duplicate
     # significance is WARN-grade — surfaced here (and into report.memory below)
@@ -2303,14 +2341,17 @@ def run_memory_backfill(
     path WITHOUT regenerating anything.
 
     CONTEXT FIDELITY (disclosed): run_memory_pass reads its inputs from PERSISTED
-    rows, not volatile narrative-stage state — briefs_by_slot from
-    latest_valid_brief, slots from the briefing's story_slots, the ledger from
-    thread_deltas. The live inline pass reads the SAME sources (see
-    _run_generate_body). So the backfill's delta-write + state-rewrite context is
-    byte-identical to a live inline pass — there is NO degradation. The only
-    difference is `spent`=0.0 (the backfill is its own run doing only the memory
-    pass; the edition's generation cost was already billed to its token_cost), so
-    the FULL cap is available to the state rewrite. The state-rewrite spend is
+    rows, not volatile narrative-stage state — briefs_by_slot from the valid
+    briefs of the PUBLISHED edition (NL-107: bounded by its publish stamp, since
+    unlike the inline pass this driver may run in a world where a later
+    regenerate wrote briefs and died), slots from the briefing's story_slots,
+    the ledger from thread_deltas. The live inline pass reads the SAME sources
+    (see _run_generate_body) — for a date with no dead regenerate the two reads
+    are identical row-for-row. So the backfill's delta-write + state-rewrite
+    context is byte-identical to a live inline pass — there is NO degradation.
+    The only difference is `spent`=0.0 (the backfill is its own run doing only
+    the memory pass; the edition's generation cost was already billed to its
+    token_cost), so the FULL cap is available to the state rewrite. The state-rewrite spend is
     folded into the edition's token_cost exactly as the live path's
     _fold_cost_steps does — WITHOUT re-archiving; the narrative/script are never
     touched.
@@ -2365,12 +2406,23 @@ def run_memory_backfill(
 
         # 2. reconstruct briefs_by_slot from PERSISTED valid briefs — the SAME
         #    source the live inline pass reads (_run_generate_body lines ~1666).
+        #
+        #    NL-107 tooth (b): bounded by the PUBLISHED edition's own stamp.
+        #    The published-gate above keys on narrative presence, and NL-106
+        #    changed what that means after a failed regenerate — the gate now
+        #    (correctly) passes on a genuinely published old edition, so the
+        #    accidental interlock that used to stop this path is gone. Without
+        #    the bound a backfill would write ledger deltas citing the DEAD
+        #    run's arcs against the surviving edition's slots: the render
+        #    mixture, made durable in the thread ledger.
         from . import analysis as analysis_mod
+        published_at = inputs["row"]["generated_at"]
         briefs_by_slot: Dict[int, Optional[Dict]] = {}
         for s in slots:
             n = int(s["slot"])
             if n <= 3:
-                doc = analysis_mod.latest_valid_brief(con, date, n)
+                doc = analysis_mod.coherent_valid_brief(con, date, n,
+                                                        published_at)
                 if doc:
                     briefs_by_slot[n] = doc
         if not briefs_by_slot:
@@ -2422,7 +2474,8 @@ def run_memory_backfill(
         # PUBLISHED — a pass failure must not raise past this driver.
         try:
             spent = run_memory_pass(con, date, key, cap, spent, briefs_by_slot,
-                                    slots, report, state_chat=state_chat)
+                                    slots, report, state_chat=state_chat,
+                                    published_at=published_at)
         except Exception as exc:  # noqa: BLE001 — the edition is on the record
             report.warnings.append(
                 f"memory backfill pass failed ({exc}) — the edition {date} is "
@@ -3406,10 +3459,28 @@ def _run_generate_body(
             report.warnings.append(
                 f"analysis stage unavailable this run ({type(exc).__name__}: "
                 f"{exc}) — writer degrades to feed-excerpt material, disclosed")
+    # NL-107 — RUN-INTERNAL by design: unbounded, newest-wins. This is the run
+    # reading its own analysis stage, minutes before its own promote stamps
+    # generated_at, so the reader's read (analysis.coherent_valid_brief) would
+    # hide the very briefs this run must write from. The same holds for a
+    # `--no-refresh` completion of an interrupted regenerate: the briefs it
+    # needs postdate the OLD edition's stamp, and its own promote is what makes
+    # them the edition of record's briefs.
+    #
+    # A SAMPLE is the exception (gate fix F3, from build flag F-b): it is not a
+    # generation context at all. Samples force refresh=False, so they never
+    # rank, never stage and never write a brief, and FIX-2 already has them
+    # consuming the LIVE row's slots rather than a staged selection. Pairing
+    # those slots with a rival's newest brief was the render mixture inside a
+    # sample artifact — so a sample reads what the reader reads. On a date with
+    # no rival staged that is the same row this loop returns anyway.
     for s in inputs["slots"]:
         n = int(s["slot"])
         if n <= 3:
-            doc = analysis_mod.latest_valid_brief(con, date, n)
+            doc = (analysis_mod.coherent_valid_brief(
+                       con, date, n, inputs["row"]["generated_at"])
+                   if report.sample else
+                   analysis_mod.latest_valid_brief(con, date, n))
             if doc:
                 briefs_by_slot[n] = doc
     # NL-63 M2: slot 3 is pinned to full-picture (medium) — the demote-to-quick
