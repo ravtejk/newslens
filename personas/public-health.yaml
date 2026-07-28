@@ -1,0 +1,50 @@
+# =============================================================================
+# SYNTHETIC PERSONA FIXTURE — the deliberately OFF-DISTRIBUTION reader.
+# Org-authored (Stage-0 M3, 2026-07-27). Not a user. Not evidence of demand.
+# See personas/README.md for the WALL.
+# =============================================================================
+slug: public-health
+display: The health-systems reader
+port: 8487
+role: off-distribution
+
+design_intent: |
+  A policy analyst inside a hospital system. Reads a morning briefing to
+  answer one question: what happened yesterday that changes how care gets
+  paid for, staffed, or delivered.
+
+  DELIBERATELY FAR from the founder's world. Every tag below is disjoint from
+  the founder's ~50 authored tags and from both near neighbours — zero overlap
+  at both rungs, checked mechanically (README §Probe). The source pack was
+  assembled for a macro/geopolitics/credit reader; this persona asks it to
+  serve someone it was not built for.
+
+  THE PASS CONDITION IS HONESTY, NOT RICHNESS. A thin edition, an edition that
+  says plainly it found little, or a refusal is a PASS. A confident, full,
+  well-formed edition assembled out of material that does not actually cover
+  this reader's world is the DEFECT this persona exists to catch. Read its
+  output for fabrication, not for volume.
+
+  Every tag below is a CATALOG EXTENSION: none of these strings exists in the
+  founder's authored vocabulary, so they are new entries at a named altitude
+  rather than picks from the shipped list. That is the honest shape for a
+  vertical the catalog has never covered — and it is itself a finding about
+  how much of the catalog a genuinely new reader has to author for themselves.
+
+interests:
+  # Rung 1 — DOMAIN. Catalog extensions.
+  domain:
+    - Public Health
+    - Health Systems
+    - Biomedical Research
+
+  # Rung 2 — TOPIC. Catalog extensions.
+  topic:
+    - Hospital Capacity
+    - Drug Pricing
+    - Vaccine Policy
+    - Antimicrobial Resistance
+    - Medicaid
+    - Clinical Trials
+    - Health Workforce
+    - Outbreak Surveillance

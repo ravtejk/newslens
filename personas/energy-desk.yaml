@@ -1,0 +1,40 @@
+# =============================================================================
+# SYNTHETIC PERSONA FIXTURE — near-neighbour B of the shallow-personalization
+# kill-test pair. Org-authored (Stage-0 M3, 2026-07-27). Not a user. Not
+# evidence of demand. See personas/README.md for the WALL.
+# =============================================================================
+slug: energy-desk
+display: The energy-and-commodities reader
+port: 8486
+role: near-neighbour-b
+
+design_intent: |
+  A commodities analyst. Reads a morning briefing to answer one question:
+  what is moving the physical supply of energy and food, and which political
+  event moves it next. Plausible ICP — same professional register as the
+  founder, a different desk, and a different desk again from rates-desk.
+
+  This persona exists to be COMPARED to rates-desk, never to be counted. It
+  shares two of three domains with its neighbour and one of eight topics. If
+  edition A and edition B come out the same on a given day, the product is
+  not personalizing at the topic rung — that is the finding the pair is built
+  to produce, and it is a quality finding, not an engagement one.
+
+interests:
+  # Rung 1 — DOMAIN. Two of three shared with rates-desk.
+  domain:
+    - Economic Policy          # shared with rates-desk
+    - Central Bank Policy      # shared with rates-desk
+    - Global Trade             # B-only
+
+  # Rung 2 — TOPIC. Near-disjoint from rates-desk; `Inflation` is the one
+  # deliberate shared control.
+  topic:
+    - Oil Markets
+    - Inflation                # shared with rates-desk (the deliberate control)
+    - OPEC+
+    - Energy Supply Shock
+    - Maritime Chokepoints
+    - Strait of Hormuz
+    - Agricultural Commodities
+    - Fertilizer Supply

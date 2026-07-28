@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""NewsLens persona launcher — serve.
+
+Thin on purpose (scripts/doctor's pattern): bootstraps sys.path so it runs
+from a fresh clone, then hands off to newslens.personas. All logic lives in
+src/newslens/personas.py; personas/README.md carries the WALL and the probes.
+"""
+
+import sys
+from pathlib import Path
+
+PROTOTYPE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
+
+from newslens.personas import serve_main as main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

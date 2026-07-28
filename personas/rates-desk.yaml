@@ -1,0 +1,48 @@
+# =============================================================================
+# SYNTHETIC PERSONA FIXTURE — near-neighbour A of the shallow-personalization
+# kill-test pair. Org-authored (Stage-0 M3, 2026-07-27). Not a user. Not
+# evidence of demand. See personas/README.md for the WALL.
+# =============================================================================
+slug: rates-desk
+display: The rates-and-credit reader
+port: 8485
+role: near-neighbour-a
+
+# Who this fixture stands in for, and why the org invented them.
+design_intent: |
+  A fixed-income strategist at a mid-size asset manager. Reads a morning
+  briefing to answer one question: where is the price of money going, and who
+  is over-levered when it gets there. Plausible ICP — the same professional
+  register as the founder, a different desk.
+
+  This persona exists to be COMPARED to energy-desk, never to be counted.
+  The pair is built so that its two readers sit inside almost the same DOMAIN
+  neighbourhood and almost disjoint TOPIC neighbourhoods (see README §Probe).
+  If the product personalizes only at the domain rung — or not at all — the
+  two editions converge and the kill-test fires.
+
+# NL-17 catalog altitudes. `domain` and `topic` are the two rungs the shipped
+# interests file can express; see README §Vocabulary for the storage mapping
+# and for why the `entity` rung is absent rather than faked.
+interests:
+  # Rung 1 — DOMAIN. Deliberately shared with energy-desk except for the last
+  # entry: high domain overlap is what makes the topic rung the only thing
+  # that can separate these two readers.
+  domain:
+    - Economic Policy          # shared with energy-desk
+    - Central Bank Policy      # shared with energy-desk
+    - Systemic Risk            # A-only
+
+  # Rung 2 — TOPIC. Near-disjoint from energy-desk on purpose. `Inflation` is
+  # the single deliberate shared topic: a pair with zero overlap is two
+  # strangers, not two near neighbours, and the one shared topic is the
+  # control that proves the corpus itself is common.
+  topic:
+    - Federal Reserve
+    - Inflation                # shared with energy-desk (the deliberate control)
+    - Private Credit
+    - Direct Lending
+    - Shadow Banking
+    - Credit Default Risk
+    - Household Debt
+    - Recession Risk
