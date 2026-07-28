@@ -127,7 +127,26 @@ _LASTREF_ANN_RE = re.compile(r"\(last referenced: [^)]*\)\s*$")
 
 
 class MemorySyncError(RuntimeError):
-    """memory.md exists but cannot be safely interpreted. Loud on purpose."""
+    """memory.md exists but cannot be safely interpreted. Loud on purpose.
+
+    NL-17-M1c — THE PAYLOAD-CLASS DISCRIMINATOR (A7, build-blocking). `kind`
+    names WHICH failure this is AT THE RAISE SITE, so the branch that renders
+    the reader's reason is the branch that produced it. Without it the UI would
+    have to substring-match the CLI sentence — and the string that gets matched
+    is exactly the string a later copy pass is free to reword, which is how a
+    refusal quietly starts rendering the wrong reason (or none).
+
+    The message stays the CLI's sentence, unchanged: two registers, two strings,
+    one condition (gate R5 — the register binds reader-facing UI only, and a
+    61-word sentence naming `--accept-file` is a good CLI string and an unlawful
+    UI one). labels.REFUSAL_MEM_* carry the UI-lane clauses, keyed by `kind`.
+    """
+
+    KINDS = ("unreadable", "unparseable", "unwritable")
+
+    def __init__(self, *args, kind: str = "") -> None:
+        super().__init__(*args)
+        self.kind = kind
 
 
 @dataclass
@@ -666,7 +685,8 @@ def parse_file(text: str) -> List[Dict]:
     if problems:
         raise MemorySyncError(
             "memory.md has problems — fix them (or delete the file to regenerate "
-            "from the database): " + "; ".join(problems)
+            "from the database): " + "; ".join(problems),
+            kind="unparseable",
         )
     return entries
 
@@ -790,7 +810,8 @@ def sync_memory(con: sqlite3.Connection, *,
             text = paths.MEMORY_FILE.read_text(encoding="utf-8")
         except OSError as exc:
             raise MemorySyncError(
-                f"memory.md exists but is not readable ({exc}) — fix its permissions"
+                f"memory.md exists but is not readable ({exc}) — fix its permissions",
+                kind="unreadable",
             ) from exc
         entries = parse_file(text)
         verdict, detail = _check_stamp(con, text)
@@ -827,7 +848,8 @@ def sync_memory(con: sqlite3.Connection, *,
         result.generation = write_memory_file(con)
         result.created_file = True
     except OSError as exc:
-        raise MemorySyncError(f"cannot write memory.md ({exc})") from exc
+        raise MemorySyncError(f"cannot write memory.md ({exc})",
+                              kind="unwritable") from exc
     return result
 
 
@@ -1078,7 +1100,13 @@ def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
 # is an unmigrated follow (pre-M1b) — renders bare, nothing fabricated.
 # ---------------------------------------------------------------------------
 STORED_ALTITUDES: Tuple[str, ...] = ("entity", "storyline", "narrow")
-ALTITUDE_SOURCES: Tuple[str, ...] = ("auto", "pick", "degrade")
+# 'seed'    NL-17-M1c: the INSTANT commit. The tap writes a story-seeded thread
+#           locally with nothing consulted — distinct from 'auto' (a settle
+#           named it) and from 'pick' (the reader chose this rung deliberately).
+# 'degrade' is now unreachable from the UI: a failed settle leaves the seeded
+#           follow exactly as it was, so there is no separate degrade landing.
+#           The value stays supported — historical rows carry it.
+ALTITUDE_SOURCES: Tuple[str, ...] = ("auto", "pick", "degrade", "seed")
 
 
 def _log_altitude_event(con: sqlite3.Connection, thread_id: Optional[int],
@@ -1157,13 +1185,35 @@ def add_thread_at_altitude(con: sqlite3.Connection, name: str, *,
 def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
                          new_name: str, altitude: str, primary_entity: str = "",
                          disclosure: str = "", alt_label: str = "",
-                         confidence: str = "", source: str = "pick"
-                         ) -> Optional[int]:
+                         confidence: str = "", source: str = "pick",
+                         log_correction: bool = True,
+                         initiator: str = "principal") -> Optional[int]:
     """The SWITCH: the reader taps the other rung. The follow MOVES, never copies
     (mutation law) — the SAME memory row's topic + altitude columns are updated
     in place. Logs a 'correct' event against the prior commit (the reader changed
     the altitude) and a fresh 'commit' at the picked rung. Returns the surviving
     active thread_id, or None if no such row.
+
+    log_correction=False — NL-17-M1c. The BACKGROUND SETTLE rides this same
+    lane as a system-initiated re-aim, and a system naming a thread it seeded
+    two seconds ago is not the reader correcting the system. Logging it would
+    write a 'correct' at the same instant as its own 'commit', so every settled
+    medium-confidence follow would self-report as "corrected within 24h" and
+    push Axel's instrument toward its 0.2 flip threshold on traffic alone. The
+    reader's own switch keeps logging it, which is the signal the flip wants.
+
+    initiator='org' — NL-17-M1c gate F3, and it is the same fix one layer over.
+    NL-81's tombstone log is APPEND-ONLY WITH NO EXPIRY: whatever it records is
+    what the org will believe about this thread forever, and it is the log the
+    lifecycle round will read to render "you stopped following" copy. Stamping
+    a SYSTEM re-aim as `actor='principal'` says a person renamed the thread; on
+    a settle-merge, `dismissed_via='principal'` says the reader dismissed a row
+    they created two seconds earlier and never touched. Both are false
+    attributions, accumulating from ship day. The initiator threads the truth
+    through: the reader's lanes stay 'principal' byte-for-byte, and the settle
+    lane says 'org' — the actor vocabulary the 0022 CHECK already admits — and
+    leaves dismissed_via NULL, which is that column's ratified reading ("did a
+    person's verb cause it": on the settle lane, none did).
 
     COLLISION REVIVE-MERGE (FIX LOOP 2 R2): when `new_name` is already held by a
     DIFFERENT row, the plain topic UPDATE would hit the 0005 unique index — the
@@ -1193,7 +1243,8 @@ def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
         (new_name, thread_id)).fetchone()
     with con:
         # the reader corrected the MOVED row's altitude (Axel's instrument).
-        _log_altitude_event(con, thread_id, row["topic"], "correct")
+        if log_correction:
+            _log_altitude_event(con, thread_id, row["topic"], "correct")
         # NL-81 §5.1 — THE RENAME TOMBSTONE. The old key stops resolving, so a
         # stale file carrying the OLD name would otherwise re-INSERT it as a
         # brand-new thread (07-17: the pre-rename "Volkswagen plans significant
@@ -1202,7 +1253,7 @@ def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
         # key is carried so the disclosure can name the thread's current name.
         if row["topic"].casefold() != new_name.casefold():
             append_tombstone(con, topic=row["topic"], kind="rename",
-                             actor="principal", thread_id=thread_id,
+                             actor=initiator, thread_id=thread_id,
                              successor=new_name)
         if clash is None:
             survivor_id = thread_id
@@ -1223,17 +1274,22 @@ def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
                 con.execute(
                     "UPDATE memory SET origin_story = ? WHERE id = ?"
                     " AND origin_story = ''", (row["origin_story"], survivor_id))
-            # The merged-away row retires. This arrived through a principal
-            # verb (the reader tapped the other rung), so by the §5.4 rule it
-            # is 'principal'. NOTE for the held Following round (M1b gate G2,
-            # binding carry-forward): merged-away is NOT reader-dismissed —
-            # the forensic distinguisher stays the 0020 event pair, not this
-            # column, which only answers "did a person's verb cause it".
+            # The merged-away row retires. On a READER switch this arrived
+            # through a principal verb (they tapped the other rung), so by the
+            # §5.4 rule it is 'principal'. On the SETTLE lane no person's verb
+            # caused it — the system merged a row the reader created seconds
+            # earlier — so the column reads NULL (gate F3). NOTE for the held
+            # Following round (M1b gate G2, binding carry-forward): merged-away
+            # is NOT reader-dismissed — the forensic distinguisher stays the
+            # 0020 event pair, not this column, which only answers "did a
+            # person's verb cause it".
             con.execute(
                 "UPDATE memory SET status = 'dismissed_user',"
                 " status_changed_at = ?, updated_at = ?,"
-                " dismissed_via = 'principal' WHERE id = ?",
-                (now, now, thread_id))
+                " dismissed_via = ? WHERE id = ?",
+                (now, now,
+                 "principal" if initiator == "principal" else None,
+                 thread_id))
         _set_altitude_columns(
             con, survivor_id, altitude=altitude, primary_entity=primary_entity,
             disclosure=disclosure, alt_label=alt_label, source=source)

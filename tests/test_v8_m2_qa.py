@@ -183,7 +183,10 @@ def test_qa_archive_edition_stamp_is_as_of_that_edition(tmp_paths):
     assert rendered == date
     lead = _article(html, f"ed{date}-story-0")
     assert "2nd entry on this thread" in lead
-    assert "last covered Jul 5" in lead
+    # RE-PINNED BY RULING (NL-17-M1c ⑤): the moved indication is the single word;
+    # the ORDINAL ARITHMETIC this test exists for is untouched, which is exactly
+    # what the surviving assertions check.
+    assert "· Updated" in lead
     assert "3rd entry" not in lead              # own-date delta did not inflate
 
 
@@ -203,7 +206,7 @@ def test_qa_no_arc_prose_on_archive_edition_path_either(tmp_paths):
     edition = html.split('id="view-edition"')[1].split("</section>")[0]
     assert "today-arc-line" not in edition
     assert "When we last covered this" not in edition
-    assert 'class="memline"' in edition
+    assert 'class="memline' in edition
 
 
 def test_qa_split_day_strip_sibling_shows_no_degraded_stamp(tmp_paths):
@@ -226,9 +229,11 @@ def test_qa_split_day_strip_sibling_shows_no_degraded_stamp(tmp_paths):
     lead = _article(today, "story-0")
     assert "entry on this thread" in lead               # prominent slot wins, full form
     strip = _article(today, "story-3")
-    assert "mem-dot" not in strip                       # no doubled degraded signal
-    assert "last covered" not in strip
-    assert today.count("mem-dot") == 1                  # one signal, whole page
+    assert "Updated" not in strip                       # no doubled degraded signal
+    # M1c: the dot is dead product-wide, so "one signal, whole page" is now
+    # counted on the WORD the ruling put in its place.
+    assert "mem-dot" not in today
+    assert today.count("· Updated") == 1                # one signal, whole page
     assert "Tracked ongoing story" not in today         # and no marker resurrection
 
 
@@ -268,7 +273,7 @@ def test_qa_multi_topic_deduped_first_topic_silences_the_slot(tmp_paths):
     assert "entry on this thread" in _article(today, "story-0")   # Alpha, on the lead
     card = _article(today, "story-1")
     assert "entry on this thread" not in card    # Alpha deduped; Beta NOT borrowed
-    assert today.count("mem-dot") == 1
+    assert today.count("· Updated") == 1
 
 
 def test_qa_unresolvable_topic_never_crashes_never_stamps(tmp_paths):
@@ -280,7 +285,7 @@ def test_qa_unresolvable_topic_never_crashes_never_stamps(tmp_paths):
     page, _ = server.build_page(con)
     con.close()
     today = _today_view(page)
-    assert "mem-dot" not in today
+    assert "Updated" not in today
     assert _article_ids(today) == ["story-0", "story-1"]
 
 
@@ -300,8 +305,7 @@ def test_qa_stamp_absent_below_strips_still_tracking_line(tmp_paths):
     today = _today_view(page)
     still = today.split('class="still-tracking"')[1].split("</div>")[0]
     assert "Still tracking" in still
-    assert "mem-dot" not in still
-    assert "last covered" not in still
+    assert "Updated" not in still
     assert "entry on this thread" not in still
 
 

@@ -140,9 +140,13 @@ def test_covered_before_signal_renders_once_on_a_tracked_lead():
     con.close()
     lead = page.split('<article class="lead')[1].split("</article>")[0]
     assert "When we last covered this" not in lead     # the arc PROSE is gone from Today
-    assert 'class="memline"' in lead                   # the slim stamp is the signal
+    assert 'class="memline' in lead                   # the slim stamp is the signal
     assert "entry on this thread" in lead              # full stamp form (lead tier)
-    assert "last covered" in lead
+    # RE-PINNED BY RULING (NL-17-M1c ⑤): the moved indication is the single word
+    # "Updated"; the date clause it replaces is the UNMOVED card's copy, which
+    # this stamp never renders. What this test guards — the signal renders ONCE
+    # — is untouched.
+    assert "· Updated" in lead
     assert "Tracked ongoing story" not in lead         # the redundant marker is gone
 
 

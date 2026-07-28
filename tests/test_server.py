@@ -601,7 +601,8 @@ def test_follow_stamps_reference_and_second_click_unfollows(ui):
     assert "Chip exports" in paths.MEMORY_FILE.read_text(encoding="utf-8")
 
     code, obj = post(ui, "/api/unfollow", {"topic": "Chip exports"})
-    assert obj == {"ok": True}
+    # M1c: `outcome` joins the payload (see test_nl11_qa's note); ok:True holds.
+    assert obj["ok"] is True and obj["outcome"] == "unfollowed"
     con = db.connect()
     try:
         status = con.execute(

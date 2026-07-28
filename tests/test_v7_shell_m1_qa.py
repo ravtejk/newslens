@@ -124,7 +124,7 @@ def test_nl65_in_brief_snippet_sources_context_below_body():
                                 slug="story-4", date=TODAY, con=con,
                                 role="snippet")
     con.close()
-    i_follow = html.index("Follow this story")
+    i_follow = html.index("Follow this thread")
     i_body = html.index("LEDE-4")
     i_sc = html.index(SC_RENDERED)
     i_here = html.index("Here for")

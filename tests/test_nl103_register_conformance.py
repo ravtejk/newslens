@@ -397,8 +397,20 @@ def test_row21_retired_constants_are_marked_and_rendered_nowhere():
     skips them — and the marker's claim is enforced: no rendering module may
     reference a marked constant."""
     marked = _marked_retired()
+    # NL-17-M1c added seven: the states his 07-25 rulings killed (the settling
+    # status ①, the ask lead + its option row ④), the apology pair NL-103 row 3
+    # killed with its composed whole, the reasonless switch line the R-WRITE
+    # frame supersedes, and the cap refusal that retires from reader copy under
+    # the content pass's §5.1 Arm A. Every one is KEPT (the ruled strings stay
+    # on record, nothing imports a dangling name) and rendered NOWHERE — which
+    # the loop below is what actually enforces.
     assert marked == {"KICKER_LEAD", "FOLLOW_STORY_ACTIVE",
-                      "FOLLOW_STORY_CONFIRM"}, marked
+                      "FOLLOW_STORY_CONFIRM",
+                      "FOLLOW_RESOLVING", "FOLLOW_LOW_LEAD",
+                      "FOLLOW_JUST_THIS_STORY_OPTION",
+                      "FOLLOW_DEGRADE_LEAD", "FOLLOW_DEGRADE_UPGRADE",
+                      "FOLLOW_DEGRADE_COMMITTED", "FOLLOW_SWITCH_FAILED",
+                      "FOLLOW_CAP_REFUSAL"}, marked
     for mod in (server, webui):
         src = Path(mod.__file__).read_text(encoding="utf-8")
         for name in marked:

@@ -60,6 +60,12 @@ JUMP_OPEN = "Still open"
 DISCREPANCY_FOLD = "points where the sources disagree"
 DISCREPANCY_FOLD_ONE = "point where the sources disagree"
 
+# The Today card's continuity stamp — his 07-25 ruling ⑤: moved-since-your-last-
+# read is the single word, in the prose register (the Following spine keeps its
+# own mono all-caps UPDATED stamp; the word follows its class register, §3
+# casing law, and the two are different classes on different surfaces).
+MEMLINE_UPDATED = "Updated"
+
 # --- Memory surfaces (thread page + deep-view memory sections) ---------------
 WHERE_THIS_STANDS = "Where this stands"
 THE_STORY_SO_FAR = "The story so far"
@@ -134,67 +140,118 @@ VERB_RESUME = "Resume"
 VERB_DELETE = "Delete"
 VERB_EDIT_NOTE = "Edit note"
 
-# --- Follow control — the follow-altitude picker (NL-17-M1b, mockup-v9 copy
-#     register; server.py + client JS via NL_LABELS). One grammar, one place. ---
+# --- Follow control — THE ONE FOLLOW-LINE COMPONENT (NL-17-M1c, mockup-v11 +
+#     the v11 content finals 2026-07-27; server.py + client JS via NL_LABELS).
+#     ONE grammar, ONE place, FOUR mounts (card · continuation card · deep view ·
+#     Following row).
+#
+# THE THREAD MODEL (his 07-25 gate rulings; DECISIONS "MOCKUP-V11 GATE RULINGS"):
+# one noun — THREAD. The tap commits a story-seeded thread INSTANTLY ($0, local,
+# nothing waits on the settle). What settles in background is only what ELSE the
+# thread covers, and the settle NEVER renders: named silently when it lands,
+# otherwise the story-scoped follow simply stands. THE ASK IS DEAD. No standing
+# Broaden/Widen exists anywhere; the surviving scope acts are NAMED swaps
+# ("Instead: …") on management surfaces only. ---
 # Resting verb (compact deck verb, not following): the ○/● pairing is the
-# disclosure mark (mockup COPY REGISTER). NB re-pin 2026-07-18: v8 shipped "＋
-# Follow this story"; mockup-v9's register names "○" (see implementer report —
-# flagged for the principal's glance against the STATE-0 "unchanged" caption).
-FOLLOW_STORY_INACTIVE = "○ Follow this story"
-# Committed forms are COMPOSED around the resolver's compact qualifier name (the
-# disclosure), never static — Kass's disclosure on every follow surface:
+# disclosure mark. NL-103 row 12 / v11 item 2: the object seat takes THREAD.
+FOLLOW_THREAD_INACTIVE = "○ Follow this thread"
+# The CTA's accessible-name STEM (content finals #49): the visible label without
+# its mark glyph, composed as "<stem> — <story name>". A screen-reader button
+# list on a today page of 8-12 cards otherwise reads "Follow this thread" a dozen
+# times, indistinguishably. Held as its own constant, not sliced off the visible
+# label at render time — a slice is a silent breakage the day the mark changes.
+FOLLOW_THREAD_ARIA = "Follow this thread"
+# Committed forms are COMPOSED around the settled compact qualifier name (the
+# disclosure), never static — the disclosure rides every follow surface:
 #   moment (follow-line):  "● " + FOLLOW_COMMITTED_VERB + " " + <disclosure>
 #   steady (deck verb):    "● " + FOLLOW_STEADY_PREFIX  + " " + <disclosure>
-#   narrow (this-story):   …STEADY_PREFIX + " " + FOLLOW_NARROW_QUALIFIER-less
+#   story-seeded:          …the object seat's deictic, FOLLOW_THREAD_SELF
 FOLLOW_COMMITTED_VERB = "Following"          # "● Following Volkswagen (company)"
 FOLLOW_STEADY_PREFIX = "Following —"         # "● Following — Volkswagen (company)"
-FOLLOW_NARROW = "this story"                 # narrow follow's name ("— this story")
+# TWO-REFERENT NOUN LAW (TAXONOMY §1.1, ratified 2026-07-26): thread takes the
+# OBJECT seats, story takes the SCOPE seats. Same deictic shape, different seat —
+# they are not interchangeable and neither may take the other's place.
+FOLLOW_THREAD_SELF = "this thread"           # object seat  — "● Following this thread"
+FOLLOW_NARROW = "this story"                 # scope  seat — the row qualifier "— this story"
 FOLLOW_DOT_ON = "●"
 FOLLOW_DOT_OFF = "○"
-# The resolving interval (the control expands from the verb into the line).
-FOLLOW_RESOLVING = "Deciding what this follow covers…"
-# The acts line under a committed follow: "Instead: <alt> · just this story · Unfollow".
+# The acts line on a MANAGEMENT surface: "Instead: <alt> · this story · Unfollow".
+# Never on a card (his 07-25 ruling ②: today cards are clean A3).
 FOLLOW_INSTEAD_PREFIX = "Instead:"
-# Lawful worded fallback when the resolver named no alternative (alt_label ''):
-# name the OTHER altitude in words, never a bare symbol (mockup seam note).
+# Lawful worded fallback when the settle named no alternative (alt_label ''):
+# name the other coverage in words, never a bare symbol.
 FOLLOW_ALT_FALLBACK_ENTITY = "the company"
-FOLLOW_ALT_FALLBACK_STORYLINE = "the ongoing story"
-FOLLOW_JUST_THIS_STORY = "just this story"   # inline, acts line
+FOLLOW_ALT_FALLBACK_STORYLINE = "the wider story"   # NL-103 row 14
+FOLLOW_RUNG_THIS_STORY = "this story"        # NL-103 row 13 — bare rung, "just" dead
 FOLLOW_UNFOLLOW = "Unfollow"                 # the symmetry-law verb (2026-07-18)
-# Low confidence: the line ASKS; nothing is followed until the reader picks.
-FOLLOW_LOW_LEAD = "What would you like to follow?"
-FOLLOW_JUST_THIS_STORY_OPTION = "Just this story"   # option-row form
-# Resolver failure / timeout: the this-story follow commits IMMEDIATELY with
-# EXACTLY this copy (principal ruling 2026-07-18, verbatim; string-equality
-# pinned in test_nl17_m1b_wiring). The two halves are the moment line's two
-# lines AND the Following-row upgrade line; they compose the exact whole.
-FOLLOW_DEGRADE_LEAD = "Following — this story."
-FOLLOW_DEGRADE_UPGRADE = "Couldn't fetch broader follow — choose it anytime."
-FOLLOW_DEGRADE_COMMITTED = FOLLOW_DEGRADE_LEAD + " " + FOLLOW_DEGRADE_UPGRADE
-# Switch refused: the server declined the "Instead" move (e.g. a transient); the
-# current follow is UNCHANGED. A plain register line so the reader's tap is never
-# a silent no-op (FIX LOOP 2 R2). FLAGGED FOR THE GATE — this exact string is the
-# implementer's plainest register candidate, not a settled copy call; the gate /
-# content own the final wording.
-FOLLOW_SWITCH_FAILED = "Couldn't switch just now — try again."
-# Cap refusal (R1, 2026-07-25): the resolve was REFUSED before any call because
-# one resolve's estimate alone exceeds the run's budget cap. Distinct from
-# FOLLOW_DEGRADE_* — nothing was attempted, so the copy must not imply a
-# transient the reader can retry away.
-# NL-103 row 4 (RATIFIED register 2026-07-26, §3 global law: reader copy never
-# contains an env-var name — doctor/SETUP own that name, and the budget figures
-# live on the meter). The ratified wording is the register's "if a blocking
-# pre-commit branch survives anywhere" fallback, verbatim.
-# PRECONDITION, flagged with the batch: its second sentence ("The follow stands")
-# is true in the register's post-v11/M1c world, where the tap commits the narrow
-# follow BEFORE the resolve and only the broadening can be refused. TODAY the
-# route refuses pre-commit and commits nothing (test_r1_resolve_cap_gate
-# ::test_refusal_commits_nothing) — and no surface renders this string at all
-# (the client's `ok === false` branch reverts to resting silently, the known gap
-# flagged to the R1 gate). So nothing lies on screen today; but whoever wires a
-# refusal reason into the UI must land the commit-narrow behaviour first, or cut
-# the second sentence. Not an implementer's unilateral call — M1c's lane.
-FOLLOW_CAP_REFUSAL = (
+# Receipts (§2.1.4). The unfollow receipt reverts ~3s to the resting CTA — no
+# undo affordance (his 07-25 verdict killed A11). A receipt never takes a pronoun
+# object, so an unnamed story-seeded thread falls back to the class noun.
+FOLLOW_UNFOLLOWED_RECEIPT = "Unfollowed —"           # + " <name>."
+FOLLOW_UNFOLLOWED_SELF = "Unfollowed — this thread."
+FOLLOW_REVERT_MS = 3000                              # the ~3s receipt window
+# Follow-again resume clause — renders ONCE at re-follow (revive/merge lane).
+FOLLOW_RESUMED_PREFIX = "Picked up where it left off —"   # + " <k> entries kept."
+FOLLOW_RESUMED_ENTRIES = "entries kept."
+FOLLOW_RESUMED_ENTRY = "entry kept."
+
+# --- REFUSALS — the protected class (TAXONOMY §3; v11 content finals §2.1) ----
+# THE LAW THIS TABLE EXISTS FOR: a tap must never vanish silently. Every refusal
+# payload renders its reason, on all four buckets, announced via aria-live.
+#
+# TWO refusal CLASSES, opposite marks — the client routes on the payload's
+# CLASS, never on the HTTP status (write refusals are 200/ok:false; the coverage
+# refusal is 409; a status-shaped discriminator misses half of them):
+#   R-WRITE    nothing was followed  -> ○, loud, aria-live      (this section)
+#   R-COVERAGE the follow STANDS; only the broadening was refused -> renders
+#              NOTHING (the "— this story" qualifier is the whole disclosure)
+#
+# FRAME (fixed):  "Didn’t <verb> — <reason>."  +  "<remedy>"
+REFUSAL_DIDNT_FOLLOW = "Didn’t follow —"
+REFUSAL_DIDNT_SWITCH = "Didn’t switch —"
+REFUSAL_DIDNT_UNFOLLOW = "Didn’t unfollow —"
+# Reason clauses: reader-world, lowercase, no terminal period, UI-lane — NEVER
+# str(exc). One per MemorySyncError arm; the arm is named at the RAISE site
+# (memory.MemorySyncError.kind), so the branch that renders the reason is the
+# branch that produced it.
+REFUSAL_MEM_UNREADABLE = "your memory file can’t be read"
+REFUSAL_MEM_UNREADABLE_FIX = "Fix the permissions on memory.md, then try again."
+REFUSAL_MEM_UNPARSEABLE = "your memory file has lines NewsLens can’t read"
+REFUSAL_MEM_UNPARSEABLE_FIX = ("Fix memory.md, or delete it and let NewsLens "
+                               "rebuild it, then try again.")
+REFUSAL_MEM_UNWRITABLE = "your memory file couldn’t be saved"
+REFUSAL_MEM_UNWRITABLE_FIX = "Make sure memory.md is writable, then try again."
+# The required fallback: an unmapped arm (a transport failure, an unclassified
+# raise) must never render raw CLI prose and must never silently revert.
+REFUSAL_MEM_FALLBACK = "NewsLens couldn’t save to your memory file"
+REFUSAL_MEM_FALLBACK_FIX = "Run newslens memory sync to see what’s wrong."
+# RETIRED with the thread model (2026-07-25/27 rulings), kept so nothing imports
+# a dangling name and so the ruled strings stay on record:
+#   * the settle is INVISIBLE (ruling ①) — no status copy exists any more
+#   * THE ASK IS DEAD (ruling ④) — the lead and its option row have no state
+#   * the degrade pair dies with it (NL-103 row 3): a failed settle is an
+#     ordinary story-scoped follow, disclosed by the "— this story" qualifier
+FOLLOW_RESOLVING = "Deciding what this follow covers…"   # RETIRED-NOT-RENDERED (v11 ruling ①)
+FOLLOW_LOW_LEAD = "What would you like to follow?"       # RETIRED-NOT-RENDERED (v11 ruling ④)
+FOLLOW_JUST_THIS_STORY_OPTION = "Just this story"        # RETIRED-NOT-RENDERED (v11 ruling ④)
+FOLLOW_DEGRADE_LEAD = "Following — this story."          # RETIRED-NOT-RENDERED (NL-103 row 3)
+FOLLOW_DEGRADE_UPGRADE = "Couldn't fetch broader follow — choose it anytime."  # RETIRED-NOT-RENDERED (NL-103 row 3)
+FOLLOW_DEGRADE_COMMITTED = FOLLOW_DEGRADE_LEAD + " " + FOLLOW_DEGRADE_UPGRADE  # RETIRED-NOT-RENDERED (NL-103 row 3)
+# Switch refused (FIX LOOP 2 R2). SUPERSEDED by the R-WRITE frame above: an act
+# refusal now states its REASON in reader-world terms and names no transience
+# the client cannot know ("just now"). Kept as the record of the string it
+# replaced; the live path is REFUSAL_DIDNT_SWITCH + a reason clause.
+FOLLOW_SWITCH_FAILED = "Couldn't switch just now — try again."   # RETIRED-NOT-RENDERED (M1c §4.1)
+# Cap refusal (R1, 2026-07-25) — RETIRED FROM READER COPY by M1c, ARM A of the
+# content pass's §5.1 fork. Its precondition (flagged in-code with the R1 batch,
+# and deliberately left to M1c) is now SATISFIED IN THE OTHER DIRECTION: the tap
+# commits the story-seeded thread BEFORE anything can be refused, so a cap
+# refusal can only refuse the BROADENING. That is the R-COVERAGE class, and the
+# R-COVERAGE class renders nothing — the "— this story" qualifier is the whole
+# disclosure. The wire payload keeps a machine-parseable `detail` for diagnostics
+# (never reader copy); the meter that would have paired with this sentence stays
+# dormant, because the surface it needed no longer exists.
+FOLLOW_CAP_REFUSAL = (   # RETIRED-NOT-RENDERED (M1c Arm A)
     "Couldn’t choose a broader follow — it costs more than this run’s budget "
     "allows. The follow stands — this story.")
 # RETIRED 2026-07-18 (M1b), retired-but-kept so nothing imports a dangling name

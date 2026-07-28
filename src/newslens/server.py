@@ -664,6 +664,11 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
             "altitude": _row_col(r, "altitude"),
             "disclosure": _row_col(r, "disclosure"),
             "altitude_source": _row_col(r, "altitude_source"),
+            # NL-17-M1c: the OTHER rung's name — the acts line's named swap
+            # target on this row. Bare '' when nothing settled, and then the
+            # "Instead:" prefix does not render at all (never a fabricated
+            # candidate).
+            "alt_label": _row_col(r, "alt_label"),
             "note": r["principal_note"] or "",
             "since": _short_date(r["created_at"]),
             "last": last,
@@ -718,14 +723,12 @@ def _altitude_qualifier_html(row: Dict) -> str:
     return ""                                  # descriptive storyline — bare by grammar
 
 
-def _altitude_upgrade_line(row: Dict) -> str:
-    """A follow that landed NARROW by resolver failure keeps its quiet upgrade
-    door in the row (mockup-v9 degraded row) — the exact 07-18 degrade sentence,
-    one grammar with the moment of follow. Only for source='degrade' (a reader's
-    deliberate 'just this story' pick shows no nag)."""
-    if (row.get("altitude_source") or "") != "degrade":
-        return ""
-    return (f'<p class="fl-degrade-why">{_e(labels.FOLLOW_DEGRADE_UPGRADE)}</p>')
+# NL-17-M1c / NL-103 row 3: _altitude_upgrade_line is DELETED. A follow that
+# landed story-scoped because the settle did not land is an ORDINARY narrow
+# follow — the "— this story" row qualifier is its whole disclosure, and the
+# apology door ("Couldn't fetch broader follow — choose it anytime.") went with
+# the standing-broaden class his 07-25 ruling killed. Nothing replaces it: there
+# is no bare directional verb left anywhere in the product to point at.
 
 
 def _active_topics_lower(con: sqlite3.Connection) -> set:
@@ -1069,13 +1072,19 @@ def _memory_stamp_inner(con, slot: Dict, date: str, degraded: bool = False,
             if tid in seen:
                 return ""                 # per-edition dedup: prominent slot won
             seen.add(tid)
-        ordinal, last = stamp
-        covered = _e(memory_core.human_date(last))
-        dot = '<span class="mem-dot">●</span>'
+        ordinal, _last = stamp
+        # NL-17-M1c — his 07-25 ruling ⑤ + the attachment ruling: THE SECOND DOT
+        # IS DEAD (the only dot a card shows again is the terra follow mark) and
+        # the moved indication is the single word "Updated". This stamp fires
+        # ONLY for a thread that moved this edition with prior coverage
+        # (memory_core.today_memory_stamp), so every stamp it renders IS the
+        # moved state — the "last covered <date>" clause it replaces is what v11
+        # shows on the UNMOVED card, which this stamp never renders. Weight is
+        # never the sole channel: the WORD changes too (Axel's law).
         if degraded:
-            return f'{dot} last covered {covered}'
-        return (f'{dot} {_e(_ordinal_num(ordinal))} entry on this thread '
-                f'· last covered {covered}')
+            return _e(labels.MEMLINE_UPDATED)
+        return (f'{_e(_ordinal_num(ordinal))} entry on this thread '
+                f'· {_e(labels.MEMLINE_UPDATED)}')
     return ""
 
 
@@ -1204,13 +1213,21 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     # non-tracked story keeps its follow toggle. The marker/follow-control
     # redesign itself stays NL-68 item 2's job.
     suppress_marker = bool(marks) and bool(stamp)
+    # v11 FLAG ③: the committed card verb opens this story's deep view when one
+    # exists (_has_deep_view is the same predicate the bottom entry link uses,
+    # so the verb can never become a dead door the entry link knows is dead).
+    card_door = slug if _has_deep_view(has_file, tier) else ""
     follow = "" if suppress_marker else _follow_control(
-        st, slot, marks, active_topics, date, slug=slug, con=con)
+        st, slot, marks, active_topics, date, slug=slug, con=con,
+        deep_slug=card_door, deep_return=deep_return)
     deck_bits: List[str] = []
     if follow:
         deck_bits.append(follow)
     if stamp:
-        deck_bits.append(f'<span class="memline">{stamp}</span>')
+        # the stamp only ever renders the MOVED state (see
+        # _memory_stamp_inner), so the weight step rides it unconditionally.
+        deck_bits.append(
+            f'<span class="memline memline--moved">{stamp}</span>')
     if deck_bits:
         parts.append(f'<p class="deck">{"".join(deck_bits)}</p>')
 
@@ -1291,26 +1308,10 @@ def _here_for(slot: Dict) -> str:
     return "world-impact selection (no tag or thread match)"
 
 
-def _altitude_options(res, headline: str) -> List[Dict]:
-    """The low-confidence picker's options (deterministic order — the resolver's
-    pick, the other rung, just-this-story last; mockup a11y contract). Each is
-    PRE-ALTITUDED: picking it commits at that altitude with NO further resolver
-    call (mutation law). `name` is the compact name minus its class parenthetical
-    (the stored match key); the other rung's own alternative is this rung."""
-    a_name, _ = follow_altitude.split_qualifier(res.disclosure)
-    other = "storyline" if res.altitude == "entity" else "entity"
-    opts = [{"label": res.disclosure, "name": a_name or res.primary_entity,
-             "altitude": res.altitude, "disclosure": res.disclosure,
-             "alt_label": res.alt_label, "primary_entity": res.primary_entity}]
-    if (res.alt_label or "").strip():
-        b_name, _ = follow_altitude.split_qualifier(res.alt_label)
-        opts.append({"label": res.alt_label, "name": b_name, "altitude": other,
-                     "disclosure": res.alt_label, "alt_label": res.disclosure,
-                     "primary_entity": res.primary_entity})
-    opts.append({"label": labels.FOLLOW_JUST_THIS_STORY_OPTION,
-                 "name": headline, "altitude": "narrow", "disclosure": "",
-                 "alt_label": "", "primary_entity": ""})
-    return opts
+# NL-17-M1c: _altitude_options is DELETED. THE ASK IS DEAD (his 07-25 ruling
+# ④) — an unconfident settle leaves the story-scoped follow standing, silently,
+# so there is no option list, no lead line and no low-confidence state left to
+# build one for. Nothing else read this function (grep-verified at the diff).
 
 
 def _follow_altitude_row(con, topic: str) -> Dict:
@@ -1380,18 +1381,51 @@ def _resolve_guard_row(con, story_topic: str, headline: str) -> Dict:
     return dict(r) if r else {}
 
 
+# --- NL-17-M1c: the write-refusal payload (R-WRITE) -------------------------
+# The three MemorySyncError arms, keyed by the `kind` the RAISE SITE names. The
+# fallback arm exists because an unmapped raise must never render raw CLI prose
+# and must never silently revert — the two failure modes this milestone kills.
+_WRITE_REFUSAL_ARMS = {
+    "unreadable": (labels.REFUSAL_MEM_UNREADABLE,
+                   labels.REFUSAL_MEM_UNREADABLE_FIX),
+    "unparseable": (labels.REFUSAL_MEM_UNPARSEABLE,
+                    labels.REFUSAL_MEM_UNPARSEABLE_FIX),
+    "unwritable": (labels.REFUSAL_MEM_UNWRITABLE,
+                   labels.REFUSAL_MEM_UNWRITABLE_FIX),
+}
+
+
+def _write_refusal(exc: Exception, verb: str = "follow") -> Dict:
+    """One place composes every R-WRITE payload, so the class, the arm and the
+    reason can never disagree. TRANSPORT-SHAPE-INDEPENDENT by construction: this
+    rides a 200 with ok:false (the _send_json default) exactly like the coverage
+    refusal rides a 409 — the client routes on `refusal`, never on the status.
+
+    `error` keeps str(exc) for diagnostics/logging; `reason`/`remedy` are the
+    UI-lane clauses and are the ONLY halves any surface renders."""
+    kind = getattr(exc, "kind", "") or ""
+    reason, remedy = _WRITE_REFUSAL_ARMS.get(
+        kind, (labels.REFUSAL_MEM_FALLBACK, labels.REFUSAL_MEM_FALLBACK_FIX))
+    return {"ok": False, "refusal": "write", "verb": verb, "arm": kind,
+            "reason": reason, "remedy": remedy, "error": str(exc)}
+
+
 def _committed_verb_inner(alt: Dict) -> str:
     """The committed deck verb's steady label (single-rendering law STATE 5):
-    "● Following — <qualifier>", Kass's disclosure carried on Today. narrow ->
-    "this story"; a named follow -> the compact qualifier (name + quiet class);
-    an UNMIGRATED follow (no stored disclosure) -> bare "● Following" (honest —
-    no altitude exists, nothing fabricated)."""
+    "● Following — <qualifier>", the disclosure carried on Today. A story-seeded
+    thread wears the object seat's deictic ("this thread"); a named follow wears
+    the compact qualifier (name + quiet class); an UNMIGRATED follow (no stored
+    disclosure) renders bare "● Following" (honest — nothing settled, nothing
+    fabricated)."""
     dot = _e(labels.FOLLOW_DOT_ON)
     altitude = alt.get("altitude") or ""
     disclosure = alt.get("disclosure") or ""
     if altitude == "narrow":
+        # v11 two-referent noun law: the OBJECT seat takes thread. The scope
+        # fact ("— this story") is the management ROW's qualifier, not the
+        # state line's — the two never name the same extension four words apart.
         return (f'{dot} {_e(labels.FOLLOW_STEADY_PREFIX)} '
-                f'{_e(labels.FOLLOW_NARROW)}')
+                f'{_e(labels.FOLLOW_THREAD_SELF)}')
     if disclosure:
         name, cls = follow_altitude.split_qualifier(disclosure)
         qual = _e(name)
@@ -1401,9 +1435,33 @@ def _committed_verb_inner(alt: Dict) -> str:
     return f'{dot} {_e(labels.FOLLOW_COMMITTED_VERB)}'   # unmigrated — bare
 
 
+def _follow_recognition(con, topic: str, headline: str,
+                        active_topics: set) -> Tuple[str, bool, Dict]:
+    """Is this story followed, and under which stored name? ONE predicate, so
+    every mount of the follow line answers identically (the single-rendering law
+    is worth nothing if two surfaces disagree about the STATE they render).
+
+    Two paths, both carried unchanged from the card: (1) NAME (NL-58 P3a) —
+    followed when the story_title OR headline is an active topic, so a follow
+    survives title drift and the committed reads target the story's phrasing
+    (NL-60 gate F1); (2) ORIGIN (FIX LOOP 1) — a settle-renamed follow is stored
+    under the settled name, not in active_topics under the story's title, and
+    the 0021 origin_story column bridges it back.
+
+    Returns (resolve_subject_topic, followed, origin_row)."""
+    t_in = topic.lower() in active_topics
+    h_in = headline.lower() in active_topics
+    name_followed = t_in or h_in
+    if name_followed and not t_in:
+        topic = headline
+    origin_row = {} if name_followed else _origin_follow_row(con, topic, headline)
+    return topic, bool(name_followed or origin_row), origin_row
+
+
 def _follow_control(st: Dict, slot: Dict, marks: List[str],
                     active_topics: set, date: str, slug: str = "",
-                    con=None) -> str:
+                    con=None, deep_slug: str = "",
+                    deep_return: str = "view-today") -> str:
     """The under-title follow control — the follow-altitude picker's single
     persistent node (NL-17-M1b, mockup-v9). SINGLE-RENDERING LAW: ONE
     `.follow-slot` element carries BOTH the compact deck verb (rest, steady) and
@@ -1423,21 +1481,10 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
     if marks:
         return (f'<span class="tracked-marker">{_e(labels.TRACKED_ONGOING_PREFIX)} '
                 f'{_e(", ".join(marks))}</span>')
-    topic = slot.get("story_title") or st.get("headline") or ""
+    topic, followed, origin_row = _follow_recognition(
+        con, slot.get("story_title") or st.get("headline") or "",
+        st.get("headline") or "", active_topics)
     headline = st.get("headline") or ""
-    t_in = topic.lower() in active_topics
-    h_in = headline.lower() in active_topics
-    name_followed = t_in or h_in
-    if name_followed and not t_in:
-        # recognized via the headline (title drift, NL-58 P3a): the committed
-        # reads target the story's headline phrasing (NL-60 gate F1).
-        topic = headline
-    # FIX-1 (fix loop 1): an altitude-renamed follow is stored under the
-    # RESOLVER's name, so it is NOT in active_topics under the story's title — the
-    # origin_story column bridges it back to this card (0021). con carries this
-    # (render-time read, no llm); active_topics-only callers keep name recognition.
-    origin_row = {} if name_followed else _origin_follow_row(con, topic, headline)
-    followed = name_followed or bool(origin_row)
     slot_id = f"follow-{slug}" if slug else "follow-slot"
     date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
     origin_attr = f' data-origin={_e_attr(headline)}' if headline else ""
@@ -1448,18 +1495,39 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
     # 0021 reload bridge). `topic` here is the resting resolve subject (story_title,
     # else headline; the drift reassignment above is already applied).
     story_attr = f' data-story={_e_attr(topic)}'
+    # v11 FLAG ③ — the card's steady verb is a DOOR. With Unfollow gone from
+    # cards (his item 4) and "Instead:" ruled off them (his ruling ②), a verb
+    # that re-expanded to an actless sentence would be a click with no answer.
+    # It opens the story's deep view — the thread's management home — when this
+    # story HAS one. When it does NOT (a degraded-hidden slot), the else arm
+    # below renders a plain <span> that states the fact and stops: no door, and
+    # no toggle either — the collapse toggle died with the acts it expanded to
+    # (gate F5: this comment used to claim a mechanism that no longer exists).
+    mount_attr = f' data-mount={_e_attr("card")}'
+    if deep_slug:
+        # stamped so the CLIENT can rebuild the same door after a live follow —
+        # one door definition, two renderers (server-rendered and post-tap).
+        mount_attr += (f' data-deep-slug={_e_attr(deep_slug)}'
+                       f' data-deep-return={_e_attr(deep_return)}')
     if not followed:
         # RESTING: the follow target is the story's canonical topic (story_title,
-        # else headline — the v7/NL-65 selection, preserved); the resolver names
-        # the better altitude from it at tap time. data-origin (the headline) is
-        # the "just this story" target on the low picker. aria-expanded="false" —
-        # the line is closed; a tap opens it in this same node.
+        # else headline — the v7/NL-65 selection, preserved). The tap COMMITS a
+        # story-seeded thread instantly ($0, local); what settles in background
+        # is only what else it covers. data-origin (the headline) is the seed's
+        # own name. aria-expanded="false" — the line is closed; a tap opens it
+        # in this same node.
+        # M1c #49: the resting CTA names its object. On a today page of 8-12
+        # cards a screen-reader button list otherwise reads "Follow this thread"
+        # a dozen times, indistinguishably.
+        aria = f"{labels.FOLLOW_THREAD_ARIA} — {topic}"
         return (f'<span class="follow-slot" id={_e_attr(slot_id)} '
-                f'data-topic={_e_attr(topic)}{origin_attr}{story_attr}{date_attr} '
+                f'data-topic={_e_attr(topic)}{origin_attr}{story_attr}{date_attr}'
+                f'{mount_attr} '
                 f'data-state="resting">'
                 f'<button class="deck-follow not-following" type="button" '
-                f'aria-expanded="false" onclick="followTap(this)">'
-                f'{_e(labels.FOLLOW_STORY_INACTIVE)}</button></span>')
+                f'aria-expanded="false" aria-label={_e_attr(aria)} '
+                f'onclick="followTap(this)">'
+                f'{_e(labels.FOLLOW_THREAD_INACTIVE)}</button></span>')
     if origin_row:
         # the follow lives under the resolver's name — data-topic is that STORED
         # name so unfollow/switch exact-match the real row; the disclosure is read
@@ -1469,15 +1537,170 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
     else:
         alt = _follow_altitude_row(con, topic)
         committed_topic = topic
+    if deep_slug:
+        verb = (f'<a class="deck-follow" href="#" '
+                f'onclick="{_deep_view_onclick(deep_slug, deep_return)}">'
+                f'{_committed_verb_inner(alt)}</a>')
+    else:
+        # no deep view on this card: the steady verb states the fact and stops.
+        # A dead door is worse than a quiet line (NL-68 item 8's law), and there
+        # is nothing left to expand — cards carry no acts (his ruling ②).
+        verb = f'<span class="deck-follow">{_committed_verb_inner(alt)}</span>'
     return (f'<span class="follow-slot" id={_e_attr(slot_id)} '
-            f'data-topic={_e_attr(committed_topic)}{origin_attr}{story_attr}{date_attr} '
+            f'data-topic={_e_attr(committed_topic)}{origin_attr}{story_attr}{date_attr}'
+            f'{mount_attr} '
             f'data-state="committed" '
             f'data-altitude={_e_attr(alt.get("altitude") or "")} '
             f'data-alt-label={_e_attr(alt.get("alt_label") or "")} '
             f'data-disclosure={_e_attr(alt.get("disclosure") or "")}>'
-            f'<button class="deck-follow" type="button" aria-expanded="false" '
-            f'onclick="followTap(this)">{_committed_verb_inner(alt)}</button>'
-            f'</span>')
+            f'{verb}</span>')
+
+
+def _thread_display_name(alt: Dict, fallback: str) -> str:
+    """The thread's reader-facing NAME for an accessible name / a receipt: the
+    settled disclosure where one exists, else the row's own title. Never a
+    pronoun (§3: a receipt takes the class noun, never "it")."""
+    disclosure = (alt.get("disclosure") or "").strip()
+    return disclosure or (alt.get("topic") or "").strip() or fallback
+
+
+def _follow_acts_line(alt: Dict, name: str, unfollow_name: str = "") -> str:
+    """THE ACTS LINE — the whole surviving scope-affordance law, in one place.
+
+    Rendered on MANAGEMENT SURFACES ONLY (deep view, Following row). His 07-25
+    ruling ②: today cards carry no acts at all. NO BARE DIRECTIONAL VERB EXISTS
+    — "Widen"/"Broaden" render nowhere and no affordance answers "what happens
+    if I tap this?" with a direction. Every scope act NAMES its target.
+
+    Composition (content pass §2.4):
+      broad candidate named            -> "Instead: <name> (<class>)"
+      candidate unnamed, but the settle told us which other rung exists
+                                       -> the worded fallback for that rung
+      nothing settled (narrow-seeded / unmigrated)
+                                       -> NO candidate, and the "Instead:"
+                                          prefix does NOT render. A prefix with
+                                          nothing after it is a broken sentence,
+                                          and a fabricated "the company" would
+                                          name a company we never resolved.
+      narrow rung                      -> renders only when there is something to
+                                          narrow TO (current scope broader than
+                                          the story) — the rung law.
+    Every rung carries `Switch to <target> — <thread name>` as its accessible
+    name (§3 aria law; the artifact implemented it nowhere)."""
+    altitude = (alt.get("altitude") or "").strip()
+    alt_label = (alt.get("alt_label") or "").strip()
+    settled = altitude in ("entity", "storyline")
+    bits: List[str] = []
+    if alt_label:
+        broad_vis, broad_target = _qualified_html(alt_label), alt_label
+    elif settled:
+        other = "storyline" if altitude == "entity" else "entity"
+        word = (labels.FOLLOW_ALT_FALLBACK_STORYLINE if other == "storyline"
+                else labels.FOLLOW_ALT_FALLBACK_ENTITY)
+        broad_vis, broad_target = _e(word), word
+    else:
+        broad_vis = broad_target = ""
+    if broad_vis:
+        bits.append(
+            f'<a href="#" aria-label='
+            f'{_e_attr(f"Switch to {broad_target} — {name}")} '
+            f'onclick="flSwitch(this); return false;">{broad_vis}</a>')
+    if settled:
+        bits.append(
+            f'<a href="#" aria-label='
+            f'{_e_attr(f"Switch to {labels.FOLLOW_RUNG_THIS_STORY} — {name}")} '
+            f'onclick="flPickNarrow(this); return false;">'
+            f'{_e(labels.FOLLOW_RUNG_THIS_STORY)}</a>')
+    prefix = f'{_e(labels.FOLLOW_INSTEAD_PREFIX)} ' if bits else ""
+    bits.append(f'<button class="fl-unfollow" type="button" '
+                f'aria-label='
+                f'{_e_attr(f"{labels.FOLLOW_UNFOLLOW} {unfollow_name or name}")} '
+                f'onclick="flUnfollow(this)">'
+                f'{_e(labels.FOLLOW_UNFOLLOW)}</button>')
+    return (f'<span class="fl-alts">{prefix}'
+            + '<span class="sep">·</span>'.join(bits) + '</span>')
+
+
+def _qualified_html(disclosure: str) -> str:
+    """"Volkswagen (company)" -> name-bold + quiet class. The ONE compact
+    qualifier render the server owns; the client's flQualified is its twin."""
+    name, cls = follow_altitude.split_qualifier(disclosure)
+    out = f'<strong>{_e(name)}</strong>'
+    if cls:
+        out += f' <span class="oq">({_e(cls)})</span>'
+    return out
+
+
+def _follow_slot_html(*, slot_id: str, mount: str, followed: bool,
+                      committed_topic: str, story_topic: str, headline: str,
+                      date: str, alt: Dict) -> str:
+    """THE ONE FOLLOW-LINE COMPONENT, mounted on a MANAGEMENT surface.
+
+    Same node, same data-* contract and same client renderers as the card mount
+    (_follow_control) — that IS the single-rendering law: one component, four
+    mounts, and a state change on any of them renders through the same code.
+
+    mount="deep"  the full form, always expanded: the state line + the acts line.
+                  Not followed -> the resting CTA (the deep view is a follow
+                  surface too, not only a management one).
+    mount="row"   the Following row's ACTS-ONLY primary (his 07-25 blessing):
+                  the ROW's own title is the object, so the state line would be
+                  a second rendering of a fact the row already states.
+
+    The memory stamp stays a SEPARATE node by design — the single-rendering law
+    governs the follow-STATE node, not the continuity stamp (07-20 design)."""
+    attrs = [f'id={_e_attr(slot_id)}', f'data-mount={_e_attr(mount)}']
+    if headline:
+        attrs.append(f'data-origin={_e_attr(headline)}')
+    if story_topic:
+        attrs.append(f'data-story={_e_attr(story_topic)}')
+    if date:
+        attrs.append(f'data-briefing-date={_e_attr(date)}')
+    if not followed:
+        aria = f"{labels.FOLLOW_THREAD_ARIA} — {story_topic}"
+        attrs.append(f'data-topic={_e_attr(story_topic)}')
+        return (f'<span class="follow-slot" {" ".join(attrs)} '
+                f'data-state="resting">'
+                f'<button class="deck-follow not-following" type="button" '
+                f'aria-expanded="false" aria-label={_e_attr(aria)} '
+                f'onclick="followTap(this)">'
+                f'{_e(labels.FOLLOW_THREAD_INACTIVE)}</button></span>')
+    name = _thread_display_name(alt, committed_topic)
+    attrs.extend([
+        f'data-topic={_e_attr(committed_topic)}',
+        f'data-altitude={_e_attr(alt.get("altitude") or "")}',
+        f'data-alt-label={_e_attr(alt.get("alt_label") or "")}',
+        f'data-disclosure={_e_attr(alt.get("disclosure") or "")}',
+    ])
+    acts = _follow_acts_line(alt, name)
+    if mount == "row":
+        # the row's own title IS the object, and its accessible name matches
+        # what the title renders (§3 aria law exemplar: "Unfollow Volkswagen
+        # (company)" under a row headed "Volkswagen (company)").
+        return (f'<span class="follow-slot" {" ".join(attrs)} '
+                f'data-state="committed" data-object-slot="surface" '
+                f'aria-live="polite">{acts}</span>')
+    disclosure = (alt.get("disclosure") or "").strip()
+    if disclosure and (alt.get("altitude") or "") != "narrow":
+        object_html = _qualified_html(disclosure)
+    else:
+        # story-seeded (or unsettled): the thread wears its own name. The scope
+        # fact rides the management ROW's "— this story" qualifier, never the
+        # state line — §1.1 forbids both referents naming the same extension.
+        object_html = f'<strong>{_e(labels.FOLLOW_THREAD_SELF)}</strong>'
+        # …and the Unfollow's accessible name follows the artifact's exemplar:
+        # the deictic the button sits under, plus the named target, so a button
+        # list never reads a bare "Unfollow" against an unnamed thread.
+        acts = _follow_acts_line(
+            alt, name,
+            unfollow_name=f"{labels.FOLLOW_THREAD_SELF} — {story_topic or name}")
+    sentence = (f'<span class="fl-sentence">'
+                f'<span class="fl-dot" aria-hidden="true">'
+                f'{_e(labels.FOLLOW_DOT_ON)}</span> '
+                f'{_e(labels.FOLLOW_COMMITTED_VERB)} {object_html}</span>')
+    return (f'<span class="follow-slot" {" ".join(attrs)} '
+            f'data-state="expanded" aria-live="polite">'
+            f'{sentence}{acts}</span>')
 
 
 def _has_deep_view(has_file: bool, tier: str) -> bool:
@@ -2076,11 +2299,23 @@ def _spine_updated_row(t: Dict) -> str:
                              qualifier=_altitude_qualifier_html(t))
     delta_html = (f'<p class="thread-delta">{_e(d.get("what_happened", ""))}</p>'
                   if d.get("what_happened") else "")
-    upgrade = _altitude_upgrade_line(t)      # degrade-narrow: the quiet door
     note = (t.get("note") or "").strip()
     note_html = f'<p class="thread-note">{_e(note)}</p>' if note else ""
-    return (f'<article class="thread">{stamp}{name}{delta_html}{upgrade}'
-            f'{note_html}</article>')
+    # NL-17-M1c — MOUNT 4: the Following row's ACTS-ONLY primary (his 07-25
+    # blessing). The row's own title is the object, so the state line would be a
+    # second rendering of a fact the row already states; the acts line IS the
+    # row's one inline action cluster.
+    acts = _following_row_follow_line(t)
+    return (f'<article class="thread">{stamp}{name}{delta_html}'
+            f'{note_html}{acts}</article>')
+
+
+def _following_row_follow_line(t: Dict) -> str:
+    """A Following row's follow-line mount — the same component, acts-only."""
+    return ('<div class="follow-line">' + _follow_slot_html(
+        slot_id=f"follow-row-{t['id']}", mount="row", followed=True,
+        committed_topic=t["topic"], story_topic=t["topic"], headline="",
+        date="", alt=t) + "</div>")
 
 
 def _quiet_fold_html(quiet: List[Dict], zero_updated: bool) -> str:
@@ -3102,6 +3337,27 @@ def _deep_arc_line_html(con, slot: Optional[Dict], date: str) -> str:
     return ""
 
 
+def _deep_follow_line(con, slot: Optional[Dict], headline: str, date: str,
+                      story_anchor: str) -> str:
+    """The deep view's follow mount. Degrades to '' with no connection (the
+    fixture/no-db render paths) rather than guessing a state — an unknown follow
+    state must never render as "not followed", which would offer a second follow
+    on a thread the reader already has."""
+    if con is None:
+        return ""
+    topic = (slot or {}).get("story_title") or headline or ""
+    if not topic:
+        return ""
+    subject, followed, origin_row = _follow_recognition(
+        con, topic, headline, _active_topics_lower(con))
+    alt = origin_row or (_follow_altitude_row(con, subject) if followed else {})
+    committed = (origin_row.get("topic") if origin_row else subject) or subject
+    return ('<div class="follow-line">' + _follow_slot_html(
+        slot_id=f"follow-deep-{story_anchor}", mount="deep", followed=followed,
+        committed_topic=committed, story_topic=subject, headline=headline,
+        date=date, alt=alt) + "</div>")
+
+
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       date: str, back_label: Optional[str] = None,
                       return_view: str = "view-today", con=None,
@@ -3138,6 +3394,14 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                f'{_e(labels.DEEP_EYEBROW)}</p>'
                f'<h1 class="deep-title">{_e(headline)}</h1>'
                f'{arc_line}</div>')
+
+    # NL-17-M1c — MOUNT 3: the deep view is the thread's MANAGEMENT HOME.
+    # Mounted where the blessed artifact puts it (SCREEN C: under the arc, above
+    # the jumplist), rendered by the SAME component the card mounts. This is
+    # where Unfollow lives now that his item 4 took it off cards — and it is why
+    # the card's steady verb became a door: every entry of a followed thread
+    # reaches the acts line in one tap, not just the card that created it.
+    out.append(_deep_follow_line(con, slot, headline, date, story_anchor))
 
     # NL-68 item 3 (THE SUPERSET LAW): open with the story's OWN Today prose
     # (lede + why-it-matters + watch-for) before any analyst section, so the deep
@@ -3547,27 +3811,41 @@ def _nl_labels_js() -> str:
     renders, injected as window.NL_LABELS so a labels.py re-pin lands in the
     client too — the same one-place re-pin the server renders enjoy. <>&-escaped
     so a re-pin can never break out of the <script> element."""
-    # NL-17-M1b: the follow-altitude picker's client copy — the JS morphs the
-    # persistent .follow-slot through resolving/committed/ask/degrade from this
-    # one table (a labels.py re-pin lands client-side too). The v8 instant-flip
-    # toast (followConfirm) is RETIRED — the inline resolving->committed
-    # disclosure replaces it.
-    payload = {"followInactive": labels.FOLLOW_STORY_INACTIVE,
-               "resolving": labels.FOLLOW_RESOLVING,
+    # NL-17-M1c: THE ONE FOLLOW-LINE COMPONENT's client copy — the JS morphs the
+    # persistent .follow-slot through resting/committed/expanded/refused/
+    # unfollowed from this one table (a labels.py re-pin lands client-side too).
+    # RETIRED with the thread model and deliberately ABSENT here, so no client
+    # branch can render them by accident: the settling status (ruling ①), the ask
+    # lead + its option row (ruling ④), the degrade pair (NL-103 row 3) and the
+    # cap refusal (Arm A). Their constants stay in labels.py marked
+    # RETIRED-NOT-RENDERED; this table is what the reader can actually reach.
+    payload = {"followInactive": labels.FOLLOW_THREAD_INACTIVE,
+               "followInactiveAria": labels.FOLLOW_THREAD_ARIA,
                "committedVerb": labels.FOLLOW_COMMITTED_VERB,
                "steadyPrefix": labels.FOLLOW_STEADY_PREFIX,
+               "threadSelf": labels.FOLLOW_THREAD_SELF,
                "narrow": labels.FOLLOW_NARROW,
                "dotOn": labels.FOLLOW_DOT_ON, "dotOff": labels.FOLLOW_DOT_OFF,
                "insteadPrefix": labels.FOLLOW_INSTEAD_PREFIX,
                "altFallbackEntity": labels.FOLLOW_ALT_FALLBACK_ENTITY,
                "altFallbackStoryline": labels.FOLLOW_ALT_FALLBACK_STORYLINE,
-               "justThisStory": labels.FOLLOW_JUST_THIS_STORY,
-               "justThisStoryOption": labels.FOLLOW_JUST_THIS_STORY_OPTION,
+               "rungThisStory": labels.FOLLOW_RUNG_THIS_STORY,
                "unfollow": labels.FOLLOW_UNFOLLOW,
-               "lowLead": labels.FOLLOW_LOW_LEAD,
-               "degradeLead": labels.FOLLOW_DEGRADE_LEAD,
-               "degradeUpgrade": labels.FOLLOW_DEGRADE_UPGRADE,
-               "switchFailed": labels.FOLLOW_SWITCH_FAILED}
+               "unfollowedReceipt": labels.FOLLOW_UNFOLLOWED_RECEIPT,
+               "unfollowedSelf": labels.FOLLOW_UNFOLLOWED_SELF,
+               "revertMs": labels.FOLLOW_REVERT_MS,
+               "resumedPrefix": labels.FOLLOW_RESUMED_PREFIX,
+               "resumedEntries": labels.FOLLOW_RESUMED_ENTRIES,
+               "resumedEntry": labels.FOLLOW_RESUMED_ENTRY,
+               # the refusal frame: verb + reason + remedy. The reason/remedy
+               # arrive ON THE PAYLOAD (the branch that produced them names
+               # them); these are the frame's fixed halves plus the fallback,
+               # so an unmapped arm still renders words, never silence.
+               "didntFollow": labels.REFUSAL_DIDNT_FOLLOW,
+               "didntSwitch": labels.REFUSAL_DIDNT_SWITCH,
+               "didntUnfollow": labels.REFUSAL_DIDNT_UNFOLLOW,
+               "refusalFallback": labels.REFUSAL_MEM_FALLBACK,
+               "refusalFallbackFix": labels.REFUSAL_MEM_FALLBACK_FIX}
     blob = (json.dumps(payload, ensure_ascii=False)
             .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
     return "window.NL_LABELS = " + blob + ";"
@@ -3827,7 +4105,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             handler = {
                 "/api/follow": self._api_follow,
-                "/api/follow/resolve": self._api_follow_resolve,
+                # NL-17-M1c: /api/follow/resolve is RETIRED and split in two.
+                # The old route made the reader's act wait on (and be refusable
+                # by) the coverage lookup; the thread model forbids both.
+                "/api/follow/seed": self._api_follow_seed,
+                "/api/follow/settle": self._api_follow_settle,
                 "/api/follow/at": self._api_follow_at,
                 "/api/unfollow": self._api_dismiss,
                 "/api/dismiss": self._api_dismiss,
@@ -3848,7 +4130,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, 500)
 
-    def _with_memory(self, fn) -> Dict:
+    def _with_memory(self, fn, verb: str = "follow") -> Dict:
         """The CLI verb protocol: sync -> verb -> render-only file write.
 
         NL-81 EMBEDDED DEGRADE (contract §5.2): a stale memory.md does NOT kill
@@ -3857,17 +4139,44 @@ class Handler(BaseHTTPRequestHandler):
         opening sync skipped the import and rewrote nothing; the verb runs on
         database state, the file rewrite is skipped too (so "neither side
         mutated" stays true for the file), and the refusal rides back in the
-        JSON response where the client can surface it."""
+        JSON response where the client can surface it.
+
+        NL-17-M1c — THE WRITE-REFUSAL PAYLOAD (R-WRITE). A MemorySyncError from
+        the OPENING sync means the verb never ran: nothing was followed, so the
+        client's mark is ○ and the line is loud. The payload carries its CLASS
+        (`refusal: "write"`) and its UI-lane reason/remedy, keyed off the arm
+        named at the raise site — never str(exc), which is a good CLI sentence
+        and an unlawful UI one. `error` keeps that CLI sentence for diagnostics.
+
+        `verb` swaps the frame's verb for the three acts that route through here
+        (follow / switch / unfollow). A refusal on switch or unfollow leaves an
+        EXISTING follow standing, so those never wear ○ — the mark would report
+        "nothing followed" over a live follow, the same lie in the other
+        direction (content pass §4.1). The client owns that split; the server
+        states which act was refused and why.
+        """
         con = db.connect()
         try:
             try:
                 sync = memory.sync_memory(con)
             except memory.MemorySyncError as exc:
-                return {"ok": False, "error": str(exc)}
+                return _write_refusal(exc, verb)
             result = fn(con)
+            warnings = list(sync.guard_lines())
             if not sync.stale_refusal:
-                memory.write_memory_file(con)
-            warnings = sync.guard_lines()
+                try:
+                    memory.write_memory_file(con)
+                except OSError as exc:      # noqa: PERF203 — one narrow arm
+                    # THE VERB ALREADY SUCCEEDED. The follow is recorded; only
+                    # the render-only file refresh failed. ○ here would lie
+                    # (M1c's whole charge), and so would a 500 — the generic
+                    # handler answers ok:False, which the client reads as a
+                    # write refusal. Keep the success, and put the adjacent
+                    # fact where NL-110 will render it. M1c renders `warnings`
+                    # NOWHERE (build tooth); this is the fact waiting for that
+                    # surface, not a new silent hole: the DB is the record and
+                    # the next sync reports the file as stale.
+                    warnings.append(f"cannot write memory.md ({exc})")
             if warnings and isinstance(result, dict):
                 result["warnings"] = list(result.get("warnings") or []) + warnings
             return result
@@ -3923,15 +4232,18 @@ class Handler(BaseHTTPRequestHandler):
             last_referenced_briefing_id=ref_id)
         return {"ok": True, "outcome": outcome, "topic": name, "thread_id": tid}
 
-    def _api_follow_resolve(self, body: Dict) -> None:
-        """The follow TAP on a headline-origin story: resolve the altitude, then
-        HIGH/MED auto-commit WITH the disclosure; LOW commits NOTHING and returns
-        the options (the reader's pick creates the follow); resolver FAILURE/
-        TIMEOUT commits this-story immediately (the act is never lost) with the
-        exact degrade copy. The resolver call holds NO db open (its own law); the
-        commit is a separate short verb. SUBSCRIPTION lane by default (NL-99 /
-        THE $0-RUN LAW, 2026-07-26) — ~2s measured with thinking suppressed, and
-        $0 charged. The api lane is a sanctioned exception, never a fall-over."""
+    def _api_follow_seed(self, body: Dict) -> None:
+        """THE TAP — NL-17-M1c, the thread model's first half.
+
+        A tap COMMITS A STORY-SEEDED THREAD INSTANTLY: written locally, $0,
+        nothing waits on a model. This route makes zero external calls and can
+        never be refused on budget, because there is nothing here to bill. That
+        is the whole point of splitting it out — under the old single route the
+        reader's act was hostage to a 9-46s resolve (~2s post-NL-99) and a cap
+        gate that could refuse the follow itself.
+
+        The only way this route fails is a MEMORY WRITE refusal, and then
+        nothing was followed — ○, loud, with its reason (R-WRITE)."""
         headline = self._topic_arg(body)
         if not headline:
             return self._send_json({"ok": False, "error": "topic required"}, 400)
@@ -3941,9 +4253,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = str(body.get("origin") or "").strip() or headline
         briefing_date = str(body.get("briefing_date") or "").strip() or None
         # XOR / recognition guard (FIX-1): a tap on an ALREADY-followed story is
-        # the steady-state expand, not a fresh follow. Return the committed row —
-        # never a second paid resolve, never a divergent second active follow
-        # (QA NO-GO: rows "…job cuts" + "Volkswagen" for one story). Read-only.
+        # the steady state, not a fresh follow. Return the committed row — never
+        # a divergent second active follow (QA NO-GO: rows "…job cuts" +
+        # "Volkswagen" for one story). Read-only.
         con = db.connect()
         try:
             existing = _resolve_guard_row(con, headline, origin)
@@ -3951,66 +4263,195 @@ class Handler(BaseHTTPRequestHandler):
             con.close()
         if existing:
             return self._send_json({
-                "ok": True, "state": "committed", "topic": existing["topic"],
+                "ok": True, "state": "committed", "seeded": False,
+                "topic": existing["topic"],
                 "altitude": existing.get("altitude") or "",
                 "disclosure": existing.get("disclosure") or "",
                 "alt_label": existing.get("alt_label") or ""})
+        out = self._with_memory(
+            lambda con: self._seed_thread(con, headline, briefing_date))
+        if out.get("ok") is False:
+            return self._send_json(out)          # R-WRITE — nothing followed
+        return self._send_json(out)
+
+    def _seed_thread(self, con, headline: str,
+                     briefing_date: Optional[str]) -> Dict:
+        """Commit the story-seeded thread. TWO landings, and the difference is
+        the whole reason this is not one call to _commit_altitude:
+
+          NEW      -> a narrow, story-seeded follow. `seeded: True` licenses the
+                      settle: this thread has no scope anyone chose, so naming
+                      one is the system doing its job.
+          RESUMED  -> a thread that EXISTED comes back as itself, at whatever
+                      scope it had, with its kept entries. `seeded: False` — the
+                      settle must never re-aim a thread whose identity someone
+                      already decided. add_thread_at_altitude would have
+                      overwritten those columns with narrow/'', silently
+                      converting "picked up where it left off" into "quietly
+                      re-scoped behind your back".
+
+        THE PREDICATE IS EXISTENCE, NOT SCOPE (gate F4 / QA-3). It first read
+        `prior is not None and prior['altitude']`, which quietly excluded every
+        pre-0019 legacy row — and those are not empty threads: on his real
+        archive they are most of his follows and they carry real history (Strait
+        of Hormuz alone has 12 ledger entries). This milestone put unfollow one
+        tap from every entry of a thread, so one unfollow+refollow would have
+        re-seeded a 12-entry thread HE named, dropped its resume clause, and let
+        the settle rename it. A row with no altitude never settled and was never
+        renamed; it comes back BARE, which is the honest unmigrated render, and
+        the settle stays out of it."""
+        prior = None
+        try:
+            prior = con.execute(
+                "SELECT id, altitude, disclosure, alt_label FROM memory"
+                " WHERE lower(topic) = lower(?)", (headline,)).fetchone()
+        except sqlite3.OperationalError:      # pre-0019 DB — no altitude columns
+            prior = None
+        if prior is not None:
+            from . import memory_core
+            outcome = memory.add_thread(
+                con, headline,
+                last_referenced_briefing_id=self._ref_id_for(con, briefing_date))
+            kept = len(memory_core.ledger_for_thread(con, prior["id"]))
+            return {"ok": True, "outcome": outcome, "seeded": False,
+                    "state": "committed", "topic": headline,
+                    "thread_id": prior["id"],
+                    "altitude": _row_col(prior, "altitude"),
+                    "disclosure": _row_col(prior, "disclosure"),
+                    "alt_label": _row_col(prior, "alt_label"),
+                    "resumed": outcome == "revived", "kept": kept}
+        out = self._commit_altitude(
+            con, name=headline, altitude="narrow", source="seed",
+            origin_story=headline, briefing_date=briefing_date)
+        out.update({"state": "committed", "seeded": True, "altitude": "narrow",
+                    "disclosure": "", "alt_label": ""})
+        return out
+
+    def _api_follow_settle(self, body: Dict) -> None:
+        """THE SETTLE — the thread model's second half, and it is INVISIBLE.
+
+        The follow already exists (the seed committed it). All this decides is
+        what ELSE the thread covers. Three landings, and only ONE of them
+        renders anything:
+
+          * a confident name -> the follow is RE-AIMED at it and the client
+            announces the name-change once. Never a second row: this MOVES the
+            seeded thread (from_topic), so a thread has exactly one identity.
+          * unconfident / failed / no thread to settle -> NOTHING renders. The
+            story-scoped follow simply stands, disclosed by the "— this story"
+            row qualifier. THE ASK IS DEAD (his ruling ④); so is the apology.
+          * over budget -> R-COVERAGE. The follow STANDS; only the broadening
+            was refused, so the client renders nothing here either. This is why
+            the ruled cap sentence retires from reader copy (content pass §5.1
+            Arm A): it described a pre-commit refusal that no longer exists, and
+            the case it now describes has no reader-facing render at all. Its
+            constant is marked RETIRED-NOT-RENDERED in labels.py, and this
+            module may not so much as name it — the sweep marker's claim is
+            enforced by a source grep, deliberately.
+
+        SUBSCRIPTION lane by default (NL-99 / THE $0-RUN LAW, 2026-07-26) —
+        ~2s measured with thinking suppressed, $0 charged."""
+        headline = self._topic_arg(body)
+        if not headline:
+            return self._send_json({"ok": False, "error": "topic required"}, 400)
+        origin = str(body.get("origin") or "").strip() or headline
+        current = str(body.get("topic_current") or "").strip() or headline
+        # Nothing to settle onto: the seed is gone (unfollowed mid-settle, or
+        # never landed). Silence is the honest answer — re-creating the follow
+        # here would resurrect an act the reader just undid.
+        con = db.connect()
+        try:
+            seeded = _resolve_guard_row(con, current, origin)
+        finally:
+            con.close()
+        if not seeded:
+            return self._send_json({"ok": True, "state": "unsettled",
+                                    "settled": False})
+        if (seeded.get("altitude") or "") != "narrow":
+            # already settled (a reload, a double-fire, a reader switch) — the
+            # settle never re-aims a thread the reader or an earlier settle
+            # already named. The mutation law, unchanged.
+            return self._send_json({"ok": True, "state": "committed",
+                                    "settled": False,
+                                    "topic": seeded["topic"],
+                                    "altitude": seeded.get("altitude") or "",
+                                    "disclosure": seeded.get("disclosure") or "",
+                                    "alt_label": seeded.get("alt_label") or ""})
         # R1 CAP GATE (2026-07-25, PREFLIGHT gate order). Everything above this
-        # line is free (a read-only guard lookup); everything below can SPEND.
-        # This route used to reach the paid resolver with no budget check at all
-        # — follow_altitude.main's cumulative gate only ever covered the batch
-        # falsifier. resolve_cost_gate is that same arithmetic (one estimate,
-        # one cap, one implementation). Refuse BEFORE any transport, disclosed,
-        # never silent; a refusal commits NOTHING, which is why it must not wear
-        # the FOLLOW_DEGRADE_* copy. 409 matches _api_generate's staleness
-        # refusal: a well-formed request declined on policy.
+        # line is free; everything below can SPEND. resolve_cost_gate is the
+        # falsifier's own arithmetic (one estimate, one cap, one implementation
+        # — a second copy of this math is how BUG-1 shipped in two places).
+        # Refuse BEFORE any transport. 409 matches _api_generate's staleness
+        # refusal: a well-formed request declined on policy. THE REFUSAL NO
+        # LONGER COSTS THE READER THEIR FOLLOW — it costs them the broadening.
+        stands = {"ok": False, "refusal": "coverage", "state": "refused",
+                  "topic": seeded["topic"], "follow_stands": True}
         try:
             allowed, est_usd, cap_usd = follow_altitude.resolve_cost_gate(headline)
         except ValueError as exc:        # malformed BUDGET_CAP_USD_PER_RUN
-            return self._send_json(
-                {"ok": False, "state": "refused",
-                 "error": labels.FOLLOW_CAP_REFUSAL, "detail": str(exc)}, 409)
+            return self._send_json(dict(stands, detail=str(exc)), 409)
         if not allowed:
-            return self._send_json(
-                {"ok": False, "state": "refused",
-                 "error": labels.FOLLOW_CAP_REFUSAL,
-                 "detail": (f"estimated resolve ${est_usd:.5f} exceeds "
-                            f"BUDGET_CAP_USD_PER_RUN ${cap_usd:.2f} — no call "
-                            "was made and nothing was followed"),
-                 "est_usd": est_usd, "cap_usd": cap_usd}, 409)
+            return self._send_json(dict(
+                stands,
+                detail=(f"estimated coverage check ${est_usd:.5f} exceeds "
+                        f"BUDGET_CAP_USD_PER_RUN ${cap_usd:.2f} — no call was "
+                        "made and the story-scoped follow stands"),
+                est_usd=est_usd, cap_usd=cap_usd), 409)
         try:
             res = follow_altitude.resolve_altitude(
                 follow_altitude.ThreadInput(thread_id=None, topic=headline),
                 retry_transport=False)   # R3: a reader waits — degrade on the
                                          # first timeout window, never retry to ~25s
         except Exception as exc:  # noqa: BLE001 — AltitudeError/LaneUnavailable/transport
-            # FAILURE/TIMEOUT: commit this-story NOW (mutation law: the reader's
-            # act stands; only the broader proposal degraded — never --danger).
-            out = self._with_memory(lambda con: self._commit_altitude(
-                con, name=headline, altitude="narrow", source="degrade",
-                origin_story=headline, briefing_date=briefing_date))
-            out.update({"state": "degrade", "reason": str(exc),
-                        "lead": labels.FOLLOW_DEGRADE_LEAD,
-                        "upgrade": labels.FOLLOW_DEGRADE_UPGRADE})
-            return self._send_json(out)
+            # The settle failed. NOTHING renders: the follow the reader made is
+            # untouched and already correct at its own scope.
+            return self._send_json({"ok": True, "state": "unsettled",
+                                    "settled": False, "reason": str(exc)})
         if res.confidence == "low":
-            # LOW: the line ASKS; nothing is followed until the pick.
-            return self._send_json({
-                "ok": True, "state": "ask", "lead": labels.FOLLOW_LOW_LEAD,
-                "options": _altitude_options(res, headline)})
-        # HIGH/MEDIUM: auto-commit at the resolved altitude, named. origin_story
-        # is the tapped story — the bridge back to this card after reload (FIX-1).
+            # Unconfident. The story-scoped follow stands, silently — his
+            # ruling ④, and Greta's pre-agreed fallback as the ruling.
+            return self._send_json({"ok": True, "state": "unsettled",
+                                    "settled": False})
         name, _cls = follow_altitude.split_qualifier(res.disclosure)
         name = name or res.primary_entity or headline
-        out = self._with_memory(lambda con: self._commit_altitude(
-            con, name=name, altitude=res.altitude,
+        out = self._with_memory(lambda con: self._settle_onto(
+            con, from_topic=seeded["topic"], name=name, res=res,
+            origin_story=headline), verb="follow")
+        if out.get("ok") is False:
+            # The re-aim could not be written. The SEEDED follow still stands —
+            # so this is not ○ and it is not loud: it is the same silence as any
+            # other unlanded settle. Nothing on screen is false.
+            return self._send_json({"ok": True, "state": "unsettled",
+                                    "settled": False, "error": out.get("error")})
+        out.update({"state": "committed", "settled": True,
+                    "altitude": res.altitude, "disclosure": res.disclosure,
+                    "alt_label": res.alt_label, "confidence": res.confidence})
+        return self._send_json(out)
+
+    def _settle_onto(self, con, *, from_topic: str, name: str, res,
+                     origin_story: str) -> Dict:
+        """MOVE the seeded thread onto the settled coverage — never a second
+        row. Reuses the switch lane (move_follow_altitude) exactly as the
+        mockup's seam note specs it: "its landing applied via the existing
+        switch lane as a system-initiated re-aim".
+
+        initiator="org" (gate F3): a system re-aim must not sign the NL-81
+        forensic log with the reader's name. Rename tombstones from this lane
+        stamp actor='org'; a settle-merge leaves the merged-away row's
+        dismissed_via NULL, because no person's verb dismissed it.
+        """
+        row = con.execute(
+            "SELECT id FROM memory WHERE lower(topic) = lower(?)"
+            " AND status = 'active'", (from_topic,)).fetchone()
+        if row is None:
+            return {"ok": True, "outcome": "gone", "topic": from_topic}
+        survivor = memory.move_follow_altitude(
+            con, row["id"], new_name=name, altitude=res.altitude,
             primary_entity=res.primary_entity, disclosure=res.disclosure,
             alt_label=res.alt_label, confidence=res.confidence, source="auto",
-            origin_story=headline, briefing_date=briefing_date))
-        out.update({"state": "committed", "altitude": res.altitude,
-                    "disclosure": res.disclosure, "alt_label": res.alt_label,
-                    "confidence": res.confidence})
-        return self._send_json(out)
+            log_correction=False, initiator="org")
+        return {"ok": True, "outcome": "settled", "topic": name,
+                "thread_id": survivor if survivor else row["id"]}
 
     def _api_follow_at(self, body: Dict) -> None:
         """A reader PICK at a chosen altitude (a low-confidence option, or a
@@ -4052,7 +4493,11 @@ class Handler(BaseHTTPRequestHandler):
                 disclosure=disclosure, alt_label=alt_label, source="pick",
                 origin_story=origin, briefing_date=briefing_date)
 
-        out = self._with_memory(verb)
+        # M1c: a refused SWITCH leaves the existing follow standing — the frame's
+        # verb says so, and the client leaves the ● state line untouched.
+        out = self._with_memory(verb, verb="switch")
+        if out.get("ok") is False:
+            return self._send_json(out)
         out.update({"state": "committed", "altitude": altitude,
                     "disclosure": disclosure, "alt_label": alt_label})
         self._send_json(out)
@@ -4067,9 +4512,20 @@ class Handler(BaseHTTPRequestHandler):
             # correction FIRST (Axel's instrument — a within-24h unfollow of a
             # medium auto-commit counts), then dismiss.
             memory.record_altitude_correction(con, topic)
-            return {"ok": memory.dismiss_thread(con, topic)}
+            if memory.dismiss_thread(con, topic):
+                return {"ok": True, "outcome": "unfollowed"}
+            # M1c ROUTING CALL (no new copy invented): there is no active row,
+            # so the act's GOAL STATE already holds. Answering ok:false here
+            # would push a truthful tap into the refusal frame and make it say
+            # "your memory file couldn't be saved" — false in a new direction.
+            # The honest answer is the receipt: you are not following this.
+            return {"ok": True, "outcome": "already"}
 
-        self._send_json(self._with_memory(verb))
+        # M1c: an unfollow the WRITE refuses leaves the follow STANDING — the
+        # line still says Following, which is TRUE, so the mark stays ● and the
+        # refusal renders beneath it. Never ○: nothing was unfollowed, but
+        # something IS followed.
+        self._send_json(self._with_memory(verb, verb="unfollow"))
 
     def _api_revive(self, body: Dict) -> None:
         topic = self._topic_arg(body)

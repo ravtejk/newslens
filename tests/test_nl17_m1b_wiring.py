@@ -190,7 +190,7 @@ def test_resting_follow_is_one_slot_aria_expanded_not_haspopup():
     assert 'aria-expanded="false"' in html
     assert "aria-haspopup" not in html                   # build rider: retired
     assert "aria-pressed" not in html                    # old toggle grammar gone
-    assert labels.FOLLOW_STORY_INACTIVE in html          # "○ Follow this story"
+    assert labels.FOLLOW_THREAD_INACTIVE in html         # "○ Follow this thread" (M1c)
     # the resting target is the HEADLINE (the resolver names the altitude on tap)
     assert "data-topic=" in html and "job cuts" in html
 
@@ -219,7 +219,10 @@ def test_committed_verb_carries_the_disclosure_qualifier():
                                       slug="story-1", con=con)
         assert html.count('class="follow-slot"') == 1
         assert 'data-state="committed"' in html
-        assert 'aria-expanded="false"' in html and "aria-haspopup" not in html
+        # M1c: aria-expanded left the committed verb WITH the collapse toggle it
+        # described (his item 4 took the acts off cards, so there is nothing to
+        # expand to). aria-haspopup stays retired, as ruled.
+        assert 'aria-expanded' not in html and "aria-haspopup" not in html
         assert labels.FOLLOW_STEADY_PREFIX in html       # "Following —"
         assert 'data-topic="Volkswagen"' in html         # STORED name — unfollow target
         assert '<span class="oq">(company)</span>' in html   # quiet class split
@@ -239,7 +242,11 @@ def test_committed_verb_narrow_and_unmigrated_bare():
         slot = {"story_title": "Some headline"}
         html = server._follow_control(st, slot, [], {"some headline"},
                                       "2026-07-18", slug="s", con=con)
-        assert labels.FOLLOW_NARROW in html              # "this story"
+        # M1c / TAXONOMY §1.1: the OBJECT seat takes thread. The state line says
+        # "this thread"; the scope fact ("— this story") is the management ROW's
+        # qualifier, and the two never name the same extension four words apart.
+        assert labels.FOLLOW_THREAD_SELF in html         # "this thread"
+        assert labels.FOLLOW_NARROW not in html          # scope seat lives elsewhere
         # unmigrated: an active follow with NO altitude columns -> bare
         memory.add_thread(con, "Old Thread")
         html2 = server._follow_control(
@@ -301,19 +308,29 @@ def test_following_rows_render_the_altitude_qualifier():
         con.close()
 
 
-def test_degrade_narrow_full_row_keeps_the_upgrade_door():
-    """A resolver-failure narrow follow keeps the exact quiet upgrade line in its
-    full row; a reader's deliberate 'just this story' pick shows no nag."""
+def test_degrade_narrow_row_no_longer_carries_an_upgrade_door():
+    """RE-PINNED BY RULING (NL-103 row 3, M1c): the quiet upgrade door on a
+    degrade-narrow row is DEAD, and so is the apology it opened.
+
+    It was the last standing broaden affordance on any surface, and his 07-25
+    question — "what happens when a reader who CHOSE narrow clicks Broaden, and
+    why would they want to?" — had no answer for it either. A follow that landed
+    story-scoped is now an ORDINARY story-scoped follow: the "— this story" row
+    qualifier is its whole disclosure, and both row kinds render identically."""
     degrade = {"id": 1, "topic": "Fund gating at Meridian", "altitude": "narrow",
-               "altitude_source": "degrade", "disclosure": "",
+               "altitude_source": "degrade", "disclosure": "", "alt_label": "",
                "this_delta": {"date": "2026-07-18", "what_happened": "x"},
                "note": ""}
     pick = dict(degrade, altitude_source="pick", id=2)
-    # the upgrade sentence renders HTML-escaped (the apostrophe -> &#x27;); assert
-    # on its apostrophe-free tail so the pin tracks the copy, not the escaping
     tail = "fetch broader follow — choose it anytime."
-    assert tail in server._spine_updated_row(degrade)
+    assert tail not in server._spine_updated_row(degrade)
     assert tail not in server._spine_updated_row(pick)
+    assert not hasattr(server, "_altitude_upgrade_line")
+    # the two rows differ ONLY by their row id — same treatment, no nag arm
+    def _norm(row, rid):
+        return (server._spine_updated_row(row)
+                .replace(f"follow-row-{rid}", "X").replace(f"'{rid}'", "'X'"))
+    assert _norm(degrade, 1) == _norm(pick, 2)
 
 
 def test_medium_auto_commit_corrected_within_a_day_is_counted():

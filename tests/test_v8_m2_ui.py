@@ -72,7 +72,7 @@ def test_today_body_carries_no_arc_prose_block(tmp_paths):
     today = _today_view(page)
     assert "today-arc-line" not in today               # the prose block is gone
     assert "When we last covered this" not in today    # ...and its sentence
-    assert 'class="memline"' in today                  # replaced by the slim stamp
+    assert 'class="memline' in today                   # replaced by the slim stamp
     assert "entry on this thread" in today
 
 
@@ -87,9 +87,14 @@ def test_lead_stamp_full_form_and_marker_suppressed(tmp_paths):
     page, _ = server.build_page(con)
     con.close()
     lead = _today_view(page).split('<article class="lead')[1].split("</article>")[0]
-    assert 'class="memline"' in lead
+    # RE-PINNED BY RULING (NL-17-M1c, his ruling ⑤ + the attachment ruling): the
+    # FULL form keeps its ordinal and loses the dot and the date clause — moved
+    # is the single word "Updated", carried by the WORD and a weight step (the
+    # word changes too, so weight is never the sole channel).
+    assert 'class="memline memline--moved"' in lead
     assert "entry on this thread" in lead              # FULL form (ordinal kept)
-    assert "last covered" in lead
+    assert "· Updated" in lead
+    assert "last covered" not in lead and "mem-dot" not in lead
     assert "Tracked ongoing story" not in lead         # marker suppressed by the stamp
 
 
@@ -104,7 +109,7 @@ def test_day_one_thread_gets_no_stamp_and_keeps_its_marker(tmp_paths):
     page, _ = server.build_page(con)
     con.close()
     lead = _today_view(page).split('<article class="lead')[1].split("</article>")[0]
-    assert 'class="memline"' not in lead               # no prior coverage → no stamp
+    assert 'class="memline' not in lead                # no prior coverage → no stamp
     assert "Tracked ongoing story" in lead             # the marker is the sole signal
 
 
@@ -129,8 +134,16 @@ def test_stamp_ordinal_is_distinct_prior_editions_plus_today(tmp_paths):
     page, _ = server.build_page(con)
     con.close()
     lead = _today_view(page).split('<article class="lead')[1].split("</article>")[0]
+    # RE-PINNED BY RULING (NL-17-M1c): his 07-25 attachment ruling killed the
+    # continuity dot on cards generally, and ruling ⑤ made the moved indication
+    # the single word "Updated". This stamp only ever fires for a thread that
+    # MOVED this edition, so the date clause it carried is the UNMOVED card's
+    # copy, which this stamp never renders. The stamp's JOB and placement are
+    # unchanged — it is still furniture, still the deck's separate node.
     assert "3rd entry on this thread" in lead
-    assert "last covered Jul 6" in lead
+    assert "· Updated" in lead
+    assert "last covered" not in lead
+    assert "mem-dot" not in lead
 
 
 # ==========================================================================
@@ -204,12 +217,18 @@ def test_strip_stamp_degrades_ordinal_drops_into_smeta(tmp_paths):
     today = _today_view(page)
     strip = today.split('id="story-3"')[1].split("</article>")[0]
     assert 'class="smeta"' in strip
-    assert 'class="mem-dot"' in strip                   # the ● dot leads the smeta
-    assert "last covered" in strip                      # degraded stamp present
+    # RE-PINNED BY RULING (NL-17-M1c): his 07-25 attachment ruling killed the
+    # continuity dot on cards generally, and ruling ⑤ made the moved indication
+    # the single word "Updated". This stamp only ever fires for a thread that
+    # MOVED this edition, so the date clause it carried is the UNMOVED card's
+    # copy, which this stamp never renders. The stamp's JOB and placement are
+    # unchanged — it is still furniture, still the deck's separate node.
+    assert "Updated" in strip                           # degraded stamp present
+    assert "mem-dot" not in strip                       # the second dot is dead
     assert "entry on this thread" not in strip          # ordinal DROPPED on a strip
     # a no-memory strip (story-1) carries no stamp
     plain = today.split('id="story-1"')[1].split("</article>")[0]
-    assert "mem-dot" not in plain
+    assert "Updated" not in plain
 
 
 def test_heading_hierarchy_carries_tier_for_at(tmp_paths):

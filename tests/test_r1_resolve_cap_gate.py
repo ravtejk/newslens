@@ -28,6 +28,15 @@ passed at HEAD.
 Offline by construction (conftest sandbox — no network, no real key, per-test DB).
 The resolver is stubbed in every test, so a gate REGRESSION shows up as a stub
 call that should not have happened, never as real spend.
+
+RE-POINTED BY NL-17-M1c (2026-07-27). `/api/follow/resolve` is retired and split:
+the TAP (`/api/follow/seed`) is $0, local and reaches no gate at all, and the
+COVERAGE LOOKUP (`/api/follow/settle`) carries the gate, because it is the only
+half that can spend. Every proof here still guards the same behaviour on the
+half that now owns it. ONE assertion FLIPPED BY RULING, and it is renamed and
+annotated in place rather than deleted: `test_refusal_commits_nothing` becomes
+`test_refusal_costs_the_broadening_never_the_follow`. The money proof — a tight
+cap attempts NO transport — is unchanged and still the point of the file.
 """
 
 from __future__ import annotations
@@ -50,7 +59,15 @@ class _FollowHandler:
     _with_memory = server.Handler._with_memory
     _ref_id_for = server.Handler._ref_id_for
     _commit_altitude = server.Handler._commit_altitude
-    _api_follow_resolve = server.Handler._api_follow_resolve
+    # NL-17-M1c: the cap gate MOVED with the route it guarded. /api/follow/
+    # resolve is retired and split — the TAP (seed) is $0/local and reaches no
+    # gate at all; the SETTLE carries the gate, because the settle is the only
+    # half that can spend. Every proof below is re-pointed at the half that now
+    # owns the behaviour it was written to guard.
+    _api_follow_seed = server.Handler._api_follow_seed
+    _api_follow_settle = server.Handler._api_follow_settle
+    _seed_thread = server.Handler._seed_thread
+    _settle_onto = server.Handler._settle_onto
 
     def __init__(self):
         self.sent = []
@@ -93,6 +110,18 @@ def _tripwire_resolver(calls):
     return _resolve
 
 
+def _tap(h, topic=STORY, origin=STORY):
+    """One reader tap on the M1c lane: seed (instant, $0, local, ungated) then
+    settle (the coverage lookup — the only half the cap gate guards). Mirrors
+    flFollow -> flSettle in webui.JS."""
+    body = {"topic": topic, "origin": origin}
+    h._api_follow_seed(dict(body))
+    seeded = h.sent[-1][0]
+    if seeded.get("ok") is False or seeded.get("seeded") is not True:
+        return
+    h._api_follow_settle(dict(body, topic_current=seeded.get("topic")))
+
+
 def _active_count():
     con = db.connect(paths.DB_PATH)
     try:
@@ -119,18 +148,23 @@ def test_refuses_when_one_resolve_exceeds_the_cap(monkeypatch):
     monkeypatch.setattr(fa, "resolve_altitude", _tripwire_resolver([]))
 
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": STORY, "origin": STORY})
+    _tap(h)
 
-    assert len(h.sent) == 1
-    payload, status = h.sent[0]
+    payload, status = h.sent[-1]
     assert status == 409
     assert payload["ok"] is False
     assert payload["state"] == "refused"
-    assert payload["error"] == labels.FOLLOW_CAP_REFUSAL
+    # M1c: the refusal carries its CLASS, and the class is R-COVERAGE — the
+    # follow stands, only the broadening was refused. FOLLOW_CAP_REFUSAL is NOT
+    # on the wire any more (Arm A retired it from reader copy); a `detail` for
+    # diagnostics is, and nothing renders it.
+    assert payload["refusal"] == "coverage"
+    assert payload["follow_stands"] is True
+    assert labels.FOLLOW_CAP_REFUSAL not in str(payload)
     # machine-parseable: both figures ride as numbers, not only prose
     assert payload["cap_usd"] == pytest.approx(float(TIGHT_CAP))
     assert payload["est_usd"] > payload["cap_usd"]
-    # honest copy: says plainly that nothing was spent and nothing was followed
+    # honest detail: says plainly that nothing was spent and the follow stands
     assert "no call" in payload["detail"]
     assert "BUDGET_CAP_USD_PER_RUN" in payload["detail"]
 
@@ -145,16 +179,23 @@ def test_refusal_makes_no_resolver_call(monkeypatch):
     calls = []
     monkeypatch.setattr(fa, "resolve_altitude", _tripwire_resolver(calls))
 
-    _FollowHandler()._api_follow_resolve({"topic": STORY, "origin": STORY})
+    _tap(_FollowHandler())
 
     assert calls == []        # zero transport attempts
 
 
-def test_refusal_commits_nothing(monkeypatch):
-    """A cap refusal is NOT the degrade path: the degrade commits this-story to
-    preserve the reader's act, but a refusal never attempted anything, so it must
-    leave the record untouched — and must not wear FOLLOW_DEGRADE copy, which
-    would imply a retryable transient. BORN-RED at HEAD."""
+def test_refusal_costs_the_broadening_never_the_follow(monkeypatch):
+    """RE-PINNED BY RULING (NL-17-M1c / v11): this test asserted the OPPOSITE at
+    HEAD — `test_refusal_commits_nothing`, "a refusal never attempted anything,
+    so it must leave the record untouched". That was true of the pre-commit
+    world and is FALSE of the thread model, which rules that the tap commits a
+    story-seeded thread INSTANTLY and only the coverage lookup can be refused.
+
+    The invariant the old pin was protecting — a refusal must not spend, and
+    must not wear copy implying a retryable transient — is kept verbatim below.
+    What flips is WHAT SURVIVES the refusal: the reader's follow, which cost
+    nothing to make. The content pass's §5.1 Arm A rides exactly this
+    precondition, which is why FOLLOW_CAP_REFUSAL retires rather than renders."""
     monkeypatch.setenv("BUDGET_CAP_USD_PER_RUN", TIGHT_CAP)
     db.migrate(db_path=paths.DB_PATH)
     _quiet_memory(monkeypatch)
@@ -162,11 +203,20 @@ def test_refusal_commits_nothing(monkeypatch):
     before = _active_count()
 
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": STORY, "origin": STORY})
+    _tap(h)
 
-    assert _active_count() == before          # nothing followed
-    payload, _ = h.sent[0]
-    assert payload["error"] != labels.FOLLOW_DEGRADE_LEAD
+    assert _active_count() == before + 1       # THE FOLLOW STANDS
+    con = db.connect(paths.DB_PATH)
+    try:
+        row = con.execute(
+            "SELECT altitude, altitude_source FROM memory"
+            " WHERE lower(topic) = lower(?)", (STORY,)).fetchone()
+    finally:
+        con.close()
+    assert row["altitude"] == "narrow"         # story-scoped, exactly as seeded
+    assert row["altitude_source"] == "seed"    # not 'degrade' — nothing degraded
+    payload, _ = h.sent[-1]
+    assert labels.FOLLOW_DEGRADE_LEAD not in str(payload)
     assert labels.FOLLOW_DEGRADE_UPGRADE not in str(payload)
 
 
@@ -182,12 +232,12 @@ def test_malformed_cap_is_a_disclosed_refusal(monkeypatch):
     monkeypatch.setattr(fa, "resolve_altitude", _tripwire_resolver(calls))
 
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": STORY, "origin": STORY})
+    _tap(h)
 
-    payload, status = h.sent[0]
+    payload, status = h.sent[-1]
     assert status == 409
     assert payload["ok"] is False
-    assert payload["error"] == labels.FOLLOW_CAP_REFUSAL
+    assert payload["refusal"] == "coverage"
     assert calls == []                        # no spend on a config error
 
 
@@ -212,12 +262,11 @@ def test_refusal_payload_lands_in_the_client_resting_branch(monkeypatch):
     monkeypatch.setattr(fa, "resolve_altitude", _tripwire_resolver([]))
 
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": STORY, "origin": STORY})
-    payload, _ = h.sent[0]
+    _tap(h)
+    payload, _ = h.sent[-1]
 
     assert payload.get("ok") is False          # the branch the client tests
-    # and the reason IS on the wire, ready for whoever renders it
-    assert payload["error"] == labels.FOLLOW_CAP_REFUSAL
+    assert payload["refusal"] == "coverage"    # …and the CLASS it routes on
 
 
 def test_gate_arithmetic_matches_the_falsifier(monkeypatch):
@@ -253,14 +302,14 @@ def test_under_cap_resolves_exactly_as_before(monkeypatch):
     monkeypatch.setattr(fa, "resolve_altitude", _tripwire_resolver(calls))
 
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": STORY, "origin": STORY})
+    _tap(h)
 
-    assert calls == [STORY]                   # resolved exactly once
-    payload, status = h.sent[0]
+    assert calls == [STORY]                   # the settle looked up exactly once
+    payload, status = h.sent[-1]
     assert status == 200
     assert payload["state"] == "committed"
     assert payload["altitude"] == "entity"
-    assert _active_count() == 1
+    assert _active_count() == 1               # MOVED, never a second row
 
 
 def test_already_followed_shortcircuit_still_precedes_the_gate(monkeypatch):
@@ -284,9 +333,10 @@ def test_already_followed_shortcircuit_still_precedes_the_gate(monkeypatch):
     monkeypatch.setattr(fa, "resolve_altitude", _tripwire_resolver(calls))
 
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": STORY, "origin": STORY})
+    _tap(h)
 
     payload, status = h.sent[0]
     assert status == 200
     assert payload["state"] == "committed"    # recognized, NOT cap-refused
-    assert calls == []                        # and still no paid resolve
+    assert payload["seeded"] is False         # …so no settle fires at all
+    assert calls == []                        # and still no paid lookup

@@ -317,15 +317,15 @@ def test_split_day_renders_the_covered_before_signal_once_per_slot_never_twice()
     con.close()
     today = page.split('id="view-today"')[1].split('id="view-following"')[0]
     assert "When we last covered this" not in today          # arc PROSE gone from Today
-    assert today.count('class="memline"') == 1               # stamp dedup holds
+    assert today.count('class="memline') == 1               # stamp dedup holds
     assert today.count("Tracked ongoing story") == 1         # sibling keeps marker
     articles = re.findall(r"<article[^>]*>.*?</article>", today, re.S)
     assert len(articles) >= 2
     for art in articles:
-        has_stamp = 'class="memline"' in art
+        has_stamp = 'class="memline' in art
         has_marker = "Tracked ongoing story" in art
         assert not (has_stamp and has_marker)                # never both in one slot
-    stamp_art = [a for a in articles if 'class="memline"' in a]
+    stamp_art = [a for a in articles if 'class="memline' in a]
     marker_art = [a for a in articles if "Tracked ongoing story" in a]
     assert len(stamp_art) == 1 and len(marker_art) == 1
     assert stamp_art[0] is not marker_art[0]

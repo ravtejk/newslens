@@ -44,7 +44,12 @@ class _FollowHandler:
     _with_memory = server.Handler._with_memory
     _ref_id_for = server.Handler._ref_id_for
     _commit_altitude = server.Handler._commit_altitude
-    _api_follow_resolve = server.Handler._api_follow_resolve
+    # NL-17-M1c: /api/follow/resolve retired -> seed (instant commit) + settle
+    # (the coverage lookup). `_tap` drives both exactly as the client does.
+    _api_follow_seed = server.Handler._api_follow_seed
+    _api_follow_settle = server.Handler._api_follow_settle
+    _seed_thread = server.Handler._seed_thread
+    _settle_onto = server.Handler._settle_onto
     _api_follow_at = server.Handler._api_follow_at
     _api_dismiss = server.Handler._api_dismiss
 
@@ -54,6 +59,15 @@ class _FollowHandler:
     def _send_json(self, obj, status=200):
         self.sent.append((obj, status))
         return obj
+
+
+def _tap(h, body):
+    """One reader tap: seed then settle (flFollow -> flSettle in webui.JS)."""
+    h._api_follow_seed(dict(body))
+    seeded = h.sent[-1][0]
+    if seeded.get("ok") is False or seeded.get("seeded") is not True:
+        return
+    h._api_follow_settle(dict(body, topic_current=seeded.get("topic")))
 
 
 def _seq_resolver(calls, specs):
@@ -142,11 +156,16 @@ def test_r3_batch_default_keeps_the_transport_retry(monkeypatch):
 
 
 def test_r3_interactive_entry_opts_out_of_transport_retry():
-    """The interactive server entry (_api_follow_resolve) passes
-    retry_transport=False, so a stuck resolve degrades in one window not two.
-    BORN-RED: pre-fix the call site takes no such kwarg."""
-    src = inspect.getsource(server.Handler._api_follow_resolve)
+    """The interactive server entry passes retry_transport=False, so a stuck
+    lookup degrades in one window not two. BORN-RED: pre-fix the call site takes
+    no such kwarg. RE-POINTED (M1c) to _api_follow_settle — the only entry that
+    still reaches the resolver at all, now that the TAP never does."""
+    src = inspect.getsource(server.Handler._api_follow_settle)
     assert "retry_transport=False" in src
+    # and the tap's own route provably cannot spend: no resolver call site in it
+    seed = inspect.getsource(server.Handler._api_follow_seed)
+    assert "resolve_altitude" not in seed
+    assert "resolve_cost_gate" not in seed
 
 
 # ===========================================================================
@@ -237,11 +256,18 @@ def test_r2_flswitch_surfaces_a_refused_switch():
     the client label table. BORN-RED: pre-fix flSwitch's callback is
     `if (!d || d.ok === false) return;` (silent no-op)."""
     body = _fn_body(webui.JS, "flSwitch")
-    assert "flSwitchFailed" in body
-    assert "function flSwitchFailed" in webui.JS
-    assert "switchFailed" in webui.JS                      # the NL_LABELS key
-    assert labels.FOLLOW_SWITCH_FAILED                     # label defined
-    assert "FOLLOW_SWITCH_FAILED" in inspect.getsource(server._nl_labels_js)
+    assert "flRefused(slot, d, 'switch')" in body
+    assert "function flRefused" in webui.JS      # the class router
+    assert "function flActRefusal" in webui.JS   # the standing-follow renderer
+    # M1c GENERALISES R2's fix rather than keeping it: the refused act now
+    # states its REASON, and the reason travels ON THE PAYLOAD from the branch
+    # that produced it. The old flat string (FOLLOW_SWITCH_FAILED, "Couldn't
+    # switch just now — try again.") named no reason, named no object, and
+    # asserted a transience the client cannot know. It is retired on record.
+    assert "didntSwitch" in webui.JS                       # the frame's NL_LABELS key
+    assert "REFUSAL_DIDNT_SWITCH" in inspect.getsource(server._nl_labels_js)
+    assert "FOLLOW_SWITCH_FAILED" not in inspect.getsource(server._nl_labels_js)
+    assert labels.FOLLOW_SWITCH_FAILED                     # kept on record only
 
 
 # ===========================================================================
@@ -301,7 +327,7 @@ def test_r1_retap_after_unfollow_resolves_the_story(monkeypatch):
     headline = "Volkswagen plans significant job cuts"
 
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": story, "origin": headline})   # tap 1
+    _tap(h, {"topic": story, "origin": headline})                 # tap 1
     assert calls[-1] == story              # first resolve ran on the story
 
     con = db.connect(paths.DB_PATH)
@@ -317,7 +343,7 @@ def test_r1_retap_after_unfollow_resolves_the_story(monkeypatch):
     # unfollow the stored follow (data-topic), then re-tap
     h._api_dismiss({"topic": _data_attr(committed, "topic")})   # "Volkswagen"
     retap_subject = _data_attr(committed, "story") or _data_attr(committed, "topic")
-    h._api_follow_resolve({"topic": retap_subject, "origin": headline})   # tap 2
+    _tap(h, {"topic": retap_subject, "origin": headline})         # tap 2
     assert calls[-1] == story              # RED pre-fix: the stale "Volkswagen"
 
     con = db.connect(paths.DB_PATH)

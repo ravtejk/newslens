@@ -99,7 +99,7 @@ def test_nl65_full_picture_below_body_follow_under_title():
                                 slug="story-1", date=TODAY, con=con)
     con.close()
 
-    i_follow = html.index("Follow this story")      # the merged follow control
+    i_follow = html.index("Follow this thread")      # the merged follow control
     i_body = html.index("LEDE-1")                   # the story body
     i_fp = html.index(labels.FULL_PICTURE)          # "The full picture"
     i_here = html.index("Here for")                 # corroboration furniture
@@ -118,7 +118,7 @@ def test_nl65_lead_story_same_placement():
     html = server._render_story(0, st, sl, "full", set(), has_file=True,
                                 slug="story-0", date=TODAY, con=con)
     con.close()
-    assert html.index("Follow this story") < html.index("LEDE-0")
+    assert html.index("Follow this thread") < html.index("LEDE-0")
     assert html.index("LEDE-0") < html.index(labels.FULL_PICTURE)
     assert html.index(labels.FULL_PICTURE) < html.index("Here for")
 

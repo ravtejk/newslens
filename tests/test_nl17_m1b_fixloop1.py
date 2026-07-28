@@ -30,6 +30,8 @@ Offline by construction (conftest sandbox — no network, no real key, per-test 
 
 from __future__ import annotations
 
+import inspect
+import re
 import types
 
 from newslens import db, follow_altitude as fa, labels, llm, memory, paths, server, webui
@@ -47,7 +49,15 @@ class _FollowHandler:
     _with_memory = server.Handler._with_memory
     _ref_id_for = server.Handler._ref_id_for
     _commit_altitude = server.Handler._commit_altitude
-    _api_follow_resolve = server.Handler._api_follow_resolve
+    # NL-17-M1c: /api/follow/resolve is retired and split — the tap COMMITS
+    # (seed) and the coverage lookup SETTLES separately, so the reader's act can
+    # neither wait on nor be refused by the lookup. `_tap` below drives the two
+    # exactly as the client does, so these fix-loop proofs keep testing the
+    # behaviour they were written for on the lane that now carries it.
+    _api_follow_seed = server.Handler._api_follow_seed
+    _api_follow_settle = server.Handler._api_follow_settle
+    _seed_thread = server.Handler._seed_thread
+    _settle_onto = server.Handler._settle_onto
     _api_follow_at = server.Handler._api_follow_at
 
     def __init__(self):
@@ -56,6 +66,16 @@ class _FollowHandler:
     def _send_json(self, obj, status=200):
         self.sent.append((obj, status))
         return obj
+
+
+def _tap(h, body):
+    """One reader tap: seed (instant, $0, local) then settle (the coverage
+    lookup). Mirrors flFollow -> flSettle in webui.JS."""
+    h._api_follow_seed(dict(body))
+    seeded = h.sent[-1][0]
+    if seeded.get("ok") is False or seeded.get("seeded") is not True:
+        return
+    h._api_follow_settle(dict(body, topic_current=seeded.get("topic")))
 
 
 def _seq_resolver(calls, specs):
@@ -112,8 +132,8 @@ def test_fix1a_origin_card_committed_after_reload(monkeypatch):
     calls = []
     monkeypatch.setattr(fa, "resolve_altitude", _seq_resolver(calls, [_ENTITY]))
     h = _FollowHandler()
-    h._api_follow_resolve({"topic": "Volkswagen job cuts",
-                           "origin": "Volkswagen plans significant job cuts"})
+    _tap(h, {"topic": "Volkswagen job cuts",
+             "origin": "Volkswagen plans significant job cuts"})
     assert len(calls) == 1                                   # first tap resolved
 
     con = db.connect(paths.DB_PATH)
@@ -222,13 +242,14 @@ def test_fix1b_recognized_origin_no_second_resolve_no_double(monkeypatch):
     h = _FollowHandler()
     body = {"topic": "Volkswagen job cuts",
             "origin": "Volkswagen plans significant job cuts"}
-    h._api_follow_resolve(dict(body))                        # tap 1
-    h._api_follow_resolve(dict(body))                        # tap 2, same origin
+    _tap(h, body)                                            # tap 1
+    _tap(h, body)                                            # tap 2, same origin
 
-    assert len(calls) == 1                                   # NO second paid resolve
+    assert len(calls) == 1                                   # NO second paid lookup
     assert _active_count() == 1                              # XOR — one follow, one story
-    # the second tap answered committed (steady-state expand), never re-asked
+    # the second tap answered committed (steady state), never re-settled
     assert h.sent[-1][0].get("state") == "committed"
+    assert h.sent[-1][0].get("seeded") is False              # and did not re-settle
 
 
 # ===========================================================================
@@ -257,11 +278,31 @@ def test_fix2_focus_helper_holds_the_persistent_slot():
 
 def test_fix2_every_transition_path_restores_focus():
     """Every fl* renderer that replaces .follow-slot innerHTML restores focus
-    first. BORN-RED: zero .focus() calls anywhere in the follow flow."""
+    first. BORN-RED: zero .focus() calls anywhere in the follow flow.
+
+    RE-PINNED for NL-17-M1c against the renderer set the thread model leaves
+    standing. flStartResolve / flRenderAsk / flRenderDegrade /
+    flCollapseCommitted are GONE — the settle is invisible, the ask is dead, the
+    apology is dead, and a committed line has nothing to collapse. The LAW is
+    unchanged and now covers the two new morphs (the refusal and the receipt),
+    which is exactly where a dropped focus would be worst."""
     js = webui.JS
-    for fn in ("flStartResolve", "flRenderCommitted", "flRenderAsk",
-               "flRenderDegrade", "flRenderResting", "flCollapseCommitted"):
+    for fn in ("flFollow", "flRenderCommitted", "flRenderResting",
+               "flRenderRefusal", "flReceipt"):
         assert "flHold(slot)" in _fn_body(js, fn), fn
+    # …and flActRefusal must NOT (gate F6). The law is "rescue focus from a
+    # subtree about to be destroyed", not "move focus on every render": this
+    # renderer APPENDS a node and destroys nothing, so holding would yank focus
+    # off the very button the reader just pressed. The two halves of the law
+    # are asserted together so neither can drift into the other.
+    act = re.sub(r"//[^\n]*", " ", _fn_body(js, "flActRefusal"))   # CODE only
+    assert "flHold(slot)" not in act
+    assert "appendChild" in act and "innerHTML" not in act
+    # and the deleted renderers stay deleted — a resurrected one would carry a
+    # dead state back onto the surface
+    for gone in ("flStartResolve", "flRenderAsk", "flRenderDegrade",
+                 "flCollapseCommitted", "flExpandCommitted", "flPick"):
+        assert "function " + gone + "(" not in js, gone
 
 
 # ===========================================================================
@@ -286,39 +327,44 @@ def test_fix3_follow_altitude_seat_has_a_short_interactive_timeout():
 
 
 def test_fix3_degrade_copy_is_byte_identical_carried_invariant():
-    """CARRIED-INVARIANT (born-GREEN): FIX-3 tunes only the timeout; the degrade
-    copy path stays byte-identical. Guards against a copy drift riding the
-    timeout change."""
+    """CARRIED-INVARIANT (born-GREEN): the 07-18 degrade string stays
+    byte-identical as a RECORD.
+
+    RE-PINNED for NL-17-M1c: it is no longer live copy. NL-103 row 3 killed the
+    apology (a failed settle is an ordinary story-scoped follow, disclosed by
+    the "— this story" row qualifier), so the constant is retired-but-kept —
+    the string the principal ruled stays on record, and no surface renders it.
+    The byte pin holds so a later sweep cannot "fix" a dead phrase into a
+    ruling it no longer belongs to; the render pin is the new half."""
     assert labels.FOLLOW_DEGRADE_COMMITTED == (
         "Following — this story. Couldn't fetch broader follow — "
         "choose it anytime.")
+    for mod in (server, webui):
+        src = inspect.getsource(mod)
+        assert "FOLLOW_DEGRADE_LEAD" not in src, mod.__name__
+        assert "FOLLOW_DEGRADE_UPGRADE" not in src, mod.__name__
 
 
 # ===========================================================================
 # FIX-4 — the expanded committed line collapses on a second tap
 # ===========================================================================
 
-def test_fix4_expanded_committed_carries_aria_expanded_true():
-    """The expanded committed sentence declares aria-expanded="true" (honest the
-    open way). BORN-RED: the committed render is a bare <span>, no aria.
+def test_fix4_the_collapse_toggle_is_dead_and_the_card_verb_is_a_door():
+    """FIX-4's collapse toggle is RETIRED BY RULING, not by drift.
 
-    R4 (fix loop 2): anchored on the MARKUP literal, not the bare attribute — the
-    prior pin matched the FIX-4 doc COMMENT too (comment-satisfiable: re-QA proved
-    stripping the markup left it green). The button literal only appears in the
-    emitted markup."""
-    body = _fn_body(webui.JS, "flRenderCommitted")
-    assert '<button class="fl-sentence" type="button" aria-expanded="true"' in body
-
-
-def test_fix4_expanded_sentence_wires_the_collapse_tap():
-    """The committed sentence carries the tap back through followTap ->
-    flExpandCommitted -> flCollapseCommitted, and the collapse renders
-    aria-expanded="false" (honest the closed way). BORN-RED: the sentence is a
-    non-interactive <span>, so flCollapseCommitted is unreachable."""
+    The v11 model took Unfollow off cards (his item 4) and "Instead:" off them
+    (his ruling ②), which left the expand with nothing to expand TO — a click
+    with no answer, the exact thing his gate feedback rejected. So the committed
+    card verb became a DOOR to the deep view, where the acts line lives, and the
+    aria-expanded="true"/"false" pair went with the toggle it described. A
+    committed sentence must therefore NOT be a button any more: an
+    aria-expanded on a control that expands nothing is a false promise to a
+    screen reader."""
     committed = _fn_body(webui.JS, "flRenderCommitted")
-    assert 'class="fl-sentence"' in committed
-    assert "followTap(this)" in committed                    # the sentence is the toggle
-    expand = _fn_body(webui.JS, "flExpandCommitted")
-    assert "flCollapseCommitted" in expand                   # reachable
-    collapse = _fn_body(webui.JS, "flCollapseCommitted")
-    assert 'aria-expanded="false"' in collapse               # honest the closed way
+    assert '<button class="fl-sentence"' not in committed
+    assert 'aria-expanded' not in committed
+    assert "followTap(this)" not in committed                # nothing to toggle
+    steady = _fn_body(webui.JS, "flSteadyVerb")
+    assert "openDeepView(" in steady                         # the door
+    # and the resting CTA keeps its honest closed-state declaration
+    assert 'aria-expanded="false"' in _fn_body(webui.JS, "flRenderResting")

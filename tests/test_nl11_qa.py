@@ -199,7 +199,10 @@ def test_coexistence_unfollow_dismisses_the_case_insensitive_thread(ui):
     bites: memory.dismiss_thread matches `lower(topic)=lower(?)`."""
     post(ui, "/api/follow", {"topic": "Iran War"})          # writes memory.md
     code, obj = post(ui, "/api/unfollow", {"topic": "IRAN WAR"})  # different case
-    assert obj == {"ok": True}
+    # M1c: the unfollow payload gained an `outcome` so the route can distinguish
+    # "I unfollowed it" from "it was already not followed" WITHOUT pushing a
+    # truthful tap into the refusal frame. ok:True is still the contract.
+    assert obj["ok"] is True and obj["outcome"] == "unfollowed"
     con = db.connect()
     try:
         status = con.execute(
