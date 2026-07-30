@@ -17,7 +17,13 @@ All dynamic values are html.escape()'d by the builders in server.py before
 they reach these templates.
 """
 
-CSS = """
+# THE TOKEN BLOCK, on its own (Stage-0 C1). Split out of CSS below — same bytes,
+# same order, concatenated back one line down — so a SECOND page can carry the
+# DIRECTION-v5 §1 tokens without a second copy of them. The Commissioning's
+# founding page is that second page (commissioning.CSS); DESIGN_SYSTEM.md's rule
+# is that tokens live in variables, and two files declaring the same hexes is how
+# they drift.
+TOKENS = """
 :root {
   /* v7 palette — DIRECTION-v5 §1 (the committed Front-Page tokens) */
   --paper: #FCFAF5; --ink: #1A1713; --ink-soft: #575046; --ink-faint: #79705F;
@@ -34,7 +40,9 @@ CSS = """
   --bg: var(--paper); --surface: #FFFFFF; --accent: var(--terra);
   --overlay-scrim: rgba(26,23,19,0.35); --popup-scrim: rgba(26,23,19,0.28);
   --radius: 10px;
-}
+}"""
+
+CSS = TOKENS + """
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html { -webkit-text-size-adjust: 100%; }
 html { scroll-behavior: smooth; }

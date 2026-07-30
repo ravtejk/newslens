@@ -1,0 +1,161 @@
+# =============================================================================
+# THE TOPIC CATALOG — the one authored file behind the Commissioning picker.
+#
+# NL-116 (ratified 2026-07-28): the catalog is DATA, not a constant in code.
+# Every surface that offers a reader topics renders from THIS file, so adding,
+# renaming or re-parenting a topic is a data edit plus a test run — never code
+# surgery. `newslens.catalog` is the only reader.
+#
+# TWO LEVELS, AND ONLY TWO, because sources.yaml has two:
+#   domain  -> written to `interests.broad`     (half-weight personal signal)
+#   topic   -> written to `interests.granular`  (full-weight personal signal)
+# The reader is never asked which level anything is. They pick names; the
+# picker knows the level because this file records it.
+#
+# -----------------------------------------------------------------------------
+# PROVENANCE — NO NAME BELOW WAS INVENTED (no-fabrication law).
+# Every `name` here appears verbatim as a shipped interest tag at 93e64c9, in
+# one of the four authored interest lists the ranker actually consumes:
+#   * sources.yaml                (the founder's own, 14 domain / 45 topic)
+#   * personas/rates-desk.yaml    (Stage-0 M3 near-neighbour A)
+#   * personas/energy-desk.yaml   (Stage-0 M3 near-neighbour B)
+#   * personas/public-health.yaml (Stage-0 M3 off-distribution)
+# tests/test_stage0_c1_catalog.py re-proves that containment mechanically, so
+# a future edit that mints a name goes red rather than shipping.
+#
+# WHAT IS AUTHORED HERE, AND IS THEREFORE ARGUABLE: the PARENTING. The shipped
+# lists are two flat sets with no domain->topic edges; the tree below is the
+# org's reading of them and is exactly the "somebody has to author it"
+# dependency the v12 mockup named. Three calls are flagged, not buried:
+#
+#   (1) SYSTEMIC RISK SITS AT BOTH LEVELS IN SHIPPED DATA — a domain in
+#       personas/rates-desk.yaml, a topic in the founder's sources.yaml. A
+#       catalog name may hold ONE level (the reader picks a name; the code
+#       resolves the level), so it is a DOMAIN here, which is how rates-desk
+#       uses it and which is the level its five credit topics hang from.
+#       Consequence, stated plainly: a reader who picks it gets a half-weight
+#       domain match where the founder's file gives him a full-weight topic.
+#   (2) FOUR DOMAINS CARRY NO TOPICS (Diplomacy, Africa, Latin America,
+#       Oceania). They stay pickable; the picker simply renders no disclosure
+#       for them. That is the honest shape of a vocabulary authored for one
+#       macro/geopolitics reader — the regional rungs never grew topics.
+#   (3) FOUR REAL TOPICS ARE NOT IN THIS FILE: NYC Subway, New York Politics,
+#       New York City, Micromobility. There is no local/regional DOMAIN in the
+#       shipped vocabulary to hang them from, and inventing one would mint a
+#       tag nobody authored. The gap is not new — the 2026-07-03 taxonomy
+#       round named it ("Local/regional news ... no equivalent domain"). It
+#       goes to NL-116's authorship round, not into this file by force.
+#
+# The mockup's 8 domains x 54 specimen topics were placeholders; this is the
+# honest set: 18 domains, 48 topics.
+# =============================================================================
+
+domains:
+
+  # --- Conflict, law, and the wider world -----------------------------------
+  - name: Middle East Conflict
+    topics:
+      - US-Israel Relations
+      - Proxy Conflicts
+      - Strait of Hormuz
+
+  - name: International Law
+    topics:
+      - War Crimes
+
+  - name: Geopolitics
+    topics:
+      - BRICS
+      - China-Taiwan
+      - India Politics
+      - Maritime Chokepoints
+
+  - name: Diplomacy
+    topics: []
+
+  # --- Money ----------------------------------------------------------------
+  - name: Central Bank Policy
+    topics:
+      - Federal Reserve
+      - ECB
+      - Inflation
+
+  - name: Economic Policy
+    topics:
+      - US Economic Outlook
+      - Recession Risk
+      - Stagflation
+      - Housing Policy
+      - Housing Affordability
+      - Consumer Protection
+      - Regulatory Design
+      - Policy Failure
+      - US Legislative Process
+      - Mergers & Acquisitions
+
+  - name: Global Trade
+    topics:
+      - Oil Markets
+      - OPEC+
+      - Energy Supply Shock
+      - Strategic Petroleum Reserve
+      - Agricultural Commodities
+      - Fertilizer Supply
+      - Food Security
+      - Supply Chain Disruption
+      - Semiconductor Supply
+
+  # Domain by the rates-desk fixture's use; see flagged call (1) above.
+  - name: Systemic Risk
+    topics:
+      - Private Credit
+      - Direct Lending
+      - Shadow Banking
+      - Credit Default Risk
+      - Household Debt
+
+  # --- Regions --------------------------------------------------------------
+  - name: Europe
+    topics:
+      - European Economy
+
+  - name: East Asia
+    topics:
+      - Asian Markets
+
+  - name: Africa
+    topics: []
+
+  - name: Latin America
+    topics: []
+
+  - name: Oceania
+    topics: []
+
+  # --- Technology, media, institutions --------------------------------------
+  - name: Civic Tech
+    topics:
+      - Artificial Intelligence
+
+  - name: Independent Media
+    topics:
+      - Financial Analysis
+      - Institutional Research
+
+  # --- Health ---------------------------------------------------------------
+  - name: Public Health
+    topics:
+      - Vaccine Policy
+      - Outbreak Surveillance
+      - Antimicrobial Resistance
+
+  - name: Health Systems
+    topics:
+      - Hospital Capacity
+      - Medicaid
+      - Drug Pricing
+      - Health Workforce
+
+  - name: Biomedical Research
+    topics:
+      - Clinical Trials

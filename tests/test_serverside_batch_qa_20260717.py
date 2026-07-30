@@ -42,6 +42,12 @@ import pytest
 
 from newslens import db, paths, server
 
+# STAGE-0 C1: /api/generate now refuses a profile with NO topics (SEAM 2's
+# belt — a run started there can only die in run_rank's CLI refusal). These
+# are staleness-guard tests about a reader who HAS been commissioned, so they
+# say so, through test_server's helper.
+from test_server import commissioned
+
 DATE = datetime.now().strftime("%Y-%m-%d")
 
 
@@ -175,6 +181,7 @@ def test_git_vanishing_midrun_real_failing_subprocess_never_crashes(
     starts = []
     monkeypatch.setattr(server.GEN_JOB, "start",
                         lambda: (starts.append(1), True)[1])
+    commissioned()
     code, obj = post(ui, "/api/generate", {})
     assert code == 200 and obj["ok"] is True and starts == [1]
 
@@ -277,6 +284,7 @@ def test_unresolvable_both_ways_one_log_line_no_banner_no_refusal(
     starts = []
     monkeypatch.setattr(server.GEN_JOB, "start",
                         lambda: (starts.append(1), True)[1])
+    commissioned()
     code, obj = post(ui, "/api/generate", {})
     assert code == 200 and obj["ok"] is True         # no refusal
 

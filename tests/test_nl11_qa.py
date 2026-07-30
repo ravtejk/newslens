@@ -33,7 +33,8 @@ from types import SimpleNamespace
 from newslens import config, db, paths, ranking, server, webui
 
 # Live-loopback harness + seed helpers (reused, single source of truth).
-from test_server import ui, get, post, seed_briefing, event_rows, replica
+from test_server import (ui, get, post, seed_briefing, event_rows, replica,
+                         prior_edition)
 # In-process build_page seeding (its slot/story/seed pin the NL-11 default-view
 # TODAY behavior and the assemble->parse render path).
 from test_ui_polish import slot, story, seed, TODAY, iso_now
@@ -266,6 +267,7 @@ def test_edition_future_absent_and_bad_calendar_dates_log_no_read(ui):
     render the honest 'unavailable' fragment; an absent ?date= is a 400. None
     is a read. Fix contract if this bites: build_edition_fragment returns
     (html, None) with no row, and _edition guards `if rendered`."""
+    prior_edition(date="1998-01-01")   # C1: past the first run -> the app shell
     code1, _, body1 = get(ui, "/edition?date=2999-12-31")   # future, well-formed
     assert code1 == 200 and "unavailable" in body1.decode("utf-8")
     code2, _, body2 = get(ui, "/edition?date=2026-13-99")   # matches regex, no such day

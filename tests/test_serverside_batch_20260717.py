@@ -30,6 +30,12 @@ import pytest
 
 from newslens import db, server
 
+# STAGE-0 C1: /api/generate now refuses a profile with NO topics (SEAM 2's
+# belt — a run started there can only die in run_rank's CLI refusal). These
+# are staleness-guard tests about a reader who HAS been commissioned, so they
+# say so, through test_server's helper.
+from test_server import commissioned
+
 DATE = datetime.now().strftime("%Y-%m-%d")
 
 
@@ -147,6 +153,7 @@ def test_item1_fresh_server_allows_generate(ui, monkeypatch):
                         lambda: (starts.append(1), True)[1])
     monkeypatch.setattr(server, "_STARTUP_IDENTITY", ("git", "samesha"))
     monkeypatch.setattr(server, "_git_head", lambda: "samesha")
+    commissioned()
     code, obj = post(ui, "/api/generate", {})
     assert code == 200 and obj["ok"] is True
     assert starts == [1]                      # the fresh path reaches the job

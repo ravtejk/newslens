@@ -618,8 +618,21 @@ def errjob(monkeypatch):
 
 
 def _panel(page: str) -> str:
-    today = page.split('id="view-today"')[1].split('id="view-following"')[0]
-    return re.search(r'<div class="state-panel">.*?</div>', today, re.S).group(0)
+    """The failure panel, whichever surface currently owns it.
+
+    STAGE-0 C1 UPDATE (2026-07-28) — assertions UNCHANGED; only the extraction
+    moved. The empty-panel pin below is explicitly about a FAILED FIRST RUN, and
+    a first run is precisely what the Commissioning's founding page now owns
+    (first-run state matrix). Its failure panel states the outcome from the SAME
+    predicate the app's does (server._failure_outcome), so "The saved edition is
+    empty." is still asserted against the words the reader actually sees."""
+    if 'id="view-today"' in page:
+        today = page.split('id="view-today"')[1].split('id="view-following"')[0]
+        return re.search(r'<div class="state-panel">.*?</div>',
+                         today, re.S).group(0)
+    m = re.search(r'<div class="panel" id="c3-failed">.*?</div>', page, re.S)
+    assert m, "neither the app's failure panel nor the founding page's rendered"
+    return m.group(0)
 
 
 INTACT = "The saved edition is intact."

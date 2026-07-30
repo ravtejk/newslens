@@ -268,6 +268,10 @@ TEMPLATES_DIR = PROJECT_ROOT / "templates"
 # migrations/ and prompts/. Deliberately not the principal's sources.yaml —
 # provisioning must never read his working file.
 PROFILE_SOURCES_TEMPLATE = TEMPLATES_DIR / "profile-sources.yaml"
+# The org-authored topic catalog the Commissioning picker renders from (NL-116,
+# Stage-0 C1). Same class as the template above: shipped, read-only, ONE copy
+# for every profile — a catalog is the org's vocabulary, not a reader's state.
+TOPIC_CATALOG = TEMPLATES_DIR / "topic-catalog.yaml"
 # SOURCES_FILE / ENV_FILE / MEMORY_FILE are NOT module globals — they resolve
 # through the PEP 562 guard above (see _GUARDED).
 

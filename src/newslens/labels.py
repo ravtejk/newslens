@@ -295,3 +295,145 @@ ARCHIVE_VIEW_BRIEFING = "View briefing"
 # §14 gate FIX-2: the sr-only qualifier on a no-edition today — terra alone is
 # color-alone non-visually; the a11y tree must not carry a bare numeral.
 ARCHIVE_TODAY_NO_EDITION = "today — no edition yet"
+
+# =============================================================================
+# THE COMMISSIONING — Stage-0 C1, the founding page a stranger's first run opens
+# =============================================================================
+# Every string below is the v12 mockup's VOICE inventory, as amended at the
+# principal's browser gate 2026-07-28 (the leave pair compressed to one line,
+# the sched line compressed; "topics" ratified over "subjects" wholesale).
+# Ship them BYTE-FOR-BYTE: this table is where a copy re-pin lands, and
+# tests/test_stage0_c1_commissioning.py pins each one to the surface that
+# renders it.
+#
+# THE VOCABULARY LAW (ratified 2026-07-28): the reader-facing word is TOPICS.
+# "subject"/"subjects" may not appear on any reader surface, and neither may
+# the mockup's KILLED-ON-SIGHT list. tests/test_stage0_c1_vocabulary.py greps
+# the RENDERED page, not this table, so a banned word cannot arrive through a
+# template either.
+
+# --- The masthead ------------------------------------------------------------
+COMMISSION_MASTHEAD = "Founding an edition"
+
+# --- Act 1: topics -----------------------------------------------------------
+COMMISSION_TOPICS_HEAD = "Topics"
+COMMISSION_TOPICS_SAY = "Pick at least one."
+COMMISSION_TOPICS_NOTE = (
+    "These are the topics NewsLens can rank. Typing filters this list; it "
+    "never adds to it.")
+COMMISSION_FILTER_LABEL = "Find a topic"
+# The filter status renders "<n> topics." at rest and "<n> topics match “q”." /
+# "No topic matches “q”." while filtering — assembled in commissioning.py so the
+# count is derived from the catalog, never typed into copy.
+COMMISSION_COUNT_NONE = "Nothing picked yet."
+# "1 topic picked." / "3 topics picked." — the numeral and plural are computed.
+COMMISSION_COUNT_ONE = "topic picked."
+COMMISSION_COUNT_MANY = "topics picked."
+# FLAG ⑤ as ruled: floor of 1, and this line renders at counts 1–2 only.
+COMMISSION_CONSEQUENCE = (
+    "With fewer than three topics, more of the first edition is general news.")
+# "Show 8 narrower topics" / "Hide 8 narrower topics" — count computed.
+COMMISSION_SHOW_NARROWER = "Show"
+COMMISSION_HIDE_NARROWER = "Hide"
+COMMISSION_NARROWER_SUFFIX = "narrower topics"
+
+# --- Act 2: sources ----------------------------------------------------------
+COMMISSION_SOURCES_HEAD = "Sources"
+COMMISSION_SOURCES_SHOW = "Show the list"
+COMMISSION_PACK_FETCHED = "FETCHED EACH MORNING"
+COMMISSION_PACK_CITED = "CITED, NOT FETCHED"
+COMMISSION_PACK_OFF = "OFF"
+COMMISSION_PACK_HEADLINES_ONLY = "(headlines only)"
+COMMISSION_SOURCES_SETTINGS = "Sources can be turned off in Settings."
+
+# --- Act 3: the found act ----------------------------------------------------
+COMMISSION_FOUND = "Generate Edition No. 1"
+COMMISSION_FOUND_SUB = "This takes about half an hour."
+COMMISSION_FOUND_REFUSAL = "Didn’t generate — no topics are picked."
+
+# --- The wait (C3) -----------------------------------------------------------
+COMMISSION_WAIT_HEAD = "Generating Edition No. 1…"
+COMMISSION_WAIT_LEAVE = (
+    "Closing this page won’t stop it — the edition will be here when it’s "
+    "ready.")
+# The record line: "This record began <Mon D, YYYY>" — the date is the profile's
+# own first-run stamp, computed at render.
+COMMISSION_RECORD_BEGAN = "This record began"
+
+# --- The wait's stage words (SEAM-3) -----------------------------------------
+# The reader-world stage map. The shipped panel renders generate.PROGRESS_LABELS
+# plus the model name — right on the founder's own screen, internal vocabulary
+# on a stranger's. commissioning.reader_stage() maps by PHASE KEY (derived from
+# generate.PROGRESS_LABELS, never a second copy of it) so a re-pin there cannot
+# silently orphan a word here.
+COMMISSION_STAGE_INGEST = "Fetching sources"
+COMMISSION_STAGE_RANK = "Picking the stories"
+COMMISSION_STAGE_ANALYSIS = "Reading around them"
+COMMISSION_STAGE_NARRATIVE = "Writing"
+COMMISSION_STAGE_EDITOR = "Editing"
+COMMISSION_STAGE_RECORDING = "Recording the episode"   # script AND audio
+COMMISSION_STAGE_SAVING = "Saving"                     # persist AND state
+COMMISSION_STAGE_STARTING = "Starting…"                # before the first phase
+# Defence in depth ONLY: a phase added to generate.PROGRESS_LABELS with no
+# reader word here fails tests/test_stage0_c1_commissioning.py before it can
+# ship, so nothing in production renders this. It exists so that if one ever
+# did, a stranger reads a true plain word instead of an internal key.
+COMMISSION_STAGE_FALLBACK = "Working"
+COMMISSION_TOTAL = "TOTAL"
+
+# --- The wait, failed (C3-FAIL) ----------------------------------------------
+COMMISSION_FAIL_HEAD = "Edition No. 1 didn’t finish."
+COMMISSION_FAIL_TRY_AGAIN = "Try again"
+# The three outcome sentences are INHERITED VERBATIM from the shipped panel —
+# server._render_today owns them and the Commissioning reuses the same strings
+# rather than re-drafting: "Nothing was published." / "The saved edition is
+# intact." / "The saved edition is empty."
+
+# --- The found act's own refusals (SEAM-2) -----------------------------------
+# A stranger must never meet the CLI refusal (which names a profile and a
+# filesystem path) or a raw generation exception. These are the reader-world
+# forms of the two ways the found act can fail before a run starts.
+COMMISSION_WRITE_REFUSAL = (
+    "Didn’t generate — your topics couldn’t be saved, so nothing was started.")
+COMMISSION_VERIFY_REFUSAL = (
+    "Didn’t generate — your topics didn’t save, so nothing was started.")
+COMMISSION_UNKNOWN_TOPIC = (
+    "Didn’t generate — one of those topics isn’t in the list.")
+# NEW COPY 2026-07-30, C1 fix loop 1 (QA-3) — FLAGGED FOR THE GATE, not ruled.
+# The third way the found act can fail: some picks landed and a later one did
+# not. The two refusals above are both FALSE in that state ("your topics
+# couldn't be saved" over a file that holds one of them), so the reader is told
+# which ones are in. `{topics}` is filled by commissioning._name_list, so the
+# sentence carries the reader's own words back at them and never a count.
+# Voice: the same "Didn't generate — <fact>, so nothing was started." frame the
+# two siblings use, and the same intransitive "saved" as COMMISSION_VERIFY_REFUSAL.
+COMMISSION_PARTIAL_REFUSAL = (
+    "Didn’t generate — only {topics} saved, so nothing was started.")
+COMMISSION_LIST_AND = " and "
+
+# --- The source pack's counted clauses (Commissioning act 2) -----------------
+# Assembled by commissioning.source_pack_sentence from the reader's OWN file —
+# the four numbers are counted, never typed. Against the shipped profile
+# template they render the mockup's line exactly: "42 outlets. 37 are fetched
+# each morning. 4 are cited but never fetched. 1 aggregator is off."
+COMMISSION_PACK_OUTLET = "outlet"
+COMMISSION_PACK_OUTLETS = "outlets"
+COMMISSION_PACK_FETCHED_ONE = "is fetched each morning"
+COMMISSION_PACK_FETCHED_MANY = "are fetched each morning"
+COMMISSION_PACK_CITED_ONE = "is cited but never fetched"
+COMMISSION_PACK_CITED_MANY = "are cited but never fetched"
+COMMISSION_PACK_OFF_AGG_ONE = "aggregator is off"
+COMMISSION_PACK_OFF_AGG_MANY = "aggregators are off"
+COMMISSION_PACK_OFF_SRC_ONE = "source is off"
+COMMISSION_PACK_OFF_SRC_MANY = "sources are off"
+COMMISSION_PACK_ANALYST_ONE = "analyst newsletter is in the list"
+COMMISSION_PACK_ANALYST_MANY = "analyst newsletters are in the list"
+COMMISSION_PACK_ANALYST_NONE = "; none are followed."
+
+# --- The picker's counted lines ----------------------------------------------
+COMMISSION_TOPIC_WORD = "topic"
+COMMISSION_TOPICS_WORD = "topics"
+# "2 topics match “grid”." / "1 topic matches “grid”." / "No topic matches “x”."
+COMMISSION_FILTER_MATCH_ONE = "topic matches"
+COMMISSION_FILTER_MATCH_MANY = "topics match"
+COMMISSION_FILTER_NO_MATCH = "No topic matches"

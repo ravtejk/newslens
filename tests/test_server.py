@@ -117,6 +117,39 @@ def seed_briefing(con, date=DATE, narrative=None, audio_path=None):
     return slots
 
 
+# ---------------------------------------------------------------------------
+# STAGE-0 C1 helpers — putting the sandbox on the far side of the Commissioning
+#
+# The founding page owns every HTML door until a profile has PUBLISHED an
+# edition (the v12 first-run state matrix), and /api/generate refuses a profile
+# with no interests (SEAM 2's belt). Both are correct and both are new, so the
+# app tests below say out loud which world they are testing rather than relying
+# on a sandbox that happened to be uncommissioned.
+# ---------------------------------------------------------------------------
+
+def commissioned():
+    """One interest tag in the sandbox's sources.yaml — a reader who has been
+    through the Commissioning. Written directly rather than through the editor
+    because the QA synthetic template carries no `interests:` block at all."""
+    text = paths.SOURCES_FILE.read_text(encoding="utf-8")
+    if "interests:" not in text:
+        paths.SOURCES_FILE.write_text(
+            text.rstrip("\n") + "\ninterests:\n  granular:\n    - Inflation\n",
+            encoding="utf-8")
+
+
+def prior_edition(date="1999-01-01"):
+    """A published edition in this profile's past, so the app — not the
+    founding page — owns the door. Deliberately an OLD date: every caller below
+    is asserting about TODAY's state, and a prior edition must not become
+    today's."""
+    con = db.connect()
+    try:
+        seed_briefing(con, date=date)
+    finally:
+        con.close()
+
+
 def event_rows(con):
     return con.execute(
         "SELECT date, kind, occurred_at FROM consumption_events ORDER BY id"
@@ -142,6 +175,10 @@ def test_unknown_routes_and_methods_are_sane(ui):
 
 
 def test_empty_state_renders_generate_copy_and_logs_nothing(ui):
+    # C1: this is the app's no-edition-TODAY panel, which is reachable once the
+    # profile is past its first run. A profile that has never published one
+    # meets the founding page instead — pinned in test_stage0_c1_commissioning.
+    prior_edition()
     code, _, body = get(ui, "/")
     text = body.decode("utf-8")
     assert code == 200
@@ -203,10 +240,15 @@ def test_api_status_starts_idle(ui):
     # stage fields). At rest everything past state/error is empty/None.
     code, _, body = get(ui, "/api/status")
     assert code == 200
+    # C1: the payload gained ONE additive field — the reader-world stage word
+    # the Commissioning's vigil renders, so the stage map lives server-side in
+    # one place instead of being re-implemented in JavaScript. At rest it is the
+    # shipped "Starting…", and the app's own client ignores the key entirely.
     assert json.loads(body) == {
         "state": "idle", "error": "",
         "started_at": None, "stage": None, "stage_model": None,
         "stage_elapsed_s": None, "total_elapsed_s": None,
+        "reader_stage": labels.COMMISSION_STAGE_STARTING,
     }
 
 
@@ -224,6 +266,7 @@ def test_generate_endpoint_is_single_flight(ui, monkeypatch):
 
     monkeypatch.setattr(generate_mod, "run_generate", slow_fake_generate)
     monkeypatch.setattr(config, "load_env", lambda *a, **kw: None)
+    commissioned()          # C1: the trigger refuses a profile with no topics
 
     code, obj = post(ui, "/api/generate", {})
     assert code == 200 and obj == {"ok": True, "detail": "started"}
@@ -252,6 +295,7 @@ def test_generate_failure_surfaces_in_status(ui, monkeypatch):
 
     monkeypatch.setattr(generate_mod, "run_generate", failing)
     monkeypatch.setattr(config, "load_env", lambda *a, **kw: None)
+    commissioned()          # C1: the trigger refuses a profile with no topics
     post(ui, "/api/generate", {})
     deadline = time.time() + 10
     state = {}
@@ -882,6 +926,7 @@ def test_reads_are_honest_during_running_and_error_states(ui, monkeypatch):
     monkeypatch.setattr(generate_mod, "run_generate",
                         lambda *a, **kw: release.wait(timeout=30))
     monkeypatch.setattr(config, "load_env", lambda *a, **kw: None)
+    commissioned()          # C1: the trigger refuses a profile with no topics
     post(ui, "/api/generate", {})
     code, _, body = get(ui, "/")  # running panel replaces the briefing
     assert "Generating" in body.decode("utf-8")
@@ -1066,6 +1111,7 @@ def test_ride24_basexception_never_strands_running(ui, monkeypatch):
 
     monkeypatch.setattr(generate_mod, "run_generate", rude)
     monkeypatch.setattr(config, "load_env", lambda *a, **kw: None)
+    commissioned()          # C1: the trigger refuses a profile with no topics
     post(ui, "/api/generate", {})
     deadline = time.time() + 10
     state = {}
@@ -1118,7 +1164,12 @@ def test_ride23_error_panel_wording_in_both_failure_positions(ui):
     every one of them."""
     server.GEN_JOB.state = "error"
     server.GEN_JOB.error = "synthetic failure for the wording pin"
-    # Position 1: no briefing row exists.
+    # C1: all three positions belong to a reader who HAS an edition history —
+    # a failed FIRST run renders the same three sentences on the founding page
+    # (same predicate, server._failure_outcome), pinned in
+    # tests/test_nl106_stage_and_promote.py and test_stage0_c1_commissioning.py.
+    prior_edition()
+    # Position 1: no briefing row exists for today.
     _, _, body = get(ui, "/")
     page1 = body.decode("utf-8")
     assert "Today’s edition failed" in page1
@@ -1270,6 +1321,7 @@ def test_item27_furniture_contract_through_build_page(ui):
 # =====================================================================
 
 def test_following_uses_suggestion_component_not_datalist(ui):
+    prior_edition()         # C1: the app shell, not the founding page
     _, _, body = get(ui, "/")
     page = body.decode("utf-8")
     following = page[page.index('id="view-following"'):page.index('id="view-archive"')]
@@ -1349,6 +1401,7 @@ def test_edition_fragment_renders_in_place_and_logs_a_read(ui):
 
 
 def test_edition_fragment_absent_edition_is_graceful_and_no_read(ui):
+    prior_edition(date="1998-01-01")   # C1: the app shell, not the founding page
     code, _, body = get(ui, "/edition?date=1999-01-01")
     assert code == 200 and "unavailable" in body.decode("utf-8")
     con = db.connect()

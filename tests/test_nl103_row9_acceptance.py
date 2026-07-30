@@ -72,8 +72,23 @@ def errjob(monkeypatch):
 
 
 def _panel(page: str) -> str:
-    today = page.split('id="view-today"')[1].split('id="view-following"')[0]
-    return re.search(r'<div class="state-panel">.*?</div>', today, re.S).group(0)
+    """The failure panel, whichever surface currently owns it.
+
+    STAGE-0 C1 UPDATE (2026-07-28) — the assertions below are UNCHANGED; only
+    the extraction moved. A profile with no PUBLISHED edition now meets the
+    Commissioning's founding page instead of the app shell (the first-run state
+    matrix), and its failure panel states the outcome from the SAME predicate
+    (server._failure_outcome, factored out of _render_today for exactly this
+    reason). So the row-9 invariant — the panel's claim must agree with the
+    edition the reader can actually open — is asserted on whichever panel the
+    reader is looking at, which is what it always meant."""
+    if 'id="view-today"' in page:
+        today = page.split('id="view-today"')[1].split('id="view-following"')[0]
+        return re.search(r'<div class="state-panel">.*?</div>',
+                         today, re.S).group(0)
+    m = re.search(r'<div class="panel" id="c3-failed">.*?</div>', page, re.S)
+    assert m, "neither the app's failure panel nor the founding page's rendered"
+    return m.group(0)
 
 
 def test_row9_intact_is_never_claimed_for_a_body_less_row(ui, errjob):

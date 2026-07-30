@@ -43,8 +43,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import (analysis, config, db, events, follow_altitude, labels, memory,
-               paths, webui)
+from . import (analysis, catalog, commissioning, config, db, events,
+               follow_altitude, labels, memory, paths, webui)
 
 DEFAULT_PORT = 8484
 DEVELOPING_WINDOW_DAYS = 7  # dot = thread picked up within this many days
@@ -102,7 +102,15 @@ class _GenJob:
             with self.lock:
                 self.state = "done"
                 self._clear_stage_locked()
-        except Exception as exc:  # surfaced verbatim in the error panel
+        except Exception as exc:  # surfaced verbatim in the FOUNDER's panel
+            # C1 fix loop 1 (QA-6): the founding page now renders this sentence
+            # only when it matches a reader-safe form (commissioning.
+            # unfit_for_readers), so on a stranger's first run it is usually
+            # omitted — a model id, a spend figure or a credential error must
+            # not be a stranger's first screen. Omitted is not lost: the
+            # operator grade of the same fact goes to the serve terminal, which
+            # is where it was always the right grade of prose.
+            print(f"generate failed: {exc}", flush=True)
             with self.lock:
                 self.state = "error"
                 self.error = str(exc)
@@ -909,6 +917,106 @@ def topic_add(name: str, level: str) -> Tuple[bool, str]:
         return True, f"added {name} as a {level} topic", lines
 
     return _yaml_edit(mutate)
+
+
+# ---------------------------------------------------------------------------
+# THE FOUND ACT'S ANSWER — Stage-0 C1, QA-9 (HIGH, fix loop 2)
+# ---------------------------------------------------------------------------
+# The whole answer is computed HERE, off the socket, and the handler below does
+# nothing but send it. Two reasons, both load-bearing:
+#
+#   1. A broad guard that wraps self._send_json() can DOUBLE-SEND — the send
+#      itself sits inside the region it is guarding. Computing the payload
+#      first means the guard has exactly one thing to protect and one thing to
+#      answer with, and no arm where half a response is already on the wire.
+#   2. It is callable without a socket, so the falsifier for QA-9 can inject a
+#      fault at every seam in this function and read the payload directly,
+#      rather than inferring the wire's contents from a rendered page.
+
+def _commission_door(name: str, level: str) -> Tuple[bool, str]:
+    """topic_add, with a RAISE treated as the door saying no.
+
+    QA-9's mechanism: _yaml_edit wraps only config.load_sources() in try/except
+    — `path.read_text()`, `tmp.write_text()` and `os.replace()` are bare — so a
+    read-only profile directory walks a real OSError straight out of topic_add.
+
+    Answering `(False, "")` hands that fault to the one path commission()
+    already models truthfully: it re-reads the file, computes what actually
+    landed, and names it. A door that raises and a door that refuses are the
+    same fact about the file, and the caller must not be able to tell them
+    apart — otherwise the refusal's truthfulness would depend on which of the
+    two happened, which is the QA-3 defect wearing a fourth face.
+
+    The message is emptied deliberately: topic_add's own strings are vouched
+    for, an exception's are not, and this function cannot tell which it is
+    holding by the time it returns. commission() composes the reader's sentence
+    from the FILE either way (`_refusal_for`), so nothing is lost. The
+    operator's grade goes to the serve terminal."""
+    try:
+        return topic_add(name, level)
+    except Exception as exc:            # noqa: BLE001 — breadth is the point
+        print(f"commission: saving {name!r} failed: {exc}", flush=True)
+        return False, ""
+
+
+def _commission_answer(body: Dict) -> Tuple[Dict, int]:
+    """(payload, status) for POST /api/commission — SEAM 2's ordering.
+
+    Write the topics, VERIFY they are readable, and only then start the
+    generate. The verification is not a formality: a run started on a profile
+    whose interests did not land dies ~30 minutes later in `run_rank`'s
+    refusal, which names the profile and a filesystem path — a CLI sentence as
+    a stranger's first screen, which is the exact thing this milestone exists
+    to make impossible. `commissioning.commission` returns the go-ahead or a
+    reader-world refusal; there is no third answer and no path from a refusal
+    to GEN_JOB.start().
+
+    QA-9 (fix loop 2) — THE ANSWER'S VOCABULARY IS CLOSED. Every `error` this
+    function can return is the output of `commissioning.reader_refusal()`,
+    whose codomain is the five blessed constants plus the one partial sentence
+    re-derived from what landed on disk. `str(exc)` has no route out of here:
+    the broad arm below catches everything the catalog load, the YAML edit, the
+    staleness check and the job start can raise, answers a blessed sentence,
+    and puts the operator's grade of the same fact in the serve terminal —
+    exactly as _GenJob._run already does for a failed generate.
+
+    KNOWN IMPRECISION, disclosed rather than hidden: the broad arm answers
+    COMMISSION_WRITE_REFUSAL. Every raise the write door itself can make is
+    already routed through _commission_door into commission()'s truthful
+    machinery, so this arm is reachable only via the catalog load,
+    config.load_sources(), the staleness check or GEN_JOB.start(). For the last
+    two the topics ARE saved, which makes "your topics couldn't be saved"
+    imprecise. The alternative was a new reader-facing string, which the QA-9
+    contract does not admit; and the picker discloses the truth on the very
+    next load regardless (a saved topic re-renders checked, QA-7). Flagged for
+    the gate, not ruled."""
+    try:
+        raw = body.get("topics") if isinstance(body, dict) else None
+        names = [str(t) for t in raw] if isinstance(raw, list) else []
+        try:
+            cat = catalog.load()
+        except catalog.CatalogError as exc:
+            # Loud in the log, reader-world on screen. A picker that cannot
+            # read its own catalog has nothing honest to offer.
+            print(f"commissioning: {exc}", flush=True)
+            return {"ok": False, "error": labels.COMMISSION_WRITE_REFUSAL}, 500
+        ok, refusal, written = commissioning.commission(
+            names, _commission_door, cat=cat)
+        if not ok:
+            return ({"ok": False,
+                     "error": commissioning.reader_refusal(refusal, written)},
+                    400)
+        if _server_is_stale():
+            # Same teeth as the generate trigger — the topics ARE saved (that
+            # write is the reader's, and it stands), so the answer names the
+            # one thing that did not start.
+            return {"ok": False, "error": labels.STALENESS_REFUSAL}, 409
+        started = GEN_JOB.start()
+        return ({"ok": True,
+                 "detail": "started" if started else "already running"}, 200)
+    except Exception as exc:            # noqa: BLE001 — breadth is the point
+        print(f"commission failed: {exc}", flush=True)
+        return {"ok": False, "error": labels.COMMISSION_WRITE_REFUSAL}, 500
 
 
 def topic_remove(name: str) -> Tuple[bool, str]:
@@ -1781,6 +1889,25 @@ def _back_link(label: str, onclick: str) -> str:
             f'onclick="{onclick}">{_e(label)}</a>')
 
 
+def _failure_outcome(con: sqlite3.Connection, row=None) -> str:
+    """Which of the three post-failure positions the reader is in.
+
+    Factored out of _render_today at Stage-0 C1 so the Commissioning's own
+    failure panel states the SAME fact from the SAME predicate — the founding
+    page and the app must never disagree about whether anything was published.
+    Behaviour is unchanged: same order, same strings, same readability
+    predicate (`_stories_for`, the edition renderer's own, reused and never
+    re-derived), still read for TODAY because GEN_JOB always generates today."""
+    _today = datetime.now().strftime("%Y-%m-%d")
+    _saved = (row if (row is not None and row["date"] == _today)
+              else _briefing_row(con, _today))
+    if _saved is None:
+        return "Nothing was published."
+    if _stories_for(_saved, _log_entry_for(_today))[0]:
+        return "The saved edition is intact."
+    return "The saved edition is empty."
+
+
 def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
                   gen_state: Dict[str, str],
                   briefs: Optional[Dict[int, Dict]] = None) -> str:
@@ -1843,15 +1970,7 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         # `_stories_for` — reused, never re-derived — so the panel and the body
         # the reader can open cannot disagree. Pinned by
         # tests/test_nl103_row9_acceptance.py (claim == what /edition returns).
-        _today = datetime.now().strftime("%Y-%m-%d")
-        _saved = (row if (row is not None and row["date"] == _today)
-                  else _briefing_row(con, _today))
-        if _saved is None:
-            _outcome = "Nothing was published."
-        elif _stories_for(_saved, _log_entry_for(_today))[0]:
-            _outcome = "The saved edition is intact."
-        else:
-            _outcome = "The saved edition is empty."
+        _outcome = _failure_outcome(con, row)
         body = f"""
 <div class="state-panel">
   <h2>Today’s edition failed</h2>
@@ -3974,14 +4093,32 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_html("<h1>Forbidden</h1>", 403)
         parsed = urlparse(self.path)
         try:
+            if parsed.path == "/api/status":
+                # NOT gated by the first-run router below: the ceremony's own
+                # vigil polls this endpoint, and the reader-world stage word
+                # rides along so the map (SEAM 3) stays server-side, in one
+                # place, rather than being re-implemented in JavaScript.
+                snap = GEN_JOB.snapshot()
+                snap["reader_stage"] = commissioning.reader_stage(
+                    snap.get("stage"))
+                return self._send_json(snap)
+            # STAGE-0 C1 — THE FIRST-RUN ROUTER. "PROFILE HAS NO TOPICS -> the
+            # founding page, at every URL" (v12 state matrix): every HTML door
+            # a first-run reader can open answers with the Commissioning, so a
+            # deep link into Today, an edition or the Archive cannot strand a
+            # stranger in three empty rooms. /api/status is exempt above;
+            # /audio/ has nothing to serve before an edition exists and 404s on
+            # its own.
+            if parsed.path in ("/", "/edition", "/archive"):
+                first_run = self._commissioning_page()
+                if first_run is not None:
+                    return self._send_html(first_run)
             if parsed.path == "/":
                 return self._page(parse_qs(parsed.query))
             if parsed.path == "/edition":
                 return self._edition(parse_qs(parsed.query))
             if parsed.path == "/archive":
                 return self._archive(parse_qs(parsed.query))
-            if parsed.path == "/api/status":
-                return self._send_json(GEN_JOB.snapshot())
             m = re.match(r"^/audio/(\d{4}-\d{2}-\d{2})\.wav$", parsed.path)
             if m:
                 return self._audio(m.group(1))
@@ -3990,6 +4127,29 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as exc:
             self._send_html(f"<h1>Server error</h1><pre>{_e(exc)}</pre>", 500)
+
+    def _commissioning_page(self) -> Optional[str]:
+        """The founding page's HTML while this profile is in its first run, or
+        None once it is out of it (Stage-0 C1).
+
+        Every state is derived HERE, server-side, from the job's snapshot — the
+        page's script only polls and reloads. That is what keeps "Closing this
+        page won't stop it — the edition will be here when it's ready." true
+        (SEAM 4): the run is a background thread in this process, and returning
+        to any URL re-enters the wait from its snapshot."""
+        con = db.connect()
+        try:
+            gen_state = GEN_JOB.snapshot()
+            state = commissioning.first_run_state(con, gen_state)
+            if state is None:
+                return None
+            outcome = (_failure_outcome(con)
+                       if state == commissioning.FAILED else "")
+        finally:
+            con.close()
+        return commissioning.render(
+            state, config.load_sources(), gen_state, outcome=outcome,
+            staleness_banner=_staleness_banner_html())
 
     def _page(self, qs: Dict[str, List[str]]) -> None:
         date = (qs.get("date") or [None])[0]
@@ -4120,6 +4280,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/topic/remove": self._api_topic_remove,
                 "/api/writer/add": self._api_writer_add,
                 "/api/writer/remove": self._api_writer_remove,
+                "/api/commission": self._api_commission,
                 "/api/generate": self._api_generate,
             }.get(parsed.path)
             if handler is None:
@@ -4586,6 +4747,17 @@ class Handler(BaseHTTPRequestHandler):
         ok, msg = writer_remove(name)
         self._send_json({"ok": ok, "detail" if ok else "error": msg})
 
+    def _api_commission(self, body: Dict) -> None:
+        """THE FOUND ACT — Stage-0 C1, and the build-blocking ordering (SEAM 2).
+
+        The act itself is `_commission_answer` (module level, above topic_remove):
+        it computes the whole answer off the socket so its broad guard cannot
+        double-send, and so QA-9's falsifier can read the wire's exact contents
+        without a browser. This method is the socket and nothing else — every
+        string it sends came out of `commissioning.reader_refusal()`."""
+        payload, status = _commission_answer(body)
+        self._send_json(payload, status)
+
     def _api_generate(self, body: Dict) -> None:
         # The teeth of the staleness guard (2026-07-16 incident): writing an
         # edition with stale code is the failure this batch exists to stop.
@@ -4594,6 +4766,15 @@ class Handler(BaseHTTPRequestHandler):
         if _server_is_stale():
             return self._send_json(
                 {"ok": False, "error": labels.STALENESS_REFUSAL}, 409)
+        # STAGE-0 C1 / SEAM 2, THE BELT. A generate on a profile with no
+        # interests cannot succeed — run_rank refuses it — and the refusal it
+        # raises is the CLI sentence naming a profile and a filesystem path,
+        # surfaced verbatim in the failure panel. Refusing at the trigger means
+        # that sentence is never generated in the first place, on this route or
+        # any other: the founding page's "Try again" lands here too.
+        if not config.load_sources().has_interests:
+            return self._send_json(
+                {"ok": False, "error": labels.COMMISSION_FOUND_REFUSAL}, 409)
         started = GEN_JOB.start()
         self._send_json({"ok": True,
                          "detail": "started" if started else "already running"})
