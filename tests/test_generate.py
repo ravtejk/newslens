@@ -830,19 +830,25 @@ def test_uncovered_story_disclosure_is_scoped_out_of_the_episode():
     assert any("story 6" in h for h in hard_all)     # legacy whole-edition behavior
 
 
-def test_slot_budget_lines_state_hard_targets_with_lead_primacy():
+def test_slot_budget_lines_state_targets_with_lead_primacy_and_no_floors():
     """NL-63 M2 fix (writer under-delivered the doubled bands ~20%, lead at a
-    third of target): the per-story budget lines the writer sees state HARD word
-    targets — ~640 lead / ~440 full-picture / ~220 In-Brief — with the lead's
-    primacy spelled out, not the old soft '~550-750' the model treated as
-    optional. Steering, not a new gate."""
+    third of target): the per-story budget lines the writer sees state explicit
+    word targets — ~640 lead / ~440 full-picture / ~220 In-Brief — with the
+    lead's primacy spelled out, not the old soft '~550-750' the model treated
+    as optional.
+
+    CONSCIOUSLY FLIPPED (length regime 2026-07-30, floors -> targets
+    product-wide): the minimums that rode alongside those targets — 550 on the
+    lead, 350 on medium, 180 on quick — are GONE. Ordering survives, padding
+    toward a number does not. The tooth that only the demotion can flip lives
+    in tests/test_length_regime_slot1.py::test_T3."""
     lead = generate._slot_budget_line(1)
     med = generate._slot_budget_line(2)
     quick = generate._slot_budget_line(4)
-    assert "640" in lead and "550" in lead      # explicit lead target + floor
+    assert "640" in lead and "550" not in lead   # target kept, floor gone
     assert "LONGEST" in lead                     # primacy stated hard
-    assert "440" in med and "350" in med
-    assert "220" in quick and "180" in quick
+    assert "440" in med and "350" not in med
+    assert "220" in quick and "180" not in quick
 
 
 def test_hard_per_story_targets_reach_the_narrative_prompt():
@@ -1109,9 +1115,14 @@ def test_amended_steering_reaches_the_sent_prompts(migrated_con, fake_model):
     prompts): the narrative call carries BOTH steering surfaces (the template's
     rewritten TIERED STRUCTURE — lowercase 'single longest' — and the injected
     per-slot budget lines — uppercase 'single LONGEST'), the editor call
-    carries the amended 450 tier floor with the stale ~300 gone, and the script
-    call carries the coverage + emergent-band contract. Offline proves ARRIVAL;
-    only the live re-run proves obedience."""
+    carries no floor language, and the script call carries the coverage +
+    emergent-band contract. Offline proves ARRIVAL; only the live re-run proves
+    obedience.
+
+    CONSCIOUSLY FLIPPED (length regime 2026-07-30): the narrative assertion
+    used to require the template's 'and never under 550'. The template now says
+    NO LENGTH FLOOR on the writer side too, matching the editor side that
+    NL-118 item 6 already reconciled."""
     slots = [slot(i) for i in range(1, 7)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
@@ -1121,7 +1132,8 @@ def test_amended_steering_reaches_the_sent_prompts(migrated_con, fake_model):
     n_prompt = json_calls[0]["prompt"]
     assert "single longest story of the day" in n_prompt          # template
     assert "the lead alone carries the largest single share" in n_prompt
-    assert "and never under 550" in n_prompt                      # template floor
+    assert "never under 550" not in n_prompt          # template floor RETIRED
+    assert "NO LENGTH FLOOR exists anywhere" in n_prompt          # its successor
     assert "single LONGEST story of the day" in n_prompt          # budget line
     e_prompt = json_calls[1]["prompt"]
     # CONSCIOUSLY FLIPPED (EC-9 reconciliation, NL-118 item 6): the editor

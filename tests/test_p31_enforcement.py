@@ -9,9 +9,11 @@ What this file pins:
     repetition; a legitimately edited script of the same edition
     (2026-07-06-legitimate.txt) passes CLEAN.
   * LIVENESS reds per the ENGINEERING.md BUG17 rule (enforcement is born
-    with the red only its wiring can flip): the structural gate and the
-    lead tier floor both reach run_generate's persisted output, not just a
-    helper function.
+    with the red only its wiring can flip): the structural gate reaches
+    run_generate's persisted output, not just a helper function. The lead
+    tier floor used to be the second such pin; the length regime of
+    2026-07-30 RETIRED it (floors -> targets, product-wide), and the section
+    below now pins its inverse — a short briefed lead ships with a note.
   * SPEND-PROOF (offline, injected models, $0): each hard-with-retry path
     fires at most ONE retry, and a retry whose estimate would breach the
     remaining cap is SKIPPED with disclosure — never attempted.
@@ -96,9 +98,11 @@ def violating_script(slots):
 
 
 def payload_with_lead_words(slots, sentinel, n_repeats=50):
-    """stories_payload with story 1's lede padded past LEAD_FLOOR_WORDS
-    using numeral-free, hedge-free filler + a unique sentinel sentence.
-    n_repeats=50 (~450 filler words) clears the NL-63 M2 floor of 450."""
+    """stories_payload with story 1's lede padded past 450 lead-words using
+    numeral-free, hedge-free filler + a unique sentinel sentence. n_repeats=50
+    (~450 filler words) clears the old NL-63 M2 floor of 450 — retired as a
+    floor on 2026-07-30, kept here as the "not short" side of the note
+    threshold (generate.LEAD_SHORT_NOTE_WORDS)."""
     payload = copy.deepcopy(stories_payload(slots))
     filler = "The analysis continues with sourced detail and measured context. "
     payload["stories"][0]["lede"] += " " + filler * n_repeats + sentinel
@@ -307,72 +311,52 @@ def test_structural_retry_skipped_when_it_would_breach_the_cap(
         con.close()
 
 
-# --- liveness: the lead tier floor (item 3) ------------------------------------
+# --- liveness: the lead tier floor, RETIRED (length regime 2026-07-30) --------
+#
+# P3.1 item 3's floor is gone: the principal ratified floors -> targets
+# product-wide, so a briefed lead under 450 words is a PASS that leaves an
+# observability NOTE, not a violation that draws a rewrite-longer retry. The
+# four tests that pinned the retry, its message, its cap-skip and the editor's
+# length discard are REPLACED below by their inverses — the enforcement they
+# guarded no longer exists, so keeping them green would require keeping it.
+# The thin-corpus case (a real 15-row slot-1 day where the short lead is the
+# HONEST output) lives in tests/test_length_regime_slot1.py; what these keep is
+# this file's own contract: the behaviour reaches run_generate's persisted
+# output, not just a helper.
 
-def test_LIVENESS_tier_floor_retry_lifts_a_briefed_lead(
+def test_LIVENESS_a_short_briefed_lead_draws_a_NOTE_not_a_retry(
         tmp_paths, fake_seq, monkeypatch):
-    """A briefed lead under LEAD_FLOOR_WORDS draws ONE narrative retry with
-    the deficiency injected; the floor-meeting retry is what persists."""
+    """WAS test_LIVENESS_tier_floor_retry_lifts_a_briefed_lead. A briefed lead
+    under 450 words used to draw one narrative retry telling the model to write
+    "much longer". It now draws a single disclosure note and nothing else: no
+    second call, no retry step, no retry line on the bill."""
     db.migrate()
     con = db.connect()
     try:
         slots = _stage_fakes(monkeypatch)
-        persist_valid(con)  # slot-1 analysis brief exists -> the floor binds
-        sentinel = "The lead now carries its full analytical weight."
-        fake_seq.narratives = [stories_payload(slots),
-                               payload_with_lead_words(slots, sentinel)]
+        persist_valid(con)  # slot-1 analysis brief exists -> the note is armed
+        fake_seq.narratives = [stories_payload(slots)]   # short lead
         fake_seq.scripts = [compliant_script(slots)]
         rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
                                     refresh=True)
         json_calls = [c for c in fake_seq.calls if c["json_mode"]]
-        assert len(json_calls) == 3  # narrative + ONE retry + editor
-        assert "TIER-EXPRESSION VIOLATION" in json_calls[1]["prompt"]
-        assert "story 1 (the lead) ran" in json_calls[1]["prompt"]
-        assert any("lead tier floor: retry brought the lead" in w
-                   for w in rep.warnings)
-        assert sentinel in rep.narrative_text
-    finally:
-        con.close()
-
-
-def test_tier_floor_retry_message_carries_amended_steering_and_bills(
-        tmp_paths, fake_seq, monkeypatch):
-    """QA (NL-63 M2 fix loop): the REWRITTEN floor-retry message reaches the
-    model carrying the amended steering — TARGET ~640, LONGEST-story primacy,
-    rewrite-the-lead-ALONE — while keeping both long-pinned substrings (the
-    TIER-EXPRESSION header and the 'story 1 (the lead) ran' opener) intact.
-    And money honesty holds on a retry-bearing OK run: the attempt ledger
-    bills all four API-reaching attempts exactly once each."""
-    db.migrate()
-    con = db.connect()
-    try:
-        slots = _stage_fakes(monkeypatch)
-        persist_valid(con)  # slot-1 analysis brief exists -> the floor binds
-        sentinel = "The lead now carries its full analytical weight."
-        fake_seq.narratives = [stories_payload(slots),
-                               payload_with_lead_words(slots, sentinel)]
-        fake_seq.scripts = [compliant_script(slots)]
-        rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
-                                    refresh=True)
-        retry_prompt = [c for c in fake_seq.calls if c["json_mode"]][1]["prompt"]
-        assert "TIER-EXPRESSION VIOLATION" in retry_prompt   # pinned header kept
-        assert "story 1 (the lead) ran" in retry_prompt      # pinned opener kept
-        assert "TARGET ~640 words" in retry_prompt           # amended steering
-        assert "LONGEST story of the day" in retry_prompt
-        assert "Rewrite the lead ALONE" in retry_prompt
-        assert "Keep every other story's tier and length" in retry_prompt
+        assert len(json_calls) == 2  # narrative + editor, no retry
+        assert not any("TIER-EXPRESSION" in c["prompt"] for c in json_calls)
+        assert not any("lead tier floor" in w for w in rep.warnings)
+        assert any("no floor action; length regime 2026-07-30" in w
+                   for w in rep.warnings), rep.warnings
         assert [(e["step"], e["attempt"]) for e in rep.attempt_ledger] == [
-            ("narrative", 1), ("narrative_retry", 1),
-            ("editor", 1), ("script", 1)]
+            ("narrative", 1), ("editor", 1), ("script", 1)]
     finally:
         con.close()
 
 
 def test_tier_floor_is_inert_without_a_lead_brief(
         tmp_paths, fake_seq, monkeypatch):
-    """Thin days keep the material excuse: no slot-1 brief => a short lead
-    draws NO retry and NO floor warning (the floor binds only when a valid
-    lead analysis brief removed the excuse)."""
+    """No slot-1 brief => a short lead draws NO retry, NO floor warning and no
+    note either. The note deliberately inherits the retry's brief gate: a slot
+    the analyst never briefed was never warned about, and the length regime
+    did not widen that."""
     db.migrate()
     con = db.connect()
     try:
@@ -385,18 +369,21 @@ def test_tier_floor_is_inert_without_a_lead_brief(
         assert len(json_calls) == 2  # narrative + editor, no retry
         assert not any("TIER-EXPRESSION" in c["prompt"] for c in json_calls)
         assert not any("lead tier floor" in w for w in rep.warnings)
+        assert not any("length regime 2026-07-30" in w for w in rep.warnings)
     finally:
         con.close()
 
 
-def test_tier_floor_retry_skipped_when_it_would_breach_the_cap(
+def test_no_floor_retry_is_attempted_even_with_the_estimator_poisoned(
         tmp_paths, fake_seq, monkeypatch):
-    """Spend-proof, narrative side: floor deficit + no cap headroom =>
-    zero retry calls, shipped with disclosure."""
+    """WAS test_tier_floor_retry_skipped_when_it_would_breach_the_cap. The
+    spend-proof it carried is now a stronger claim: the retry is not skipped
+    for cost, it does not exist. The poison is left armed on purpose — a
+    TIER-EXPRESSION prompt priced at $999 can never be built, so the estimator
+    is never consulted and the cap-skip disclosure vocabulary is retired too."""
     real_est = generate._est_cost
 
     def starving_est(prompt, max_tokens, step="narrative"):
-        # B2: step-aware passthrough (seat-priced estimates), same poison.
         if "TIER-EXPRESSION VIOLATION" in prompt:
             return 999.0
         return real_est(prompt, max_tokens, step)
@@ -412,18 +399,23 @@ def test_tier_floor_retry_skipped_when_it_would_breach_the_cap(
         rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
                                     refresh=True)
         json_calls = [c for c in fake_seq.calls if c["json_mode"]]
-        assert len(json_calls) == 2  # narrative + editor; retry never attempted
-        assert any("lead tier floor" in w and "retry skipped" in w
-                   and "shipped with disclosure" in w for w in rep.warnings)
+        assert len(json_calls) == 2  # narrative + editor
+        assert not any("retry skipped" in w and "lead tier floor" in w
+                       for w in rep.warnings)
+        assert any("no floor action; length regime 2026-07-30" in w
+                   for w in rep.warnings), rep.warnings
     finally:
         con.close()
 
 
-def test_editor_guard_discards_an_edit_that_cuts_the_lead_below_floor(
+def test_the_editor_may_now_cut_a_briefed_lead_below_the_old_floor(
         tmp_paths, fake_seq, monkeypatch):
-    """M6's cut power gains a floor, not a new power: a floor-meeting draft
-    edited below the floor is DISCARDED through the existing degrade path,
-    disclosed, and the draft persists."""
+    """WAS test_editor_guard_discards_an_edit_that_cuts_the_lead_below_floor.
+    M6's cut power no longer carries a floor: a shorter edit ships. The FACT
+    guard on the same degrade seam is untouched — pinned in
+    tests/test_editor_preservation.py and paired in test_length_regime_slot1's
+    T2b — so what this proves is precisely that the LENGTH discard, and only
+    the length discard, is gone."""
     db.migrate()
     con = db.connect()
     try:
@@ -432,15 +424,15 @@ def test_editor_guard_discards_an_edit_that_cuts_the_lead_below_floor(
         sentinel = "The lead now carries its full analytical weight."
         draft = payload_with_lead_words(slots, sentinel)
         edit = copy.deepcopy(draft)
-        edit["stories"][0]["lede"] = "Cut to nothing."  # same tier/labels
+        edit["stories"][0]["lede"] = "Cut to the point."  # same tier/labels
         fake_seq.narratives = [draft, edit]
         fake_seq.scripts = [compliant_script(slots)]
         rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
                                     refresh=True)
-        assert any("editor cut the lead to" in w
-                   and "tier floor" in w for w in rep.warnings)
-        assert any("the edit was discarded" in w for w in rep.warnings)
-        assert sentinel in rep.narrative_text
+        assert not any("editor cut the lead to" in w for w in rep.warnings)
+        assert not any("the edit was discarded" in w for w in rep.warnings)
+        assert "Cut to the point." in rep.narrative_text   # the EDIT shipped
+        assert sentinel not in rep.narrative_text          # the draft did not
     finally:
         con.close()
 
@@ -684,9 +676,10 @@ def test_structural_retry_skipped_when_real_spend_already_ate_the_cap(
 def test_tier_floor_inert_with_a_rejected_slot1_brief(
         tmp_paths, fake_seq, monkeypatch):
     """Rejected is not valid: a slot-1 brief row with status='rejected'
-    (and no valid row) leaves the floor INERT exactly like absence —
-    latest_valid_brief filters on status, the material excuse stands,
-    and the deep view reads absent."""
+    (and no valid row) leaves the short-lead note INERT exactly like absence —
+    latest_valid_brief filters on status, and the deep view reads absent.
+    (Pre-2026-07-30 this pinned the FLOOR's inertness; the gate it tests is
+    the same one, now guarding a note instead of a retry.)"""
     db.migrate()
     con = db.connect()
     try:
@@ -701,20 +694,22 @@ def test_tier_floor_inert_with_a_rejected_slot1_brief(
         assert len(json_calls) == 2  # narrative + editor, no retry
         assert not any("TIER-EXPRESSION" in c["prompt"] for c in json_calls)
         assert not any("lead tier floor" in w for w in rep.warnings)
+        assert not any("length regime 2026-07-30" in w for w in rep.warnings)
         assert rep.deep_views["1"] == "absent"
     finally:
         con.close()
 
 
-def test_tier_floor_still_binds_when_a_newer_rejection_follows_a_valid_brief(
+def test_the_brief_gate_still_reads_the_latest_VALID_row_not_the_newest_row(
         tmp_paths, fake_seq, monkeypatch):
-    """The adversarial flip of the rejected case: a valid brief followed
-    by a NEWER rejected row (a failed regeneration) does NOT lift the
-    floor — latest_valid_brief serves the latest VALID row, the writer
-    still receives that brief, so the thin-material excuse stays removed
-    and the short lead draws its retry. (Deliberately different from
-    analyst_slot3_tier's newest-row-wins: that derives a VERDICT; this
-    asks whether usable brief material exists.)"""
+    """The adversarial flip of the rejected case, re-pointed at the surviving
+    observable. A valid brief followed by a NEWER rejected row (a failed
+    regeneration) does NOT lift the gate: latest_valid_brief serves the latest
+    VALID row, the writer still receives that brief, so the short lead still
+    draws its disclosure note. (Deliberately different from
+    analyst_slot3_tier's newest-row-wins: that derives a VERDICT; this asks
+    whether usable brief material exists.) Pre-2026-07-30 the observable was
+    the floor retry; the gate under test is unchanged."""
     db.migrate()
     con = db.connect()
     try:
@@ -722,16 +717,14 @@ def test_tier_floor_still_binds_when_a_newer_rejection_follows_a_valid_brief(
         persist_valid(con)                                   # valid, older
         analysis.persist_brief(con, DATE, 1, "full", "rejected", None, "",
                                0.01, {"manifest": {}})       # rejected, newer
-        sentinel = "The lead now carries its full analytical weight."
-        fake_seq.narratives = [stories_payload(slots),
-                               payload_with_lead_words(slots, sentinel)]
+        fake_seq.narratives = [stories_payload(slots)]       # short lead
         fake_seq.scripts = [compliant_script(slots)]
         rep = generate.run_generate(date=DATE, con=con, env=dict(ENV),
                                     refresh=True)
         json_calls = [c for c in fake_seq.calls if c["json_mode"]]
-        assert len(json_calls) == 3  # narrative + floor retry + editor
-        assert "TIER-EXPRESSION VIOLATION" in json_calls[1]["prompt"]
-        assert sentinel in rep.narrative_text
+        assert len(json_calls) == 2  # narrative + editor, no retry ever
+        assert any("no floor action; length regime 2026-07-30" in w
+                   for w in rep.warnings), rep.warnings
         assert rep.deep_views["1"] == "available"
     finally:
         con.close()

@@ -44,7 +44,9 @@ WHAT TO DO, in priority order:
 6. PRESERVE ABSOLUTELY: tier values; story order; why_label / watch_label
    values exactly as declared; every revival phrase and its exact date; outlet names in single-source ledes; all facts, numbers,
    dates, and attributions you keep must appear character-honest (no
-   rounding, no paraphrase of quoted matter). NL-75 — preserve the
+   rounding, no paraphrase of quoted matter; a quote stays with its EXACT
+   speaker — never re-attach quoted words to a different, broader, or plural
+   subject). NL-75 — preserve the
    ACCOUNTABILITY moves: a watch-for CONVERSION (a sentence reporting the
    outcome of a prior promise, noting today's sources are silent on it, or
    naming what superseded it) is load-bearing content — never cut it as

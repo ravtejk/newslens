@@ -867,26 +867,33 @@ def _slot_budget_line(slot_n: int) -> str:
     # the lead and both full-picture stories DOUBLE their Today-page depth, and
     # "In Brief" (slot 4+) is the OLD medium register (structured — NOT the dead
     # <=60-word snippet). Slots 1-3 are EXACTLY the three full-picture stories.
-    # Fix (obs: the writer under-delivered the doubled bands by ~20% and the
-    # lead came in at a third of its target): word targets are stated HARD, as
-    # floors not decoration, and the lead's primacy is spelled out — the model
-    # treated the old soft "~550-750" as optional and wrote a full-picture-
-    # length lead. Steering, not a gate: only the 450-word briefed-lead floor
-    # is enforced (with retry); these targets steer the whole edition up to band.
+    #
+    # LENGTH REGIME 2026-07-30 (principal-ratified, product-wide): these numbers
+    # are TARGETS, not floors. The NL-63 M2 fix stated them "HARD, as floors not
+    # decoration" to cure a writer under-delivering its bands — but a minimum a
+    # model cannot honestly reach is an instruction to PAD, and padding is the
+    # one thing the no-fabrication rule forbids. So the floor words come out and
+    # the ORDERING rule (the lead is the day's longest story) stays: on a thin
+    # day the other stories tighten, the lead does not inflate.
     if slot_n == 1:
-        return ("FULL tier (the lead) — TARGET ~640 words, and NEVER under 550. "
-                "This is THE LEAD: it must be the single LONGEST story of the "
-                "day, visibly longer than any full-picture story below — a lead "
-                "that reads as short as a slot-2 story is a failure. Spend the "
-                "budget: lede 3-6 sentences; why_it_matters a full 8-12 "
-                "sentences built from source specifics; watch_for 2-3 sentences")
+        return ("FULL tier (the lead) — TARGET ~640 words WHEN THE MATERIAL "
+                "SUPPORTS IT. This is THE LEAD: it must be the single LONGEST "
+                "story of the day, visibly longer than any full-picture story "
+                "below. The lead leads by WEIGHT, not by word count: a lead "
+                "built on one or two full texts is SHORT, and short is a PASS. "
+                "The no-fabrication rule outranks every length rule — never "
+                "reach a number with material you were not given. On a thin day "
+                "the other stories TIGHTEN so the lead still leads; the lead "
+                "never pads to get there. On a rich day, spend the budget: lede "
+                "3-6 sentences; why_it_matters a full 8-12 sentences built from "
+                "source specifics; watch_for 2-3 sentences")
     if slot_n in (2, 3):
         return ("MEDIUM tier (a full-picture story, DOUBLED depth) — TARGET ~440 "
-                "words, floor 350, shorter than the lead but a real full "
+                "words, shorter than the lead but a real full "
                 "picture: lede 3-5 sentences; why_it_matters 5-8 sentences; "
                 "watch_for 1-2 sentences")
     return ("QUICK tier (the 'In Brief' register — a compact STRUCTURED mini-"
-            "story, NOT a headline snippet) — TARGET ~220 words, floor 180: "
+            "story, NOT a headline snippet) — TARGET ~220 words: "
             "lede 2-3 sentences; why_it_matters 3-5 sentences; watch_for 1-2 "
             "sentences")
 
@@ -1801,14 +1808,19 @@ def trace_check_numerals(stories: List[Dict], inputs: Dict) -> List[str]:
     return warns
 
 
-# P3.1 item 3 (principal ruling (5)): the lead's tier must EXPRESS.
-# NL-63 M2 re-derivation under the AMENDED contract: the edition total is now
-# 1,800-2,500 lead-weighted and A2's lead band is 450-900; the lead target is
-# ~640. The floor lands at 450 — the band minimum, above a full-picture story's
-# ~440 so a briefed lead can never sink to full-picture length, and well under
-# the 900 ceiling. Enforced hard-with-retry ONLY when a valid lead brief exists;
-# thin days without a brief stay warn-free (the material excuse is real there).
-LEAD_FLOOR_WORDS = 450
+# P3.1 item 3 was "the lead's tier must EXPRESS", enforced hard-with-retry at a
+# 450-word floor (NL-63 M2's re-derivation: edition total 1,800-2,500
+# lead-weighted, A2's lead band 450-900, target ~640).
+#
+# LENGTH REGIME 2026-07-30 — THIS IS NO LONGER A FLOOR. The principal ratified
+# floors -> targets product-wide: a rewrite-longer retry is pad-toward-minimum,
+# which is exactly the behaviour the no-fabrication rule forbids, and the
+# thinnest real slot-1 day in the record (founder brief 17 — 15 rows, two full
+# texts, 16,717 held chars; frozen at tests/fixtures/slot1_thin_corpus.json)
+# has no honest 640-word lead in it. 450 survives only as the DISCLOSURE
+# threshold: below it the run leaves an observability note so D3's
+# week-of-editions falsifier has data. No action, no retry, no discard.
+LEAD_SHORT_NOTE_WORDS = 450
 
 
 def _lead_words(payload: Dict) -> int:
@@ -3230,7 +3242,7 @@ def run_generate(
             )
         except GenerateError as exc:
             # BUG-6/32 family (NL-63 M2 obs): a run that aborts mid-pipeline
-            # still spent real money — narrative, its floor retry, the editor,
+            # still spent real money — narrative, the editor,
             # and BOTH script attempts on a degenerate-stub abort all bill before
             # the raise. Fold that accumulated spend into the failed entry so
             # the money record is never a silent null. attempt_ledger is
@@ -3543,68 +3555,6 @@ def _run_generate_body(
     # subscription (below), where charged is 0 but the run must still be capped.
     spent += step_n["usd_shadow"] or 0
 
-    # P3.1 item 3: tier expression. A briefed lead under the floor gets ONE
-    # retry with the deficiency injected; a second miss ships with
-    # disclosure (severity judgment: warn-after-retry, not a dead run —
-    # the briefing always ships, per the reconciled ladder's spirit).
-    lead_w = _lead_words(draft_payload)
-    if (inputs.get("briefs_by_slot") or {}).get(1) and lead_w < LEAD_FLOOR_WORDS:
-        floor_msg = (
-            f"story 1 (the lead) ran {lead_w} words — FAR under its floor of "
-            f"{LEAD_FLOOR_WORDS} (it has a full analysis brief, so the material "
-            "excuse is gone). Rewrite the lead ALONE, much longer: TARGET ~640 "
-            f"words, an absolute floor of {LEAD_FLOOR_WORDS}. The brief gives "
-            "you a cited ledger, mechanism, effects, and unknowns — spend them: "
-            "a full 8-12-sentence why_it_matters built from those source "
-            "specifics is the bulk of the lift. The lead is THE LEAD: it must "
-            "end up the LONGEST story of the day, clearly longer than any "
-            "full-picture story. Keep every other story's tier and length "
-            "exactly as they are.")
-        retry_n_prompt = (n_prompt + "\n\n=== YOUR PREVIOUS DRAFT WAS "
-                          "REJECTED — TIER-EXPRESSION VIOLATION (fix exactly "
-                          "this; everything above still binds) ===\n- "
-                          + floor_msg)
-        est_rn = _est_cost(retry_n_prompt, NARRATIVE_MAX_TOKENS)
-        if spent + est_rn > cap:
-            report.warnings.append(
-                f"lead tier floor: {lead_w} words < {LEAD_FLOOR_WORDS} "
-                f"(retry skipped — would exceed the cap) — shipped with "
-                "disclosure")
-        else:
-            try:
-                _, usage_rn = call_llm(
-                    key, retry_n_prompt, "narrative_retry",
-                    NARRATIVE_MAX_TOKENS, NARRATIVE_TEMPERATURE, True,
-                    validate=_shape_check, cost_sink=report.attempt_ledger,
-                )
-                retry_payload = draft_holder[0]
-                step_rn = {"step": "narrative_retry",
-                           "prompt_tokens": usage_rn.get("prompt_tokens"),
-                           "completion_tokens": usage_rn.get("completion_tokens"),
-                           **_step_ledger("narrative_retry", usage_rn)}
-                report.steps.append(step_rn)
-                spent += step_rn["usd_shadow"] or 0   # cap on shadow (see above)
-                retry_w = _lead_words(retry_payload)
-                if retry_w >= LEAD_FLOOR_WORDS:
-                    draft_payload = retry_payload
-                    report.warnings.append(
-                        f"lead tier floor: retry brought the lead {lead_w} "
-                        f"-> {retry_w} words")
-                elif retry_w > lead_w:
-                    draft_payload = retry_payload
-                    report.warnings.append(
-                        f"lead tier floor: retry improved {lead_w} -> "
-                        f"{retry_w} words, still under {LEAD_FLOOR_WORDS} — "
-                        "shipped with disclosure")
-                else:
-                    report.warnings.append(
-                        f"lead tier floor: retry did not improve ({lead_w} "
-                        f"words) — shipped with disclosure")
-            except GenerateError as exc:
-                report.warnings.append(
-                    f"lead tier floor retry failed ({exc}) — {lead_w}-word "
-                    "lead shipped with disclosure")
-
     # --- Editor pass (M6 mandate 2): cut/tighten/concretize ONLY — the
     # editor may never add facts; the edited payload is what gets fully
     # validated, persisted, and adapted. Editor failure degrades to the
@@ -3715,23 +3665,19 @@ def _run_generate_body(
     # draft with disclosure; a draft that ALSO fails is a logged, visible
     # GenerateError — never a raw crash.
     try:
-        # P3.1 item 3 (editor guard): tightening never cuts a briefed lead
-        # below its tier floor — the M6 cut power gains a floor, not a new
-        # power. A violating edit is DISCARDED via the existing degrade
-        # path (ValueError -> draft, disclosed).
-        if (inputs.get("briefs_by_slot") or {}).get(1) \
-                and edited_payload is not draft_payload \
-                and _lead_words(edited_payload) < LEAD_FLOOR_WORDS \
-                and _lead_words(draft_payload) >= LEAD_FLOOR_WORDS:
-            raise ValueError(
-                f"editor cut the lead to {_lead_words(edited_payload)} words "
-                f"— below its {LEAD_FLOOR_WORDS}-word tier floor (the draft "
-                "met it)")
+        # LENGTH REGIME 2026-07-30 — the editor's length guard is GONE. P3.1
+        # item 3 discarded any edit that cut a briefed lead below 450 words,
+        # which made "tighten" conditional on a minimum the editor could not
+        # always honestly meet. A shorter lead that keeps the specifics is now
+        # the desired outcome, so it ships. What did NOT go is the FACT guard
+        # directly below: the editor may still never lose a dated ledger
+        # callback, and that discard rides this same degrade seam.
         # A9 preserve-enforcement (editor-preservation batch): the teeth. A
         # dated ledger callback the DRAFT carried whose (date + subject) fact no
         # longer survives the edit is DISCARDED via this SAME degrade path —
-        # exactly the LEAD_FLOOR mirror above: raise ValueError -> the edit is
-        # dropped, the writer's draft ships with disclosure. This is the direct
+        # the shape the retired LEAD_FLOOR guard used to share with it: raise
+        # ValueError -> the edit is dropped, the writer's draft ships with
+        # disclosure. (It is now the ONLY user of this path.) This is the direct
         # HSR unblock: the length-editor can no longer delete the writer's clean
         # dated accountability callbacks (e8/e9) while keeping the poison one.
         # Degrade-to-draft is the LONGER, pricier text (Onna) — couples to the
@@ -3787,6 +3733,26 @@ def _run_generate_body(
         else:
             raise GenerateError(f"narrative failed validation: {exc}") from exc
     report.warnings.extend(narrative_warnings)
+    # LENGTH REGIME 2026-07-30 — OBSERVABILITY, NOT ENFORCEMENT. What stood
+    # at the pre-editor site was P3.1 item 3's floor retry (pad-toward-
+    # minimum; banned product-wide by the ratification). Nothing is retried,
+    # rejected, or discarded; a short lead on a thin day is a PASS. The note
+    # measures the SHIPPED lead — post-editor, post-degrade (gate ruling R4,
+    # batch A 2026-07-31): an editor-shortened lead is exactly the data
+    # D3's week-of-editions revisit needs, and the revisit reads shipped
+    # lengths from the record; this line is the run-time disclosure of the
+    # same number.
+    #
+    # The brief gate is KEPT from the retry this replaced: a slot with no
+    # valid analysis brief was never warned about, and the length regime did
+    # not widen that (the record-derived revisit covers briefless days).
+    lead_w = _lead_words({"stories": stories})
+    if (inputs.get("briefs_by_slot") or {}).get(1) \
+            and lead_w < LEAD_SHORT_NOTE_WORDS:
+        report.warnings.append(
+            f"lead length note: story 1 ran {lead_w} words, under the "
+            f"{LEAD_SHORT_NOTE_WORDS}-word disclosure threshold — no floor "
+            "action; length regime 2026-07-30 (D3 week-of-editions data)")
     # NL-75 THE FORWARD-CLAIM RULES — run generation-side over the EDITED
     # stories (the same text that persists). Repetition diction without a
     # predating antecedent (poisoned-antecedent hardened), stale watch-fors,
@@ -3911,7 +3877,8 @@ def _run_generate_body(
     # test_structural_retry_skipped_when_real_spend_already_ate_the_cap):
     # count the script step's REAL cost into `spent` BEFORE the structural
     # retry decision below — mirroring the narrative twin, which counts
-    # step_n before its floor-retry pre-check. Without this the retry
+    # step_n into `spent` as soon as the step completes (its floor-retry
+    # pre-check is retired; length regime 2026-07-30). Without this the retry
     # pre-check under-counts true spend by one script call, and a run can
     # overshoot the cap by one retry. (report.steps keeps its original
     # append position after the block.)

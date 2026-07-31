@@ -32,6 +32,16 @@ workspace/debates/2026-07-06--newslens--editor-analysis-briefs.md):
     own wording ("F1: a pinned fact contradicts its own cited sources").
     Your background knowledge of who holds office is presumptively stale;
     if the sources say "President X", the brief says "President X".
+  - A quotation belongs to its ACTUAL SPEAKER, and the speaker survives from
+    source to brief: who is quoted, and how many of them there are, is COPIED
+    from the source's own framing, never merged with a nearby subject. A
+    first-person-singular quote ("my", "me", "I") NEVER shares a sentence with
+    a plural or collective subject — if the source keeps "Parents ... say" and
+    one parent's "my dead daughter" in separate sentences, so does the brief.
+    When the source carries a quote WITHOUT naming the speaker, attribute it to
+    the outlet's framing — "Al Jazeera's report carries a parent saying ..." —
+    never to the group the speaker belongs to, and never to a speaker the
+    material does not name.
   - A discrepancy exists only when two sources conflict on the SAME
     quantity or date of the SAME event/decision. Check the dates on both
     sources first: "a figure from an earlier decision or period is
@@ -172,6 +182,17 @@ minister" for the same person is the defect.) Never supply the missing name from
 own knowledge: you may well be right, and it would still be a fabrication,
 because we did not retrieve it. Four ways of not saying a name is worse
 writing AND worse faith than one sentence saying we do not have it.
+
+LOCK THE DESCRIPTOR IN THE DISCLOSURE SENTENCE. The sentence that names the gap
+also fixes the exact descriptor phrase; every later mention of that entity — in
+any field, including unknowns, watch, and notes_for_writer — reuses that exact
+string, character for character. Synonyms, shortenings, and appositive
+re-descriptions ("the appointee", "the new minister" after "the unnamed veteran
+leader") are the defect, not variety. One entity, one string. A genuinely
+different entity (a future or permanent office-holder, discussed separately from
+today's unnamed person) gets its own disclosure and its own single locked
+descriptor — and no sentence may leave the reader unsure which of the two it
+means.
 
 LENGTH. The word budget below is a ceiling with teeth, not a target to fill: a
 brief that comes in at 40% of budget because the material was thin is CORRECT

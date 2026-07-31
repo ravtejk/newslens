@@ -306,56 +306,53 @@ def test_pipeline_narrative_and_editor_validators_get_the_same_correction(
 # HAMMER 4 — interplay with the SEPARATE outer retry mechanisms
 # =========================================================================
 
-def test_lead_floor_retry_and_informed_retry_compose_without_doubling(
+def test_the_informed_retry_still_anchors_cleanly_with_the_floor_retry_gone(
         rec_chat):
-    """Both mechanisms in one narrative pass: attempt 1 is valid-shaped but
-    its briefed lead is under LEAD_FLOOR_WORDS -> the OUTER floor retry
-    fires a fresh call_llm whose base is n_prompt + the TIER-EXPRESSION
-    block, pristine of any CORRECTION block. Inside THAT call, attempt 1
-    returns malformed JSON -> the informed retry appends exactly ONE
-    correction to exactly THAT base. One TIER header, one CORRECTION block,
-    nothing compounds, and the floor-cleared payload ships."""
+    """RE-ANCHORED (length regime 2026-07-30, floors -> targets product-wide).
+
+    WAS: both mechanisms in one narrative pass — a briefed lead under
+    LEAD_FLOOR_WORDS fired an OUTER floor retry whose base was n_prompt + the
+    TIER-EXPRESSION block, and a malformed JSON inside THAT call appended
+    exactly one CORRECTION block to exactly that base. The outer floor retry no
+    longer exists: a short briefed lead is a pass that leaves a note.
+
+    NOW, what this hammer still owns: the informed retry anchors to the
+    ORIGINAL narrative prompt, exactly one correction block, no TIER-EXPRESSION
+    block anywhere in the run, the short-lead payload ships, and the editor
+    call starts pristine. Nothing compounds — which was always the point."""
     con = _con()
     try:
         slots = [slot(1), slot(2), slot(3)]
         seed_briefing(con, A_DAY, slots)
-        persist_valid(con, date=A_DAY)   # slot-1 brief -> the floor binds
+        persist_valid(con, date=A_DAY)   # slot-1 brief -> the NOTE is armed
         try:
             json.loads("still not json")
         except ValueError as e:
             json_err = str(e)
-        import copy
-        long_lead = copy.deepcopy(stories_payload(slots))
-        filler = ("The analysis continues with sourced detail and measured "
-                  "context. ")
-        long_lead["stories"][0]["lede"] += " " + filler * 60
+        short_lead = stories_payload(slots)
         rec_chat.replies = [
-            json.dumps(stories_payload(slots)),   # narrative 1: short lead
-            "still not json",                     # floor retry, attempt 1: bad
-            json.dumps(long_lead),                # floor retry, attempt 2: ok
-            json.dumps(long_lead),                # editor echo
+            "still not json",                     # narrative, attempt 1: bad
+            json.dumps(short_lead),               # attempt 2: ok, short lead
+            json.dumps(short_lead),               # editor echo
             _digest_script(slots, 620),           # script clean
         ]
         rep = generate.run_generate(date=A_DAY, con=con, env=dict(ENV),
                                     refresh=False)
         j = [c["prompt"] for c in rec_chat.calls if c["json_mode"]]
-        assert len(j) == 4
-        assert PREFIX not in j[0] and "TIER-EXPRESSION" not in j[0]
-        # outer retry base: original narrative prompt + TIER block, no leak
-        assert j[1].startswith(j[0])
-        assert "TIER-EXPRESSION VIOLATION" in j[1]
-        assert PREFIX not in j[1]
-        # informed retry anchors to THAT base: one correction, one TIER header
-        assert j[2] == j[1] + "\n\n" + PREFIX + json_err + SUFFIX
-        assert j[2].count(PREFIX) == 1
-        assert j[2].count("TIER-EXPRESSION VIOLATION") == 1
-        # editor starts pristine of both mechanisms' blocks
-        assert PREFIX not in j[3] and "TIER-EXPRESSION" not in j[3]
-        assert any("lead tier floor: retry brought the lead" in w
-                   for w in rep.warnings)
+        assert len(j) == 3                        # narrative x2 + editor
+        assert PREFIX not in j[0]
+        # informed retry anchors to the ORIGINAL base: one correction, no more
+        assert j[1] == j[0] + "\n\n" + PREFIX + json_err + SUFFIX
+        assert j[1].count(PREFIX) == 1
+        # the retired mechanism appears nowhere in the run
+        assert not any("TIER-EXPRESSION" in p for p in j)
+        # editor starts pristine
+        assert PREFIX not in j[2]
+        assert not any("lead tier floor" in w for w in rep.warnings)
+        assert any("no floor action; length regime 2026-07-30" in w
+                   for w in rep.warnings), rep.warnings
         assert _ledger(rep) == [
-            ("narrative", 1), ("narrative_retry", 1), ("narrative_retry", 2),
-            ("editor", 1), ("script", 1)]
+            ("narrative", 1), ("narrative", 2), ("editor", 1), ("script", 1)]
         assert not rec_chat.replies
     finally:
         con.close()
