@@ -77,12 +77,13 @@ import stat
 import textwrap
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from conftest import anthropic_sse_bytes
+from conftest import anthropic_sse_bytes, pin_product_clock
 from newslens import doctor, generate, llm, memory_core, paths, ranking
 from test_generate import (A_DAY, ENV, compliant_script, run, seed_briefing,
                            slot, stories_payload)
@@ -189,6 +190,41 @@ _RANK_CLUSTERS = {"clusters": [{"story_title": "T", "summary": "S",
                                 "matched_tags": [],
                                 "matched_memory": [], "world_impact": 5,
                                 "world_impact_reason": "r"}]}
+
+
+# ---------------------------------------------------------------------------
+# NL-126 (2026-07-31) — the fixture time-bomb pin
+# ---------------------------------------------------------------------------
+# This file is dated 2026-07-17 and every seed in it is written against that
+# day: source_items.fetched_at = '2026-07-17T00:00:00.000Z', briefings on
+# 2026-07-16/17. ranking.candidate_window is NOW-anchored (now -
+# RECENCY_CAP_DAYS = now-14d), and run_rank does not thread a now_utc down to
+# it — so on 2026-07-30, fourteen real days after the stamps, four tests here
+# started dying inside run_rank with "no ingested items inside the candidate
+# window (14.0d, first briefing — full cap)", for a reason with nothing to do
+# with the subscription lane they exist to guard. They detonated BETWEEN the
+# NL-118 gate's run and its land; bisect proved them pre-existing at clean
+# 3ce882b (DECISIONS [2026-07-30] "THE FIXTURE TIME-BOMB CLASS (NL-126)").
+#
+# The pin freezes the product's window clock at a NOW consistent with this
+# file's own stamps — 12h after the newest seeded item, so the 14d recency cap
+# and the 14d dormancy cap both hold exactly as they did on the day the file
+# was written. The seeded stamps are NOT re-dated: moving them to "today"
+# would hide the class and re-arm the same fuse 14 days out.
+#
+# Two side effects to know before adding tests here: (1) seam 3 also freezes
+# memory._utc_now, so every memory row this module writes is stamped
+# 2026-07-17T12:00:00.000Z — do not assert real time on memory stamps; (2) the
+# pin gates READS, not writes: briefings.generated_at still gets the REAL
+# clock (ranking.py:1498), and candidate_window's clock-skew clamp
+# (ranking.py:230) is what absorbs that future-dated row into a 0.0d window —
+# that clamp is load-bearing for this pin.
+MODULE_NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_window_clock(monkeypatch):
+    pin_product_clock(monkeypatch, MODULE_NOW)
 
 
 # ===========================================================================

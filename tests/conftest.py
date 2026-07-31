@@ -720,3 +720,60 @@ def migrated_con(tmp_path):
     con = db.connect(db_path)
     yield con
     con.close()
+
+
+# ---------------------------------------------------------------------------
+# NL-126 — the fixture time-bomb pin (2026-07-31)
+# ---------------------------------------------------------------------------
+# THE CLASS: a test seeds an ABSOLUTE stamp ('2026-07-17T00:00:00.000Z' into
+# source_items.fetched_at) and then calls a NOW-ANCHORED window — ranking's
+# candidate_window (now - RECENCY_CAP_DAYS) or memory's apply_dormancy (now -
+# DORMANT_AFTER_DAYS). Such a test is a bomb with a fuse: it passes until real
+# time walks past the stamp, then fails for a reason that has nothing to do
+# with the code under test. NL-126's four fired on the evening of 2026-07-30,
+# 14 days after the 07-16/17 stamps, BETWEEN a gate run and its land.
+#
+# THE PIN: inject a frozen clock through the seams the product already exposes
+# (`now_utc=`), so the seeded stamps and the window agree forever. Two laws
+# this helper keeps:
+#   * it NEVER re-dates fixture data (that hides the class and re-arms the
+#     fuse at a later date), and
+#   * it NEVER touches product code — `candidate_window(con, date, now_utc=…)`
+#     and `apply_dormancy(con, now_utc=…)` are pre-existing seams; the only
+#     reason a wrapper is needed at all is that `ranking.run_rank` does not
+#     thread `now_utc` down to its window call (ranking.py:1782), so the pin
+#     must sit on the callee.
+# A caller-supplied now_utc always wins, so a test that already pins its own
+# clock (test_ranking_selection.py's `now_utc=NOW` calls) is unaffected.
+
+def pin_product_clock(monkeypatch, frozen):
+    """NL-126 pin — freeze every NOW-ANCHORED window the ranking/memory paths
+    read, at `frozen` (an aware UTC datetime). Call from an autouse fixture in
+    any module whose seeds carry absolute stamps. Signature-preserving: a
+    caller that passes its own `now_utc=` still wins, so modules that already
+    pin their own clock are unaffected. monkeypatch owns the undo.
+
+    Coupling to note: the pin freezes READS, not writes — rows written from
+    the real clock (e.g. briefings.generated_at, ranking.py:1498) land in the
+    frozen now's future, and candidate_window's clock-skew clamp
+    (ranking.py:230) is what turns that into a 0.0d window rather than a
+    negative one.
+    """
+    from newslens import memory as _memory
+    from newslens import ranking as _ranking
+
+    _real_window = _ranking.candidate_window
+    _real_history = _ranking.ingested_history_days
+
+    def _pinned_window(con, target_date, now_utc=None):
+        return _real_window(con, target_date, now_utc=now_utc or frozen)
+
+    def _pinned_history(con, now_utc=None):
+        return _real_history(con, now_utc=now_utc or frozen)
+
+    monkeypatch.setattr(_ranking, "candidate_window", _pinned_window)
+    monkeypatch.setattr(_ranking, "ingested_history_days", _pinned_history)
+    # memory.sync_memory calls apply_dormancy(con) with no now_utc (memory.py:845),
+    # and run_rank calls sync_memory first — so the dormancy cap is on the same
+    # fuse as the recency cap whenever a module seeds dated memory rows.
+    monkeypatch.setattr(_memory, "_utc_now", lambda: frozen)
