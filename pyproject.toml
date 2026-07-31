@@ -27,3 +27,13 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# NL-126b third-leg convention (ENGINEERING.md, gate ruling R3 2026-07-31).
+# `-p` and NOT a conftest re-export: tests/conftest.py imports newslens twelve
+# lines before its re-export point, so a configure-time clock swap is already
+# too late (measured: newslens.{db,paths} are in sys.modules at pytest_configure
+# and absent at -p import). `pythonpath` puts the repo root on sys.path BEFORE
+# plugin loading, which is what makes `tools.` importable under the `pytest`
+# console script as well as `python -m pytest`. The plugin is inert unless
+# --clockshift / NEWSLENS_CLOCKSHIFT asks for a horizon.
+pythonpath = ["."]
+addopts = "-p tools.pytest_clockshift"
