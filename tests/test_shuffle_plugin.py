@@ -98,6 +98,53 @@ def test_shuffling_never_drops_or_duplicates_a_test(mini_suite):
                                for i in sorted(range(12), key=str)]
 
 
+def run(d, *args):
+    """(returncode, stdout+stderr) for a real pytest subprocess.
+
+    Deliberately NOT `-q`: the report header is the thing under test in the
+    order-attestation cases, and `-q` suppresses it — which is itself part of
+    why the hollow run went unnoticed.
+    """
+    out = subprocess.run(
+        [sys.executable, "-m", "pytest", *args],
+        cwd=str(d), capture_output=True, text=True, timeout=120)
+    return out.returncode, out.stdout + out.stderr
+
+
+def test_a_seed_without_shuffle_is_a_loud_error_not_an_ordered_run(mini_suite):
+    """BORN RED (NL-118 QA finding 4, the R5 class's second occurrence).
+
+    `--shuffle-seed N` alone set the seed and shuffled NOTHING: `pytest_configure`
+    returned early, the run was ordered, and the only tell was a header line
+    nobody read. A build report attested "suite, shuffled: --shuffle-seed 118500"
+    against a run that was ordered. Inertness without `--shuffle` is the
+    property that lets this plugin live in conftest, so it stays — but a seed
+    is an explicit statement that the author wanted a shuffle, and that
+    combination now refuses to run instead of quietly lying.
+    """
+    rc, out = run(mini_suite, "--shuffle-seed", "118500")
+    assert rc != 0, f"seed-without-shuffle still ran (rc={rc}):\n{out}"
+    assert "--shuffle-seed 118500 was given WITHOUT --shuffle" in out, out
+    assert "would be ORDERED" in out
+    # and the error names the fix, so nobody has to read the plugin
+    assert "--shuffle --shuffle-seed 118500" in out
+
+
+def test_the_error_does_not_fire_on_the_two_runs_a_pass_actually_owes(mini_suite):
+    """CARRIED INVARIANT (green both sides of the fix, deliberately). The tooth
+    must not bite the ordered baseline (no seed, no flag) nor the real shuffled
+    run (both flags) — those are the two runs the R5 convention asks every pass
+    for, and a UsageError that over-fired on either would cost more than the
+    silent no-op did. It also pins the two header strings a report quotes."""
+    rc_ordered, out_ordered = run(mini_suite)
+    assert rc_ordered == 0, out_ordered
+    assert "test order: ORDERED (no --shuffle)" in out_ordered
+
+    rc_shuf, out_shuf = run(mini_suite, "--shuffle", "--shuffle-seed", "118500")
+    assert rc_shuf == 0, out_shuf
+    assert "SHUFFLED — seed 118500" in out_shuf
+
+
 def test_the_plugin_adds_no_third_party_dependency():
     """Stdlib `random` only. Adding pytest-randomly for a 40-line ordering
     shim would be a new dependency — an ENGINEERING.md escalation trigger."""

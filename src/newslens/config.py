@@ -105,7 +105,8 @@ _VALID_SOURCE_KEYS = {
 }
 _VALID_TOP_LEVEL_KEYS = {"sources", "interests", "settings"}
 _VALID_INTEREST_KEYS = {"broad", "granular"}
-_VALID_SETTINGS_KEYS = {"threads_steer_selection", "tts_engine"}
+_VALID_SETTINGS_KEYS = {"threads_steer_selection", "tts_engine",
+                        "gap_report_second_pass"}
 
 # Source tiers (milestone 2, principal's source list):
 #   full           — usable RSS content (title + summary/excerpt)
@@ -172,6 +173,16 @@ class SourcesConfig:
     # key moves. One-line reversal: "openai" back here (plus the
     # raw_settings.get default below and audio.DEFAULT_TTS_ENGINE).
     tts_engine: str = "kokoro"
+    # NL-118 item 7: the analyst's second synthesis pass over the SAME corpus,
+    # emitting a mandatory gap_report (what the draft cannot answer). DEFAULT
+    # OFF — it doubles analysis latency (~3m -> ~6m serial on a 3-brief
+    # edition) and adds one analyst call per depth story, so it waits on
+    # NL-89's L1 parallelisation or a slot-1-only restriction. Flipped in
+    # sources.yaml `settings:` like every other principal-facing switch; NO
+    # new env var (env-var checkpoint law). Zero retrieval calls in either
+    # position — the gap_report is the hook a sanctioned-retrieval leg would
+    # later consume, not a retrieval leg itself.
+    gap_report_second_pass: bool = False
 
     @property
     def fetchable_sources(self) -> List[Source]:
@@ -389,6 +400,12 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                 cfg.problems.append("settings.tts_engine must be kokoro or openai")
             else:
                 cfg.tts_engine = engine
+            grsp = raw_settings.get("gap_report_second_pass", False)
+            if not isinstance(grsp, bool):
+                cfg.problems.append(
+                    "settings.gap_report_second_pass must be true or false")
+            else:
+                cfg.gap_report_second_pass = grsp
 
     raw_interests = raw.get("interests")
     if raw_interests is not None:

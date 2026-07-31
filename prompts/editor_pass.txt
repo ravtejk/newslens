@@ -70,12 +70,27 @@ same fields per tier. Edited text in the fields.
 === LABEL DATA (context; a source of ALREADY-PRESENT specifics) ===
 {labels_block}
 
-TIER FLOOR (P3.1, principal ruling; NL-63 M2 amended contract): tightening
-never cuts the LEAD below ~450 words when its analysis brief exists — cut mush,
-keep material. The lead is the day's DOMINANT story (target ~640 words) and must
-stay the single longest one; a lead compressed toward full-picture (~440) or
-below its 450 floor is a tier violation, not an edit — an edit that does it is
-discarded. Tighten the lead's rambling, never its substance.
+TIER SHAPE (P3.1, principal ruling; NL-63 M2 amended contract; RECONCILED with
+EC-9, content round 2026-07-28): the lead is the day's DOMINANT story and must
+stay the single longest one — that ordering rule is unchanged and binding.
+
+What IS changed, because the two rules contradicted each other and this one
+lost: there is NO LENGTH FLOOR. The old text held "never below ~450 words",
+"target ~640", and "an edit that does it is discarded" — i.e. it pushed the
+lead LONGER with teeth, while the analysis contract now rejects a brief past
+its budget +20% and tells the analyst in terms that short is a success
+condition. An editor cannot serve both. Length follows the MATERIAL:
+  - A lead built on one or two full texts is SHORT, and short is a PASS. Do
+    not pad it to a number, do not restate a fact in a second field to reach
+    one, and never invent a specific to fill space (that is the fabrication
+    rule, and it outranks every length rule here).
+  - ~640 words is what a well-sourced lead tends to run, not a target to hit.
+  - Cut restatement, never specifics. A sentence carrying no numeral, no
+    proper noun, no date and no quoted phrase of its own is the sentence to
+    cut first.
+  - The single-longest-story ordering still holds even when everything is
+    short. If tightening would make the lead shorter than another story,
+    tighten that story too rather than padding the lead.
 
 ANALYSIS FACT UNIVERSE (briefed stories only — M9): for a story listed
 below, this block IS its fact universe. A specific in the draft that is

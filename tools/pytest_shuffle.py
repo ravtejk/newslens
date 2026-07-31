@@ -23,6 +23,13 @@ shuffled run, so a report that quotes "seed 20260725" can be replayed exactly.
 Without `--shuffle` the plugin is inert: loading it never changes an ordered
 run's order, so it is safe to leave on a default addopts line.
 
+`--shuffle-seed N` WITHOUT `--shuffle` is a hard UsageError (NL-118 QA finding
+4). Inertness is the property that lets this file live in conftest, and it is
+also the exact shape of the silent no-op this plugin was written to end: a pass
+that ran `--shuffle-seed 118500`, got an ORDERED run, and attested a shuffled
+one. Seed-without-shuffle is never a run anybody wants, so it stops being a
+run at all — the seed is the tell that the author believed they were shuffling.
+
 Deliberately dependency-free (stdlib `random` only, no pytest-randomly): the
 venv has no randomization plugin and adding one is a new dependency —
 an escalation trigger for a 40-line ordering shim.
@@ -31,6 +38,8 @@ an escalation trigger for a 40-line ordering shim.
 from __future__ import annotations
 
 import random
+
+import pytest
 
 _SHUFFLE_HELP = (
     "shuffle test execution order (seeded; the seed is printed and can be "
@@ -49,11 +58,23 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     """Resolve the seed ONCE, here, so the header, the summary and the shuffle
-    itself all quote the same number even when the seed was auto-picked."""
+    itself all quote the same number even when the seed was auto-picked.
+
+    A seed with no `--shuffle` is refused rather than ignored: that combination
+    means the author thinks the run is shuffled, and a silently-ordered run
+    that gets reported as shuffled is the R5 failure class this plugin exists
+    to close. Failing at configure time costs one run; a hollow attestation
+    costs a whole gate's worth of trust in the suite's order-independence."""
+    seed = config.getoption("shuffle_seed")
     if not config.getoption("--shuffle"):
+        if seed is not None:
+            raise pytest.UsageError(
+                f"--shuffle-seed {seed} was given WITHOUT --shuffle: this run "
+                "would be ORDERED and the seed would do nothing. Any report "
+                "calling it a shuffled run would be false. Re-run with "
+                f"`--shuffle --shuffle-seed {seed}`, or drop the seed.")
         config._shuffle_seed = None
         return
-    seed = config.getoption("shuffle_seed")
     if seed is None:
         seed = random.Random().randrange(2 ** 32)
     config._shuffle_seed = int(seed)

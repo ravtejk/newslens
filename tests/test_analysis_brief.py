@@ -78,11 +78,16 @@ def good_brief():
              "why_material": "three holdouts can block a unanimous communique",
              "would_resolve": "the communique text or a named-member statement"},
         ],
+        # EC-1 (NL-118): watch items carry receipts like every other
+        # forward-looking array. Cites reuse keys the brief already cites so
+        # the code-built source table is unchanged by the schema move.
         "watch": [
             {"observable": "communique language on the five percent target "
-                           "by Thursday", "settles": "whether resistance held"},
+                           "by Thursday", "settles": "whether resistance held",
+             "basis": "mechanical", "cites": ["C1"]},
             {"observable": "any bilateral Trump-Zelensky statement Wednesday",
-             "settles": "what the meeting produced"},
+             "settles": "what the meeting produced",
+             "basis": "mechanical", "cites": ["S1"]},
         ],
         "notes_for_writer": "lead with the meeting, not the agenda.",
     }
@@ -193,12 +198,33 @@ def test_discrepancy_requires_both_sides_cited_never_averaged():
     assert len(disc) == 1  # carried as a discrepancy, both sides intact
 
 
-def test_word_budget_is_a_warning_never_a_reject():
+def test_word_budget_warns_over_budget_and_REJECTS_past_the_ceiling():
+    """CONSCIOUSLY FLIPPED (EC-9, content round 2026-07-28, ratified in the
+    NL-118 P0-P2 batch). This test used to be named
+    `test_word_budget_is_a_warning_never_a_reject` and pinned warn-only —
+    and the receipt for why that pin had to go is brief 50: 636 prose words
+    against a 400-word medium budget (+59%), the warning fired, nothing
+    happened, and the warning was not even persisted.
+
+    The contract now has two tiers: over BUDGET still warns (a 410-word
+    medium brief is not a defect), past budget x WORD_CEILING_FACTOR raises
+    BriefOverCeiling — which `analyze_story` turns into one redraft, and
+    which any other caller degrades on exactly as it degrades on every other
+    BriefRejected (BriefOverCeiling is a subclass)."""
     src = sources_fixture()
     b = good_brief()
-    b["mechanism"] = "Each member government answers to its own parliament. " * 60
+    b["mechanism"] = "Each member government answers to its own parliament. " * 45
     clean, warnings = analysis.validate_brief(b, src, "medium", corpus_of(src))
+    assert 400 < analysis._prose_words(
+        clean["pinned_facts"], clean["ledger"], clean["mechanism"],
+        clean["effects"], clean["unknowns"], clean["watch"]) <= 480
     assert any("word" in w and "ceiling" in w for w in warnings)
+
+    b["mechanism"] = "Each member government answers to its own parliament. " * 60
+    with pytest.raises(analysis.BriefOverCeiling) as over:
+        analysis.validate_brief(b, src, "medium", corpus_of(src))
+    assert over.value.ceiling == 480 and over.value.budget == 400
+    assert isinstance(over.value, analysis.BriefRejected)
 
 
 def test_stable_background_tolerated_and_labeled():
@@ -303,6 +329,10 @@ def fake_chat_good(key, prompt):
                       "parliament [S1].")
     b["effects"] = []
     b["arc"] = None
+    # EC-1 (NL-118): watch carries cites now, and this seeded map's only
+    # offered key is S1 — a C-key here would be a fabricated citation.
+    for w in b["watch"]:
+        w["cites"] = ["S1"]
     return b, 0.03
 
 

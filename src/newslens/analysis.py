@@ -524,6 +524,11 @@ ANALYSIS_MAX_TOKENS = 6000
 ANALYSIS_TIMEOUT_S = 90
 SONAR_EST_USD = 0.012              # measured spike ~$0.007 + headroom
 WORD_BUDGETS = {"full": 700, "medium": 400}
+# EC-9 (content round 2026-07-28, resolved by combination — Remy's hard
+# threshold WITH Vera's retry instruction): the tier budget is a target that
+# warns; budget × this factor is a ceiling that raises and buys ONE redraft.
+# medium 400 -> 480, full 700 -> 840.
+WORD_CEILING_FACTOR = 1.2
 ALLOWED_EFFECT_BASES = ("attributed", "mechanical", "historical-pattern")
 BRIEF_SECTIONS = ("pinned_facts", "ledger", "mechanism", "effects",
                   "arc", "unknowns", "watch")
@@ -531,9 +536,59 @@ QUOTE_MIN_CHARS = 12
 ABSTRACT_MECHANISM_RE = re.compile(
     r"\b(tensions|dynamics|landscape|geopolitical situation)\b", re.I)
 
+# X4's honest degrade, as one named string instead of three literals.
+#
+# It is written as an all-caps imperative because its reader is the ANALYST:
+# "do not treat this edition's index as this thread's record". That makes it a
+# model-input directive, and NL-118 QA finding 2 showed it was not staying in
+# the model's channel — `source_table` copied the P key's title verbatim into
+# the PERSISTED brief, so `brief["sources"][].title` carried it, and the only
+# thing keeping it off a reader's screen was NL-58's unrelated title rewrite
+# in server.py: cross-file, incidental, and owned by nobody here.
+#
+# So the boundary is owned HERE now (`_persisted_source_row`): the suffix is
+# stripped from the persisted title and the same fact is carried in plain
+# reader-safe prose under its own key. The writer channel re-attaches it
+# (`render_writer_view`), because §5.3 says the writer view carries
+# degradation directives — the reader view is the one that must not.
+DEGRADE_NO_SECTION = "NO SECTION OF THAT EDITION NAMES THIS STORY"
+DEGRADE_TITLE_SUFFIX = " — " + DEGRADE_NO_SECTION
+DEGRADE_RECORD_STATUS = ("this edition carried no section naming this story")
+
 
 class BriefRejected(ValueError):
     """Hard-reject class: the brief is discarded for BOTH consumers."""
+
+
+class BriefOverCeiling(BriefRejected):
+    """EC-9's ceiling with teeth (NL-118 item 6). A SUBCLASS of BriefRejected
+    on purpose: any caller that does not know about the retry still degrades
+    exactly as it always did (a disclosed rejected row), and the one caller
+    that does — `analyze_story` — catches this first and redrafts once."""
+
+    def __init__(self, words: int, budget: int, ceiling: int):
+        self.words, self.budget, self.ceiling = words, budget, ceiling
+        super().__init__(
+            f"brief runs {words} prose words against the {budget}-word budget "
+            f"— past the {ceiling}-word ceiling (budget +"
+            f"{round((WORD_CEILING_FACTOR - 1) * 100)}%)")
+
+
+# The retry instruction is Vera's, verbatim in intent and recorded as the
+# resolution of a real disagreement: a model told only "you are over" drops
+# the LAST thing it wrote, and on the specimen page the last thing was the
+# human stakes. So the redraft names what to cut.
+REDRAFT_INSTRUCTION = (
+    "\n\nREDRAFT — YOUR PREVIOUS ATTEMPT WAS OVER THE CEILING.\n"
+    "That draft ran {words} prose words against a {budget}-word budget; the "
+    "hard ceiling is {ceiling}. Write it again, shorter.\n"
+    "You may come in WELL UNDER the budget — short is a success condition "
+    "here, not a failure to be padded around.\n"
+    "Do NOT remove specifics. Remove RESTATEMENT: a fact stated in "
+    "pinned_facts does not need restating in the ledger, the mechanism, or "
+    "an unknown. Cut the sentence that carries no numeral, no proper noun, "
+    "no date and no quoted phrase of its own. Keep every named person, "
+    "number, date and attribution chain from the draft you are replacing.\n")
 
 
 @dataclass
@@ -567,13 +622,21 @@ def build_source_map(fetch_records: List[FetchRecord],
     result; P# prior briefing. This dict IS the retrieval manifest."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
     sources: Dict[str, Dict] = {}
+    # NL-118 item 2: the model has never seen WHEN anything was published —
+    # `source_items.published_at` stops at the DB. Carry it onto every key
+    # (the fetch record has no date of its own; the cluster item it came from
+    # does, joined here on URL) so `render_material` can dateline the header.
+    published_by_url = {(it.get("url") or "").strip(): it.get("published_at")
+                        for it in cluster_items if it.get("published_at")}
     fetched_urls = set()
     n = 1
     for r in fetch_records:
         if r.outcome == OK and r.text:
             sources[f"S{n}"] = {"kind": "cluster-full-text", "outlet": r.source_name,
                                 "title": r.title or "(untitled)", "url": r.url,
-                                "retrieved_at": now, "text": r.text}
+                                "retrieved_at": now, "text": r.text,
+                                "published_at": published_by_url.get(
+                                    (r.url or "").strip(), "")}
             fetched_urls.add(r.url)
             n += 1
     n = 1
@@ -583,6 +646,7 @@ def build_source_map(fetch_records: List[FetchRecord],
         sources[f"C{n}"] = {"kind": "cluster-excerpt", "outlet": it.get("outlet", ""),
                             "title": it.get("title", ""), "url": it.get("url", ""),
                             "retrieved_at": it.get("fetched_at", ""),
+                            "published_at": it.get("published_at") or "",
                             "text": it.get("raw_excerpt") or ""}
         n += 1
     cluster_urls = fetched_urls | {(it.get("url") or "").strip()
@@ -600,15 +664,32 @@ def build_source_map(fetch_records: List[FetchRecord],
         sources[f"R{n}"] = {"kind": "retrieved", "outlet": _outlet_of(url),
                             "title": res.get("title", ""), "url": url,
                             "retrieved_at": now,
+                            # the Search API returns a `date` per result and we
+                            # discarded it; kept now as a dateline (item 2)
+                            "published_at": _iso_day(res.get("date")),
                             "text": res.get("snippet") or res.get("title") or ""}
         n += 1
     n = 1
     for pb in prior_briefings:
+        title = f"briefing {pb.get('date')}"
+        if pb.get("thread"):
+            title += f" — thread: {pb['thread']}"
+        elif pb.get("matched") is False:
+            # X4's honest degrade: the model must not read an unrelated
+            # story's coverage as this thread's record.
+            title += DEGRADE_TITLE_SUFFIX
         sources[f"P{n}"] = {"kind": "prior-briefing", "outlet": "NewsLens (prior edition)",
-                            "title": f"briefing {pb.get('date')}", "url": "",
+                            "title": title, "url": "",
                             "retrieved_at": pb.get("date", ""),
+                            "published_at": _iso_day(pb.get("date")),
                             "text": pb.get("text") or ""}
         n += 1
+    # NL-118 item 4: outlet multiplicity, computed HERE at prompt-build (it
+    # existed only at render time, downstream of the model that needed it).
+    for oid, keys in outlet_index(sources).items():
+        for key in keys:
+            sources[key]["outlet_id"] = oid
+            sources[key]["outlet_keys"] = list(keys)
     return sources
 
 
@@ -617,12 +698,126 @@ def _outlet_of(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _outlet_id(s: Dict) -> str:
+    """One identity per OUTLET across key kinds (NL-118 item 4). The same
+    newsroom reaches the map as a feed name on S/C keys ("NPR") and as a host
+    on R keys ("npr.org"); counting those as two outlets would inflate every
+    corroboration count the model is about to modulate confidence against.
+    The URL host is the identity where a URL exists, the outlet string
+    otherwise (prior-briefing keys, which carry no URL)."""
+    host = _outlet_of(s.get("url") or "")
+    return host or (s.get("outlet") or "").strip().lower()
+
+
+def outlet_index(sources: Dict[str, Dict]) -> Dict[str, List[str]]:
+    """outlet identity -> the keys carrying it, in map order."""
+    out: Dict[str, List[str]] = {}
+    for key in sorted(sources, key=_key_sort):
+        out.setdefault(_outlet_id(sources[key]), []).append(key)
+    return out
+
+
 def render_source_map(sources: Dict[str, Dict]) -> str:
+    """The citable-key list — now carrying each key's DATELINE and its
+    OUTLET MULTIPLICITY (NL-118 items 2 + 4).
+
+    Outlet counts existed only at RENDER time (`server.py:_facts_outlet_count`,
+    computed from the finished brief's cites), so the model that wrote the
+    claims never saw them and could not modulate confidence to corroboration.
+    They are computed at prompt-build now, by `build_source_map`, and shown
+    here: keys sharing an outlet are named on each other's line, and the map's
+    distinct-outlet total closes the line. The model can then count DISTINCT
+    outlets behind any cite set with no arithmetic we have to trust."""
+    by_outlet = outlet_index(sources)
     lines = []
     for key in sorted(sources, key=_key_sort):
         s = sources[key]
-        lines.append(f"[{key}] {s['outlet']} — {s['title']} ({s['kind']})")
-    return "\n".join(lines) or "(none)"
+        oid = _outlet_id(s)
+        bits = [s["kind"]]
+        dateline = _dateline_of(s)
+        if dateline:
+            bits.append(f"published {dateline}")
+        sibs = [k for k in by_outlet.get(oid, []) if k != key]
+        bits.append(f"outlet {oid}"
+                    + (f" — SAME OUTLET as {', '.join(sibs)}" if sibs
+                       else " — 1 key"))
+        lines.append(f"[{key}] {s['outlet']} — {s['title']} ({'; '.join(bits)})")
+    if not lines:
+        return "(none)"
+    outlets = {o for o in by_outlet if o}
+    lines.append(f"DISTINCT OUTLETS IN THIS MAP: {len(outlets)}. A claim's "
+                 "outlet count is the number of DISTINCT outlets among the "
+                 "keys you cite — keys marked SAME OUTLET count once.")
+    return "\n".join(lines)
+
+
+def _water_fill(demands: List[int], budget: int) -> List[int]:
+    """Max-min fair shares: each entry gets min(demand, λ) for the largest λ
+    the budget affords, so surplus from short entries RE-FLOWS to the long
+    ones instead of evaporating (NL-118 P0).
+
+    The old allocator computed one average share and handed it to every
+    entry: a 303-byte Sonar stub reserved a ~1,371-char slice and spent 303
+    of it, while BBC's 6,622-char article was cut at that same 1,371 and
+    14,446 chars of the 24,000 budget went unspent. Ascending-demand greedy
+    is the textbook water-filling construction: settle the cheapest demand
+    first, then re-divide what is left among those still thirsty."""
+    n = len(demands)
+    out = [0] * n
+    if n == 0 or budget <= 0:
+        return out
+    remaining = budget
+    left = n
+    for i in sorted(range(n), key=lambda j: demands[j]):
+        take = min(demands[i], remaining // left)
+        out[i] = take
+        remaining -= take
+        left -= 1
+    return out
+
+
+# Never a sliver (BUG15's rule, restated for the water-fill): a source that
+# has to be TRUNCATED below this is dropped instead of shredded. Sources
+# whose whole text fits are never affected.
+MATERIAL_MIN_SHARE = 400
+_MATERIAL_SEAM = 2   # the "\n\n" between rendered entries
+
+
+def _iso_day(raw: object) -> str:
+    text = str(raw or "").strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-" \
+            and text[:4].isdigit() and text[5:7].isdigit() and text[8:10].isdigit():
+        return text[:10]
+    return ""
+
+
+def _dateline_of(s: Dict) -> str:
+    """The absolute PUBLICATION date for a source's material header, as
+    YYYY-MM-DD, or "" when we do not hold one.
+
+    ANNOTATION ONLY — the corpus text itself is never rewritten (Rook's rail:
+    `check_quotes` validates model quotes as verbatim substrings of the corpus
+    WE assemble, so editing the corpus would let the model quote our own edit
+    and pass the fabrication check).
+
+    `retrieved_at` is NOT a fallback for article keys: it is when WE fetched,
+    which on every S/C/R key is today. Stamping today onto a three-day-old
+    article would be a fabricated dateline wearing our own header — strictly
+    worse than no dateline. The one exception is a prior-briefing key, where
+    the "outlet" is us and the retrieved_at IS that edition's publication
+    date."""
+    day = _iso_day(s.get("published_at"))
+    if day:
+        return day
+    if (s.get("kind") or "") == "prior-briefing":
+        return _iso_day(s.get("retrieved_at"))
+    return ""
+
+
+def _material_header(key: str, s: Dict) -> str:
+    dateline = _dateline_of(s)
+    stamp = f" (published {dateline})" if dateline else ""
+    return f"--- [{key}] {s['outlet']} — {s['title']}{stamp} ---\n"
 
 
 def render_material(sources: Dict[str, Dict], budget_chars: int = 24_000) -> str:
@@ -634,60 +829,71 @@ def render_material(sources: Dict[str, Dict], budget_chars: int = 24_000) -> str
     old shared budget exhausted before P rendered, the model could not cite
     P-keys it never saw, and the arc-integrity lint then dropped the arc
     with a misattributing disclosure. The reservation is budget, not
-    position: assembly order stays S, R, C, P."""
+    position: assembly order stays S, R, C, P.
+
+    WATER-FILL (NL-118 P0): inside both the P slice and the S/R/C remainder,
+    shares are max-min fair — every entry gets min(its demand, λ), λ as large
+    as the budget affords. Short entries take exactly what they need and the
+    surplus pours into the long ones. Measured on brief 50's frozen corpus:
+    BBC 1,371 -> 6,622 (full), PBS 1,371 -> 5,721 (full), P2 dropped -> shown,
+    material block 9,554 -> 21,095 chars."""
     def _entry(key: str, share_cap: int) -> Optional[str]:
         s = sources[key]
         text = (s.get("text") or "").strip()
-        if not text:
+        if not text or share_cap <= 0:
             return None
-        chunk = text[:min(len(text), share_cap)]
-        return f"--- [{key}] {s['outlet']} — {s['title']} ---\n{chunk}"
+        return _material_header(key, s) + text[:min(len(text), share_cap)]
+
+    def _demand(key: str) -> int:
+        return len((sources[key].get("text") or "").strip())
 
     order = sorted(sources, key=lambda k: ({"S": 0, "R": 1, "C": 2, "P": 3}
                                            .get(k[0], 9), _key_sort(k)))
-    p_keys = [k for k in order if k[0] == "P" and (sources[k].get("text") or "").strip()]
-    p_total = sum(len((sources[k].get("text") or "").strip()) for k in p_keys)
+    p_keys = [k for k in order if k[0] == "P" and _demand(k)]
+    p_total = sum(_demand(k) for k in p_keys)
     reserve = min(p_total, budget_chars // 6)
 
     p_parts: List[str] = []
-    p_used = 0
-    for key in p_keys:
-        share = max(600, reserve // max(1, len(p_keys)))
-        entry = _entry(key, share)
-        if entry is None:
-            continue
-        if p_used + len(entry) > reserve and p_parts:
-            break
-        p_parts.append(entry)
-        p_used += len(entry)
+    if p_keys:
+        overhead = (sum(len(_material_header(k, sources[k])) for k in p_keys)
+                    + _MATERIAL_SEAM * (len(p_keys) - 1))
+        p_demands = [_demand(k) for k in p_keys]
+        if reserve - overhead > 0:
+            p_shares = _water_fill(p_demands, reserve - overhead)
+        else:
+            # A reserve smaller than one header: admit the FIRST prior only,
+            # capped at the reserve — residual 3's first-entry admission. A
+            # P-key the model never sees is a P-key it cannot cite.
+            p_shares = [min(p_demands[0], reserve)] + [0] * (len(p_keys) - 1)
+        for key, share in zip(p_keys, p_shares):
+            entry = _entry(key, share)
+            if entry is not None:
+                p_parts.append(entry)
+    p_used = (sum(len(x) for x in p_parts)
+              + _MATERIAL_SEAM * max(0, len(p_parts) - 1))
 
-    remainder = budget_chars - p_used
-    parts: List[str] = []
-    used = 0
-    src_keys = [k for k in order if k[0] != "P"]
-    for key in src_keys:
-        text = (sources[key].get("text") or "").strip()
-        if not text:
-            continue
-        # BUG15 (header-room trim, QA's option a): the old break-on-overflow
-        # starved real articles — a single long source rendered an EMPTY
-        # (or P-only) material block, and two-source days dropped the
-        # second outlet with half the budget unused. Because the SCR gate
-        # has already passed by here, an invisible article's REAL keys
-        # remained citable: fake receipts with code-supplied keys. Now each
-        # entry is trimmed to the room that actually remains (minus its own
-        # header) and admitted whenever its 1200-char floor share fits —
-        # the material block is never empty of article text while a fetched
-        # article exists.
-        s = sources[key]
-        header = f"--- [{key}] {s['outlet']} — {s['title']} ---\n"
-        share = min(len(text), max(1200, remainder // max(1, len(src_keys))))
-        room = remainder - used - len(header)
-        if room < min(1200, len(text)):
-            continue  # no room for even the floor — skip, never a sliver
-        chunk_len = min(share, room)
-        parts.append(header + text[:chunk_len])
-        used += len(header) + chunk_len
+    remainder = budget_chars - p_used - (_MATERIAL_SEAM if p_parts else 0)
+    src_keys = [k for k in order if k[0] != "P" and _demand(k)]
+    # BUG15's contract, preserved under the new math: trim to the room that
+    # actually remains rather than breaking on first overflow, so the material
+    # block is never empty of article text while a fetched article exists.
+    # Here the trim is the water-fill level; the drop loop below only ever
+    # sheds the LOWEST-priority keys (C/R tail first — `order` is S,R,C), and
+    # only when the budget cannot give a truncated source more than a sliver.
+    shares: Dict[str, int] = {}
+    keys = list(src_keys)
+    while keys:
+        overhead = (sum(len(_material_header(k, sources[k])) for k in keys)
+                    + _MATERIAL_SEAM * (len(keys) - 1))
+        alloc = _water_fill([_demand(k) for k in keys], remainder - overhead)
+        cut = [a for k, a in zip(keys, alloc) if a < _demand(k)]
+        if remainder - overhead > 0 and (not cut or min(cut) >= MATERIAL_MIN_SHARE):
+            shares = dict(zip(keys, alloc))
+            break
+        keys.pop()
+
+    parts = [e for e in (_entry(k, shares.get(k, 0)) for k in keys)
+             if e is not None]
     return "\n\n".join(parts + p_parts)
 
 
@@ -721,9 +927,183 @@ def _norm_glyphs(s: str) -> str:
     return s
 
 
+# NL-118 QA finding 3 — BUG11's successor, same argument, one more class.
+# BUG11 normalised whitespace, case and curly glyphs on BOTH sides because
+# those differences are not fabrications. Boundary punctuation is that same
+# class and was left out: American style pulls the sentence's comma INSIDE the
+# closing mark, so a correctly-sourced fragment arrives as `damaged
+# permanently,` against a corpus reading `...has been damaged permanently.`
+# and the WHOLE BRIEF is rejected over a comma (observed live, 2026-07-30
+# redraft probe run 2).
+#
+# Direction-safe by construction, and the asymmetry is the proof: the trim is
+# applied to the CANDIDATE ONLY and never to the corpus, so it can delete
+# false rejections and cannot manufacture a match for invented INTERIOR text
+# — which is the fabrication the check exists to catch. Interior punctuation
+# is deliberately untouched: "Mr. Modi" -> "Mr Modi" is a real edit to a
+# quotation and stays a rejection.
+_BOUNDARY_PUNCT = " \t\r\n,.;:!?…"
+
+
+def _strip_boundary_punct(s: str) -> str:
+    """Sentence furniture at a quoted fragment's two edges, removed."""
+    return s.strip(_BOUNDARY_PUNCT)
+
+
 _QUOTE_RE = re.compile(
     r'["\u201c]([^"\u201c\u201d]{%d,})["\u201d]' % QUOTE_MIN_CHARS)
 _INLINE_KEY_RE = re.compile(r"\[([SCRP]\d+)\]")
+_WORD_CH_RE = re.compile(r"[A-Za-z0-9]")
+
+
+def _quoted_spans_by_family(text: str, min_chars: int = 0
+                            ) -> Tuple[List[str], List[str]]:
+    """(double-quoted spans, single-quoted spans) — see `_quoted_spans`.
+
+    The families are returned apart because they are enforced apart: a
+    double-quoted non-match is a hard rejection (it always has been), while a
+    single-quoted non-match is DISCLOSED and not fatal. The reason is
+    measured, not aesthetic — see `check_quotes`.
+    """
+    dbl, sgl = _scan_quoted(text)
+    return ([q for q in dbl if len(q) >= min_chars],
+            [q for q in sgl if len(q) >= min_chars])
+
+
+def _quoted_spans(text: str, min_chars: int = 0) -> List[str]:
+    """Every quoted run in `text`, BOTH delimiter families.
+
+    NL-118 fix leg, found while repairing the eval's D5 checker: `_QUOTE_RE`
+    matches only the double-quote family, and the analyst writes its briefs as
+    JSON string values \u2014 where a single mark needs no escaping and is
+    therefore what the model reaches for. So `check_quotes` iterated an EMPTY
+    list on essentially every real brief and the verbatim promise was never
+    tested. Measured on the founder DB (read-only, 2026-07-30): roughly 90 quoted
+    spans across the 43 persisted briefs; the old regex saw 7 (the family
+    split is field-set-dependent, so counts are approximate by design). The
+    spans it never saw include real, correctly-cited quotations the promise
+    silently skipped — brief 50's Al Jazeera headline quote among them
+    (real, not fabricated; gate rider R1). The gap this closes is COVERAGE.
+
+    A plain single-quote regex does not work, which is why this is a scanner
+    and not one more pattern: the apostrophe in `can't` would close the span
+    early. The rule that separates a DELIMITER from an APOSTROPHE is position,
+    not glyph \u2014 an apostrophe between two word characters is interior
+    (`can't`, `Modi's`); one that is not is a candidate delimiter. An opener
+    must additionally be followed by a word character, which is what keeps the
+    plural possessive ("the parents' group") from opening a span.
+
+    Direction: this can only find MORE quotes to check. It cannot excuse one.
+    """
+    dbl, sgl = _scan_quoted(text)
+    return [q for q in dbl + sgl if len(q) >= min_chars]
+
+
+def _scan_quoted(text: str) -> Tuple[List[str], List[str]]:
+    s = _norm_glyphs(text or "")
+    out: List[str] = []
+    single: List[str] = []
+
+    marks = [m.start() for m in re.finditer(r'"', s)]
+    for i in range(0, len(marks) - 1, 2):
+        span = s[marks[i] + 1:marks[i + 1]]
+        if span.strip():
+            out.append(span)
+
+    delims = []
+    for m in re.finditer(r"'", s):
+        i = m.start()
+        prev = s[i - 1] if i else ""
+        nxt = s[i + 1] if i + 1 < len(s) else ""
+        if _WORD_CH_RE.match(prev or "") and _WORD_CH_RE.match(nxt or ""):
+            continue
+        delims.append(i)
+    j = 0
+    while j < len(delims):
+        o = delims[j]
+        nxt = s[o + 1] if o + 1 < len(s) else ""
+        if not _WORD_CH_RE.match(nxt or ""):
+            j += 1
+            continue
+        for k in range(j + 1, len(delims)):
+            c = delims[k]
+            if s[c - 1].isspace():
+                continue
+            span = s[o + 1:c]
+            if span.strip():
+                single.append(span)
+            j = k + 1
+            break
+        else:
+            break
+    return out, single
+
+
+def _prose_words(pinned, ledger_out, mechanism, effects_out, unknowns,
+                 watch) -> int:
+    """The brief's prose word count — the figure EC-9's ceiling binds. Same
+    fields the warning has always counted; extracted so the validator and the
+    eval measure one number by one method."""
+    prose = " ".join(
+        [p.get("fact", "") for p in pinned]
+        + [e.get("claim", "") for e in ledger_out if not e.get("discrepancy")]
+        + [mechanism]
+        + [e["effect"] for e in effects_out]
+        + [u.get("question", "") + " " + u.get("why_material", "")
+           + " " + u.get("would_resolve", "") for u in unknowns]
+        + [w.get("observable", "") for w in watch])
+    return len(prose.split())
+
+
+def verbatim_corpus(sources: Dict[str, Dict]) -> str:
+    """The material a quotation is checked against: everything we retrieved
+    AND showed the model.
+
+    It used to be the body text alone — but `render_material` puts each
+    source's HEADLINE in its material header ("--- [C5] Al Jazeera — <title>
+    (published ...) ---"), so the model is shown titles and quotes from them.
+    Al Jazeera's 2026-07-26 headline IS a quotation ("New education minister
+    can't bring my dead daughter back"), brief 50 quoted it with a citation to
+    the right key, and a body-only corpus calls that fabrication. Widening the
+    corpus to the titles is what keeps the single-quote fix (`_quoted_spans`)
+    from converting legitimate headline quotation into lost briefs.
+
+    Prior-briefing keys are deliberately EXCLUDED: their titles are OUR text,
+    not an outlet's, and Rook's rail says the model must never get to quote
+    NewsLens's own words back as retrieved material — which is exactly what
+    including the X4 degrade directive here would allow.
+    """
+    parts: List[str] = []
+    for key in sorted(sources, key=_key_sort):
+        s = sources[key]
+        if s.get("kind") != "prior-briefing":
+            parts.append(s.get("title") or "")
+        parts.append(s.get("text") or "")
+    return " ".join(p for p in parts if p)
+
+
+def _persisted_source_row(key: str, s: Dict) -> Dict:
+    """One row of the brief's PERSISTED source table — the reader boundary.
+
+    NL-118 QA finding 2, owned. This row is what `brief["sources"]` stores and
+    therefore what every current and future renderer reads; the prompt-side
+    map (`build_source_map`) is a different artifact and keeps its all-caps
+    directive. The X4 degrade suffix is stripped here and re-expressed as
+    reader-safe prose under `record_status`, so containment no longer depends
+    on a downstream file happening to overwrite the title (server.py's NL-58
+    branch, which this batch neither owns nor tests).
+
+    Additive on the wire: rows keep every key they have ever had, and
+    `record_status` appears only on a degraded prior-briefing row.
+    """
+    title = s["title"]
+    row = {"key": key, "outlet": s["outlet"], "title": title,
+           "url": s["url"], "retrieved_at": s["retrieved_at"],
+           "kind": s["kind"]}
+    if title.endswith(DEGRADE_TITLE_SUFFIX):
+        row["title"] = title[:-len(DEGRADE_TITLE_SUFFIX)]
+        row["record_status"] = DEGRADE_RECORD_STATUS
+    return row
 
 
 def _cites_of(entry: Dict) -> List[str]:
@@ -1080,12 +1460,56 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
                     f"fabricated citation {c!r} in {where} — not in the "
                     "retrieval manifest")
 
+    def verbatim(q: str) -> Tuple[bool, bool]:
+        """(matches, matched_only_after_trimming_boundary_punctuation)."""
+        norm = _norm_ws(_norm_glyphs(q))
+        if norm in corpus_norm:
+            return True, False
+        # NL-118 QA finding 3: boundary punctuation is not fabrication.
+        # Candidate side only (see _strip_boundary_punct).
+        trimmed = _strip_boundary_punct(norm)
+        return (bool(trimmed) and trimmed in corpus_norm), True
+
     def check_quotes(text: str, where: str) -> None:
-        for q in _QUOTE_RE.findall(text or ""):
-            if _norm_ws(_norm_glyphs(q)) not in corpus_norm:
-                raise BriefRejected(
-                    f"quote in {where} is not a verbatim substring of "
-                    f"retrieved material: \"{q[:60]}...\"")
+        # Two families, enforced APART — and the asymmetry is measured, not a
+        # preference. `_QUOTE_RE` only ever saw double quotes, so the single
+        # family has never been enforced at all: replaying the fixed scanner
+        # over the founder DB (read-only, 2026-07-30) the old regex saw 7
+        # quoted spans across 43 briefs where the scanner sees 92.
+        #
+        # Hard-rejecting all 92 would have destroyed 5 of those 43 briefs
+        # (12%) — and every one of the five is a REAL quotation carrying a
+        # standard editorial mark: `'as long as the United States
+        # maintain[s]'` (bracketed grammar), `'not only holding the line
+        # but... advancing'` (elision). Whether a verbatim rule admits
+        # brackets and ellipses is an EDITORIAL question the content round
+        # owns; it is not a call to make silently inside a validator.
+        #
+        # So: the double family keeps the hard reject it has always had, and
+        # the single family is DISCLOSED. Disclosure is strictly more than the
+        # silence it replaces and costs no brief. Promoting single-quote
+        # misses to BriefRejected is a one-line change (`raise` instead of
+        # `warnings.append`) once that editorial call is made.
+        dbl, sgl = _quoted_spans_by_family(text or "", QUOTE_MIN_CHARS)
+        for q in dbl:
+            ok, trimmed = verbatim(q)
+            if ok:
+                if trimmed:
+                    warnings.append(
+                        f"quote in {where} matched after trimming boundary "
+                        f"punctuation: \"{q[:60]}\" (BUG11 boundary rule — "
+                        "interior text is verbatim)")
+                continue
+            raise BriefRejected(
+                f"quote in {where} is not a verbatim substring of "
+                f"retrieved material: \"{q[:60]}...\"")
+        for q in sgl:
+            ok, _ = verbatim(q)
+            if not ok:
+                warnings.append(
+                    f"single-quoted material in {where} is not a verbatim "
+                    f"substring of retrieved material: '{q[:60]}' — "
+                    "DISCLOSED, not rejected (see check_quotes)")
 
     # pinned facts: 3-6, each cited (hard: at least 1, each cited)
     pinned = raw.get("pinned_facts") or []
@@ -1311,26 +1735,57 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
     if not (1 <= len(unknowns) <= 3):
         warnings.append(f"unknowns count {len(unknowns)} outside the 1-3 band")
 
-    watch = [w for w in (raw.get("watch") or []) if isinstance(w, dict)]
-    for i, w in enumerate(watch):
+    # watch: EC-1 (NL-118 item 5) — `watch` was the only forward-looking array
+    # with no citation slot, and 102/102 watch items across the whole DB were
+    # uncited by construction: the field had nowhere to put a receipt. It has
+    # one now, and an item that cannot be keyed is DROPPED, not softened —
+    # the identical rule `effects` has carried since 2026-07-06. `basis` rides
+    # the same three-value enum and is validated, not yet enforced (the drop
+    # rail the dispatch names is cites; a basis rule would reach past it).
+    watch_in = [w for w in (raw.get("watch") or []) if isinstance(w, dict)]
+    watch: List[Dict] = []
+    watch_dropped = 0
+    for i, w in enumerate(watch_in):
         _require_str(w.get("observable", ""), f"watch {i+1} observable")
         check_quotes(w.get("observable", ""), f"watch {i+1} observable")
         if isinstance(w.get("settles"), str):
             check_quotes(w["settles"], f"watch {i+1} settles")
+        cites = _cites_of(w)
+        if not cites:
+            watch_dropped += 1
+            continue
+        check_cites(cites, f"watch {i+1}")
+        basis = str(w.get("basis") or "").strip()
+        if basis and basis not in ALLOWED_EFFECT_BASES:
+            warnings.append(f"watch {i+1} basis {basis!r} outside the "
+                            "attributed/mechanical/historical-pattern "
+                            "vocabulary — carried, flagged")
+        out_w = {"observable": w.get("observable", ""),
+                 "settles": w.get("settles", ""), "cites": cites}
+        if basis:
+            out_w["basis"] = basis
+        watch.append(out_w)
+    if watch_dropped:
+        warnings.append(
+            f"watch citation enforcement (EC-1): dropped {watch_dropped} "
+            "uncited watch item(s) — a forward-looking claim with no receipt "
+            "is a prediction in our own voice")
     if not (2 <= len(watch) <= 4):
         warnings.append(f"watch count {len(watch)} outside the 2-4 band")
 
-    # word budget (editorial ceiling — warn, never reject)
-    prose = " ".join(
-        [p.get("fact", "") for p in pinned]
-        + [e.get("claim", "") for e in ledger_out if not e.get("discrepancy")]
-        + [mechanism]
-        + [e["effect"] for e in effects_out]
-        + [u.get("question", "") + " " + u.get("why_material", "")
-           + " " + u.get("would_resolve", "") for u in unknowns]
-        + [w.get("observable", "") for w in watch])
-    words = len(prose.split())
+    # word budget — EC-9 (NL-118 item 6). The ceiling used to WARN and the
+    # warning was not even persisted, so brief 50 ran 636 words against a 400
+    # budget (+59%) and nothing happened. Over budget still only warns (the
+    # budget is a target, and a 410-word brief is not a defect); over
+    # budget × WORD_CEILING_FACTOR raises, and `analyze_story` turns that into
+    # ONE retry carrying the content round's instruction — come in short, cut
+    # restatement, never specifics.
+    words = _prose_words(pinned, ledger_out, mechanism, effects_out,
+                         unknowns, watch)
     budget = WORD_BUDGETS.get(tier, 400)
+    ceiling = int(budget * WORD_CEILING_FACTOR)
+    if words > ceiling:
+        raise BriefOverCeiling(words, budget, ceiling)
     if words > budget:
         warnings.append(f"brief runs {words} words against the {budget}-word "
                         f"{tier} ceiling — Editor's eye at day-14")
@@ -1356,6 +1811,8 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
     collect(_INLINE_KEY_RE.findall(mechanism))
     for e in effects_out:
         collect(e["cites"])
+    for w in watch:                      # EC-1: watch now carries receipts
+        collect(w["cites"])
     if arc:
         collect(_cites_of(arc))
     # Gate residual 2 tail: notes_for_writer flows into writer material
@@ -1364,11 +1821,8 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
     notes = str(raw.get("notes_for_writer") or "")[:300]
     check_quotes(notes, "notes_for_writer")
 
-    source_table = [
-        {"key": k, "outlet": sources[k]["outlet"], "title": sources[k]["title"],
-         "url": sources[k]["url"], "retrieved_at": sources[k]["retrieved_at"],
-         "kind": sources[k]["kind"]}
-        for k in sorted(used, key=_key_sort)]
+    source_table = [_persisted_source_row(k, sources[k])
+                    for k in sorted(used, key=_key_sort)]
 
     clean = {
         "pinned_facts": pinned_clean,
@@ -1586,10 +2040,14 @@ def _cluster_items_for_slot(con: sqlite3.Connection, slot: Dict,
         return []
     tier_by_outlet = {s.name: s.tier for s in cfg.sources}
     rows = con.execute(
-        f"SELECT outlet, url, title, raw_excerpt, fetched_at FROM source_items"
-        f" WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        f"SELECT outlet, url, title, raw_excerpt, fetched_at, published_at"
+        f" FROM source_items WHERE id IN ({','.join('?' * len(ids))})",
+        ids).fetchall()
     return [{"outlet": r["outlet"], "url": r["url"], "title": r["title"],
              "raw_excerpt": r["raw_excerpt"], "fetched_at": r["fetched_at"],
+             # NL-118 item 2: the dateline's source. Feeds may omit it; a
+             # missing date renders as no dateline, never as a guess.
+             "published_at": r["published_at"] or "",
              "source_name": r["outlet"],
              "tier": tier_by_outlet.get(r["outlet"], "full")} for r in rows]
 
@@ -1823,11 +2281,15 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
                   prior: List[Dict],
                   fetch: FetchFn = net.fetch_bytes,
                   chat=None, sonar=None,
-                  sleep: Callable[[float], None] = time.sleep) -> StoryAnalysis:
+                  sleep: Callable[[float], None] = time.sleep,
+                  second_pass: Optional[bool] = None) -> StoryAnalysis:
     """One story through the whole organ: fetch -> sonar -> synthesize ->
     validate -> persist. Every failure path is a disclosed outcome; the
     ladder degrades cheapest-first (Sonar before synthesis, synthesis before
-    anything downstream)."""
+    anything downstream).
+
+    `second_pass` (NL-118 item 7) opts into the gap_report synthesis over the
+    same corpus. None = read the config flag, which is False."""
     from . import paths
     sa = StoryAnalysis(slot=slot_no, tier=tier, outcome="failed")
     chat = chat or call_analysis_model
@@ -1870,6 +2332,19 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     # same P material budget.
     from . import memory_core
     slot_prior = memory_core.prior_for_slot(con, date, slot, prior)
+    # X4 (NL-118 item 3): when no thread record exists, `prior_for_slot`
+    # hands back the GENERIC editions — whole narratives now, so the cut to
+    # this slot's own story happens here, where the story is known. A
+    # thread-scoped prior (carries "thread") is already story-scoped and
+    # passes through untouched.
+    if slot_prior and not any(p.get("thread") for p in slot_prior):
+        slot_prior = prior_material_for_story(slot_prior, slot)
+        for p in slot_prior:
+            if not p.get("matched"):
+                sa.warnings.append(
+                    f"prior-briefing {p.get('date')}: no section of that "
+                    "edition names this story — head slice carried, and the "
+                    "analyst is told it may not be this thread's record")
     sources = build_source_map(records, items, sonar_results, slot_prior)
 
     # Slot-3 reconciliation, binding here (M2): the analyst holds the
@@ -1944,7 +2419,7 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     sa.cost_usd += cost
     sa.shadow_usd += shadow
 
-    corpus = " ".join((s.get("text") or "") for s in sources.values())
+    corpus = verbatim_corpus(sources)
     header = {
         "slot": slot_no, "tier": tier, "date": date,
         "manifest": {k: {"url": sources[k]["url"], "outlet": sources[k]["outlet"],
@@ -1957,6 +2432,35 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     try:
         clean, warnings = validate_brief(raw, sources, tier, corpus,
                                          briefing_date=date)
+    except BriefOverCeiling as over:
+        # EC-9's teeth (NL-118 item 6): ONE redraft, same corpus, same map,
+        # plus the instruction that names what to cut. Bounded by construction
+        # — the redraft's own validation is not caught here, so a second
+        # over-run is a disclosed rejected row, never a third call.
+        sa.warnings.append(f"length ceiling: {over} — redrafting once")
+        try:
+            raw, cost, *rest = chat(openai_key, prompt + REDRAFT_INSTRUCTION.format(
+                words=over.words, budget=over.budget, ceiling=over.ceiling))
+            shadow = rest[0] if rest else cost
+        except Exception as exc:
+            sa.outcome = "failed"
+            sa.detail = (f"length redraft call failed "
+                         f"({type(exc).__name__}: {exc})")
+            return sa
+        sa.cost_usd += cost
+        sa.shadow_usd += shadow
+        try:
+            clean, warnings = validate_brief(raw, sources, tier, corpus,
+                                             briefing_date=date)
+        except BriefRejected as exc:
+            sa.outcome = "rejected"
+            sa.detail = f"after length redraft: {exc}"
+            persist_brief(con, date, slot_no, tier, "rejected", None,
+                          sa.detail, sa.cost_usd, header, sources=sources)
+            return sa
+        warnings = list(warnings) + [
+            f"length redraft applied: first draft {over.words} words > "
+            f"{over.ceiling}-word ceiling; this brief is the redraft"]
     except BriefRejected as exc:
         sa.outcome = "rejected"
         sa.detail = str(exc)
@@ -1973,6 +2477,22 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
                       sa.cost_usd, header, sources=sources)
         return sa
     sa.warnings.extend(warnings)
+
+    # NL-118 item 7 — the gap_report second synthesis pass. DEFAULT OFF
+    # (config.SourcesConfig.gap_report_second_pass, sources.yaml `settings:`;
+    # no new env var). Same corpus, same map, ZERO retrieval calls: the
+    # gap_report is the hook a later sanctioned-retrieval leg consumes, and
+    # without it a second pass cannot tell "not chased" from "chased and
+    # absent" — which is how "veteran leader" ×4 happened.
+    if second_pass is None:
+        second_pass = bool(getattr(cfg, "gap_report_second_pass", False))
+    if second_pass:
+        clean, gap_report, pass2_warnings = _gap_report_pass(
+            clean, sources, tier, corpus, date, openai_key, chat, sa)
+        sa.warnings.extend(pass2_warnings)
+        if gap_report is not None:
+            header["gap_report"] = gap_report
+
     sa.outcome = "ok"
     sa.detail = (f"{len(clean['ledger'])} ledger entries, "
                  f"{len(clean['sources'])} cited sources")
@@ -1980,6 +2500,82 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     persist_brief(con, date, slot_no, tier, "valid", clean, "", sa.cost_usd,
                   header, sources=sources)
     return sa
+
+
+def _gap_report_pass(clean: Dict, sources: Dict[str, Dict], tier: str,
+                     corpus: str, date: str, openai_key: str, chat,
+                     sa: StoryAnalysis) -> Tuple[Dict, Optional[List[Dict]], List[str]]:
+    """Second synthesis over the SAME held corpus, with a mandatory
+    gap_report. Returns (brief, gap_report or None, warnings).
+
+    Fails SOFT by design: every failure path keeps pass 1's validated brief.
+    A second pass that can lose a good brief is a downgrade wearing an
+    improvement's name."""
+    from . import paths
+    warns: List[str] = []
+    unknowns = [u.get("question", "") for u in clean.get("unknowns") or []]
+    if not unknowns:
+        return clean, None, ["gap-report pass skipped — the draft has no "
+                             "open questions to chase"]
+    try:
+        template = (paths.PROMPTS_DIR / "analysis_gap_report.txt").read_text(
+            encoding="utf-8")
+    except OSError as exc:
+        return clean, None, [f"gap-report pass skipped — prompt unreadable ({exc})"]
+    prompt = _render_prompt(template, {
+        "word_budget": str(WORD_BUDGETS.get(tier, 400)), "tier": tier,
+        "date": date,
+        "draft_json": json.dumps(clean, ensure_ascii=False, indent=1),
+        "source_map": render_source_map(sources),
+        "material": render_material(sources)})
+    try:
+        raw2, cost, *rest = chat(openai_key, prompt)
+        sa.cost_usd += cost
+        sa.shadow_usd += rest[0] if rest else cost
+    except Exception as exc:  # noqa: BLE001 — pass 1's brief survives
+        return clean, None, [f"gap-report pass failed ({type(exc).__name__}: "
+                             f"{exc}) — pass-1 brief kept"]
+    try:
+        clean2, warnings2 = validate_brief(raw2, sources, tier, corpus,
+                                           briefing_date=date)
+    except Exception as exc:  # noqa: BLE001 — includes BriefOverCeiling: a
+        # redraft loop inside the optional pass is not worth a third call
+        return clean, None, [f"gap-report pass rejected ({exc}) — pass-1 "
+                             "brief kept"]
+
+    gap_report = []
+    for g in (raw2.get("gap_report") or []) if isinstance(raw2, dict) else []:
+        if not isinstance(g, dict):
+            continue
+        cites = [c for c in _cites_of(g) if c in sources]
+        gap_report.append({"question": str(g.get("question") or ""),
+                           "answered": bool(g.get("answered")),
+                           "cites": cites,
+                           "note": str(g.get("note") or "")[:300]})
+    if not gap_report:
+        return clean, None, ["gap-report pass returned no gap_report — "
+                             "pass-1 brief kept (the report IS the pass)"]
+    # The engineering round's non-negotiable: a question marked UNANSWERED
+    # must survive into unknowns, or the pass has quietly dropped the hole
+    # instead of disclosing it.
+    kept = {_norm_ws(u.get("question", "")) for u in clean2.get("unknowns") or []}
+    for g in gap_report:
+        if not g["answered"] and _norm_ws(g["question"]) not in kept:
+            warns.append(
+                "gap-report contract: question marked unanswered vanished "
+                f"from unknowns — {g['question'][:80]!r}; pass-1 brief kept")
+            return clean, gap_report, warns
+        if g["answered"] and not g["cites"]:
+            warns.append(
+                "gap-report: question marked answered with no citable key — "
+                f"{g['question'][:80]!r}; pass-1 brief kept")
+            return clean, gap_report, warns
+    answered = sum(1 for g in gap_report if g["answered"])
+    warns.extend(warnings2)
+    warns.append(f"gap-report second pass applied: {answered}/{len(gap_report)} "
+                 "open questions answered from the held corpus, "
+                 f"{len(gap_report) - answered} disclosed as absent")
+    return clean2, gap_report, warns
 
 
 def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = None,
@@ -2137,12 +2733,139 @@ def _tiers_for(date: str, n: int) -> List[str]:
             for i in range(n)]
 
 
+# X4 (case file 2026-07-28) — the exact-4,000-char prior-briefing rows. The
+# old head-truncation `narrative_text[:4000]` cut a WHOLE EDITION (16,582
+# chars on 2026-07-25) at its first story, so a slot-2 thread's prior record
+# reached the analyst as slot 1's coverage. Measured on the cockroach thread:
+# compensat@5,140 Wangchuk@5,683 reform@7,254 "dropping police cases"@5,095
+# — every one of them past the cut, and `instr()=0` in all four persisted P
+# rows (briefs 47 + 50). The continuity leg LINKED the prior edition and FED
+# a rendering missing its substance.
+_PRIOR_SECTION_RE = re.compile(r"^\*\*(.+?)\*\*\s*$", re.M)
+
+
+def split_briefing_sections(narrative: str) -> List[Tuple[str, str]]:
+    """A briefing narrative -> [(headline, section_text)], preamble first
+    under the empty headline. The rendered edition is `# NewsLens — <date>`,
+    an index, then one `**Headline**` block per story separated by `---`."""
+    text = narrative or ""
+    marks = list(_PRIOR_SECTION_RE.finditer(text))
+    if not marks:
+        return [("", text)] if text.strip() else []
+    out: List[Tuple[str, str]] = []
+    head = text[:marks[0].start()].strip()
+    if head:
+        out.append(("", head))
+    for i, m in enumerate(marks):
+        stop = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        out.append((m.group(1).strip(), text[m.start():stop].strip()))
+    return out
+
+
+_STOPWORDS = {"the", "and", "for", "with", "from", "after", "over", "into",
+              "its", "his", "her", "their", "are", "was", "were",
+              "new", "first", "amid", "says", "said", "than", "that", "this",
+              "more", "than", "again", "still", "under", "against", "about"}
+
+
+def _story_terms(slot: Dict) -> List[str]:
+    """Distinctive lowercase terms naming this story: title + thread topics.
+    The SUMMARY is deliberately excluded — it is ranking's prose and drags in
+    generic vocabulary that matches every section."""
+    raw = " ".join([str(slot.get("story_title") or "")]
+                   + [str(t) for t in (slot.get("matched_memory") or [])])
+    terms = {w.lower() for w in re.split(r"[^A-Za-z0-9]+", raw)}
+    return sorted(t for t in terms if len(t) > 3 and t not in _STOPWORDS)
+
+
+def _term_patterns(terms: List[str]) -> List[re.Pattern]:
+    # word-START anchored so "force" reaches "forces"/"forced" but never
+    # "enforcement"; inflection without a stemmer dependency
+    return [re.compile(r"\b" + re.escape(t) + r"\w*", re.I) for t in terms]
+
+
+def _relevance(section: Tuple[str, str], patterns: List[re.Pattern]) -> int:
+    """Distinctive terms this section carries. A HEADLINE hit is worth three
+    body hits: the section title is the story's own name, and body words
+    ("forces", "protests") wander across an edition."""
+    headline, body = section
+    return sum(3 * bool(p.search(headline)) + bool(p.search(body))
+               for p in patterns)
+
+
+def _distinctive(sections: List[Tuple[str, str]],
+                 patterns: List[re.Pattern]) -> List[re.Pattern]:
+    """Drop terms that are common across THIS edition — a word appearing in a
+    third of the day's stories identifies nothing. Self-calibrating, so the
+    stoplist above stays short and no hand-tuned news vocabulary accretes."""
+    stories = [s for s in sections if s[0]]
+    if not stories:
+        return patterns
+    ceiling = max(1, len(stories) // 3)
+    keep = [p for p in patterns
+            if sum(1 for s in stories if p.search(s[1])) <= ceiling]
+    return keep or patterns
+
+
+def prior_material_for_story(priors: List[Dict], slot: Dict,
+                             budget_chars: int = 4000,
+                             index_chars: int = 700) -> List[Dict]:
+    """X4's fix: give the analyst THIS STORY's prior coverage, not the first
+    4,000 characters of an unrelated edition.
+
+    Each prior edition is split into its story sections and scored against the
+    story's distinctive terms; a section qualifies only when its own HEADLINE
+    names one of them. Qualifying sections are kept WHOLE, best match first,
+    and only the tail is cut if the per-edition budget runs out.
+
+    Fact-preserving BY SELECTION, not by summarisation: no model call, no
+    rewriting of our own prior prose — the writer's own words reach the
+    analyst verbatim, which is what makes "we previously reported X" a
+    quotable claim rather than a paraphrase of a paraphrase.
+
+    An edition that did not carry this story returns its INDEX (the "in
+    today's briefing" list) with `matched: False`, and `build_source_map`
+    stamps that on the key's own title. That is the honest degrade: the old
+    head slice fed an unrelated story's coverage into the thread's record
+    channel, which is precisely how the 07-26 edition re-broke the 07-25
+    edition's news as fresh (X1) while re-asking questions the record had
+    answered (X2). "We did not cover this yesterday" is a fact the analyst
+    can use; four thousand characters about oil prices is not."""
+    out: List[Dict] = []
+    for pb in priors:
+        narrative = pb.get("text") or ""
+        sections = split_briefing_sections(narrative)
+        patterns = _distinctive(sections, _term_patterns(_story_terms(slot)))
+        hits = [(s, _relevance(s, patterns)) for s in sections if s[0]]
+        hits = [(s, score) for s, score in hits if score >= 3]  # headline hit
+        hits.sort(key=lambda pair: -pair[1])
+        if hits:
+            body, used = [], 0
+            for (_, section_text), _score in hits:
+                if used and used + len(section_text) > budget_chars:
+                    break
+                body.append(section_text[:budget_chars - used])
+                used += len(body[-1]) + 2
+            out.append({"date": pb.get("date"), "text": "\n\n".join(body),
+                        "matched": True})
+        else:
+            preamble = next((s[1] for s in sections if not s[0]), "")
+            out.append({"date": pb.get("date"),
+                        "text": preamble[:index_chars] or narrative[:index_chars],
+                        "matched": False})
+    return out
+
+
 def _prior_briefing_material(con: sqlite3.Connection, date: str,
                              cap: int = 2) -> List[Dict]:
+    """The last `cap` editions, WHOLE. Selection to the slot's own story
+    happens per-slot in `prior_material_for_story` — this stage-level read
+    cannot know which story it is feeding, and truncating here is what X4
+    was."""
     rows = con.execute(
         "SELECT date, narrative_text FROM briefings WHERE date < ?"
         " ORDER BY date DESC LIMIT ?", (date, cap)).fetchall()
-    return [{"date": r["date"], "text": (r["narrative_text"] or "")[:4000]}
+    return [{"date": r["date"], "text": r["narrative_text"] or ""}
             for r in rows]
 
 
@@ -2199,7 +2922,13 @@ def render_writer_view(brief: Dict) -> str:
         parts.append(f"  - {w.get('observable')} (settles: {w.get('settles')})")
     parts.append("\nSOURCES (cited, never 'verified'):")
     for s in brief.get("sources", []):
-        parts.append(f"  [{s['key']}] {s['outlet']} — {s['title']} ({s['kind']})"
+        # §5.3: the WRITER view carries degradation directives. The persisted
+        # title is reader-safe (_persisted_source_row), so the X4 directive is
+        # re-attached here — this channel is exactly where it belongs.
+        title = s["title"]
+        if s.get("record_status") == DEGRADE_RECORD_STATUS:
+            title += DEGRADE_TITLE_SUFFIX
+        parts.append(f"  [{s['key']}] {s['outlet']} — {title} ({s['kind']})"
                      + (f" {s['url']}" if s["url"] else ""))
     if brief.get("notes_for_writer"):
         parts.append(f"\nNOTE FOR WRITER: {brief['notes_for_writer']}")

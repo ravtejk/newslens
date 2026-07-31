@@ -129,11 +129,15 @@ def qa_brief():
              "why_material": "holdouts can block the communique",
              "would_resolve": "the communique text"},
         ],
+        # EC-1 (NL-118): the citation slot `watch` never had. Keys reuse ones
+        # the brief already cites, so the code-built source table is unmoved.
         "watch": [
             {"observable": "communique language by Thursday",
-             "settles": "whether resistance held"},
+             "settles": "whether resistance held",
+             "basis": "mechanical", "cites": ["S1"]},
             {"observable": "any bilateral statement Wednesday",
-             "settles": "what the meeting produced"},
+             "settles": "what the meeting produced",
+             "basis": "mechanical", "cites": ["S1"]},
         ],
         "notes_for_writer": "lead with the meeting.",
     }
@@ -200,6 +204,16 @@ def seed_min(con, n_items=2, date=DATE, slots_extra=()):
         slots.extend(slots_extra)
         con.execute("INSERT INTO briefings (date, story_slots) VALUES (?, ?)",
                     (date, json.dumps(slots)))
+
+
+def _short_article_fetch(url, timeout, cap=0, user_agent=""):
+    """A minimal extractable article (NL-118): clears MIN_EXTRACT_CHARS and
+    nothing more, so a prompt-size-sensitive band test measures the TEMPLATE,
+    not a 4KB fixture article."""
+    if url.endswith("/robots.txt"):
+        raise urllib.error.HTTPError(url, 404, "nf", {}, None)
+    para = b"<p>The president travels to the summit midweek for talks.</p>"
+    return (b"<html><body><article>" + para * 16 + b"</article></body></html>")
 
 
 def fetch_fixture(url, timeout, cap=0, user_agent=""):
@@ -654,7 +668,15 @@ def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths)
         rung independence whole again."""
     con = _con(tmp_paths)
     try:
-        seed_min(con)
+        # SLIMMED (NL-118 P0-P2): this test's own fix contract says "slim the
+        # fixture" when the prompt grows past the sonar line, and this batch's
+        # prompt work (dateline + corroboration + gap-disclosure + length
+        # blocks, ~+3.4k chars of STATIC template) pushed the 2-item est from
+        # ~$0.1006 to $0.1043 against a $0.102 line. One item + a SHORT article
+        # restores the witnessing band with headroom for the next template
+        # edit; nothing in this test depends on the material's size (the
+        # skipped-budget half is carried by the fixed output-token term alone).
+        seed_min(con, n_items=1)
         slot = json.loads(con.execute(
             "SELECT story_slots FROM briefings WHERE date=?",
             (DATE,)).fetchone()["story_slots"])[0]
@@ -667,7 +689,7 @@ def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths)
         sa = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
                 remaining_usd=0.0619, sonar=sonar_sentinel,
-                chat=recording_chat))
+                chat=recording_chat, fetch=_short_article_fetch))
         # the sonar half: never called below the line
         assert "budget ladder" in sa.sonar_status
         assert any(w.startswith("derating: Sonar") for w in sa.warnings)
@@ -692,7 +714,8 @@ def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths)
             analysis.analyze_story(
                 con, DATE, 1, slot, **story_kwargs(
                     remaining_usd=9.0, sonar=lambda k, t, c: ([], 0.0, "ok"),
-                    chat=lambda k, p: (s_brief(), 0.01)))
+                    chat=lambda k, p: (s_brief(), 0.01),
+                    fetch=_short_article_fetch))
             est = seen["est"]
             sonar_line = analysis.SONAR_EST_USD + (
                 analysis.ANALYSIS_MAX_TOKENS / 1e6
@@ -706,7 +729,7 @@ def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths)
             sa_band = analysis.analyze_story(
                 con, DATE, 1, slot, **story_kwargs(
                     remaining_usd=band_mid, sonar=sonar_sentinel,
-                    chat=recording_chat))
+                    chat=recording_chat, fetch=_short_article_fetch))
         finally:
             analysis.estimate_synthesis_usd = orig_est
         assert "budget ladder" in sa_band.sonar_status   # sonar still skipped

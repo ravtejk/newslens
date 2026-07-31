@@ -1124,8 +1124,17 @@ def test_amended_steering_reaches_the_sent_prompts(migrated_con, fake_model):
     assert "and never under 550" in n_prompt                      # template floor
     assert "single LONGEST story of the day" in n_prompt          # budget line
     e_prompt = json_calls[1]["prompt"]
-    assert "never cuts the LEAD below ~450 words" in e_prompt
-    assert "target ~640 words" in e_prompt                        # editor knows the lead target
+    # CONSCIOUSLY FLIPPED (EC-9 reconciliation, NL-118 item 6): the editor
+    # prompt used to assert "never cuts the LEAD below ~450 words" — a floor
+    # with teeth, pointing the opposite way from the analysis contract's
+    # ceiling with teeth. The floor language is gone; what survives is the
+    # ORDERING rule (the lead is the single longest) and the explicit
+    # statement that a short lead on thin material is a pass.
+    assert "never cuts the LEAD below ~450 words" not in e_prompt
+    assert "NO LENGTH FLOOR" in e_prompt
+    assert "single longest one" in e_prompt        # ordering rule survives
+    assert "short is a PASS" in e_prompt
+    assert "~640 words is what a well-sourced lead tends to run" in e_prompt
     assert "~300" not in e_prompt                                 # stale floor gone
     s_prompt = [c for c in fake_model.calls if not c["json_mode"]][0]["prompt"]
     assert "THIS EPISODE COVERS (binding): This episode covers 5 stories" in s_prompt
