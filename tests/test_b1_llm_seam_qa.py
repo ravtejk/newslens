@@ -893,9 +893,16 @@ def test_seat_table_pins_the_b3_stack_exactly():
 
 
 def test_seat_for_step_covers_every_live_generate_step():
-    # the five step strings generate.call_llm is actually called with today
+    # The step strings `generate.call_llm` is called with, PLUS one dormant
+    # name. QA F7 / gate R7 (2026-07-31): `narrative_retry` no longer has an
+    # emitter in `src/` — the length-regime ratification deleted the floor
+    # retry — so the comment that used to read "the five step strings ...
+    # actually called with today" was false the moment batch A landed. The
+    # assertion STAYS: `seat_for_step` matches by prefix, so this pins the
+    # prefix contract for any future `narrative_*` step, and a dormant name
+    # that resolves correctly costs nothing. Ruled keep-as-dormant, not pruned.
     assert llm.seat_for_step("narrative") == "writer"
-    assert llm.seat_for_step("narrative_retry") == "writer"
+    assert llm.seat_for_step("narrative_retry") == "writer"     # dormant
     assert llm.seat_for_step("editor") == "editor"
     assert llm.seat_for_step("script") == "script"
     assert llm.seat_for_step("script_retry") == "script"

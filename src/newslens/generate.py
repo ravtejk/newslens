@@ -3746,6 +3746,20 @@ def _run_generate_body(
     # The brief gate is KEPT from the retry this replaced: a slot with no
     # valid analysis brief was never warned about, and the length regime did
     # not widen that (the record-derived revisit covers briefless days).
+    #
+    # D3 REVISIT BINDING (gate ruling R4.i, 2026-07-31 — batch B item 6).
+    # When the week-of-editions falsifier is run, it counts SHIPPED LEAD WORDS
+    # QUERIED FROM THE RECORD:
+    #
+    #     SELECT date, narrative_text FROM briefings ORDER BY date
+    #
+    # — lead = story 1 of `narrative_text`, counted with `_lead_words`. It does
+    # NOT count these note lines. The note is CORROBORATION, never the count.
+    # The reason is a measurement gap this line cannot close on its own: the
+    # note is brief-gated, so a briefless thin day ships a short lead and
+    # emits nothing, and counting notes would silently undercount exactly the
+    # days D3 exists to find. The record has every shipped lead regardless of
+    # gate, editor behaviour, or degrade path.
     lead_w = _lead_words({"stories": stories})
     if (inputs.get("briefs_by_slot") or {}).get(1) \
             and lead_w < LEAD_SHORT_NOTE_WORDS:

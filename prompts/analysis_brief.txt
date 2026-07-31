@@ -17,6 +17,12 @@ CITATIONS: cite ONLY the keys offered in the SOURCE MAP below (e.g. "S1",
 "C2", "R3", "P1"). Every pinned fact and every ledger claim carries at least
 one key. A claim you cannot key to the map does not go in the brief. Never
 invent keys. Quotes must be verbatim substrings of the supplied material.
+Quote marks promise EXACT words. If you would need to change a word inside
+them, do not quote it: quote the exact words, quote a shorter exact span, or
+drop the marks and paraphrase with the citation. Disclosed adjustments only:
+square brackets for an inserted/adjusted word, an ellipsis (...) for an
+omission that does not change meaning. Never splice quotations from different
+sources into one span.
 Conflicting sources become a discrepancy entry naming both values and both
 sources — never average, reconcile, or silently pick one.
 

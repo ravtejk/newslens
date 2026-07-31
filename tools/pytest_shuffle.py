@@ -15,8 +15,14 @@ all — the correction that put this file here.
 Usage (the two runs a pass owes):
 
     pytest                                        # ordered
-    pytest -p tools.pytest_shuffle --shuffle      # shuffled, seed auto-picked
-    pytest -p tools.pytest_shuffle --shuffle --shuffle-seed 20260725
+    pytest --shuffle                              # shuffled, seed auto-picked
+    pytest --shuffle --shuffle-seed 20260725
+
+Do NOT pass `-p tools.pytest_shuffle`: conftest already registers this plugin,
+and asking for it again double-registers the options, which dies on
+`--shuffle already added` before a single test runs. QA hit exactly that on
+2026-07-31 — because the usage line here still showed the `-p` form, which was
+correct only while the plugin lived OUT of tree. The residency move retired it.
 
 The chosen seed is printed in the header AND the terminal summary of every
 shuffled run, so a report that quotes "seed 20260725" can be replayed exactly.

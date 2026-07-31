@@ -523,12 +523,31 @@ ANALYSIS_USD_OUT_PER_MTOK = llm.SEATS["analyst"].usd_per_mtok_out
 ANALYSIS_MAX_TOKENS = 6000
 ANALYSIS_TIMEOUT_S = 90
 SONAR_EST_USD = 0.012              # measured spike ~$0.007 + headroom
-WORD_BUDGETS = {"full": 700, "medium": 400}
+# LENGTH REGIME 2026-07-30, Spec-4(c) STEP 0 (NL-118 content leg, batch B):
+# RE-BASED medium 400 -> 450 and full 700 -> 750, in the same change that puts
+# `arc` inside `_prose_words`. The two halves are one change. The arc RENDERS
+# (see the ARC block in `render_brief_for_writer`) and had never been in the
+# number the ceiling binds — ~55 words, ~14% of a medium budget, invisible.
+# Landing the arc alone would have tightened the real ceiling by ~14%
+# overnight; landing the budgets alone would have genuinely widened it.
+# Together they re-base the SAME behaviour onto an honest measurement: the
+# observed ~487-word median prose plus ~55 words of arc is ~540, the new
+# ceiling. Measurement catching up with the product, not more room for it.
+WORD_BUDGETS = {"full": 750, "medium": 450}
 # EC-9 (content round 2026-07-28, resolved by combination — Remy's hard
 # threshold WITH Vera's retry instruction): the tier budget is a target that
 # warns; budget × this factor is a ceiling that raises and buys ONE redraft.
-# medium 400 -> 480, full 700 -> 840.
+# The FACTOR is deliberately untouched by step 0 — re-basing by moving the
+# factor would be a different, unratified change. medium 450 -> 540,
+# full 750 -> 900.
 WORD_CEILING_FACTOR = 1.2
+# Spec-4(c) STEP 2 — the disclosure band. Past the ceiling but within
+# budget x this, the SHORTER of the two drafts ships WITH a disclosure rather
+# than being discarded. It is not a second, looser ceiling: nothing is written
+# TO this number, the model is never told it, and a brief only reaches it after
+# it has already been told to come in shorter and failed. Falsifier on the
+# record: disclosed-band briefs failing a G7 density read close the band.
+DISCLOSURE_BAND_FACTOR = 1.35
 ALLOWED_EFFECT_BASES = ("attributed", "mechanical", "historical-pattern")
 BRIEF_SECTIONS = ("pinned_facts", "ledger", "mechanism", "effects",
                   "arc", "unknowns", "watch")
@@ -572,6 +591,48 @@ class BriefOverCeiling(BriefRejected):
             f"brief runs {words} prose words against the {budget}-word budget "
             f"— past the {ceiling}-word ceiling (budget +"
             f"{round((WORD_CEILING_FACTOR - 1) * 100)}%)")
+
+
+class BriefQuoteUnmarked(BriefRejected):
+    """Spec-1's promotion (content round 2026-07-31, HIGH stakes).
+
+    A quoted span that is neither verbatim nor lawfully MARKED. A SUBCLASS of
+    BriefRejected for the same reason `BriefOverCeiling` is one: any caller
+    that does not know about the redraft degrades exactly as it always did,
+    and the one caller that does — `analyze_story` — catches this first and
+    redrafts ONCE.
+
+    The round explicitly REFUSED the bare one-line `raise`: a rejection that
+    only says "no" turns a fixable editorial slip into a lost brief. This
+    carries the span and the two lawful outs so the redraft can act.
+    """
+
+    def __init__(self, span: str, where: str):
+        self.span, self.where = span, where
+        super().__init__(
+            f"quote in {where} is not a verbatim substring of retrieved "
+            f"material and is not lawfully marked: \"{span[:60]}...\" — quote "
+            "the exact words, or drop the quote marks and paraphrase with the "
+            "citation")
+
+
+# Spec-1's instructed redraft. Named outs, not a scolding: the model is told
+# the two lawful moves, because "that quote is wrong" without them produces a
+# second draft that drops the quotation and the attribution with it.
+QUOTE_REDRAFT_INSTRUCTION = (
+    "\n\nREDRAFT — ONE QUOTATION IN YOUR PREVIOUS ATTEMPT WAS NOT VERBATIM.\n"
+    "In {where} you wrote: {span}\n"
+    "Quote marks promise the source's EXACT words. That span is not a verbatim "
+    "substring of the supplied material, and it carries no disclosed mark.\n"
+    "Fix it in ONE of exactly two ways, keeping the citation either way:\n"
+    "  1. QUOTE THE EXACT WORDS — copy them character for character from the "
+    "material, or quote a SHORTER exact span. Disclosed adjustments are "
+    "allowed: square brackets for an inserted or adjusted word, an ellipsis "
+    "(...) for an omission that does not change the meaning.\n"
+    "  2. DROP THE QUOTE MARKS and paraphrase the point in your own words, "
+    "keeping the citation and the attribution.\n"
+    "Never splice quotations from different sources into one span. Change "
+    "NOTHING else about the brief.\n")
 
 
 # The retry instruction is Vera's, verbatim in intent and recorded as the
@@ -920,11 +981,24 @@ _GLYPHS = {"\u201c": '"', "\u201d": '"', "\u201e": '"',
            "\u2018": "'", "\u2019": "'", "\u201a": "'",
            "\u2013": "-", "\u2014": "-"}
 
+# Spec-1's NORMALIZATION PRECONDITION (content round 2026-07-31, batch B).
+# Unicode FORMAT characters carry no glyph: a reader cannot see them and
+# neither should the verbatim check. Brief 49 is the receipt — its source
+# reads "United \u2060States maintains" (a WORD JOINER after the space), so a
+# perfectly faithful quotation of it was graded a fabrication. Written as
+# ESCAPES on purpose: a literal here is a line no reviewer could check.
+# Symmetric on both sides, so by BUG11's own argument this can only repair a
+# glyph-variant match and can never manufacture one.
+_FORMAT_CHARS = ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad")
+_NBSP = "\u00a0"
+
 
 def _norm_glyphs(s: str) -> str:
     for k, v in _GLYPHS.items():
         s = s.replace(k, v)
-    return s
+    for ch in _FORMAT_CHARS:
+        s = s.replace(ch, "")
+    return s.replace(_NBSP, " ")
 
 
 # NL-118 QA finding 3 — BUG11's successor, same argument, one more class.
@@ -960,10 +1034,12 @@ def _quoted_spans_by_family(text: str, min_chars: int = 0
                             ) -> Tuple[List[str], List[str]]:
     """(double-quoted spans, single-quoted spans) — see `_quoted_spans`.
 
-    The families are returned apart because they are enforced apart: a
-    double-quoted non-match is a hard rejection (it always has been), while a
-    single-quoted non-match is DISCLOSED and not fatal. The reason is
-    measured, not aesthetic — see `check_quotes`.
+    The families are returned apart for reporting and for the one asymmetry
+    that remains: since Spec-1's promotion (2026-07-31) both families are
+    enforced alike by marks-lawfulness in every reader-reachable field, and
+    the split only matters in the exempt `notes_for_writer` channel, where a
+    single-quoted non-match is disclosed while a double-quoted one keeps its
+    hard reject (the Gate residual 2 ordered pin) — see `check_quotes`.
     """
     dbl, sgl = _scan_quoted(text)
     return ([q for q in dbl if len(q) >= min_chars],
@@ -1039,11 +1115,98 @@ def _scan_quoted(text: str) -> Tuple[List[str], List[str]]:
     return out, single
 
 
+_BRACKET_RE = re.compile(r"\[[^\[\]]*\]")
+_BRACKET_KEEP = re.compile(r"\[([^\[\]]*)\]")
+_ELLIPSIS_RE = re.compile(r"\.\.\.+|\u2026")
+
+
+def _source_texts(sources: Dict[str, Dict]) -> List[str]:
+    """One haystack PER SOURCE — title+text, mirroring `verbatim_corpus`'s
+    prior-briefing carve (our own headlines never become quotable material).
+
+    Per-source is the whole point of Spec-1's ellipsis rule: two true
+    fragments from two different outlets joined by an ellipsis is a quotation
+    of a sentence nobody wrote, and checking against the CONCATENATED corpus
+    would wave it through."""
+    out = []
+    for key in sorted(sources, key=_key_sort):
+        s = sources[key]
+        parts = []
+        if s.get("kind") != "prior-briefing":
+            parts.append(s.get("title") or "")
+        parts.append(s.get("text") or "")
+        out.append(_norm_ws(_norm_glyphs(" ".join(p for p in parts if p))))
+    return out
+
+
+def _fragments_in_order(frags: List[str], hay: str) -> bool:
+    pos = 0
+    for f in frags:
+        i = hay.find(f, pos)
+        if i < 0:
+            return False
+        pos = i + len(f)
+    return True
+
+
+def _marks_lawful(span: str, sources: Dict[str, Dict],
+                  min_chars: int = QUOTE_MIN_CHARS) -> bool:
+    """Spec-1 mechanics 2 and 3 — is this span lawful UNDER THE MARKS?
+
+    Called only for a span that already failed the plain verbatim check; this
+    is the additional lawfulness the canon grants, never a replacement for it.
+
+      * BRACKETS: the bracket-content-INLINED form matches, OR the fragments
+        left when bracketed segments are DELETED match in order.
+      * ELLIPSIS: split on the marks; every fragment verbatim, IN SOURCE
+        ORDER, within ONE source; at least one fragment >= QUOTE_MIN_CHARS so
+        an ellipsis cannot shred a span into unrecognisable confetti and call
+        the result a quotation.
+    """
+    norm = _norm_ws(_norm_glyphs(span))
+    forms = [norm]
+    if "[" in norm and "]" in norm:
+        forms.append(_BRACKET_KEEP.sub(lambda m: m.group(1), norm))
+        forms.append(_BRACKET_RE.sub(" ", norm))
+    haystacks = _source_texts(sources)
+    for form in forms:
+        frags = [_strip_boundary_punct(_norm_ws(p))
+                 for p in _ELLIPSIS_RE.split(form)]
+        frags = [f for f in frags if f]
+        if not frags or not any(len(f) >= min_chars for f in frags):
+            continue
+        for hay in haystacks:
+            if _fragments_in_order(frags, hay):
+                return True
+    return False
+
+
+def _arc_prose(arc) -> str:
+    """The arc's RENDERED words, counted the way the ARC block renders them:
+    the NL-63 two-clause shape (`what_happened` — `significance`) when present,
+    else the legacy single-clause `what_changed` fallback. Counting fields the
+    reader never sees would be as dishonest as counting none of them."""
+    if not isinstance(arc, dict):
+        return ""
+    if arc.get("what_happened"):
+        return f"{arc.get('what_happened', '')} {arc.get('significance', '')}"
+    return arc.get("what_changed", "") or ""
+
+
 def _prose_words(pinned, ledger_out, mechanism, effects_out, unknowns,
-                 watch) -> int:
-    """The brief's prose word count — the figure EC-9's ceiling binds. Same
-    fields the warning has always counted; extracted so the validator and the
-    eval measure one number by one method."""
+                 watch, arc=None) -> int:
+    """The brief's prose word count — the figure EC-9's ceiling binds.
+
+    Spec-4(c) STEP 0 (batch B): `arc` is now IN this number. It renders on the
+    reader's page and was the one prose carrier the ceiling could not see, so
+    ~14% of a medium budget was being spent invisibly. The tier budgets
+    re-based in the same change (`WORD_BUDGETS`) so the behaviour is unmoved
+    and only the measurement is honest.
+
+    `arc` defaults to None so that a caller measuring a brief that legitimately
+    has no arc reads the same number it always did — the arc is optional in the
+    schema and a dropped arc must not be counted as zero-by-accident.
+    """
     prose = " ".join(
         [p.get("fact", "") for p in pinned]
         + [e.get("claim", "") for e in ledger_out if not e.get("discrepancy")]
@@ -1051,7 +1214,8 @@ def _prose_words(pinned, ledger_out, mechanism, effects_out, unknowns,
         + [e["effect"] for e in effects_out]
         + [u.get("question", "") + " " + u.get("why_material", "")
            + " " + u.get("would_resolve", "") for u in unknowns]
-        + [w.get("observable", "") for w in watch])
+        + [w.get("observable", "") for w in watch]
+        + [_arc_prose(arc)])
     return len(prose.split())
 
 
@@ -1440,11 +1604,18 @@ def _dedup_and_order_pinned(pinned: List[Dict]) -> Tuple[List[Dict], List[str]]:
 
 
 def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
-                   corpus: str, briefing_date: str = "") -> Tuple[Dict, List[str]]:
+                   corpus: str, briefing_date: str = "",
+                   ceiling_factor: float = None) -> Tuple[Dict, List[str]]:
     """Returns (clean brief with computed furniture, warnings). Raises
     BriefRejected for the hard classes: missing sections, fabricated
     citation keys, quotes that aren't verbatim substrings of retrieved
-    material, an uncitable pinned-facts section."""
+    material, an uncitable pinned-facts section.
+
+    `ceiling_factor` exists for exactly ONE caller — Spec-4(c) step 2's
+    disclosure band, which re-validates an already-redrafted brief against
+    budget x DISCLOSURE_BAND_FACTOR. It defaults to None (meaning
+    WORD_CEILING_FACTOR) so no other call site can widen the ceiling by
+    accident, and every other check in this function is unchanged by it."""
     if not isinstance(raw, dict):
         raise BriefRejected("brief is not a JSON object")
     missing = [s for s in BRIEF_SECTIONS if s not in raw]
@@ -1470,28 +1641,24 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
         trimmed = _strip_boundary_punct(norm)
         return (bool(trimmed) and trimmed in corpus_norm), True
 
-    def check_quotes(text: str, where: str) -> None:
-        # Two families, enforced APART — and the asymmetry is measured, not a
-        # preference. `_QUOTE_RE` only ever saw double quotes, so the single
-        # family has never been enforced at all: replaying the fixed scanner
-        # over the founder DB (read-only, 2026-07-30) the old regex saw 7
-        # quoted spans across 43 briefs where the scanner sees 92.
-        #
-        # Hard-rejecting all 92 would have destroyed 5 of those 43 briefs
-        # (12%) — and every one of the five is a REAL quotation carrying a
-        # standard editorial mark: `'as long as the United States
-        # maintain[s]'` (bracketed grammar), `'not only holding the line
-        # but... advancing'` (elision). Whether a verbatim rule admits
-        # brackets and ellipses is an EDITORIAL question the content round
-        # owns; it is not a call to make silently inside a validator.
-        #
-        # So: the double family keeps the hard reject it has always had, and
-        # the single family is DISCLOSED. Disclosure is strictly more than the
-        # silence it replaces and costs no brief. Promoting single-quote
-        # misses to BriefRejected is a one-line change (`raise` instead of
-        # `warnings.append`) once that editorial call is made.
+    def check_quotes(text: str, where: str, exempt: bool = False) -> None:
+        # ONE loop, BOTH families, enforced by MARKS-LAWFULNESS. The
+        # editorial call the old comment here deferred has been MADE:
+        # content round 2026-07-31 (Spec-1), canon + D4 ratified by the
+        # principal the same day. History, kept because it explains the
+        # shape: `_QUOTE_RE` only ever saw double quotes (7 spans across 43
+        # founder briefs where the scanner sees 92), and hard-rejecting
+        # everything the scanner newly saw would have destroyed 5 real
+        # briefs whose spans carry standard editorial marks (`maintain[s]`,
+        # `but... advancing`). The canon separates the two populations the
+        # old policy could not: marked-and-faithful spans are LAWFUL in both
+        # families (`_marks_lawful`), unmarked alteration REJECTS in both —
+        # as `BriefQuoteUnmarked`, one instructed redraft, never the bare
+        # raise the round refused. The one asymmetry left is the narrowed
+        # `exempt` channel below (see the pin comment inside this loop).
         dbl, sgl = _quoted_spans_by_family(text or "", QUOTE_MIN_CHARS)
-        for q in dbl:
+        for q, family in ([(x, "double") for x in dbl]
+                          + [(x, "single") for x in sgl]):
             ok, trimmed = verbatim(q)
             if ok:
                 if trimmed:
@@ -1500,16 +1667,31 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
                         f"punctuation: \"{q[:60]}\" (BUG11 boundary rule — "
                         "interior text is verbatim)")
                 continue
-            raise BriefRejected(
-                f"quote in {where} is not a verbatim substring of "
-                f"retrieved material: \"{q[:60]}...\"")
-        for q in sgl:
-            ok, _ = verbatim(q)
-            if not ok:
+            if _marks_lawful(q, sources):
+                continue          # canon (a)/(b): a DISCLOSED adjustment
+            # SPEC-1 vs AN ORDERED GATE PIN — the pin wins, minimally.
+            # Spec-1 scope says "`notes_for_writer` exempt from reject". The
+            # Gate residual 2 ordered pin says the opposite in this file's own
+            # words at the call site below: notes_for_writer "cannot stay
+            # quote-exempt", because it flows into writer material where the
+            # fact-subset chain treats it as given. A spec clause does not
+            # silently un-pin a gate-ordered assertion, so the exemption is
+            # narrowed to the MINIMUM that satisfies both: it covers the
+            # SINGLE family — the one Spec-1's promotion newly enforces, and
+            # the one its own acceptance case lives in (founder brief 40's
+            # span is single-quoted; it carries no double-quoted span at all).
+            # The DOUBLE family keeps the hard reject it already had here.
+            # Nothing Spec-1 asked for is lost: marks-lawfulness still governs
+            # both families in every field. Flagged for the gate to ratify or
+            # reverse.
+            if exempt and family == "single":
                 warnings.append(
                     f"single-quoted material in {where} is not a verbatim "
                     f"substring of retrieved material: '{q[:60]}' — "
-                    "DISCLOSED, not rejected (see check_quotes)")
+                    "DISCLOSED, not rejected (internal channel, never "
+                    "rendered to the reader)")
+                continue
+            raise BriefQuoteUnmarked(q, where)
 
     # pinned facts: 3-6, each cited (hard: at least 1, each cited)
     pinned = raw.get("pinned_facts") or []
@@ -1780,10 +1962,14 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
     # budget × WORD_CEILING_FACTOR raises, and `analyze_story` turns that into
     # ONE retry carrying the content round's instruction — come in short, cut
     # restatement, never specifics.
+    # Step 0: `arc` is passed here AFTER the arc-drop/verdict block above, so a
+    # dropped arc (uncited — set to None there) is correctly counted as zero
+    # words. The brief is measured as it will RENDER, not as it arrived.
     words = _prose_words(pinned, ledger_out, mechanism, effects_out,
-                         unknowns, watch)
-    budget = WORD_BUDGETS.get(tier, 400)
-    ceiling = int(budget * WORD_CEILING_FACTOR)
+                         unknowns, watch, arc)
+    budget = WORD_BUDGETS.get(tier, 450)
+    ceiling = int(budget * (WORD_CEILING_FACTOR if ceiling_factor is None
+                            else ceiling_factor))
     if words > ceiling:
         raise BriefOverCeiling(words, budget, ceiling)
     if words > budget:
@@ -1819,7 +2005,12 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
     # where the fact-subset chain treats it as given — it cannot stay
     # quote-exempt.
     notes = str(raw.get("notes_for_writer") or "")[:300]
-    check_quotes(notes, "notes_for_writer")
+    # Spec-1 SCOPE, as narrowed by the pin above: `notes_for_writer` never
+    # renders to the reader, so its SINGLE-quoted misses stay disclosed-not-
+    # rejected and never cost a brief (worked span: founder brief 40). A
+    # DOUBLE-quoted fabrication here still rejects — Gate residual 2. Every
+    # reader-reachable prose field — including `arc` — is enforced.
+    check_quotes(notes, "notes_for_writer", exempt=True)
 
     source_table = [_persisted_source_row(k, sources[k])
                     for k in sorted(used, key=_key_sort)]
@@ -2387,7 +2578,7 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     # discovery BUG-3 class), and the file stays principal-editable without
     # {{escape}} noise.
     prompt = _render_prompt(template, {
-        "word_budget": str(WORD_BUDGETS.get(tier, 400)), "tier": tier,
+        "word_budget": str(WORD_BUDGETS.get(tier, 450)), "tier": tier,
         "date": date, "slot": str(slot_no),
         "story_title": slot.get("story_title", ""),
         "story_summary": slot.get("summary", ""),
@@ -2432,12 +2623,44 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     try:
         clean, warnings = validate_brief(raw, sources, tier, corpus,
                                          briefing_date=date)
+    except BriefQuoteUnmarked as unmarked:
+        # Spec-1's promotion, with the redraft the round made a CONDITION of
+        # saying yes to it. Bounded exactly like the ceiling redraft: the
+        # second attempt's validation is not caught here, so a second unmarked
+        # quote is a disclosed rejected row, never a third call.
+        sa.warnings.append(f"quote fidelity: {unmarked} — redrafting once")
+        try:
+            raw, cost, *rest = chat(
+                openai_key,
+                prompt + QUOTE_REDRAFT_INSTRUCTION.format(
+                    span=unmarked.span, where=unmarked.where))
+            shadow = rest[0] if rest else cost
+        except Exception as exc:
+            sa.outcome = "failed"
+            sa.detail = (f"quote redraft call failed "
+                         f"({type(exc).__name__}: {exc})")
+            return sa
+        sa.cost_usd += cost
+        sa.shadow_usd += shadow
+        try:
+            clean, warnings = validate_brief(raw, sources, tier, corpus,
+                                             briefing_date=date)
+        except BriefRejected as exc:
+            sa.outcome = "rejected"
+            sa.detail = f"after quote redraft: {exc}"
+            persist_brief(con, date, slot_no, tier, "rejected", None,
+                          sa.detail, sa.cost_usd, header, sources=sources)
+            return sa
+        warnings = list(warnings) + [
+            f"quote redraft applied: an unmarked quotation in "
+            f"{unmarked.where} was rewritten; this brief is the redraft"]
     except BriefOverCeiling as over:
         # EC-9's teeth (NL-118 item 6): ONE redraft, same corpus, same map,
         # plus the instruction that names what to cut. Bounded by construction
         # — the redraft's own validation is not caught here, so a second
         # over-run is a disclosed rejected row, never a third call.
         sa.warnings.append(f"length ceiling: {over} — redrafting once")
+        draft1 = raw                       # Step 2 needs the FIRST draft back
         try:
             raw, cost, *rest = chat(openai_key, prompt + REDRAFT_INSTRUCTION.format(
                 words=over.words, budget=over.budget, ceiling=over.ceiling))
@@ -2452,15 +2675,59 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         try:
             clean, warnings = validate_brief(raw, sources, tier, corpus,
                                              briefing_date=date)
+        except BriefOverCeiling as over2:
+            # Spec-4(c) STEP 2 — THE SURVIVING LOSS MODE (batch B item 5).
+            # The redraft is instructed to come in shorter. It does not always
+            # obey: measured on this batch's own iteration-1 runs, draft 603 ->
+            # redraft 725 and draft 622 -> redraft 646. Both times the model
+            # was told "write it again, shorter" and wrote it LONGER, and the
+            # old code then threw away the shorter draft it already had and
+            # rejected the story.
+            #
+            # So: take the SHORTER of the two drafts. If it is over the ceiling
+            # but within budget x DISCLOSURE_BAND_FACTOR, ship it WITH the
+            # disclosure. Beyond the band, the existing disclosed rejection is
+            # unchanged. The band's falsifier is on the record: disclosed-band
+            # briefs failing a G7 density read close the band.
+            shorter, words2 = ((raw, over2.words) if over2.words < over.words
+                               else (draft1, over.words))
+            band = int(over.budget * DISCLOSURE_BAND_FACTOR)
+            if words2 <= band:
+                try:
+                    clean, warnings = validate_brief(
+                        shorter, sources, tier, corpus, briefing_date=date,
+                        ceiling_factor=DISCLOSURE_BAND_FACTOR)
+                except BriefRejected as exc:
+                    sa.outcome = "rejected"
+                    sa.detail = f"after length redraft: {exc}"
+                    persist_brief(con, date, slot_no, tier, "rejected", None,
+                                  sa.detail, sa.cost_usd, header,
+                                  sources=sources)
+                    return sa
+                warnings = list(warnings) + [
+                    f"length DISCLOSURE BAND (Spec-4(c) step 2): drafts ran "
+                    f"{over.words} and {over2.words} words; the shorter "
+                    f"({words2}) is over the {over.ceiling}-word ceiling but "
+                    f"within the {band}-word band — shipped WITH this "
+                    f"disclosure, not padded and not discarded"]
+            else:
+                sa.outcome = "rejected"
+                sa.detail = (f"after length redraft: both drafts past the "
+                             f"disclosure band ({over.words} and "
+                             f"{over2.words} words, band {band})")
+                persist_brief(con, date, slot_no, tier, "rejected", None,
+                              sa.detail, sa.cost_usd, header, sources=sources)
+                return sa
         except BriefRejected as exc:
             sa.outcome = "rejected"
             sa.detail = f"after length redraft: {exc}"
             persist_brief(con, date, slot_no, tier, "rejected", None,
                           sa.detail, sa.cost_usd, header, sources=sources)
             return sa
-        warnings = list(warnings) + [
-            f"length redraft applied: first draft {over.words} words > "
-            f"{over.ceiling}-word ceiling; this brief is the redraft"]
+        else:
+            warnings = list(warnings) + [
+                f"length redraft applied: first draft {over.words} words > "
+                f"{over.ceiling}-word ceiling; this brief is the redraft"]
     except BriefRejected as exc:
         sa.outcome = "rejected"
         sa.detail = str(exc)
@@ -2523,7 +2790,7 @@ def _gap_report_pass(clean: Dict, sources: Dict[str, Dict], tier: str,
     except OSError as exc:
         return clean, None, [f"gap-report pass skipped — prompt unreadable ({exc})"]
     prompt = _render_prompt(template, {
-        "word_budget": str(WORD_BUDGETS.get(tier, 400)), "tier": tier,
+        "word_budget": str(WORD_BUDGETS.get(tier, 450)), "tier": tier,
         "date": date,
         "draft_json": json.dumps(clean, ensure_ascii=False, indent=1),
         "source_map": render_source_map(sources),

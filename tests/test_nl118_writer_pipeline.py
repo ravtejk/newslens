@@ -457,23 +457,28 @@ HEADLINE_QUOTE_FACT = (
 AL_JAZEERA_HEADLINE = "New education minister can't bring my dead daughter back"
 
 
-def test_single_quoted_material_is_checked_and_disclosed_not_silently_passed():
-    """BORN RED, and the most serious red in this batch.
+def test_single_quoted_material_is_checked_and_now_REJECTED_when_unmarked():
+    """CONSCIOUSLY FLIPPED (Spec-1 promotion, content round 2026-07-31, HIGH
+    stakes; landed in NL-118 content-leg batch B).
 
-    `_QUOTE_RE` matched only the double-quote family. The analyst emits its
-    brief as a JSON object, where a single mark needs no escaping — so it
-    quotes with single marks, and `check_quotes` iterated an EMPTY list. The
-    cardinal promise ("quotes must be verbatim substrings of retrieved
-    material") was never enforced on the quotations the model actually
-    writes: replayed read-only over the founder DB, the old regex saw 7
-    quoted spans where the scanner sees 92.
+    WAS: `test_single_quoted_material_is_checked_and_disclosed_not_silently_
+    passed`, which pinned DISCLOSE-not-reject and asserted the brief survived.
 
-    DISCLOSED rather than rejected, deliberately and measurably: hard-
-    rejecting all 92 would have destroyed 5 of 43 real briefs, every one of
-    them a true quotation carrying a standard editorial mark (`maintain[s]`,
-    `but... advancing`). Whether a verbatim rule admits brackets and elisions
-    is the content round's call. Silence was not defensible; a rejection
-    policy set inside a validator would not be either.
+    That pin was always explicitly provisional — its own docstring said
+    "whether a verbatim rule admits brackets and elisions is the content
+    round's call", and the round has now made it. The scanner's original find
+    stands unchanged and is still asserted here: `_QUOTE_RE` matched only the
+    double-quote family, so the cardinal promise was never enforced on the
+    quotations the model actually writes (7 spans seen where the scanner sees
+    92, replayed read-only over the founder DB).
+
+    What changed is the PENALTY, and only because the canon now separates the
+    two populations the old policy could not tell apart. Hard-rejecting all 92
+    would have destroyed 5 of 43 real briefs — but every one of those five
+    carries a standard editorial MARK (`maintain[s]`, `but... advancing`), and
+    marked spans are now lawful. What is left is unmarked wording alteration,
+    which is the thing the promise was about. Founder-DB replay under the
+    promoted policy: 0 briefs destroyed.
     """
     doc = corpus(50)
     src = sources_of(doc)
@@ -484,11 +489,14 @@ def test_single_quoted_material_is_checked_and_disclosed_not_silently_passed():
 
     b = _brief([{"observable": "Whether the party registers", "cites": ["S1"]}])
     b["pinned_facts"] = [{"fact": invented, "cites": ["S1"]}]
-    clean, warnings = analysis.validate_brief(
-        b, src, "medium", body, briefing_date=doc["date"])
-    assert clean["pinned_facts"], "disclosure must not cost the brief"
-    assert any("single-quoted material in pinned fact 1" in w
-               and "not a verbatim substring" in w for w in warnings), warnings
+    with pytest.raises(analysis.BriefQuoteUnmarked) as exc:
+        analysis.validate_brief(b, src, "medium", body,
+                                briefing_date=doc["date"])
+    # the span is still SEEN by the single-quote scanner — the find that
+    # produced this test is what makes the rejection possible at all
+    assert "finished before the monsoon" in str(exc.value)
+    assert "pinned fact 1" in str(exc.value)
+    assert isinstance(exc.value, analysis.BriefRejected)
 
 
 def test_the_double_quoted_hard_reject_is_untouched_by_the_disclosure_split():
@@ -670,16 +678,19 @@ def test_the_boundary_tolerance_cannot_launder_an_interior_edit(quote, kept):
 
 
 # ---------------------------------------------------------------------------
-# 6. The 400-word ceiling made real
+# 6. The 450-word ceiling made real  (WAS: "the 400-word ceiling" — re-based by
+#    Spec-4(c) step 0, batch B, when `arc` entered the counted number)
 # ---------------------------------------------------------------------------
 
 def test_over_budget_warns_and_past_the_ceiling_raises():
+    """RE-ANCHORED, not weakened (batch B item 1): same brief, same raise, the
+    re-based numbers. WAS: `budget == 400 and ceiling == 480`."""
     src = _map_for()
     b = _brief([{"observable": "Whether the party registers", "cites": ["S1"]}])
-    b["mechanism"] = "Each ministry answers to its own committee. " * 70
+    b["mechanism"] = "Each ministry answers to its own committee. " * 80
     with pytest.raises(analysis.BriefOverCeiling) as over:
         analysis.validate_brief(b, src, "medium", "Some retrieved body text.")
-    assert over.value.budget == 400 and over.value.ceiling == 480
+    assert over.value.budget == 450 and over.value.ceiling == 540
     assert isinstance(over.value, analysis.BriefRejected)
 
 
@@ -694,7 +705,9 @@ def test_analyze_story_redrafts_once_and_ships_the_shorter_draft(tmp_paths):
         b = _brief([{"observable": "Whether the party registers",
                      "cites": ["S1"]}])
         if len(calls) == 1:
-            b["mechanism"] = "Each ministry answers to its own committee. " * 70
+            # RE-BASED (batch B item 1): x70 = 510 words, which SHIPS under the
+            # step-0 ceiling of 540. x80 = 580 still trips it. WAS: 70.
+            b["mechanism"] = "Each ministry answers to its own committee. " * 80
         return b, 0.0, 0.0
 
     sa = analysis.analyze_story(con, "2026-07-26", 1, _slot(), "medium",
@@ -709,14 +722,14 @@ def test_analyze_story_redrafts_once_and_ships_the_shorter_draft(tmp_paths):
     assert any("length redraft applied" in w for w in sa.warnings)
 
 
-def test_a_second_over_run_is_a_disclosed_rejection_not_a_third_call(tmp_paths):
+def _second_over_run(tmp_paths, reps):
     con = _seed(tmp_paths)
     calls = []
 
     def chat(key, prompt):
         calls.append(prompt)
         b = _brief([{"observable": "Whether it registers", "cites": ["S1"]}])
-        b["mechanism"] = "Each ministry answers to its own committee. " * 70
+        b["mechanism"] = "Each ministry answers to its own committee. " * reps
         return b, 0.0, 0.0
 
     sa = analysis.analyze_story(con, "2026-07-26", 1, _slot(), "medium",
@@ -724,9 +737,83 @@ def test_a_second_over_run_is_a_disclosed_rejection_not_a_third_call(tmp_paths):
                                 fetch=_fetch, chat=chat,
                                 sonar=lambda *a: ([], 0.0, "ok — 0 results"),
                                 sleep=lambda s: None)
+    return sa, calls
+
+
+def test_a_second_over_run_INSIDE_the_band_ships_disclosed_not_a_third_call(
+        tmp_paths):
+    """CONSCIOUSLY FLIPPED (Spec-4(c) step 2, batch B item 5).
+
+    WAS: `test_a_second_over_run_is_a_disclosed_rejection_not_a_third_call`,
+    which asserted `outcome == "rejected"` for every second over-run.
+
+    Step 2 is the surviving loss mode, and it exists because the redraft does
+    not reliably shrink: measured on batch B's own iteration-1 runs, draft 603
+    -> redraft 725 and 622 -> 646. The old path threw away the shorter draft it
+    already had and lost the story. Now the SHORTER draft ships when it is
+    within budget x 1.35, WITH a disclosure.
+
+    The property that mattered in the old test is unchanged and still asserted
+    here: exactly TWO calls. Bounded-by-construction was never the part Step 2
+    touched."""
+    sa, calls = _second_over_run(tmp_paths, 80)          # 580 words, band 607
+    assert sa.outcome == "ok"
+    assert len(calls) == 2, "step 2 must not buy a third call"
+    band_notes = [w for w in sa.warnings if "DISCLOSURE BAND" in w]
+    assert len(band_notes) == 1, sa.warnings
+    assert "shipped WITH this disclosure" in band_notes[0]
+
+
+def test_step2_keeps_the_FIRST_draft_when_the_redraft_comes_back_LONGER(
+        tmp_paths):
+    """The case Step 2 was actually written for, and the one the sibling tests
+    do not reach because their two drafts are identical.
+
+    Observed live on batch B's iteration-1 rescore, twice: draft 603 words ->
+    redraft 725, and draft 622 -> redraft 646. The model is instructed to come
+    in shorter and does the opposite. Step 2 must keep the FIRST draft in that
+    case — "take the shorter draft" is not "take the redraft"."""
+    con = _seed(tmp_paths)
+    calls = []
+
+    def chat(key, prompt):
+        calls.append(prompt)
+        b = _brief([{"observable": "Whether it registers", "cites": ["S1"]}])
+        # draft 1 inside the band (580w); the "redraft" comes back far LONGER
+        b["mechanism"] = ("Each ministry answers to its own committee. "
+                          * (80 if len(calls) == 1 else 130))
+        return b, 0.0, 0.0
+
+    sa = analysis.analyze_story(con, "2026-07-26", 1, _slot(), "medium",
+                                config.SourcesConfig(), "", "", 10.0, [], [],
+                                fetch=_fetch, chat=chat,
+                                sonar=lambda *a: ([], 0.0, "ok — 0 results"),
+                                sleep=lambda s: None)
+    assert sa.outcome == "ok", sa.detail
+    assert len(calls) == 2
+    band = [w for w in sa.warnings if "DISCLOSURE BAND" in w]
+    assert len(band) == 1, sa.warnings
+    # the SHORTER (first) draft is what shipped
+    shipped = analysis._prose_words(
+        sa.brief["pinned_facts"], sa.brief["ledger"], sa.brief["mechanism"],
+        sa.brief["effects"], sa.brief["unknowns"], sa.brief["watch"],
+        sa.brief.get("arc"))
+    assert shipped <= int(450 * 1.35), shipped
+    # the disclosure names the number that actually shipped — not the redraft's
+    assert f"the shorter ({shipped})" in band[0], band[0]
+    assert "and 929 words" in band[0], "the longer redraft is disclosed too"
+
+
+def test_past_the_band_it_is_still_a_disclosed_rejection_not_a_third_call(
+        tmp_paths):
+    """CARRIED INVARIANT. The band is bounded: beyond budget x 1.35 the
+    existing disclosed rejection is exactly as it was, and still on two calls.
+    Without this pin, step 2 would read as 'the ceiling is now 1.35'."""
+    sa, calls = _second_over_run(tmp_paths, 100)         # ~720 words > band
     assert sa.outcome == "rejected"
     assert len(calls) == 2
     assert "after length redraft" in sa.detail
+    assert "disclosure band" in sa.detail
 
 
 def test_the_editor_prompt_no_longer_pushes_the_lead_longer_with_teeth():
