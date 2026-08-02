@@ -127,7 +127,9 @@ def test_nl65_in_brief_snippet_sources_context_below_body():
     i_follow = html.index("Follow this thread")
     i_body = html.index("LEDE-4")
     i_sc = html.index(SC_RENDERED)
-    i_here = html.index("Here for")
+    # NL-134 F3 RE-PIN (was: html.index("Here for")) — the corroboration
+    # furniture is still the tail anchor; only its "Here for: …" clause moved.
+    i_here = html.index('class="furniture"')
     assert i_follow < i_body < i_sc < i_here
     assert SC_RENDERED not in html[:i_body]              # not in the deck region
     assert labels.FULL_PICTURE not in html               # never the analyst label

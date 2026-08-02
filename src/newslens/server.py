@@ -1245,13 +1245,115 @@ def _strip_smeta(slot: Dict, stamp_inner: str) -> str:
     meta = (slot.get("corroboration_label") or "").strip()
     if meta:
         bits.append(_e(meta))
-    here = _here_for(slot)
-    first = here.split(",")[0].strip() if here else ""
-    if first:
-        bits.append(_e(first))
+    # NL-134 F3: the primary-selecting-topic echo is GONE from this line. The
+    # why-chosen line now rides above every strip's headline and carries the
+    # WHOLE answer ("Related to: <every match>"), not the first name before the
+    # first comma — and the principal's spec is that the reason shows JUST
+    # once. _here_for is untouched: it still serves the deep view and the
+    # markdown briefing's meta-line.
     if not bits:
         return ""
     return f'<p class="smeta">{" · ".join(bits)}</p>'
+
+
+def _selection_names(slot: Dict) -> List[str]:
+    """The followed things this slot matched — tag names first, then tracked
+    threads; order-preserving, case-insensitively deduped, empties dropped.
+
+    Extracted from _here_for (NL-134 F3) so the why-chosen line and the 'Here
+    for' rationale cannot drift apart. The NL-68 exhibit ('Strait of Hormuz,
+    Strait of Hormuz' — a tag and a tracked thread of the same name doubling the
+    line) must stay dead on BOTH surfaces, and ONE dedupe is how that stays
+    true. Behaviour is byte-identical to the code this replaced."""
+    ordered: List[str] = []
+    seen: set = set()
+    tag_names = [t.get("name", "") for t in slot.get("matched_tags") or []
+                 if isinstance(t, dict)]
+    for name in tag_names + list(slot.get("matched_memory") or []):
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(name)
+    return ordered
+
+
+def _followed_writer_outlets() -> set:
+    """Outlet names the reader follows as WRITERS (sources.yaml
+    `followed_analyst: true`). Needed only to NAME the writer in the why-chosen
+    line — the slot itself carries a bare `followed_analyst` bool, so the name
+    has to come from config.
+
+    An unreadable or absent sources file degrades to the UN-NAMED credit ("a
+    writer you follow"). That is a disclosed degrade, not a silent catch: the
+    line still renders, still says a followed writer is why the story is here,
+    and never invents an outlet name — and a config problem never takes the
+    front page down. Called once per edition render, not once per story."""
+    try:
+        return {s.name for s in config.load_sources().followed_analyst_sources}
+    except (config.SourcesParseError, OSError):
+        return set()
+
+
+def _why_chosen_parts(slot: Dict,
+                      followed_writers: Optional[set] = None) -> Tuple[str, str]:
+    """(prefix, subject) for THE WHY-CHOSEN LINE — code-owned, never prose,
+    never empty (NL-134 F3, folding NL-117's why-chosen provenance order).
+
+    THE PRINCIPAL'S DISPLAY SPEC, 2026-08-02, verbatim: "The reason for the
+    story should be just be displayed as 'Chosen because:' or 'Related to:' and
+    then '{relevant topics the user follows} or Important World News.'" Two
+    forms, nothing else:
+
+        Related to: <the followed things that put this story here>
+        Chosen because: Important World News
+
+    Precedence follows _here_for's, deliberately: what the reader FOLLOWS
+    outranks the world-impact fallback, so a story is never told "we picked
+    this for you" when the reader's own topics are the true answer.
+
+    The followed-writer credit joins the Related-to list whenever
+    followed_analyst is a basis. It NAMES the outlet when sources.yaml resolves
+    one (the slot's own outlets ∩ the followed set) and stays un-named
+    otherwise — never a fabricated byline. A followed outlet dropped from the
+    slot's named outlets (wire-excluded) simply yields the un-named credit.
+
+    NO match at all — the world-impact override, and any zero-match slot the
+    combined score carried — takes the Chosen-because form. That is TRUE by
+    construction (personal_score contributed nothing to the pick) and it is the
+    exact wording the principal specified, so the line is never empty, never
+    false, and never the model's prose."""
+    names = _selection_names(slot)
+    if slot.get("followed_analyst"):
+        named = [o for o in (slot.get("outlets") or [])
+                 if o in (followed_writers or set())]
+        credited = {o.lower() for o in named}
+        names = [n for n in names if n.lower() not in credited]
+        names = names + ([f"{o} ({labels.WHY_FOLLOWED_WRITER})" for o in named]
+                         or [labels.WHY_FOLLOWED_WRITER])
+    if names:
+        return labels.WHY_RELATED_TO, ", ".join(names)
+    return labels.WHY_CHOSEN_BECAUSE, labels.WHY_WORLD_NEWS
+
+
+def _why_chosen(slot: Dict, followed_writers: Optional[set] = None) -> str:
+    """The why-chosen line as plain text (see _why_chosen_parts)."""
+    prefix, subject = _why_chosen_parts(slot, followed_writers)
+    return f"{prefix} {subject}"
+
+
+def _why_chosen_html(slot: Dict,
+                     followed_writers: Optional[set] = None) -> str:
+    """The why-chosen line as front-page markup. The world-impact form keeps
+    the visual prominence the old override note had (it is still the "this is
+    off your map" signal); the Related-to form reads as quiet furniture."""
+    prefix, subject = _why_chosen_parts(slot, followed_writers)
+    cls = ("why-chosen why-chosen--world"
+           if prefix == labels.WHY_CHOSEN_BECAUSE else "why-chosen")
+    return (f'<p class="{cls}"><span class="why-label">{_e(prefix)}</span> '
+            f'{_e(subject)}</p>')
 
 
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
@@ -1259,7 +1361,8 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   slug: Optional[str] = None, date: str = "",
                   deep_return: str = "view-today", con=None,
                   arc_seen: Optional[set] = None, role: str = "story",
-                  grid_cls: str = "", grid_row: str = "") -> str:
+                  grid_cls: str = "", grid_row: str = "",
+                  followed_writers: Optional[set] = None) -> str:
     """One story in the v8 newspaper grid. `role` selects the shape:
     - "lead"  → article.lead: h2 + deck (follow + slim memory stamp) + body +
                 [full picture] + furniture (the dominant left column, spanning).
@@ -1288,15 +1391,19 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     row_style = f' style="--gr:{grid_row}"' if grid_row else ""
     parts = [f'<article class="{wrap_cls}{grid_cls}" id="{_e(slug)}"{row_style}>']
 
-    # The override callout stays ABOVE the title (it explains why an off-beat
-    # story is here) — on every tier, including a strip.
-    if slot.get("override"):
-        label = slot.get("override_label") or "Editor's override"
-        reason = slot.get("world_impact_reason") or ""
-        parts.append(
-            f'<p class="override-note">{_e(label)}'
-            + (f'<span class="reason">{_e(reason)}</span>' if reason else "")
-            + "</p>")
+    # THE WHY-CHOSEN LINE (NL-134 F1 + F3) — above the title, on EVERY story and
+    # every tier, where the override callout used to sit: the "why am I seeing
+    # this" answer arrives before the story, which is NL-117's whole point.
+    #
+    # It REPLACES the override note. That block read override_label — which
+    # ranking.py:1320 already stores as OVERRIDE_LABEL_PREFIX + the ranker's
+    # prose reason — and then appended world_impact_reason, THE SAME TEXT, in a
+    # <span class="reason"> with no separator between them. The principal's
+    # fresh1 specimen (2026-08-02) read "…energy prices.Pause in potential…".
+    # The double-render dies with the furniture: the line is now his two-part
+    # format and the ranker's full prose reason is off the front page entirely
+    # (still persisted on the slot; still rendered, labeled, in the deep view).
+    parts.append(_why_chosen_html(slot, followed_writers))
 
     # NL-68 item 6: the visible "The Lead" kicker DIES — scale + placement carry
     # the hierarchy. NL-68 item 8: the title itself is the deep-view door.
@@ -1354,13 +1461,18 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
         parts.append(f'<p class="story-more">{entry_link}</p>')
 
     # Corroboration furniture — CODE-OWNED, from the slot (never prose).
-    here_for = _here_for(slot)
+    # NL-134 F3: the "Here for: …" clause is GONE from this line. The why-chosen
+    # line above the headline is now the story's ONE reason display, and the
+    # principal's spec says the reason is shown JUST that way — a second clause
+    # restating the same answer in a second vocabulary is the duplication class
+    # F1 exists to kill. What remains here is corroboration, which the
+    # why-chosen line never carried. _here_for itself is untouched and still
+    # serves the deep view and generate.py's markdown meta-line.
     outlets = slot.get("outlets") or []
     meta = slot.get("corroboration_label", "")
     if outlets:
         meta += f' — {", ".join(outlets)}'
-    parts.append(
-        f'<p class="furniture">{_e(meta)}. Here for: {_e(here_for)}.</p>')
+    parts.append(f'<p class="furniture">{_e(meta)}.</p>')
 
     parts.append("</article>")
     return "".join(parts)
@@ -1395,20 +1507,14 @@ def _here_for(slot: Dict) -> str:
     NL-68 exhibit ('Strait of Hormuz, Strait of Hormuz'): a tag and a tracked
     thread of the same name doubled the line. Dedupe case-insensitively and
     order-preserving — tags first, then threads; a thread that only repeats a
-    tag name (any case) is dropped. Empty names are dropped too."""
-    ordered: List[str] = []
-    seen: set = set()
-    tag_names = [t.get("name", "") for t in slot.get("matched_tags") or []
-                 if isinstance(t, dict)]
-    for name in tag_names + list(slot.get("matched_memory") or []):
-        if not name:
-            continue
-        key = name.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        ordered.append(name)
-    matches = ", ".join(ordered)
+    tag name (any case) is dropped. Empty names are dropped too. NL-134 F3 moved
+    that dedupe into _selection_names, shared with the why-chosen line, so the
+    two surfaces can never disagree about what the reader matched.
+
+    FRONT-PAGE NOTE (NL-134 F3): Today's story cards no longer render this
+    line — the why-chosen line replaced it there. This remains the deep view's
+    rationale and generate.py's markdown meta-line."""
+    matches = ", ".join(_selection_names(slot))
     if matches:
         return matches
     if slot.get("override"):
@@ -2143,6 +2249,10 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     slots = _slots_for(row)
     tiers = (entry or {}).get("tiers") or []
     active = _active_topics_lower(con)
+    # NL-134 F3: resolved ONCE per edition, not once per story — the why-chosen
+    # line needs outlet names to credit a followed writer, and the slot only
+    # carries a bool.
+    followed_writers = _followed_writer_outlets()
 
     # BUG-35: one dedup set per EDITION — a same-thread arc line renders under
     # its most prominent (earliest) slot only; a split-day sibling suppresses
@@ -2187,7 +2297,8 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
             i, st, slot, tier, active, has_file=(i + 1) in (briefs or {}),
             slug=f"{slug_prefix}story-{i}", date=row["date"],
             deep_return=deep_return, con=con, arc_seen=arc_seen, role=role,
-            grid_cls=grid_cls, grid_row=rows.get(i, "")))
+            grid_cls=grid_cls, grid_row=rows.get(i, ""),
+            followed_writers=followed_writers))
 
     still_html = ""
     if still_lines:
@@ -3813,6 +3924,17 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
         ctx.append('<p class="sc-threads">Tracked threads: '
                    f'{_e(", ".join(threads))}</p>')
     ctx.append(f'<p class="sc-herefor">Here for: {_e(_here_for(slot))}.</p>')
+    # NL-134 F3: the ranker's FULL prose reason lives HERE. The front page shows
+    # only the short why-chosen line now (the principal's spec), but provenance
+    # is not destroyed — the reason stays persisted on the slot and surfaces on
+    # this context surface, clearly labeled as what it is. Override-only (a
+    # matched story's pick is already explained by its matches) and empty-safe:
+    # an older row without the field renders nothing, never a placeholder.
+    if slot.get("override"):
+        full_reason = (slot.get("world_impact_reason") or "").strip()
+        if full_reason:
+            ctx.append(f'<p class="sc-reason">{_e(labels.WHY_FULL_REASON)} '
+                       f'{_e(full_reason)}</p>')
     out.append(f'<div class="deep-section" id="{story_anchor}-context">'
                f'<h2 class="deep-section-label">{_e(labels.DEEP_WHY_SEEING)}</h2>'
                + "".join(ctx) + "</div>")

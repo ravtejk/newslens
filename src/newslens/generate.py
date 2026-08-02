@@ -924,6 +924,21 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
     else:
         prior_block = "(This is the first briefing — no prior coverage to reference.)"
 
+    # NL-134 F2(a) — COLD-START HONESTY. On a profile's FIRST briefing there is
+    # no "usual" to be off: any your-usual-map / your-interests-history framing
+    # is a FALSE claim about a reader history that does not exist. (The TWO
+    # CLOCKS law in both variant prompts already forbids narrating the reader's
+    # clock; this makes the writer able to obey it, by telling it which clock
+    # reads zero.) The signal is already computed above and already drives
+    # prior_block — 'none' means no prior briefing row exists at all. 'corrupt'
+    # is deliberately NOT first-edition: a prior briefing DOES exist there, its
+    # record is merely unreadable, so the reader does have a history and the
+    # honest move is silence about it, not a cold-start claim. The rank meta's
+    # history_days 0.0 / "first briefing — full cap" says the same thing, but
+    # that metadata is advisory (NL-107 gate ruling) while continuity_status is
+    # authoritative here — so the authoritative signal is the one threaded.
+    first_edition = inputs.get("continuity_status") == "none"
+
     story_parts = []
     for s in inputs["slots"]:
         n = s["slot"]
@@ -975,10 +990,27 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
                 f"SINGLE-OUTLET STORY — name the outlet in the lede prose: "
                 f"{outlets[0] if outlets else 'the sole outlet'}"
             )
-        if s.get("override"):
+        if s.get("override") and first_edition:
+            # NL-134 F2(a): the cold-start arm. Two specimens on record wrote a
+            # reader-history claim into a FIRST briefing (fresh1 2026-08-02;
+            # persona public-health 2026-07-28), both opening on the phrase the
+            # prompt itself supplied. The acknowledgement is not banned — it is
+            # banned WHEN THERE IS NOTHING TO ACKNOWLEDGE.
+            lines.append(
+                "OVERRIDE STORY — outside the reader's tags. THIS IS THE "
+                "READER'S FIRST BRIEFING: they have no reading history with "
+                "you, so there is no 'usual' for this story to be off and no "
+                "established interests to contrast it against. Introduce it on "
+                "its own world-impact merits. Make NO claim about what the "
+                "reader normally reads, follows, tracks or expects — on a first "
+                "briefing every such claim is false (the pipeline renders its "
+                "own label)"
+            )
+        elif s.get("override"):
             lines.append(
                 "OVERRIDE STORY — outside the reader's tags (the pipeline "
-                "renders its own label; your lede may acknowledge naturally)"
+                "renders its own label; your lede may acknowledge naturally, "
+                "in your own words — no supplied phrasing to copy)"
             )
         for rv in s.get("revived_threads", []):
             if rv.get("last_covered"):

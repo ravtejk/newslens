@@ -826,7 +826,11 @@ def test_structured_and_fallback_paths_render_the_same_shape(ui):
         # Trust furniture ALWAYS from slots, on both paths:
         assert "Reported by 2 named outlets" in page, label
         assert "Outlet A" in page, label
-        assert "Here for" in page, label
+        # NL-134 F3 RE-PIN (was: assert "Here for" in page). The front page's
+        # code-owned provenance is the why-chosen line now; "Here for" moved to
+        # the deep view and the markdown briefing. Same contract — provenance
+        # renders from SLOT data on both paths — new copy.
+        assert 'class="why-chosen' in page, label
 
 
 # --- a11y: durable markup pins ------------------------------------------------------------------
@@ -1289,12 +1293,21 @@ def test_item27_furniture_contract_through_build_page(ui):
     page = body.decode("utf-8")
     # 1. Tracked marker (from matched_memory + active thread):
     assert "Tracked ongoing story" in page
-    # 2. Override note (canonical label text, from the slot):
-    assert "Outside your interests" in page or "outside your" in page.lower()
+    # 2. NL-134 F1/F3 RE-PIN. WAS: `"Outside your interests" in page or
+    #    "outside your" in page.lower()` — which post-diff would still pass off
+    #    this fixture's own LEDE ("A global development outside your tags"), so
+    #    the loose `or` had stopped testing the furniture at all. The override's
+    #    code-owned furniture is now the why-chosen line in the principal's
+    #    format, pinned exactly, and the ranker's prose reason must NOT be on
+    #    the front page (that recital was the F1 double-render).
+    assert "Important World News" in page
+    assert 'class="why-chosen why-chosen--world"' in page
+    assert ranking.OVERRIDE_LABEL_PREFIX not in page
     # 3. Meta-footnote: corroboration + outlets + provenance, from slots:
     assert "Reported by 2 named outlets" in page
     assert "Outlet A" in page
-    assert "Here for" in page
+    # NL-134 F3 RE-PIN (was: assert "Here for" in page) — see item 2.
+    assert 'class="why-chosen' in page
     # 4. Disclosure trigger: the revival back-reference reaches the surface:
     assert "2026-07-01" in page
     # 5. Follow affordance (on the NON-tracked story — the tracked story drops

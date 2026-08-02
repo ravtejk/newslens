@@ -234,8 +234,16 @@ article.story { scroll-margin-top: 0.75rem; }
 .deep-view-entry-link:hover { color: var(--terra-deep); text-decoration: underline; }
 .furniture, .meta-footnote { font-size: 0.8rem; font-style: italic; color: var(--ink-faint);
   margin: 1.1rem 0 0; max-width: 38rem; line-height: 1.5; }
-.override-note { font-size: 0.82rem; font-weight: 700; color: var(--terra-deep); margin: 0 0 0.8rem; }
-.override-note .reason { display: block; font-weight: 400; margin-top: 0.2rem; color: var(--ink); }
+/* NL-134 F3: the why-chosen line REPLACES .override-note, which is deleted
+   together with its .reason child — that span WAS the F1 double-render. This
+   line rides every story on every tier. The Related-to form reads as quiet
+   furniture; the world-impact form keeps the terra prominence the override
+   callout had, because it is still the "this one is off your map" signal. */
+.why-chosen { font-size: 0.82rem; font-weight: 400; color: var(--ink-faint);
+  font-family: var(--font-sans); margin: 0 0 0.6rem; line-height: 1.45; }
+.why-chosen .why-label { font-weight: 700; color: var(--ink-soft); }
+.why-chosen--world { color: var(--ink); }
+.why-chosen--world .why-label { color: var(--terra-deep); }
 h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-weight: 700;
   margin: 0 0 0.4rem; line-height: 1.22; }
 /* NL-68 item 8: the story title IS the click-through to its deep view — it reads
@@ -566,7 +574,7 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
   color: var(--ink-soft); margin: 1.4rem 0 0.3rem; }
 .deep-today-prose > p { margin: 0 0 0.8rem; }
 /* NL-66(b): the In-Brief sources-&-context view. */
-.sc-tags, .sc-threads, .sc-herefor { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.35rem; }
+.sc-tags, .sc-threads, .sc-herefor, .sc-reason { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.35rem; }
 .sc-corrob { color: var(--ink-faint); font-size: 0.85rem; margin: 0 0 0.6rem; }
 .deep-footer { font-size: 0.78rem; color: var(--ink-faint); padding-top: 1.25rem;
   margin-top: 0.5rem; border-top: 1px solid var(--rule); line-height: 1.6; }

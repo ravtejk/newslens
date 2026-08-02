@@ -1,0 +1,501 @@
+"""NL-134 — the fresh-profile fix batch (principal's notes 2026-08-02, walk on
+profile `fresh1`). Three items, red-first:
+
+  * F1 — the override-note DOUBLE-RENDER. server.py rendered `override_label`
+    (which ranking.py:1320 already stores as OVERRIDE_LABEL_PREFIX + the
+    ranker's prose reason) and then appended `world_impact_reason` — the SAME
+    text — in a <span class="reason"> with no separator. The principal's
+    specimen read "…energy prices.Pause in potential…". The specimen strings in
+    this file are that receipt, verbatim from
+    profiles/fresh1/data/briefings/2026-08-02.md.
+
+  * F2 — COLD-START HONESTY. (a) On a first briefing there is no "usual", so a
+    your-usual-map framing is a false claim about a reader history that does
+    not exist; the writer path now says so. (b) The example-becomes-template
+    class (M9-M2 lineage): both variant prompts supplied "Off your usual map,
+    but:" as a quotable example and the writer parroted it — two specimens
+    (fresh1 2026-08-02, persona public-health 2026-07-28). The guidance now
+    instructs by SHAPE and supplies no phrase to copy.
+
+  * F3 — THE WHY-CHOSEN LINE, the principal's display spec (binding, verbatim):
+    "The reason for the story should be just be displayed as 'Chosen because:'
+    or 'Related to:' and then '{relevant topics the user follows} or Important
+    World News.'" Folds NL-117. Front-page surfaces only — the model's full
+    reason stays persisted on the slot and surfaces, labeled, in the deep view.
+
+BORN-RED CLASS. Every test here except the three marked CARRIED-INVARIANT
+(born-green) fails on HEAD c3778c9; the HEAD-run fail list travels with the
+implementer's report per the 2026-07-18 gate ruling.
+
+Offline by construction (conftest autouse sandbox + loopback-only guard).
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from html import unescape
+
+import pytest
+
+from newslens import config, db, generate, labels, paths, ranking, server
+
+_TAGS = re.compile(r"<[^>]+>")
+
+
+def visible(html: str) -> str:
+    """The page as a reader sees it — markup stripped — so a copy pin reads the
+    COPY and not the furniture carrying it (the label rides its own <span>,
+    following the _still_tracking_line idiom)."""
+    return unescape(_TAGS.sub("", html))
+
+DATE = "2026-08-02"
+
+# The principal's specimen, verbatim (fresh1, 2026-08-02 edition). The reason
+# ends "…energy prices" and the label form appends a period, which is exactly
+# how the two renders butted together into "energy prices.Pause in potential".
+SPECIMEN_REASON = (
+    "Pause in potential military action affects global oil markets and Middle "
+    "East regional stability with direct consequences for international "
+    "shipping and energy prices"
+)
+SPECIMEN_CONCATENATION = "energy prices.Pause in potential"
+
+
+def iso_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def slot(n=1, tags=(), mem=(), override=False, followed=False,
+         outlets=("Outlet A",), reason="A systemic development."):
+    """A persisted-shape slot, as _slots_for hands them to the renderer."""
+    return {
+        "slot": n, "story_title": f"Story {n}", "summary": "S.",
+        "item_ids": [n], "outlets": list(outlets),
+        "matched_tags": [dict(t) for t in tags],
+        "matched_memory": list(mem), "matched_dormant": [],
+        "followed_analyst": followed,
+        "personal_score": 1.0 if (tags or mem) else 0.0,
+        "world_impact": 9 if override else 6,
+        "world_impact_reason": reason,
+        "combined_score": 0.5, "override": override,
+        "override_label": (
+            ranking.OVERRIDE_LABEL_PREFIX + reason.rstrip(".") + "."
+        ) if override else None,
+        "corroboration_count": 1,
+        "corroboration_label": "Reported by 1 named outlet",
+        "wire_items_excluded": 0, "revived_threads": [],
+        "still_tracking": False, "still_tracking_note": "",
+    }
+
+
+def story(headline="A headline", lede="The lede sentence."):
+    return {"tier": "full", "headline": headline, "lede": lede,
+            "why_label": "Why it matters", "why_it_matters": "Effects.",
+            "watch_label": "Watch for", "watch_for": "The vote.",
+            "my_read": None}
+
+
+def render(sl, role="story", tier="full", **kw):
+    return server._render_story(0, story(), sl, tier, set(), date=DATE,
+                                role=role, **kw)
+
+
+def inputs_for(slots, continuity="none"):
+    prior = ({"text_block": "PRIOR EDITION CONTEXT"}
+             if continuity == "ok" else None)
+    return {"slots": slots, "items_by_slot": {s["slot"]: [] for s in slots},
+            "threads": [], "prior_ctx": prior,
+            "continuity_status": continuity, "window_meta": None,
+            "corroboration": {}}
+
+
+# ===========================================================================
+# F1 — the double-render dies
+# ===========================================================================
+
+def test_f1_the_specimen_reason_cannot_render_twice_on_a_story_card(tmp_paths):
+    """BORN RED on c3778c9. The exact fresh1 specimen: the label already ends
+    with the reason, then the old <span class="reason"> appended it again with
+    no separator. The concatenation artefact the principal saw must be
+    unrenderable, and the reason must not appear on the card at all."""
+    html = render(slot(override=True, reason=SPECIMEN_REASON))
+    assert SPECIMEN_CONCATENATION not in html, (
+        "the F1 concatenation is back — the reason is rendering twice")
+    assert html.count(SPECIMEN_REASON) == 0, (
+        "the ranker's prose reason is on the front page; the principal's spec "
+        "allows only the short why-chosen line there")
+
+
+def test_f1_the_old_override_note_furniture_is_gone_everywhere(tmp_paths):
+    """BORN RED on c3778c9. The <p class="override-note"> and its .reason child
+    were the double-render's whole mechanism; neither the markup nor the
+    OVERRIDE_LABEL_PREFIX prose reaches a front-page story any more."""
+    html = render(slot(override=True, reason=SPECIMEN_REASON))
+    assert 'class="override-note"' not in html
+    assert 'class="reason"' not in html
+    assert ranking.OVERRIDE_LABEL_PREFIX not in html
+
+
+def test_f1_holds_on_every_tier_including_the_strip(tmp_paths):
+    """BORN RED on c3778c9. The old callout rendered on every tier "including a
+    strip", so the duplication did too. Check all three shapes."""
+    for role in ("lead", "story", "strip"):
+        html = render(slot(override=True, reason=SPECIMEN_REASON), role=role,
+                      tier="quick" if role == "strip" else "full")
+        assert SPECIMEN_CONCATENATION not in html, f"{role} still duplicates"
+        assert SPECIMEN_REASON not in html, f"{role} still recites the reason"
+
+
+# ===========================================================================
+# F3 — the why-chosen line, in the principal's format
+# ===========================================================================
+
+def test_f3_interest_matched_story_says_related_to_the_topic_names(tmp_paths):
+    """BORN RED on c3778c9. Form 1: the reader follows these topics, so the
+    line names them — every match, not the first one before a comma."""
+    html = render(slot(tags=({"name": "Energy policy", "level": "broad"},
+                             {"name": "Oil markets", "level": "specific"})))
+    assert "Related to: Energy policy, Oil markets" in visible(html)
+    assert "Chosen because:" not in html
+
+
+def test_f3_world_impact_override_says_chosen_because_important_world_news(
+        tmp_paths):
+    """BORN RED on c3778c9. Form 2, verbatim from the principal's spec."""
+    html = render(slot(override=True, reason=SPECIMEN_REASON))
+    assert "Chosen because: Important World News" in visible(html)
+    assert "Related to:" not in html
+
+
+def test_f3_thread_selected_story_says_related_to_the_thread(tmp_paths):
+    """BORN RED on c3778c9. Form 3: no tag match, but a tracked thread put it
+    here — the thread's display name is the honest answer."""
+    html = render(slot(mem=("Hormuz Grain Corridor",)))
+    assert "Related to: Hormuz Grain Corridor" in visible(html)
+
+
+def test_f3_followed_writer_credit_names_the_outlet_when_it_resolves(
+        tmp_paths, monkeypatch):
+    """BORN RED on c3778c9. Form 4: followed_analyst is the selection basis and
+    the outlet name comes from sources.yaml, never from the slot (which carries
+    only a bool). The name must be the reader's own configured outlet."""
+    monkeypatch.setattr(server, "_followed_writer_outlets",
+                        lambda: {"Stratechery"})
+    sl = slot(followed=True, outlets=("Stratechery", "Wire Co"))
+    line = server._why_chosen(sl, server._followed_writer_outlets())
+    assert line == "Related to: Stratechery (a writer you follow)"
+    assert "Wire Co" not in line, "an un-followed outlet was credited"
+
+
+def test_f3_followed_writer_degrades_to_the_un_named_credit(tmp_paths):
+    """BORN RED on c3778c9. When sources.yaml resolves no matching outlet (an
+    unreadable config, or a followed outlet the corroboration count excluded),
+    the credit renders WITHOUT a name — never a fabricated byline, never an
+    empty line."""
+    sl = slot(followed=True, outlets=("Some Wire",))
+    assert server._why_chosen(sl, set()) == "Related to: a writer you follow"
+
+
+def test_f3_unreadable_sources_file_degrades_instead_of_raising(
+        tmp_paths, monkeypatch):
+    """BORN RED on c3778c9. A config problem must not take the front page
+    down: the resolver returns the empty set and the line still renders."""
+    def boom(*a, **kw):
+        raise config.SourcesParseError("sources.yaml is not valid YAML")
+    monkeypatch.setattr(config, "load_sources", boom)
+    assert server._followed_writer_outlets() == set()
+    html = render(slot(followed=True))
+    assert "Related to: a writer you follow" in visible(html)
+
+
+def test_f3_the_line_is_never_empty_for_any_slot_shape(tmp_paths):
+    """BORN RED on c3778c9. "NEVER render an empty, false, or model-verbose
+    reason on front surfaces" — including a slot with nothing on it at all
+    (an older persisted row), which falls to the world-news form because
+    world impact is literally why it is there."""
+    for sl in ({}, slot(), slot(override=True), slot(followed=True),
+               {"matched_tags": None, "matched_memory": None}):
+        line = server._why_chosen(sl)
+        assert line.strip(), f"empty why-chosen line for {sl!r}"
+        assert (line.startswith(labels.WHY_RELATED_TO)
+                or line.startswith(labels.WHY_CHOSEN_BECAUSE)), line
+    assert server._why_chosen({}) == "Chosen because: Important World News"
+
+
+def test_f3_the_line_rides_every_tier_including_the_strip(tmp_paths):
+    """BORN RED on c3778c9. NL-117's order was a provenance line on EVERY
+    story; the strip (the quick-tier grout) is a story."""
+    sl = slot(tags=({"name": "Energy policy", "level": "broad"},))
+    for role, tier in (("lead", "full"), ("story", "medium"),
+                       ("strip", "quick")):
+        html = render(sl, role=role, tier=tier)
+        assert 'class="why-chosen' in html, f"{role} has no why-chosen line"
+        assert "Related to: Energy policy" in visible(html), f"{role} line"
+
+
+def test_f3_the_reason_shows_just_once_per_card(tmp_paths):
+    """BORN RED on c3778c9. "just be displayed as" is load-bearing: the old
+    card answered the same question twice — the override note above the title
+    AND "Here for: …" in the bottom furniture. One line now; the furniture
+    keeps corroboration, which the why-chosen line never carried."""
+    html = render(slot(tags=({"name": "Energy policy", "level": "broad"},)))
+    assert html.count("Energy policy") == 1
+    assert "Here for:" not in html
+    assert 'class="furniture"' in html
+    assert "Reported by 1 named outlet" in html
+
+
+def test_f3_strip_smeta_no_longer_echoes_the_selecting_topic(tmp_paths):
+    """BORN RED on c3778c9. The strip's machine meta line carried the first
+    name BEFORE THE FIRST COMMA (a truncation, not an answer). The why-chosen
+    line above it now carries the whole answer, so the echo is duplication —
+    pinned inside the smeta element, because the strip has no bottom furniture
+    and a whole-card count cannot tell the two placements apart."""
+    html = render(slot(tags=({"name": "Energy policy", "level": "broad"},
+                             {"name": "Oil markets", "level": "specific"})),
+                  role="strip", tier="quick")
+    smeta = html.split('<p class="smeta">')[1].split("</p>")[0]
+    assert "Energy policy" not in smeta, "the strip still echoes the topic"
+    assert "Reported by 1 named outlet" in smeta     # smeta itself survives
+    assert "Related to: Energy policy, Oil markets" in visible(html)
+
+
+def test_f3_full_reason_survives_labeled_in_the_deep_view(tmp_paths):
+    """BORN RED on c3778c9. Provenance is not destroyed by taking the prose
+    reason off the front page: it stays persisted on the slot AND renders,
+    clearly labeled, in the sources-&-context view's why-you're-seeing-this
+    block."""
+    db.migrate()
+    con = db.connect()
+    try:
+        sec = server._render_sources_context_view(
+            "s0", "A headline", story(),
+            slot(override=True, reason=SPECIMEN_REASON), con, DATE)
+    finally:
+        con.close()
+    assert labels.WHY_FULL_REASON in sec
+    assert SPECIMEN_REASON in sec
+    assert 'class="sc-reason"' in sec
+
+
+def test_f3_deep_view_reason_is_override_only_and_empty_safe(tmp_paths):
+    """BORN RED on c3778c9. A matched story's pick is explained by its matches,
+    and an older row without the field renders nothing — never a placeholder,
+    never a bare label."""
+    db.migrate()
+    con = db.connect()
+    try:
+        matched = server._render_sources_context_view(
+            "s0", "H", story(),
+            slot(tags=({"name": "Energy policy", "level": "broad"},)), con,
+            DATE)
+        empty = server._render_sources_context_view(
+            "s0", "H", story(), slot(override=True, reason=""), con, DATE)
+    finally:
+        con.close()
+    assert labels.WHY_FULL_REASON not in matched
+    assert labels.WHY_FULL_REASON not in empty
+
+
+def test_f3_labels_are_live_not_captured(tmp_paths, monkeypatch):
+    """WIRING PROOF (the label-table liveness idiom): the render reads
+    labels.<NAME> at call time, so a re-pin of the string table reaches the
+    page. A captured import-time constant fails this."""
+    monkeypatch.setattr(labels, "WHY_RELATED_TO", "REPIN-RELATED")
+    monkeypatch.setattr(labels, "WHY_CHOSEN_BECAUSE", "REPIN-CHOSEN")
+    monkeypatch.setattr(labels, "WHY_WORLD_NEWS", "REPIN-WORLD")
+    monkeypatch.setattr(labels, "WHY_FOLLOWED_WRITER", "REPIN-WRITER")
+    assert "REPIN-RELATED" in render(
+        slot(tags=({"name": "Energy policy", "level": "broad"},)))
+    assert "REPIN-CHOSEN" in render(slot(override=True))
+    assert "REPIN-WORLD" in render(slot(override=True))
+    assert "REPIN-WRITER" in render(slot(followed=True))
+
+
+def test_f3_carried_invariant_the_line_escapes_hostile_names(tmp_paths):
+    """CARRIED-INVARIANT (born-green): tag and thread names come from the
+    ranked web through the model, and every carrier of them escapes through _e.
+    HEAD passed this through the "Here for" furniture; the why-chosen line is
+    the new carrier and inherits the obligation, so the pin travels with it."""
+    hostile = '</p><img src=x onerror=alert(1)>'
+    html = render(slot(tags=({"name": hostile, "level": "broad"},)))
+    assert "<img" not in html
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html
+
+
+def test_f3_the_nl68_dedupe_holds_on_the_new_surface_too(tmp_paths):
+    """BORN RED on c3778c9 — the _why_chosen half does not exist there. (The
+    _here_for half alone is a carried invariant, pinned separately below.) The
+    NL-68 exhibit — a tag and a tracked thread of the same name doubling the
+    line, "Strait of Hormuz, Strait of Hormuz" — must stay dead on BOTH
+    surfaces now that they share _selection_names' one dedupe."""
+    sl = {"matched_tags": [{"name": "Strait of Hormuz", "level": "specific"}],
+          "matched_memory": ["strait of hormuz"]}
+    assert server._here_for(sl) == "Strait of Hormuz"
+    assert server._why_chosen(sl) == "Related to: Strait of Hormuz"
+
+
+def test_f3_carried_invariant_here_for_is_unchanged_for_its_own_surfaces(
+        tmp_paths):
+    """CARRIED-INVARIANT (born-green): F3 took the "Here for" clause off the
+    front page only. _here_for itself — the deep view's rationale and
+    generate.py's markdown meta-line — keeps every branch it had."""
+    assert server._here_for({"matched_tags": [{"name": "AI regulation"}],
+                             "matched_memory": []}) == "AI regulation"
+    assert server._here_for({"override": True}) == \
+        "editor's override — see note above"
+    assert server._here_for({}) == \
+        "world-impact selection (no tag or thread match)"
+
+
+def test_f3_full_edition_render_carries_the_line_and_not_the_reason(tmp_paths):
+    """BORN RED on c3778c9. End-to-end through the real edition body renderer
+    (the path Today and the archive-in-place edition share), not just the story
+    helper: the line is present, the prose reason is not."""
+    db.migrate()
+    con = db.connect()
+    try:
+        slots = [slot(1, tags=({"name": "Energy policy", "level": "broad"},)),
+                 slot(2, override=True, reason=SPECIMEN_REASON)]
+        stories = [story("Matched story", "Lede one."),
+                   story("Override story", "Lede two.")]
+        narrative = generate.assemble_narrative(
+            DATE, "A", stories, inputs_for(slots))
+        con.execute(
+            "INSERT INTO briefings (date, story_slots, corroboration_labels,"
+            " narrative_text, generated_at) VALUES (?, ?, ?, ?, ?)",
+            (DATE, json.dumps(slots),
+             json.dumps({"standing_caveat": ranking.CORROBORATION_CAVEAT,
+                         "per_story": []}), narrative, iso_now()))
+        con.commit()
+        row = con.execute("SELECT * FROM briefings WHERE date = ?",
+                          (DATE,)).fetchone()
+        body = server._render_briefing_body(con, row, None, None, "",
+                                            "view-today")
+    finally:
+        con.close()
+    seen = visible(body)
+    assert "Related to: Energy policy" in seen
+    assert "Chosen because: Important World News" in seen
+    assert SPECIMEN_CONCATENATION not in body
+    assert "Here for:" not in body
+
+
+def test_f3_writer_credit_absorbs_a_same_named_tag_or_thread(tmp_paths):
+    """BORN RED on the NL-134 land (gate FIX-2, 2026-08-02): a followed tag or
+    thread named identically to a followed-writer outlet must not stutter the
+    line — 'Stratechery, Stratechery (a writer you follow)' (gate probe
+    receipt, both exact-case and case-variant). The credit form carries the
+    name; the bare name folds into it, case-insensitively, per
+    _selection_names' own dedupe convention."""
+    sl = slot(tags=({"name": "Stratechery", "level": "specific"},),
+              followed=True, outlets=("Stratechery",))
+    assert server._why_chosen(sl, {"Stratechery"}) == \
+        "Related to: Stratechery (a writer you follow)"
+    sl_case = slot(tags=({"name": "stratechery", "level": "specific"},),
+                   followed=True, outlets=("Stratechery",))
+    line = server._why_chosen(sl_case, {"Stratechery"})
+    assert line.lower().count("stratechery") == 1
+
+
+# ===========================================================================
+# F2(a) — cold-start honesty reaches the writer
+# ===========================================================================
+
+def test_f2a_first_briefing_override_line_forbids_reader_history_claims(
+        tmp_paths):
+    """BORN RED on c3778c9. WIRING PROOF: continuity_status 'none' (no prior
+    briefing row exists) reaches the writer's per-story OVERRIDE line, which
+    now states there is no "usual" and bans every reader-history claim."""
+    prompt = generate.build_narrative_prompt(
+        DATE, "A", inputs_for([slot(1, override=True)], continuity="none"))
+    assert "THIS IS THE READER'S FIRST BRIEFING" in prompt
+    assert "no 'usual' for this story to be off" in prompt
+    assert "Make NO claim about what the reader normally reads" in prompt
+
+
+def test_f2a_established_reader_keeps_the_acknowledgement_legal(tmp_paths):
+    """BORN RED on c3778c9 (the "no supplied phrasing" clause is new). The
+    principal's complaint was the FALSE history claim and the verbatim crutch —
+    acknowledging off-interest inclusion stays legal on a non-first edition."""
+    prompt = generate.build_narrative_prompt(
+        DATE, "A", inputs_for([slot(1, override=True)], continuity="ok"))
+    assert "your lede may acknowledge naturally" in prompt
+    assert "no supplied phrasing to copy" in prompt
+    assert "THIS IS THE READER'S FIRST BRIEFING" not in prompt
+
+
+def test_f2a_corrupt_continuity_is_not_a_first_edition(tmp_paths):
+    """BORN RED on c3778c9 (via the established arm's new clause). The
+    distinction the M4 gate mandated: a prior briefing whose record is
+    unreadable is NOT "no prior briefing" — the reader HAS a history there, so
+    the cold-start claim would itself be false. 'corrupt' takes the ESTABLISHED
+    arm, and this pin fails if it ever takes the cold-start one."""
+    prompt = generate.build_narrative_prompt(
+        DATE, "A", inputs_for([slot(1, override=True)], continuity="corrupt"))
+    assert "THIS IS THE READER'S FIRST BRIEFING" not in prompt
+    assert "your lede may acknowledge naturally" in prompt
+    assert "no supplied phrasing to copy" in prompt   # the established arm
+
+
+def test_f2a_carried_invariant_cold_start_line_is_override_scoped(tmp_paths):
+    """CARRIED-INVARIANT (born-green) — a NEGATIVE-SPACE guard, and it can
+    only be born green: it asserts the absence of furniture, which HEAD also
+    lacked. It earns its place by pinning SCOPE — the cold-start line rides the
+    override story it belongs to and never leaks onto a matched story."""
+    prompt = generate.build_narrative_prompt(
+        DATE, "A", inputs_for([slot(1)], continuity="none"))
+    assert "THIS IS THE READER'S FIRST BRIEFING" not in prompt
+    assert "OVERRIDE STORY" not in prompt
+
+
+@pytest.mark.parametrize("variant", ["A", "B"])
+def test_f2a_both_variants_carry_the_cold_start_arm(tmp_paths, variant):
+    """BORN RED on c3778c9. The override line is composed in generate.py, so it
+    must reach BOTH writer variants — the 07-28 public-health specimen was one
+    variant and the 08-02 fresh1 specimen the other."""
+    prompt = generate.build_narrative_prompt(
+        DATE, variant, inputs_for([slot(1, override=True)], continuity="none"))
+    assert "THIS IS THE READER'S FIRST BRIEFING" in prompt
+
+
+# ===========================================================================
+# F2(b) — the example-becomes-template class
+# ===========================================================================
+
+_VARIANTS = ("narrative_variant_a.txt", "narrative_variant_b.txt")
+
+
+@pytest.mark.parametrize("fname", _VARIANTS)
+def test_f2b_no_variant_supplies_the_quotable_override_phrase(fname):
+    """BORN RED on c3778c9 (a:229, b:148). The M9-M2 class: the prompt's own
+    example becomes the writer's template. Two specimens parroted this exact
+    phrase — it is not guidance any more, in either file."""
+    text = (paths.PROMPTS_DIR / fname).read_text(encoding="utf-8")
+    assert "Off your usual map" not in text
+    assert "acknowledge that naturally" not in text
+
+
+@pytest.mark.parametrize("fname", _VARIANTS)
+def test_f2b_both_variants_instruct_by_shape_instead(fname):
+    """BORN RED on c3778c9. The replacement teaches the move without handing
+    over a phrase, and names the cold-start case in the file the principal
+    edits — the prompts stay plain and principal-editable."""
+    text = (paths.PROMPTS_DIR / fname).read_text(encoding="utf-8")
+    assert "in YOUR OWN WORDS" in text
+    assert "no phrase to copy" in text
+    assert "FIRST briefing" in text
+
+
+@pytest.mark.parametrize("fname", _VARIANTS)
+def test_f2b_rewritten_guidance_stays_above_the_cache_sentinel(fname):
+    """BORN RED on c3778c9 — the anchor text is new there. The INVARIANT is
+    old (ADR-0016 §6: the law sits in the cached system prefix); this pin asks
+    whether the REWRITTEN guidance still precedes the split sentinel, which
+    only the post-diff files can answer."""
+    text = (paths.PROMPTS_DIR / fname).read_text(encoding="utf-8")
+    at = text.find("in YOUR OWN WORDS")
+    sentinel = text.find(generate._NARRATIVE_CACHE_SENTINEL)
+    assert at != -1 and sentinel != -1
+    assert at < sentinel, "the override guidance drifted below the sentinel"

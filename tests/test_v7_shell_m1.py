@@ -102,7 +102,11 @@ def test_nl65_full_picture_below_body_follow_under_title():
     i_follow = html.index("Follow this thread")      # the merged follow control
     i_body = html.index("LEDE-1")                   # the story body
     i_fp = html.index(labels.FULL_PICTURE)          # "The full picture"
-    i_here = html.index("Here for")                 # corroboration furniture
+    # NL-134 F3 RE-PIN (was: html.index("Here for")). The bottom corroboration
+    # furniture is the ordering anchor and it still exists — its "Here for: …"
+    # clause moved to the deep view, so the pin anchors on the ELEMENT, which is
+    # a stricter anchor than one clause of its copy.
+    i_here = html.index('class="furniture"')        # corroboration furniture
     assert i_follow < i_body, "follow control must sit under the title, above body"
     assert i_body < i_fp, "NL-65: full picture must move BELOW the body"
     assert i_fp < i_here, "full picture sits just before the sources/corrob furniture"
@@ -120,7 +124,8 @@ def test_nl65_lead_story_same_placement():
     con.close()
     assert html.index("Follow this thread") < html.index("LEDE-0")
     assert html.index("LEDE-0") < html.index(labels.FULL_PICTURE)
-    assert html.index(labels.FULL_PICTURE) < html.index("Here for")
+    # NL-134 F3 RE-PIN (was: html.index("Here for")) — see the anchor note above.
+    assert html.index(labels.FULL_PICTURE) < html.index('class="furniture"')
 
 
 # --- The still-tracking render + A8 no-fabrication teeth -----------------------

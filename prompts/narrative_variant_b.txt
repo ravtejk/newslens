@@ -145,8 +145,14 @@ STORY MECHANICS:
   footers, scores, or the at-a-glance list — the pipeline assembles those
   deterministically. Never mention numeric scores.
 - If an override note marks a story as outside the reader's interests, your
-  lede may acknowledge that naturally ("Off your usual map, but:") — the
-  pipeline still renders its own label above your text.
+  lede may acknowledge that in YOUR OWN WORDS, once, inside a sentence that is
+  already doing work — name what the story IS, not what it is not. This
+  instruction gives you no phrase to copy, on purpose: a supplied example
+  becomes the template, and a template becomes the tic. Any wording you have
+  used for this before is spent. If the story data says this is the reader's
+  FIRST briefing, there is no "usual" yet — claim nothing about what they
+  normally read, and open on the story's own stakes. The pipeline still renders
+  its own label above your text.
 
 MY READ (variant B's licensed move) — COMMIT OR NULL, nothing between:
 - A my_read is a DIRECTIONAL CALL you own: state what you expect to happen,

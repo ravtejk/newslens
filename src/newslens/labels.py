@@ -109,6 +109,23 @@ THREAD_EDITIONS_LABEL = "In these editions"  # the edition back-links group labe
 STILL_TRACKING_PREFIX = "Still tracking"
 STILL_TRACKING_NO_DATE = "No next date is set."
 
+# --- The why-chosen provenance line (NL-134 F3; folds NL-117) -----------------
+# THE PRINCIPAL'S DISPLAY SPEC, 2026-08-02, verbatim: "The reason for the story
+# should be just be displayed as 'Chosen because:' or 'Related to:' and then
+# '{relevant topics the user follows} or Important World News.'" It rides every
+# front-page story on every tier and REPLACES the old override note, which
+# rendered the ranker's full prose reason (twice — the F1 bug). The model's full
+# reason is not destroyed: it stays persisted on the slot and surfaces in the
+# deep view under WHY_FULL_REASON. "just" is load-bearing — no front-page
+# surface says the same thing a second way.
+WHY_RELATED_TO = "Related to:"          # the reader follows the named things
+WHY_CHOSEN_BECAUSE = "Chosen because:"  # nothing followed matched
+WHY_WORLD_NEWS = "Important World News"
+WHY_FOLLOWED_WRITER = "a writer you follow"   # composed as "<outlet> (…)" when
+                                              # the outlet name resolves, and
+                                              # rendered bare when it does not
+WHY_FULL_REASON = "The full reason it was included:"   # deep view only
+
 # --- Following — the Spine (§7/§12.2/§12.5) ----------------------------------
 FOLLOWING_TRIAD_THREADS = "Threads"    # WAS the switcher's "Ongoing stories"
 FOLLOWING_TRIAD_TOPICS = "Topics"
