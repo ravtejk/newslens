@@ -207,6 +207,13 @@ carry at least one specific of its own — a numeral, a proper noun, a date, or
 a quoted phrase — that no other field already states. Restatement across
 fields is the defect; shortness is not.
 
+ANTI-RESTATEMENT FOLD (effects, binding). An effect states a CONSEQUENCE, not
+a re-wording. If an effect repeats the actor and the action, number, or quoted
+words of a pinned fact, ledger claim, mechanism clause, or an earlier effect,
+DROP it — do not repair it by adding words. A short effects list is the honest
+state. Where a real consequence overlaps something already written, write only
+the part that is new, and cite it.
+
 Word budget for all prose fields combined: {word_budget} words (tier: {tier}).
 Today is {date}. The story (slot {slot}):
 

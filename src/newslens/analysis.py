@@ -533,7 +533,29 @@ SONAR_EST_USD = 0.012              # measured spike ~$0.007 + headroom
 # Together they re-base the SAME behaviour onto an honest measurement: the
 # observed ~487-word median prose plus ~55 words of arc is ~540, the new
 # ceiling. Measurement catching up with the product, not more room for it.
-WORD_BUDGETS = {"full": 750, "medium": 450}
+#
+# NL-118 RATIFICATION 2026-08-01, ruling clause (i) — medium 450 -> 542.
+# This one is NOT measurement honesty and must not be read as more of batch B:
+# it is a THROUGHPUT change, and it does give the medium tier more room. That
+# is the ratified intent. Grounds on the record: the trip tax (briefs hitting
+# the ceiling) fell 73% -> 17% and the second-over rate 40% -> 0%, rejections
+# 3 -> 1, P85 sat at a fixed point, and density at the new budget was certified
+# by HAND READ — the widening buys throughput without buying padding. The
+# acknowledged cost is a small-n fixture ledger edge (median 17 vs 15) against
+# the old ceiling; the redraft record is mixed, not protective.
+#
+# The FULL tier is deliberately untouched at 750: the evidence is medium-tier
+# evidence, and re-basing both together (batch B's move) would extend a
+# measured result to an unmeasured tier.
+#
+# EVERYTHING DOWNSTREAM DERIVES — nothing below is hand-edited to match:
+#   ceiling = 542 x WORD_CEILING_FACTOR (1.2)  = 650   (was 540)
+#   band    = 542 x DISCLOSURE_BAND_FACTOR (1.35) = 731   (was 607)
+# Both factors stay exactly where they were. Re-basing by moving a factor
+# instead of the budget would silently change the SHAPE of the two-tier
+# contract (how far past budget is tolerated), which is a different and
+# unratified change. If you are here to widen the ceiling, move this number.
+WORD_BUDGETS = {"full": 750, "medium": 542}
 # EC-9 (content round 2026-07-28, resolved by combination — Remy's hard
 # threshold WITH Vera's retry instruction): the tier budget is a target that
 # warns; budget × this factor is a ceiling that raises and buys ONE redraft.

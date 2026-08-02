@@ -216,21 +216,30 @@ def test_word_budget_warns_over_budget_and_REJECTS_past_the_ceiling():
     the contract is untouched and every assertion still fires — only the
     numbers re-base, 400/480 -> 450/540, and `_prose_words` now takes the arc
     it always rendered. WAS: `45`/`400 < x <= 480` and `ceiling == 480 and
-    budget == 400`."""
+    budget == 400`.
+
+    RE-ANCHORED AGAIN (NL-118 ratification 2026-08-01, ruling clause (i)):
+    450/540 -> 542/650, on the same terms — the shape is untouched and every
+    assertion still fires. Both multipliers move with the numbers (50 -> 62 in
+    the warn half, 60 -> 75 in the raise half) because both were calibrated to
+    the old ceiling: at x50 the brief now measures 487, UNDER the 542 budget,
+    and at x60 it measures 567, under the 650 ceiling — so the untouched
+    fixtures would have stopped exercising both halves of the contract.
+    WAS: `50`/`60` and `450 < x <= 540` and `ceiling == 540 and budget == 450`."""
     src = sources_fixture()
     b = good_brief()
-    b["mechanism"] = "Each member government answers to its own parliament. " * 50
+    b["mechanism"] = "Each member government answers to its own parliament. " * 62
     clean, warnings = analysis.validate_brief(b, src, "medium", corpus_of(src))
-    assert 450 < analysis._prose_words(
+    assert 542 < analysis._prose_words(
         clean["pinned_facts"], clean["ledger"], clean["mechanism"],
         clean["effects"], clean["unknowns"], clean["watch"],
-        clean.get("arc")) <= 540
+        clean.get("arc")) <= 650
     assert any("word" in w and "ceiling" in w for w in warnings)
 
-    b["mechanism"] = "Each member government answers to its own parliament. " * 60
+    b["mechanism"] = "Each member government answers to its own parliament. " * 75
     with pytest.raises(analysis.BriefOverCeiling) as over:
         analysis.validate_brief(b, src, "medium", corpus_of(src))
-    assert over.value.ceiling == 540 and over.value.budget == 450
+    assert over.value.ceiling == 650 and over.value.budget == 542
     assert isinstance(over.value, analysis.BriefRejected)
 
 

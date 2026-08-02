@@ -678,19 +678,29 @@ def test_the_boundary_tolerance_cannot_launder_an_interior_edit(quote, kept):
 
 
 # ---------------------------------------------------------------------------
-# 6. The 450-word ceiling made real  (WAS: "the 400-word ceiling" — re-based by
-#    Spec-4(c) step 0, batch B, when `arc` entered the counted number)
+# 6. The 542-word budget made real  (WAS: "the 400-word ceiling", then "the
+#    450-word ceiling" — re-based by Spec-4(c) step 0, batch B, when `arc`
+#    entered the counted number, and re-based again by the NL-118 ratification
+#    of 2026-08-01, clause (i), which moved medium 450 -> 542 as throughput.
+#    Ceiling 650 and band 731 DERIVE from it; neither factor has ever moved.)
+#
+#    EVERY multiplier in this section is calibrated to the ceiling and the
+#    band, so all of them moved with the numbers. Left alone they would have
+#    gone quiet rather than red: 80 reps = 580 words, which used to trip the
+#    540 ceiling and now sits comfortably under 650.
 # ---------------------------------------------------------------------------
 
 def test_over_budget_warns_and_past_the_ceiling_raises():
-    """RE-ANCHORED, not weakened (batch B item 1): same brief, same raise, the
-    re-based numbers. WAS: `budget == 400 and ceiling == 480`."""
+    """RE-ANCHORED, not weakened (batch B item 1; again at the NL-118
+    ratification): same brief, same raise, the re-based numbers.
+    WAS: `budget == 400 and ceiling == 480`, then `450`/`540` at x80."""
     src = _map_for()
     b = _brief([{"observable": "Whether the party registers", "cites": ["S1"]}])
-    b["mechanism"] = "Each ministry answers to its own committee. " * 80
+    # 20 baseline + 7/rep => 699 words, past the 650 ceiling. WAS: x80 = 580.
+    b["mechanism"] = "Each ministry answers to its own committee. " * 97
     with pytest.raises(analysis.BriefOverCeiling) as over:
         analysis.validate_brief(b, src, "medium", "Some retrieved body text.")
-    assert over.value.budget == 450 and over.value.ceiling == 540
+    assert over.value.budget == 542 and over.value.ceiling == 650
     assert isinstance(over.value, analysis.BriefRejected)
 
 
@@ -707,7 +717,11 @@ def test_analyze_story_redrafts_once_and_ships_the_shorter_draft(tmp_paths):
         if len(calls) == 1:
             # RE-BASED (batch B item 1): x70 = 510 words, which SHIPS under the
             # step-0 ceiling of 540. x80 = 580 still trips it. WAS: 70.
-            b["mechanism"] = "Each ministry answers to its own committee. " * 80
+            # RE-BASED AGAIN (NL-118 clause (i)): x80 = 580 now SHIPS under the
+            # 650 ceiling, so the first draft would never have been over and no
+            # redraft would have been bought — the test would have failed on
+            # the call count rather than proving anything. x97 = 699 trips 650.
+            b["mechanism"] = "Each ministry answers to its own committee. " * 97
         return b, 0.0, 0.0
 
     sa = analysis.analyze_story(con, "2026-07-26", 1, _slot(), "medium",
@@ -756,7 +770,10 @@ def test_a_second_over_run_INSIDE_the_band_ships_disclosed_not_a_third_call(
     The property that mattered in the old test is unchanged and still asserted
     here: exactly TWO calls. Bounded-by-construction was never the part Step 2
     touched."""
-    sa, calls = _second_over_run(tmp_paths, 80)          # 580 words, band 607
+    # RE-BASED (NL-118 clause (i)): x97 = 699 words, over the 650 ceiling and
+    # inside the 731 band — the same position in the band that x80's 580 held
+    # against the old 540/607 pair. WAS: x80.
+    sa, calls = _second_over_run(tmp_paths, 97)          # 699 words, band 731
     assert sa.outcome == "ok"
     assert len(calls) == 2, "step 2 must not buy a third call"
     band_notes = [w for w in sa.warnings if "DISCLOSURE BAND" in w]
@@ -779,9 +796,13 @@ def test_step2_keeps_the_FIRST_draft_when_the_redraft_comes_back_LONGER(
     def chat(key, prompt):
         calls.append(prompt)
         b = _brief([{"observable": "Whether it registers", "cites": ["S1"]}])
-        # draft 1 inside the band (580w); the "redraft" comes back far LONGER
+        # draft 1 inside the band (699w); the "redraft" comes back far LONGER.
+        # RE-BASED (NL-118 clause (i)): draft 1 x80 -> x97 so it still lands
+        # over the 650 ceiling and inside the 731 band. The redraft's x130 is
+        # UNCHANGED — it only has to come back longer than draft 1, and 929
+        # words clears 699 exactly as it cleared 580.
         b["mechanism"] = ("Each ministry answers to its own committee. "
-                          * (80 if len(calls) == 1 else 130))
+                          * (97 if len(calls) == 1 else 130))
         return b, 0.0, 0.0
 
     sa = analysis.analyze_story(con, "2026-07-26", 1, _slot(), "medium",
@@ -798,7 +819,7 @@ def test_step2_keeps_the_FIRST_draft_when_the_redraft_comes_back_LONGER(
         sa.brief["pinned_facts"], sa.brief["ledger"], sa.brief["mechanism"],
         sa.brief["effects"], sa.brief["unknowns"], sa.brief["watch"],
         sa.brief.get("arc"))
-    assert shipped <= int(450 * 1.35), shipped
+    assert shipped <= int(542 * 1.35), shipped      # the 731 band (was 607)
     # the disclosure names the number that actually shipped — not the redraft's
     assert f"the shorter ({shipped})" in band[0], band[0]
     assert "and 929 words" in band[0], "the longer redraft is disclosed too"
@@ -808,8 +829,14 @@ def test_past_the_band_it_is_still_a_disclosed_rejection_not_a_third_call(
         tmp_paths):
     """CARRIED INVARIANT. The band is bounded: beyond budget x 1.35 the
     existing disclosed rejection is exactly as it was, and still on two calls.
-    Without this pin, step 2 would read as 'the ceiling is now 1.35'."""
-    sa, calls = _second_over_run(tmp_paths, 100)         # ~720 words > band
+    Without this pin, step 2 would read as 'the ceiling is now 1.35'.
+
+    RE-BASED (NL-118 clause (i)): x100 = 720 words used to sit past the 607
+    band; against the 731 band it now falls INSIDE, so the untouched fixture
+    would have inverted this test's meaning — it would have shipped disclosed
+    and reported the bound as broken. x121 = 867 restores 'past the band' with
+    the same proportional overshoot x100 had."""
+    sa, calls = _second_over_run(tmp_paths, 121)         # ~867 words > band 731
     assert sa.outcome == "rejected"
     assert len(calls) == 2
     assert "after length redraft" in sa.detail
