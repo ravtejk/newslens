@@ -654,6 +654,62 @@ def test_repaired_run_succeeds_end_to_end_with_full_disclosure(migrated_con, llm
     ).fetchone()[0] == 1
 
 
+def test_over_cap_cluster_is_trimmed_and_disclosed_end_to_end(migrated_con, llm):
+    """NL-133 end to end: an over-cap cluster survives the run, is TRIMMED to
+    MAX_CLUSTER_ITEMS, and says so — as a visible run warning AND in
+    ranking_runs.meta.repairs. Same never-silent contract the clustering repair
+    above holds, on the same channel.
+
+    This is the liveness pin for the DISCLOSURE half (ENGINEERING.md:113 — a new
+    enforcement surface is born with the red only it can flip): the trim itself
+    is pinned in tests/test_nl133_cluster_item_cap.py, but nothing there reaches
+    `_run_rank_body`, so without this the warning line and the meta key would be
+    an unproven wiring claim.
+    """
+    now = ranking.datetime.now(ranking.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z")
+    n = ranking.MAX_CLUSTER_ITEMS + 12
+    for i in range(1, n + 1):
+        # TWO outlets, and the second outlet's ONLY item sorts LAST — the shape
+        # a head-slice would silently drop, costing a corroborating outlet.
+        outlet = "Solo Wire" if i == n else "Bulk Wire"
+        migrated_con.execute(
+            "INSERT INTO source_items (id, source_type, outlet, url, title,"
+            " fetched_at) VALUES (?, 'rss', ?, ?, ?, ?)",
+            (i, outlet, f"https://o{i}.example/{i}", f"Story {i}", now))
+    migrated_con.commit()
+
+    payload = {"clusters": [cluster(
+        list(range(1, n + 1)), title="Mega story",
+        tags=[{"name": "AI regulation", "level": "topic"}])]}
+    llm.add_route("/v1/messages", status=200,
+                  body=anthropic_envelope(payload),
+                  content_type="application/json")
+    report = ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),
+                              env={"OPENAI_API_KEY": "sk-x"})
+
+    slot = report.slots[0]
+    assert len(slot.item_ids) == ranking.MAX_CLUSTER_ITEMS
+    # The diversity rule paying off where the reader can see it: both outlets
+    # survive, so the corroboration label is the one the untrimmed cluster
+    # would have carried.
+    assert set(slot.outlets) == {"Bulk Wire", "Solo Wire"}
+    assert slot.corroboration_count == 2
+
+    trims = [w for w in report.warnings if "cluster cap" in w]
+    assert len(trims) == 1
+    assert f"{n} -> {ranking.MAX_CLUSTER_ITEMS} items" in trims[0]
+    assert "2 outlets -> 2" in trims[0]
+    assert "ranking_runs.meta.repairs" in trims[0]
+
+    meta = json.loads(migrated_con.execute(
+        "SELECT meta FROM ranking_runs WHERE date = ?", (DATE,)).fetchone()["meta"])
+    assert meta["status"] == "ok"
+    assert meta["repairs"]["clusters_truncated"] == [
+        {"cluster": "Mega story", "kept": ranking.MAX_CLUSTER_ITEMS,
+         "dropped": 12, "outlets_before": 2, "outlets_after": 2}]
+
+
 # --- render-failure class (BUG-3 carryover pins, ranking side) --------------------------
 
 @pytest.mark.parametrize(

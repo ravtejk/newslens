@@ -82,6 +82,42 @@ USER_AGENT = "NewsLens/0.1 (personal news briefing prototype; ranking)"
 RECENCY_CAP_DAYS = 14
 MAX_INPUT_ITEMS = 550       # most-recent cap so the prompt stays bounded
 MAX_CLUSTERS = 12
+# ---------------------------------------------------------------------------
+# PER-CLUSTER ITEM CAP (NL-133, chartered by the NL-130 gate ruling R-B /
+# commit constraint C-4: "the structural end of the quadratic-source-map
+# class"). MAX_INPUT_ITEMS bounds the POOL; nothing bounded what one cluster
+# could take out of it, and `render_source_map` (analysis.py) is O(n^2) in the
+# count of keys sharing an outlet — every key names every sibling on its own
+# line. A validation-passing payload that put 63+ same-outlet items in one
+# cluster therefore rendered a source map past PROMPT_MARGIN_CHARS (40,000),
+# which re-opened the pay-then-skip sliver the 2026-08-01 ordering ruling
+# closed. The margin cannot fix this: no constant bounds a quadratic. A cap on
+# the INPUT does, which is why the fix lives here and not there.
+#
+# THE VALUE, derived (full derivation in research/2026-08-02--nl133-build.md;
+# every number measured, none guessed):
+#   * FLOOR — the all-time observed maximum is 44 items in one cluster (175
+#     cluster records swept read-only across `briefings` + `briefings_history`;
+#     the next-largest is 26). 48 never truncates a shape this product has ever
+#     produced.
+#   * CEILING — 49 is the largest cap whose WORST renderable prompt still fits
+#     `brief_bound_chars` (analysis.py). Measured through the real constructors
+#     at all-time field maxima (title 183 / outlet 41 / host 27 / memory topic
+#     64, every key on ONE host, plus the 8 Sonar keys `_sonar_verify` allows on
+#     that same host and CONTEXT_CAP=15 prior-briefing keys): cap 48 -> 77,164
+#     chars vs the 78,621 bound (slack 1,457); cap 49 -> +586; cap 50 BREACHES
+#     by 295. 48 is one step inside the ceiling so the invariant is not a
+#     knife-edge.
+#   * The window [45, 49] is NARROW — ~9% over today's real maximum. That is a
+#     property of the 40,000 allowance, not of this cap, and it is on the
+#     record: raising MAX_CLUSTER_ITEMS REQUIRES raising PROMPT_MARGIN_CHARS
+#     (a money-guard constant — bound_usd rises with it). The arithmetic pin in
+#     tests/test_nl133_cluster_item_cap.py enforces exactly that coupling from
+#     the constants, so the class cannot silently re-open.
+# Over-cap clusters are TRUNCATED, never rejected: a degenerate cluster is the
+# ranker model's doing, and refusing the whole payload would cost a re-draw for
+# a shape we can honestly repair. Which items survive: `_cap_cluster_items`.
+MAX_CLUSTER_ITEMS = 48
 # NL-63 M2 — the AMENDED slot contract (DECISIONS 2026-07-13): minimum SIX
 # stories surfaced, 6-7 by the day's material. MAX_SLOTS is the upper clamp;
 # SLOT_FLOOR is the floor a normal day should clear — a thinner day ships fewer
@@ -549,6 +585,76 @@ def _post_chat(key: str, prompt: str) -> Dict:
     ).raw
 
 
+def _cap_cluster_items(
+    ids: List[int],
+    outlets: Optional[Dict[int, str]] = None,
+    cap: int = MAX_CLUSTER_ITEMS,
+) -> Tuple[List[int], List[int]]:
+    """Trim an over-cap cluster to `cap` items. Returns (kept, dropped), each
+    in the MODEL'S OWN ORDER — the trim decides membership, never sequence.
+
+    THE RULE — round-robin across outlets, model order inside each outlet.
+    Group the ids by outlet in first-appearance order, then take each group's
+    1st item, then each group's 2nd, and so on until the cap is full. Two
+    properties this buys, and they are the reason the rule is not "keep the
+    first 48":
+      * OUTLET DIVERSITY SURVIVES. Every outlet in the cluster keeps at least
+        one item whenever the cluster's distinct-outlet count is <= cap (real
+        max observed 18–19 across sweeps — a join-time quantity that moves
+        with id churn; far below the cap either way). A cluster of 59 Reuters
+        items plus one lone AP item
+        keeps the AP item — the naive head-slice drops it if it sorted last.
+      * THE CORROBORATION EVIDENCE SURVIVES. `corroborate` counts DISTINCT
+        non-wire outlets, so preserving the outlet set preserves the trust
+        label ("Reported by N named outlets") the reader sees. What the trim
+        costs is per-outlet DEPTH — and in the text-rich regime that produces
+        the largest maps, depth past ~45 sources is already
+        unreadable (`render_material`'s water-fill cannot feed more than that
+        inside MATERIAL_BUDGET_CHARS, so those items reach the analyst as
+        citable keys with no text behind them). (With short real excerpts all
+        items would be fed — a supporting argument, not the load-bearing one;
+        NL-133 build §1.)
+        ONE NAMED EDGE, not covered: this function sees outlets, not the
+        `wire_syndication_flag`. If an outlet's surviving representative is
+        wire-syndicated and the non-wire item behind it was dropped, that
+        outlet leaves `corroborate`'s NAMED count while staying in the map —
+        the count moves DOWN, the conservative direction for a trust label
+        (ADR-0004's own doctrine), and only inside a cluster already past 48
+        items. Fixing it means plumbing the wire flag this far up; deliberately
+        not done (NL-133 report, open item).
+    Without an outlet map (a direct `validate_payload` call — every unit test,
+    and any future caller that has ids but no rows) each item becomes its own
+    group, so the round-robin degrades EXACTLY to model order: deterministic
+    either way, and no false grouping is ever invented from missing data.
+    """
+    if len(ids) <= cap:
+        return list(ids), []
+    groups: List[List[int]] = []      # positions, grouped by outlet
+    index: Dict[str, List[int]] = {}
+    for pos, item_id in enumerate(ids):
+        outlet = (outlets or {}).get(item_id) or ""
+        key = outlet or f"\x00{pos}"  # unknown outlet -> its own group
+        if key not in index:
+            index[key] = []
+            groups.append(index[key])
+        index[key].append(pos)
+    keep: set = set()
+    depth = 0
+    while len(keep) < cap:
+        advanced = False
+        for group in groups:
+            if depth < len(group):
+                keep.add(group[depth])
+                advanced = True
+                if len(keep) >= cap:
+                    break
+        if not advanced:
+            break
+        depth += 1
+    return ([i for pos, i in enumerate(ids) if pos in keep],
+            [i for pos, i in enumerate(ids) if pos not in keep])
+
+
 def validate_payload(
     payload: object,
     known_ids: set,
@@ -556,12 +662,23 @@ def validate_payload(
     memory_topics: List[str],
     dormant_topics: Optional[List[str]] = None,
     notes: Optional[List[str]] = None,
+    item_outlets: Optional[Dict[int, str]] = None,
+    truncations: Optional[List[Dict]] = None,
 ) -> List[Dict]:
     """Hard schema validation of the LLM's cluster payload. Raises ValueError
     with ALL problems found (not just the first) so a retry/report is
     actionable. Extra unknown keys are tolerated; everything we consume is
     checked. matched_dormant (lifecycle v2) validates against the provided
-    dormant list — match-only; scoring never sees it."""
+    dormant list — match-only; scoring never sees it.
+
+    NL-133: an over-cap cluster is TRIMMED to MAX_CLUSTER_ITEMS rather than
+    rejected (`_cap_cluster_items` picks which items survive; pass
+    `item_outlets` — id -> outlet — to make the trim diversity-preserving, and
+    a list as `truncations` to receive one disclosure record per trimmed
+    cluster). Every REJECTION above still reads the model's FULL id list: an
+    invented id or a cross-cluster re-use hard-rejects exactly as before, even
+    when the offending id sits in the part the trim would have dropped. The
+    trim is our hygiene, never a way for a bad payload to slip past."""
     problems: List[str] = []
     if not isinstance(payload, dict) or not isinstance(payload.get("clusters"), list):
         raise ValueError("payload must be a JSON object with a `clusters` list")
@@ -595,6 +712,27 @@ def validate_payload(
         if dupes:
             problems.append(f"{where}: item_ids {dupes} already used by another cluster")
         seen_ids.update(ids)
+
+        # NL-133 per-cluster cap. AFTER every rejection above (which all read
+        # the model's full list) and BEFORE `valid` — so what leaves this
+        # function is bounded, and nothing the model got wrong is hidden by
+        # the trim. `seen_ids` also keeps the FULL list: an item we dropped
+        # here is still spoken for, and a later cluster re-using it is still
+        # the same integrity violation it was before the cap existed.
+        ids, dropped_ids = _cap_cluster_items(ids, item_outlets)
+        if dropped_ids and truncations is not None:
+            kept_outlets = {(item_outlets or {}).get(x) for x in ids}
+            truncations.append({
+                "cluster": (title if isinstance(title, str) else "")[:80]
+                           or f"cluster #{i}",
+                "kept": len(ids),
+                "dropped": len(dropped_ids),
+                # the diversity claim, measured on this actual trim rather
+                # than asserted: outlets present before vs after
+                "outlets_before": len({(item_outlets or {}).get(x)
+                                       for x in ids + dropped_ids}),
+                "outlets_after": len(kept_outlets),
+            })
 
         mtags = c.get("matched_tags", [])
         if not isinstance(mtags, list):
@@ -654,7 +792,21 @@ def validate_payload(
                 "summary": (summary or "").strip()[:400],
                 "item_ids": ids,
                 "matched_tags": clean_tags,
-                "matched_memory": [m for m in mmem if m in memory_set],
+                # NL-133, the SECOND route into the same quadratic: every
+                # matched_memory entry becomes a P key in the analyst's source
+                # map (`memory_core.prior_for_slot` yields one prior entry per
+                # entry, and all P keys share the outlet identity "newslens
+                # (prior edition)" — so they name each other, quadratically).
+                # Nothing bounded the LIST, only its vocabulary: 80 repeats of
+                # one valid topic rendered a 46,391-char map with zero cluster
+                # items (measured). De-duplicated in first-mention order, which
+                # bounds P by the vocabulary itself (memory.CONTEXT_CAP = 15)
+                # and costs nothing: a repeated topic carries no information
+                # any consumer reads (scoring tests truthiness,
+                # `update_references` already iterates `set(topics)`, the
+                # quiet-thread and fragmentation passes build sets).
+                "matched_memory": list(dict.fromkeys(
+                    m for m in mmem if m in memory_set)),
                 "matched_dormant": [m for m in mdorm if m in dormant_set],
                 "world_impact": int(round(float(impact))),
                 "world_impact_reason": reason.strip()[:400],
@@ -782,6 +934,7 @@ def call_llm_validated(
     repairs: Optional[Dict] = None,
     dormant_topics: Optional[List[str]] = None,
     cost_sink: Optional[List[Dict]] = None,
+    item_outlets: Optional[Dict[int, str]] = None,
 ) -> Tuple[List[Dict], Dict]:
     """B3-D5: the request-scoped resolution boundary. Resolve the rank seat
     through effective_seat EXACTLY ONCE for this call (if an outer scope —
@@ -797,7 +950,8 @@ def call_llm_validated(
     try:
         return _call_llm_validated(
             key, prompt, known_ids, tag_levels, memory_topics,
-            repairs=repairs, dormant_topics=dormant_topics, cost_sink=cost_sink)
+            repairs=repairs, dormant_topics=dormant_topics, cost_sink=cost_sink,
+            item_outlets=item_outlets)
     finally:
         if _own_scope:
             _ACTIVE_RANK = None
@@ -812,6 +966,7 @@ def _call_llm_validated(
     repairs: Optional[Dict] = None,
     dormant_topics: Optional[List[str]] = None,
     cost_sink: Optional[List[Dict]] = None,
+    item_outlets: Optional[Dict[int, str]] = None,
 ) -> Tuple[List[Dict], Dict]:
     """One call + ONE retry total, then a visible RankingError.
 
@@ -888,15 +1043,21 @@ def _call_llm_validated(
             payload = decode_keys(payload)
             payload, repair_info = repair_duplicate_ids(payload)
             shape_notes: List[str] = []
+            trimmed: List[Dict] = []
             clusters = validate_payload(
                 payload, known_ids, tag_levels, memory_topics, dormant_topics,
-                notes=shape_notes,
+                notes=shape_notes, item_outlets=item_outlets,
+                truncations=trimmed,
             )
             if repairs is not None:
                 repairs.clear()
                 repairs.update(repair_info)
                 if shape_notes:
                     repairs["tag_shape_normalized"] = len(shape_notes)
+                if trimmed:
+                    # Same channel as every other disclosed deterministic
+                    # repair: the run warning + ranking_runs.meta.repairs.
+                    repairs["clusters_truncated"] = trimmed
             return clusters, usage
         except urllib.error.HTTPError as exc:
             detail = _http_error_detail(exc)
@@ -1833,6 +1994,10 @@ def _run_rank_body(
     clusters, usage = call_llm_validated(
         key, prompt, known_ids, tag_levels, memory_topics,
         repairs=repair_sink, dormant_topics=dormant, cost_sink=attempt_ledger,
+        # NL-133: the trim needs to know which outlet each candidate came from
+        # or it cannot preserve diversity. Same rows `known_ids` is built from,
+        # read once — no extra query.
+        item_outlets={r["id"]: r["outlet"] for r in items},
     )
 
     items_by_id = {r["id"]: r for r in items}
@@ -1845,7 +2010,8 @@ def _run_rank_body(
     meta["threads_steer_selection"] = cfg.threads_steer_selection
     meta["window"] = window
     meta["history_days"] = history
-    if repair_sink.get("repaired") or repair_sink.get("tag_shape_normalized"):
+    if (repair_sink.get("repaired") or repair_sink.get("tag_shape_normalized")
+            or repair_sink.get("clusters_truncated")):
         # Disclosed repair/tolerance (never silent, never unpersisted): the
         # warning renders in CLI output AND the detail persists in
         # ranking_runs.meta.repairs — BUG-7: a tag-shape-only run (the common
@@ -1946,6 +2112,21 @@ def _run_rank_body(
             "bare-string tag name(s) accepted (exact vocabulary matches; "
             "levels from the canonical map — disclosed schema tolerance, "
             "ADR-0004 M5 amendment)"
+        )
+    if repair_sink.get("clusters_truncated"):
+        trims = repair_sink["clusters_truncated"]
+        detail = "; ".join(
+            f"{t['cluster']!r} {t['kept'] + t['dropped']} -> {t['kept']} items "
+            f"({t['outlets_before']} outlets -> {t['outlets_after']})"
+            for t in trims)
+        report.warnings.append(
+            f"cluster cap: {len(trims)} cluster(s) trimmed to the "
+            f"{MAX_CLUSTER_ITEMS}-item per-cluster cap — {detail}. Items were "
+            "dropped round-robin across outlets — every outlet keeps a "
+            "representative whenever a cluster has at most "
+            f"{MAX_CLUSTER_ITEMS} distinct outlets, and the per-trim outlet "
+            "counts above are the measured fact (NL-133); details stored in "
+            "ranking_runs.meta.repairs"
         )
     if repair_sink.get("repaired"):
         emptied = repair_sink.get("clusters_emptied") or []

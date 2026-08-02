@@ -577,6 +577,24 @@ MATERIAL_BUDGET_CHARS = 24_000
 # safe direction for a money guard (config.py:57-58 states that doctrine for
 # the cap itself); the price is that Sonar skips slightly earlier under
 # exhaustion, which is precisely the order M9 rules.
+#
+# NL-133 2026-08-02 — ALLOWANCE -> BOUND (NL-130 gate ruling R-B / C-4, "the
+# structural end of the quadratic-source-map class"). The quadratic's INPUT is
+# now bounded upstream: `ranking.MAX_CLUSTER_ITEMS` caps items per cluster and
+# `validate_payload` de-duplicates matched_memory (the P-key route into the
+# same sibling list). With those two, the worst prompt this code can build
+# measures 77,164 chars against a 78,621-char bound — a real ceiling, not a
+# dominating guess. It is conditional on FIELD lengths, not on cluster shape:
+# fields far past their all-time maxima could still breach, and that residue
+# has three owners, none of them the ranker — ingest (feed titles, all-time
+# max 183), `_sonar_verify` (vendor titles/snippets/urls: count-clamped to 8,
+# NOT byte-clamped — 8 titles averaging >=366 chars breach cap 48 by 7), and
+# memory (topic inserts carry no length clamp). Byte-clamp follow-up tracked
+# (NL-133 gate R-B). Raising this constant is bound-safe but NOT money-free —
+# bound_usd rises with it, so more slots skip under exhaustion (the coupling
+# test's failure message says the same); LOWERING it, or raising
+# MAX_CLUSTER_ITEMS, breaks the bound —
+# tests/test_nl133_cluster_item_cap.py holds the coupling from the constants.
 PROMPT_MARGIN_CHARS = 40_000
 # ---------------------------------------------------------------------------
 # LENGTH REGIME 2026-07-30, Spec-4(c) STEP 0 (NL-118 content leg, batch B):

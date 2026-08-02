@@ -285,12 +285,21 @@ def test_call_llm_and_call_llm_validated_signatures_preserved():
         "temperature: 'float', json_mode: 'bool', validate=None, "
         "cost_sink: 'Optional[List[Dict]]' = None) -> 'Tuple[str, Dict]'"
     )
+    # NL-133 (2026-08-02): a DELIBERATE parameter addition, re-pinned in the
+    # same change that made it — the NL-95 precedent above. `item_outlets`
+    # (id -> outlet) is what lets the per-cluster cap drop items round-robin
+    # across outlets instead of head-slicing one outlet out of the cluster; it
+    # is optional and defaults to None, so every existing caller and every
+    # monkeypatch seam is unaffected. The pin's JOB is that this line had to be
+    # edited consciously.
     assert str(inspect.signature(ranking.call_llm_validated)) == (
         "(key: 'str', prompt: 'str', known_ids: 'set', "
         "tag_levels: 'Dict[str, str]', memory_topics: 'List[str]', "
         "repairs: 'Optional[Dict]' = None, "
         "dormant_topics: 'Optional[List[str]]' = None, "
-        "cost_sink: 'Optional[List[Dict]]' = None) -> 'Tuple[List[Dict], Dict]'"
+        "cost_sink: 'Optional[List[Dict]]' = None, "
+        "item_outlets: 'Optional[Dict[int, str]]' = None"
+        ") -> 'Tuple[List[Dict], Dict]'"
     )
 
 
