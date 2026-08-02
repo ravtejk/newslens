@@ -216,6 +216,27 @@ def _short_article_fetch(url, timeout, cap=0, user_agent=""):
     return (b"<html><body><article>" + para * 16 + b"</article></body></html>")
 
 
+# The PRODUCTION-REGIME article (NL-130, ordering ruling 2026-08-01). Two of
+# these saturate `render_material`'s 24,000-char budget, so the rendered prompt
+# lands at ~38.9k chars — the size the NL-118 land measured on real editions
+# (template-alone 14,524 + the full material budget = 38,524 chars, est
+# $0.11889). The ladder tests below run HERE, not on a slimmed fixture: the old
+# band test measured a ~15.7k-char prompt, which is exactly why 429 chars of
+# template growth could kill it. Deliberately plain markup — the 393KB
+# `clean_article.html` costs ~145ms per `analyze_story` call and this costs
+# ~6ms, which is what makes a 200-point budget sweep affordable.
+_LONG_ARTICLE = (b"<html><body><article>"
+                 + b"<p>The president travels to the summit midweek for "
+                   b"talks.</p>" * 260
+                 + b"</article></body></html>")
+
+
+def _long_article_fetch(url, timeout, cap=0, user_agent=""):
+    if url.endswith("/robots.txt"):
+        raise urllib.error.HTTPError(url, 404, "nf", {}, None)
+    return _LONG_ARTICLE
+
+
 def fetch_fixture(url, timeout, cap=0, user_agent=""):
     if url.endswith("/robots.txt"):
         raise urllib.error.HTTPError(url, 404, "nf", {}, None)
@@ -651,62 +672,77 @@ def _con(tmp_paths):
     return db.connect()
 
 
-def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths):
-    """Sonar-line half of the old rung-independence proof: remaining 0.0619
-    is under the Sonar line (0.0619 - 0.012 < 0.05 probe) -> Sonar sentinel
-    NEVER called, derating disclosed.
+def _production_slot(con):
+    """A slot whose material saturates the 24,000-char budget -> a ~38.9k-char
+    prompt, the regime the ordering ruling is about."""
+    seed_min(con, n_items=2)
+    return json.loads(con.execute(
+        "SELECT story_slots FROM briefings WHERE date=?",
+        (DATE,)).fetchone()["story_slots"])[0]
 
-    B4-D2 CLOSED (FIX-2, 2026-07-17 — the conscious flip this docstring's
-    fix contract demanded): the probe derives from the seat now (~$0.09), so
-    the Sonar line sits at remaining $0.102 and a witnessing band for 'Sonar
-    degrades FIRST and alone' EXISTS again — remaining ∈ [synthesis est,
-    0.102): Sonar skips while the brief still fits and is BUILT. Proven at
-    both remainings:
-      * 0.0619 (deep under everything): Sonar skipped AND brief skipped —
-        the disclosed double-derate, unchanged;
-      * 0.098 (the restored band): Sonar skipped, brief BUILT — outcome ok,
-        rung independence whole again."""
+
+def _shipped_lines():
+    """The ladder's two lines, READ OFF THE SHIPPED CODE at test time.
+
+    Nothing below is a hand-frozen dollar figure. The predecessor of these
+    tests pinned $0.102 by hand and died the day the template grew 429 chars
+    (the NL-118 land measured the surviving margin at 4.33 chars); deriving
+    both lines from `brief_bound_usd` — which reads the template off disk on
+    every call — is what ends that drift class rather than relocating it."""
+    template = (paths.PROMPTS_DIR / "analysis_brief.txt").read_text(
+        encoding="utf-8")
+    bound = analysis.brief_bound_usd(template)
+    return template, bound, bound + analysis.SONAR_EST_USD
+
+
+def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths):
+    """The ORDERING RULING 2026-08-01 (NL-130), witnessed as behaviour at
+    PRODUCTION prompt sizes — the property this test has always asserted, now
+    made true by the code instead of by a slimmed fixture.
+
+    Ruled contract: rung 1 prices the brief's affordability with a call-time
+    upper bound built from the same artifact rung 2 prices, so the Sonar line
+    is `brief_bound_usd + SONAR_EST_USD` and sits ABOVE the brief line at every
+    prompt size the code can build. Three consequences, one arm each:
+
+      (1) CONSERVATISM — the bound dominates the real estimate on a
+          production-regime prompt (~38.9k chars, est ~$0.119). This is the
+          invariant `bound >= est` that makes the other two arms hold.
+      (2) THE WITNESSING BAND — remaining in [bound, bound + SONAR_EST_USD):
+          Sonar SKIPPED, brief BUILT, outcome ok. M9's "verification degrades
+          first" (2026-07-06, config.py:41-48), still standing, now at a width
+          that is structural (SONAR_EST_USD) rather than incidental.
+      (3) THE SLOT-ATOMIC FLOOR — remaining under the bound: the WHOLE slot
+          skips before rung 1, Sonar sentinel never called. Never pay for
+          verification a brief will never consume.
+
+    HISTORY, so the re-scope is not read as a shrink-to-fit. This test used to
+    pin the band at [est, $0.102) — a line priced off the OUTPUT term alone —
+    and could only witness it on a deliberately slimmed fixture, because at
+    real prompt sizes est (~$0.119) sits ABOVE that line and production paid
+    for Sonar and then skipped the brief. It was the tree's one standing red
+    from 2026-08-01 (gate ruling R-1, named acceptance) with a fix contract
+    that said "slim the fixture" — a remedy the same land measured as
+    structurally impossible (966 chars needed > 809 available, three
+    derivations). The remedy was never the fixture. It was the ladder."""
     con = _con(tmp_paths)
     try:
-        # SLIMMED (NL-118 P0-P2): this test's own fix contract says "slim the
-        # fixture" when the prompt grows past the sonar line, and this batch's
-        # prompt work (dateline + corroboration + gap-disclosure + length
-        # blocks, ~+3.4k chars of STATIC template) pushed the 2-item est from
-        # ~$0.1006 to $0.1043 against a $0.102 line. One item + a SHORT article
-        # restores the witnessing band with headroom for the next template
-        # edit; nothing in this test depends on the material's size (the
-        # skipped-budget half is carried by the fixed output-token term alone).
-        seed_min(con, n_items=1)
-        slot = json.loads(con.execute(
-            "SELECT story_slots FROM briefings WHERE date=?",
-            (DATE,)).fetchone()["story_slots"])[0]
+        slot = _production_slot(con)
+        template, bound, sonar_line = _shipped_lines()
         chat_calls = []
 
         def recording_chat(k, p):
             chat_calls.append(p)
             return (s_brief(), 0.01)
 
-        sa = analysis.analyze_story(
-            con, DATE, 1, slot, **story_kwargs(
-                remaining_usd=0.0619, sonar=sonar_sentinel,
-                chat=recording_chat, fetch=_short_article_fetch))
-        # the sonar half: never called below the line
-        assert "budget ladder" in sa.sonar_status
-        assert any(w.startswith("derating: Sonar") for w in sa.warnings)
-        # deep under the synthesis estimate too: disclosed double-derate
-        assert chat_calls == []
-        assert sa.outcome == "skipped-budget"
-        # the RESTORED band (FIX-2's whole point): sonar skips, brief builds.
-        # SELF-CALIBRATING: the band is [synthesis est, 0.102) and this
-        # fixture's prompt (~14k chars) puts est ~ $0.1006 — a hardcoded
-        # remaining would die on ±500 chars of fixture drift, so measure the
-        # est through the real estimator and aim for the band's midpoint.
+        # ---- (1) conservatism: the shipped bound dominates the real estimate
         seen = {}
         orig_est = analysis.estimate_synthesis_usd
 
         def spy(prompt):
             est = orig_est(prompt)
             seen["est"] = est
+            seen["chars"] = len(prompt)
             return est
 
         analysis.estimate_synthesis_usd = spy
@@ -715,88 +751,314 @@ def test_sonar_precheck_skips_below_the_line_and_synthesis_still_runs(tmp_paths)
                 con, DATE, 1, slot, **story_kwargs(
                     remaining_usd=9.0, sonar=lambda k, t, c: ([], 0.0, "ok"),
                     chat=lambda k, p: (s_brief(), 0.01),
-                    fetch=_short_article_fetch))
-            est = seen["est"]
-            sonar_line = analysis.SONAR_EST_USD + (
-                analysis.ANALYSIS_MAX_TOKENS / 1e6
-                * analysis.ANALYSIS_USD_OUT_PER_MTOK)          # 0.012 + 0.09
-            assert est < sonar_line - 0.0005, (
-                f"fixture prompt grew past the sonar line (est ${est:.4f} >= "
-                f"${sonar_line:.4f}) — the restored band is unprovable at this "
-                "fixture size; slim the fixture")
-            band_mid = (est + sonar_line) / 2
-            chat_calls.clear()
-            sa_band = analysis.analyze_story(
-                con, DATE, 1, slot, **story_kwargs(
-                    remaining_usd=band_mid, sonar=sonar_sentinel,
-                    chat=recording_chat, fetch=_short_article_fetch))
+                    fetch=_long_article_fetch))
         finally:
             analysis.estimate_synthesis_usd = orig_est
-        assert "budget ladder" in sa_band.sonar_status   # sonar still skipped
-        assert chat_calls, "synthesis never ran inside the restored band"
+        est, chars = seen["est"], seen["chars"]
+        # the fixture really is in the production regime — an arm that quietly
+        # slimmed itself would prove nothing about the ruled contract
+        assert chars > 35_000, (
+            f"fixture prompt is {chars} chars — not the production regime "
+            f"(the material budget alone is {analysis.MATERIAL_BUDGET_CHARS}); "
+            "this arm must measure a saturated prompt, not a slim one")
+        # G-3: print the quantities ACTUALLY compared. The predecessor printed
+        # `est >= sonar_line` while comparing against `sonar_line - 0.0005`.
+        assert est <= bound, (
+            f"the rung-1 bound UNDER-PRICES a real prompt: est ${est:.5f} "
+            f"({chars} chars) > bound ${bound:.5f} "
+            f"({analysis.brief_bound_chars(template)} chars). This is the "
+            "'margin proves unboundable' falsifier, not a fixture problem — "
+            "raise PROMPT_MARGIN_CHARS (analysis.py) with a measurement, or "
+            "re-open the ordering ruling. Do NOT slim the fixture: the "
+            "contract is about production sizes.")
+
+        # ---- (2) the witnessing band: Sonar skipped, brief BUILT
+        band_mid = (bound + sonar_line) / 2
+        chat_calls.clear()
+        sa_band = analysis.analyze_story(
+            con, DATE, 1, slot, **story_kwargs(
+                remaining_usd=band_mid, sonar=sonar_sentinel,
+                chat=recording_chat, fetch=_long_article_fetch))
+        assert "budget ladder" in sa_band.sonar_status, sa_band.sonar_status
+        assert any(w.startswith("derating: Sonar") for w in sa_band.warnings)
+        assert chat_calls, (
+            f"synthesis never ran at ${band_mid:.5f}, inside the band "
+            f"[${bound:.5f}, ${sonar_line:.5f}) — the band is the whole point "
+            "of 'verification degrades FIRST'")
         assert sa_band.outcome == "ok"
+
+        # ---- (3) the slot-atomic floor: under the bound, nothing is bought
+        chat_calls.clear()
+        sa_floor = analysis.analyze_story(
+            con, DATE, 1, slot, **story_kwargs(
+                remaining_usd=bound / 2, sonar=sonar_sentinel,
+                chat=recording_chat, fetch=_long_article_fetch))
+        assert sa_floor.outcome == "skipped-budget"
+        assert "slot skipped whole" in sa_floor.detail
+        assert chat_calls == []
+        assert any("escalation-flag class" in w for w in sa_floor.warnings)
+    finally:
+        con.close()
+
+
+def test_no_reachable_budget_pays_for_sonar_then_skips_the_brief(tmp_paths):
+    """THE ORDERING INVARIANT, as a budget-sweep property (NL-130, ruling
+    2026-08-01, replacing the chartered inversion-band pin — the ruling
+    INVERTED it: what used to be pinned as expected behaviour is now pinned as
+    unreachable).
+
+    Property: over a sweep of `remaining_usd`, there is NO value at which Sonar
+    spend is incurred and the brief is then skipped. Sonar output is consumed
+    by the synthesis prompt or by nothing at all — the skipped-budget path
+    returns before persisting it — so paying for verification a brief will
+    never read is pure waste, and `_sonar_verify` charges SONAR_EST_USD even
+    when the call FAILS (analysis.py, the exception arm).
+
+    BORN RED at HEAD 2df7fdb: rung 1 priced the output term alone (line
+    $0.102) while rung 2 priced the full estimate (~$0.119 at this fixture's
+    size), so every remaining in [$0.102, $0.119) bought Sonar and then
+    skipped the brief. This pin needs nothing that HEAD lacks — it asserts
+    behaviour, not the new API — which is what lets it be run against the old
+    code and fail.
+
+    The sweep is DERIVED (step = SONAR_EST_USD/8) and self-checks its own
+    coverage, so it cannot go quiet the way a hand-frozen range would when the
+    template grows."""
+    con = _con(tmp_paths)
+    try:
+        slot = _production_slot(con)
+        step = analysis.SONAR_EST_USD / 8
+        sweep = [i * step for i in range(201)]          # $0 .. $0.30
+
+        # what the ladder is actually pricing at this fixture size — measured,
+        # so the coverage self-check below is honest at HEAD and post-diff
+        seen = {}
+        orig_est = analysis.estimate_synthesis_usd
+
+        def spy(prompt):
+            seen["est"] = orig_est(prompt)
+            seen["chars"] = len(prompt)
+            return seen["est"]
+
+        analysis.estimate_synthesis_usd = spy
+        try:
+            analysis.analyze_story(
+                con, DATE, 1, slot, **story_kwargs(
+                    remaining_usd=9.0, sonar=lambda k, t, c: ([], 0.0, "ok"),
+                    chat=lambda k, p: (s_brief(), 0.01),
+                    fetch=_long_article_fetch))
+        finally:
+            analysis.estimate_synthesis_usd = orig_est
+        assert seen["chars"] > 35_000, seen["chars"]
+        assert sweep[-1] > seen["est"] + 4 * analysis.SONAR_EST_USD, (
+            f"sweep tops out at ${sweep[-1]:.5f} but the estimate is already "
+            f"${seen['est']:.5f} — the sweep no longer covers the region where "
+            "the two rungs could disagree; widen it rather than trusting a "
+            "green run")
+
+        violations = []
+        for remaining in sweep:
+            sonar_calls = []
+
+            def sonar_charging(key, title, claims):
+                sonar_calls.append(title)
+                # the worst honest case: a call that costs its full reserve
+                return [], analysis.SONAR_EST_USD, "ok — 0 results"
+
+            sa = analysis.analyze_story(
+                con, DATE, 1, slot, **story_kwargs(
+                    remaining_usd=remaining, sonar=sonar_charging,
+                    chat=lambda k, p: (s_brief(), 0.01),
+                    fetch=_long_article_fetch))
+            if sonar_calls and sa.outcome == "skipped-budget":
+                violations.append((remaining, round(sa.cost_usd, 6), sa.detail))
+
+        assert not violations, (
+            f"{len(violations)} of {len(sweep)} swept budgets PAY for Sonar "
+            f"and then skip the brief it feeds — remaining "
+            f"${violations[0][0]:.5f} .. ${violations[-1][0]:.5f}, "
+            f"${sum(v[1] for v in violations):.4f} of orphan verification "
+            f"spend. First: {violations[0][2]}")
+    finally:
+        con.close()
+
+
+def test_a_violated_ordering_invariant_escalates_instead_of_passing_quietly(
+        tmp_paths, monkeypatch):
+    """The FALSIFIER TRIPWIRE (Onna's instrumentation clause, ordering ruling
+    2026-08-01). Rung 2 firing after rung 1 let Sonar spend means rung 1's
+    bound was wrong — the one state the ruling calls unreachable. It must
+    escalate through the EXISTING derating channel, never pass as an ordinary
+    budget skip, because "unreachable" states that arrive silently are how a
+    latent contract stays wrong for months.
+
+    Two causes, one arm each — the two ways the by-construction argument can
+    leak:
+
+      (1) SONAR OVERCHARGES its reserve — the TOKEN-VISIBLE class. The proof
+          assumes `s_cost <= SONAR_EST_USD`; `_sonar_verify` derives cost from
+          returned `usage.total_tokens`, so this arm covers reported-usage
+          inflation only (here 5x). NL-127's named falsifier — "per-request
+          billing >= 5-10x the token model" — is the ADJACENT class this
+          tripwire structurally CANNOT see: a per-request charge never enters
+          `total_tokens`, moves no s_cost, and fires nothing here; it can
+          only surface at vendor-invoice vs shadow-ledger reconciliation
+          (NL-127, open). BORN RED at HEAD 2df7fdb: HEAD strands the slot the
+          same way and says nothing about it.
+      (2) THE BOUND UNDER-PRICES the prompt. PROMPT_MARGIN_CHARS is an
+          allowance, not a proof-bound (render_source_map's sibling list is
+          quadratic in key count), so this arm injects the fault directly:
+          drive the margin below what the real prompt needs and check the
+          escalation names the margin as the cause."""
+    con = _con(tmp_paths)
+    try:
+        slot = _production_slot(con)
+        # NOT via `_shipped_lines()`: arm (1) below asserts BEHAVIOUR and must
+        # be reachable against pre-ruling code, so nothing before it may touch
+        # an API the old ladder lacks.
+        template = (paths.PROMPTS_DIR / "analysis_brief.txt").read_text(
+            encoding="utf-8")
+
+        seen = {}
+        orig_est = analysis.estimate_synthesis_usd
+
+        def spy(prompt):
+            seen["est"] = orig_est(prompt)
+            return seen["est"]
+
+        analysis.estimate_synthesis_usd = spy
+        try:
+            analysis.analyze_story(
+                con, DATE, 1, slot, **story_kwargs(
+                    remaining_usd=9.0, sonar=lambda k, t, c: ([], 0.0, "ok"),
+                    chat=lambda k, p: (s_brief(), 0.01),
+                    fetch=_long_article_fetch))
+        finally:
+            analysis.estimate_synthesis_usd = orig_est
+        est = seen["est"]
+
+        # ---- (1) a 5x Sonar overcharge strands the brief -> escalation
+        overcharge = 5 * analysis.SONAR_EST_USD
+
+        def sonar_overcharging(key, title, claims):
+            return [], overcharge, "ok — 0 results"
+
+        sa = analysis.analyze_story(
+            con, DATE, 1, slot, **story_kwargs(
+                remaining_usd=est + 4 * analysis.SONAR_EST_USD,
+                sonar=sonar_overcharging,
+                chat=lambda k, p: (s_brief(), 0.01),
+                fetch=_long_article_fetch))
+        assert sa.outcome == "skipped-budget"          # the stranded slot
+        assert sa.cost_usd == pytest.approx(overcharge)  # ...and it was PAID
+        violated = [w for w in sa.warnings
+                    if "ORDERING INVARIANT VIOLATED" in w]
+        assert violated, (
+            "Sonar was paid and the brief then skipped, and the run said "
+            f"nothing beyond an ordinary derating: {sa.warnings}")
+        assert "Sonar charged" in violated[0], violated[0]
+
+        # ---- (2) an under-priced bound names ITSELF as the cause
+        out_term = (analysis.ANALYSIS_MAX_TOKENS / 1e6
+                    * analysis.ANALYSIS_USD_OUT_PER_MTOK)
+        # a margin that puts the bound two Sonar-widths BELOW the real
+        # estimate, so rung 1 clears while rung 2 cannot — fault injection on
+        # the one constant that can be wrong, derived rather than hardcoded
+        broken_bound_chars = int((est - 2 * analysis.SONAR_EST_USD - out_term)
+                                 * 4 * 1e6 / analysis.ANALYSIS_USD_IN_PER_MTOK)
+        monkeypatch.setattr(
+            analysis, "PROMPT_MARGIN_CHARS",
+            broken_bound_chars - len(template) - analysis.MATERIAL_BUDGET_CHARS)
+        broken_bound = analysis.brief_bound_usd(template)
+        assert broken_bound + analysis.SONAR_EST_USD < est, (
+            "fault injection failed to make the bound too small")
+        sa2 = analysis.analyze_story(
+            con, DATE, 1, slot, **story_kwargs(
+                remaining_usd=(broken_bound + analysis.SONAR_EST_USD + est) / 2,
+                sonar=lambda k, t, c: ([], 0.0, "ok"),
+                chat=lambda k, p: (s_brief(), 0.01),
+                fetch=_long_article_fetch))
+        assert sa2.outcome == "skipped-budget"
+        violated2 = [w for w in sa2.warnings
+                     if "ORDERING INVARIANT VIOLATED" in w]
+        assert violated2, sa2.warnings
+        assert "PROMPT_MARGIN_CHARS is too small" in violated2[0], violated2[0]
     finally:
         con.close()
 
 
 def test_sonar_precheck_boundary_calls_just_above_the_line(tmp_paths):
-    """B4-D2 CLOSED (FIX-2, 2026-07-17 — the conscious re-pin this test's
-    as-is docstring demanded): est_synth_probe now DERIVES from the seat
-    (ANALYSIS_MAX_TOKENS x ANALYSIS_USD_OUT_PER_MTOK = 6,000 x $15/MTok =
-    $0.09), so the Sonar line sits at remaining = SONAR_EST_USD + probe =
-    $0.102. Pinned BEHAVIORALLY at both edges — a probe that stops deriving
-    (or a constant that moves without this boundary moving) fails here:
+    """The Sonar line, pinned BEHAVIOURALLY at both edges — re-derived for the
+    ordering ruling 2026-08-01 (NL-130).
 
-      * remaining 0.1019 (line - epsilon) -> Sonar SKIPPED;
-      * remaining 0.1021 (line + epsilon) -> Sonar CALLED;
-      * remaining 0.0621 — the OLD boundary, inside the former inversion
-        band (old-probe remainders in (0.062, 0.102]) -> Sonar SKIPPED now:
-        the $0.012-wasted-then-brief-skipped inversion is CLOSED there.
+    WAS (FIX-2, 2026-07-17): the line was `SONAR_EST_USD + probe` where the
+    probe priced the analyst seat's OUTPUT ceiling alone, giving a hand-written
+    $0.102, and this test pinned 0.1019 / 0.1021 / 0.0621 / 0.12 as literals.
+    That arithmetic is the one the ruling replaced — engineering found this pin
+    encoding it while re-scoping the band test, so it rides the same batch (the
+    NL-118 charter had not enumerated it).
 
-    Known residual, by construction: the probe is output-only (the map isn't
-    built at sonar time, so the input leg is unknowable) — a sliver of width
-    ~the input leg (~$0.002-0.009) remains just above the line where Sonar
-    runs and the brief still derates. Bounded and coarse-by-design; the
-    clean sonar-AND-brief arm is proven at 0.12 below."""
+    IS: the line is `brief_bound_usd(template) + SONAR_EST_USD`, read off the
+    shipped code at test time. Every remaining below is derived from it, so a
+    template edit moves the pin with the code instead of silently invalidating
+    it. The edges:
+
+      * line - epsilon  -> Sonar SKIPPED (rung 1 holds);
+      * line + epsilon  -> Sonar CALLED  *and the brief still BUILDS* — that
+        second half is new and is the ruling's whole content: crossing the
+        Sonar line can no longer strand a slot that has paid for verification
+        it cannot use;
+      * bound - epsilon -> the slot skips WHOLE before rung 1 (no fetch of
+        Sonar at all), which is the floor, not the ladder.
+
+    The old "known residual" is GONE, not restated: the sliver just above the
+    line where Sonar ran and the brief still derated existed because rung 1
+    could not see the input leg. It can now — the bound prices it."""
     con = _con(tmp_paths)
     try:
-        seed_min(con)
-        slot = json.loads(con.execute(
-            "SELECT story_slots FROM briefings WHERE date=?",
-            (DATE,)).fetchone()["story_slots"])[0]
+        slot = _production_slot(con)
+        _template, bound, line = _shipped_lines()
+        eps = analysis.SONAR_EST_USD / 100          # $0.00012, derived
         calls = []
 
         def sonar_recording(key, title, claims):
             calls.append(title)
             return [], 0.0, "ok — 0 results"
 
-        # line - epsilon: skipped (the derived 0.09 probe holding the line)
+        # line - epsilon: Sonar skipped, and (still inside the band) the brief
+        # builds — rung 1 holding the line without stranding the slot
         sa = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
-                remaining_usd=0.1019, sonar=sonar_recording,
-                chat=lambda k, p: (s_brief(), 0.01)))
-        assert calls == []
+                remaining_usd=line - eps, sonar=sonar_recording,
+                chat=lambda k, p: (s_brief(), 0.01), fetch=_long_article_fetch))
+        assert calls == [], f"Sonar called at ${line - eps:.5f}, under the line"
         assert "budget ladder" in sa.sonar_status
-        # the old inversion band: skipped there too now
-        sa_old = analysis.analyze_story(
+        assert sa.outcome == "ok"
+        # below the BOUND: the whole slot goes, before rung 1 ever runs
+        sa_floor = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
-                remaining_usd=0.0621, sonar=sonar_recording,
-                chat=lambda k, p: (s_brief(), 0.01)))
+                remaining_usd=bound - eps, sonar=sonar_recording,
+                chat=lambda k, p: (s_brief(), 0.01), fetch=_long_article_fetch))
         assert calls == []
-        assert "budget ladder" in sa_old.sonar_status
-        # line + epsilon: called
-        analysis.analyze_story(
+        assert sa_floor.outcome == "skipped-budget"
+        assert "slot skipped whole" in sa_floor.detail
+        # line + epsilon: called — AND the brief it feeds is built. Under the
+        # old output-only line this remaining bought Sonar and skipped the
+        # brief; that state is what the ruling made unreachable.
+        sa_edge = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
-                remaining_usd=0.1021, sonar=sonar_recording,
-                chat=lambda k, p: (s_brief(), 0.01)))
+                remaining_usd=line + eps, sonar=sonar_recording,
+                chat=lambda k, p: (s_brief(), 0.01), fetch=_long_article_fetch))
         assert calls == ["Summit meetings"]
-        # comfortably above: Sonar runs AND the brief it feeds is BUILT —
-        # the ladder's intent, whole again.
+        assert sa_edge.outcome == "ok", (
+            f"Sonar was paid at ${line + eps:.5f} and the brief did not run "
+            f"({sa_edge.outcome}: {sa_edge.detail})")
+        # comfortably above: unchanged, the ladder's intent
         calls.clear()
         sa_ok = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
-                remaining_usd=0.12, sonar=sonar_recording,
-                chat=lambda k, p: (s_brief(), 0.01)))
+                remaining_usd=line * 2, sonar=sonar_recording,
+                chat=lambda k, p: (s_brief(), 0.01), fetch=_long_article_fetch))
         assert calls == ["Summit meetings"]
         assert sa_ok.outcome == "ok"
     finally:

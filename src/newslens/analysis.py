@@ -495,10 +495,13 @@ def fetch_stats(records: List[FetchRecord]) -> Dict:
 #
 # Spend: ANALYSIS_MODEL behind the one-constant seam (fallback rung:
 # gpt-4o-mini — one diff, documented, QA-pinned like RANK/WRITER_MODEL).
-# Ladder under the $0.25 cap, cheapest first: Sonar background is skipped
+# Ladder under the run cap, cheapest first: Sonar background is skipped
 # before synthesis; remaining stories' briefs are skipped before anything
 # touches the briefing itself; routine derating raises an escalation flag
-# in the run log, never absorbed silently.
+# in the run log, never absorbed silently. (The cap was $0.25 when these
+# thresholds were shaped; it is $1.50 since B4 — config.py:59. The rungs'
+# PRICES and the ordering contract that binds them live at the LADDER
+# PRICING block below — ordering ruling 2026-08-01, NL-130.)
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -523,6 +526,59 @@ ANALYSIS_USD_OUT_PER_MTOK = llm.SEATS["analyst"].usd_per_mtok_out
 ANALYSIS_MAX_TOKENS = 6000
 ANALYSIS_TIMEOUT_S = 90
 SONAR_EST_USD = 0.012              # measured spike ~$0.007 + headroom
+# ---------------------------------------------------------------------------
+# LADDER PRICING — ORDERING RULING 2026-08-01 (NL-130), principal-approved
+# ("Approved as converged, both riders in, build NL-130").
+#
+# The two rungs used to be priced by two DIFFERENT estimators: rung 1 against
+# the output term alone ($0.09 -> a $0.102 line) and rung 2 against the full
+# estimate. At production prompt sizes the full estimate is ~$0.119, so a band
+# existed in which Sonar was PAID and the brief it feeds was then skipped —
+# spend on a verification whose only consumer never ran (and `_sonar_verify`
+# charges SONAR_EST_USD even on a FAILED call, :2241). The ruling closes that
+# band by CONSTRUCTION: rung 1 now prices the brief's affordability with a
+# call-time UPPER BOUND built from the same artifact rung 2 prices, so Sonar
+# only ever runs when the brief is still fundable AFTER paying for Sonar. M9's
+# order (2026-07-06, config.py:41-48 — "Sonar degrades first") is PRESERVED,
+# not repealed: the band [bound, bound + SONAR_EST_USD) still skips Sonar while
+# the brief runs. A slot that cannot fund its brief at all skips WHOLE, before
+# rung 1 — no orphan verification spend.
+#
+# RIDER (a) — SUNSET CONDITION. This ladder has never fired live (0
+# `derating: true`, 0 `skipped-budget` across 28 logged runs as of 2026-08-01).
+# If derating still has not fired live by the promised cap tune-down decision
+# (config.py:57-58, "TUNE DOWN once measured spend lands"), the org proposes
+# replacing this ladder with a plain slot-skip + escalate.
+# RIDER (b) — M9 clause (2) ("lower-tier briefs degrade before the lead's") is
+# a CROSS-slot ordering this per-slot ladder still does not implement; the
+# importance x deficit allocator is deferred, and this block is its future home.
+#
+# `render_material`'s hard budget, named ONCE so both rungs price the same
+# number (rung 1's bound reads it here; `render_material` takes it as its
+# default). Never re-hardcode it at a second address — two addresses drifting
+# apart is the class this ruling exists to end.
+MATERIAL_BUDGET_CHARS = 24_000
+# Everything else that renders into the analysis prompt beside the template and
+# the material block: the source map, memory_context, the scalars. MEASURED,
+# not guessed — full derivation in the NL-130 build record (2026-08-01):
+#   * real production maximum source map, reconstructed from all 52 persisted
+#     `analysis_retrieval` manifests: 10,295 chars at 56 keys (2026-07-20);
+#   * that same 56-key shape re-rendered with every title and outlet at its
+#     all-time observed maximum (183 / 41 chars) AND every key sharing one
+#     outlet — render_source_map's O(n^2) sibling-list worst case: 31,615;
+#   * twice that key count (116) at the same maxima, diverse outlets: 35,927;
+#   * memory_context <= CONTEXT_CAP(15) topics = 229 chars; story_title <= 108;
+#     summary <= 226; the four scalars <= 32 (all observed maxima, real data).
+# 40,000 dominates every one of those. It is an ALLOWANCE, not a proof-bound:
+# the sibling list is quadratic in key count, so NO constant bounds it for an
+# unbounded cluster. That is exactly why exceeding it is a DISCLOSED event
+# rather than a silent one — see the ORDERING INVARIANT VIOLATED warning at
+# rung 2, which is this constant's own falsifier tripwire. Over-counting is the
+# safe direction for a money guard (config.py:57-58 states that doctrine for
+# the cap itself); the price is that Sonar skips slightly earlier under
+# exhaustion, which is precisely the order M9 rules.
+PROMPT_MARGIN_CHARS = 40_000
+# ---------------------------------------------------------------------------
 # LENGTH REGIME 2026-07-30, Spec-4(c) STEP 0 (NL-118 content leg, batch B):
 # RE-BASED medium 400 -> 450 and full 700 -> 750, in the same change that puts
 # `arc` inside `_prose_words`. The two halves are one change. The arc RENDERS
@@ -556,6 +612,27 @@ SONAR_EST_USD = 0.012              # measured spike ~$0.007 + headroom
 # contract (how far past budget is tolerated), which is a different and
 # unratified change. If you are here to widen the ceiling, move this number.
 WORD_BUDGETS = {"full": 750, "medium": 542}
+
+
+def word_budget_for(tier: str) -> int:
+    """The tier's prose budget; an unknown tier gets the MEDIUM budget.
+
+    NL-131 (gate ruling R-2, 2026-07-31 → structural-kill form chosen by the
+    NL-130 batch 2026-08-01). Three call sites used to spell the fallback as a
+    literal — `WORD_BUDGETS.get(tier, 450)` — which meant every re-base of the
+    medium budget had to be re-synced at three addresses or leave a stale
+    number behind reading as "the medium default" (the f4a9c6c lockstep
+    precedent is exactly that chore, recurring). Deriving the default FROM the
+    dict ends the class: there is no second number to re-sync, ever.
+
+    PRODUCTION-UNREACHABLE BOTH WAYS, so this is drift-hygiene and not a
+    behaviour change: `run_analysis`'s loop is the only entry to `analyze_story`
+    and it gates on `if tier not in ("full", "medium"): continue`, and every
+    `validate_brief` call site sits inside `analyze_story` under that same
+    tier. No test anywhere passes an unknown tier."""
+    return WORD_BUDGETS.get(tier, WORD_BUDGETS["medium"])
+
+
 # EC-9 (content round 2026-07-28, resolved by combination — Remy's hard
 # threshold WITH Vera's retry instruction): the tier budget is a target that
 # warns; budget × this factor is a ceiling that raises and buys ONE redraft.
@@ -690,6 +767,15 @@ class StoryAnalysis:
     sonar_status: str = "skipped"
     warnings: List[str] = field(default_factory=list)
     brief: Optional[Dict] = None
+    # Ordering ruling 2026-08-01 (NL-130), Onna's instrumentation clause: the
+    # synthesis ESTIMATE and the rung-1 BOUND, persisted per slot in the
+    # generation_log so the promised cap tune-down (config.py:57-58) has
+    # est-vs-actual data to decide on instead of a re-derivation. `est_usd`
+    # stays None on every path that never renders a prompt (slot-atomic floor,
+    # skipped-thin, demoted-quick) — a null there means "never priced", which
+    # is a different fact from "priced at zero".
+    est_usd: Optional[float] = None
+    bound_usd: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -903,9 +989,14 @@ def _material_header(key: str, s: Dict) -> str:
     return f"--- [{key}] {s['outlet']} — {s['title']}{stamp} ---\n"
 
 
-def render_material(sources: Dict[str, Dict], budget_chars: int = 24_000) -> str:
+def render_material(sources: Dict[str, Dict],
+                    budget_chars: int = MATERIAL_BUDGET_CHARS) -> str:
     """Full texts first (the whole point), then excerpts/results, byte-capped
     so a long article can't blow the context.
+
+    The default is the NAMED constant (ordering ruling 2026-08-01, NL-130):
+    rung 1's affordability bound prices this same number, so the two rungs can
+    never be priced off two different material budgets.
 
     P-RESERVATION (M2 gate residual 3): prior-briefing material gets a
     budget slice RESERVED before the S/R/C spend — on a many-source day the
@@ -1989,7 +2080,7 @@ def validate_brief(raw: Dict, sources: Dict[str, Dict], tier: str,
     # words. The brief is measured as it will RENDER, not as it arrived.
     words = _prose_words(pinned, ledger_out, mechanism, effects_out,
                          unknowns, watch, arc)
-    budget = WORD_BUDGETS.get(tier, 450)
+    budget = word_budget_for(tier)   # NL-131 structural kill (was `.get(tier, 450)`)
     ceiling = int(budget * (WORD_CEILING_FACTOR if ceiling_factor is None
                             else ceiling_factor))
     if words > ceiling:
@@ -2216,10 +2307,38 @@ def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float, float]:
             _clear_analyst()
 
 
-def estimate_synthesis_usd(prompt: str) -> float:
-    est_in = len(prompt) / 4
+def estimate_synthesis_usd_chars(prompt_chars: int) -> float:
+    """The synthesis estimate as a function of PROMPT LENGTH alone.
+
+    Split out by the ordering ruling 2026-08-01 (NL-130) so rung 1 can price a
+    prompt that does not exist yet — the bound is a char count — through the
+    exact same arithmetic rung 2 prices the real prompt with. One estimator,
+    two call shapes: that identity is what makes `bound >= est` a property of
+    char counts rather than a coincidence of two formulas."""
+    est_in = prompt_chars / 4
     return (est_in / 1e6 * ANALYSIS_USD_IN_PER_MTOK
             + ANALYSIS_MAX_TOKENS / 1e6 * ANALYSIS_USD_OUT_PER_MTOK)
+
+
+def estimate_synthesis_usd(prompt: str) -> float:
+    return estimate_synthesis_usd_chars(len(prompt))
+
+
+def brief_bound_chars(template: str) -> int:
+    """Call-time UPPER BOUND on the analysis prompt this template can build.
+
+    template + the material block's hard budget + the measured margin for
+    everything else (source map, memory_context, scalars). `template` is READ
+    AT CALL TIME, never pinned: the prompt file is principal-editable with no
+    test run between his edit and the next generate, so any static length is a
+    stale line waiting to happen (the 4.33-char margin the NL-118 land
+    measured was that class expressing itself, not bad luck)."""
+    return len(template) + MATERIAL_BUDGET_CHARS + PROMPT_MARGIN_CHARS
+
+
+def brief_bound_usd(template: str) -> float:
+    """What rung 1 must be able to afford before it may spend on Sonar."""
+    return estimate_synthesis_usd_chars(brief_bound_chars(template))
 
 
 def _sonar_verify(key: str, story_title: str, claims: List[str]) -> Tuple[List[Dict], float, str]:
@@ -2513,18 +2632,58 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     sa.fetch_attempted = sum(1 for r in records if r.attempted)
     sa.fetch_ok = sum(1 for r in records if r.outcome == OK)
 
+    # The template is READ HERE, above the sonar decision (ordering ruling
+    # 2026-08-01, NL-130) — rung 1 cannot price the brief without it, and it is
+    # a file read, so hoisting it costs nothing and spends nothing. The SAME
+    # string renders the prompt below: one artifact, both rungs.
+    template = (paths.PROMPTS_DIR / "analysis_brief.txt").read_text(encoding="utf-8")
+    bound_usd = brief_bound_usd(template)
+    sa.bound_usd = bound_usd
+
+    # SLOT-ATOMIC FLOOR (ruling clause 2). A slot whose brief cannot be
+    # afforded at ALL skips WHOLE, before rung 1 — paying Sonar here would buy
+    # verification for a brief that will never run. Same disclosed exit as
+    # rung 2: outcome, derating warning, escalation-flag class.
+    # KNOWN PREEMPTION (NL-130 gate F-2 ruling, 2026-08-02): this floor sits
+    # before the slot-3 demotion check below, so under exhaustion slot 3 gets
+    # NO demoted-quick verdict row — `analyst_slot3_tier` returns None (the
+    # writer's A2 fallback) and the run summary counts the slot outside
+    # `good` (ok -> partial). Unreachable until the cap tune-down
+    # (config.py:57-58) — the same decision rider (a)'s sunset waits on — and
+    # that decision must resolve this corner (restore the free verdict row,
+    # or ratify A2) before the cap moves. sonar_results are consumed by the
+    # prompt, by the demotion predicate as evidence, or not at all.
+    if remaining_usd < bound_usd:
+        sa.outcome = "skipped-budget"
+        sa.sonar_status = "skipped — slot skipped whole (budget floor)"
+        sa.detail = (f"slot skipped whole: remaining ${remaining_usd:.3f} is "
+                     f"under the brief bound ${bound_usd:.3f} — no Sonar spend "
+                     "for a brief that cannot run (ordering ruling 2026-08-01)")
+        sa.warnings.append("derating: analysis brief skipped under the cap "
+                           "(escalation-flag class)")
+        return sa
+
     # Ladder rung 1 (cheapest first): Sonar goes before synthesis money
     sonar_results: List[Dict] = []
-    # FIX-2 (B4-D2): the coarse pre-map probe DERIVES from the analyst seat's
-    # output ceiling (Sonnet 5's ANALYSIS_MAX_TOKENS at its out-rate = $0.09), not
-    # a stale $0.05 hardcode — so the Sonar-degrades-first ladder is calibrated to
-    # the ACTUAL synthesis cost, not the GPT-4o-era figure. The real per-slot
-    # estimate still follows once the source map is built.
-    est_synth_probe = ANALYSIS_MAX_TOKENS / 1e6 * ANALYSIS_USD_OUT_PER_MTOK
-    if remaining_usd - SONAR_EST_USD < est_synth_probe:
+    sonar_ran = False
+    s_cost = 0.0
+    # FIX-2 (B4-D2) priced this probe off the analyst seat's OUTPUT ceiling
+    # alone ($0.09). The ordering ruling 2026-08-01 (NL-130) replaces that with
+    # `bound_usd` — the call-time upper bound on what rung 2 will price — so the
+    # sonar line is `bound + SONAR_EST_USD` and sits ABOVE the brief line at
+    # every prompt size the code can build, including after a principal edit to
+    # the template. Consequences, by construction and not by calibration:
+    #   * Sonar runs only when the brief is STILL fundable after paying for
+    #     Sonar -> pay-then-skip is unreachable (given s_cost <= SONAR_EST_USD;
+    #     a Sonar overcharge is caught by the invariant tripwire at rung 2);
+    #   * the witnessing band [bound, bound + SONAR_EST_USD) — Sonar skipped,
+    #     brief runs — exists at EVERY prompt size, width SONAR_EST_USD. That
+    #     is M9's "verification degrades first", still standing.
+    if remaining_usd - SONAR_EST_USD < bound_usd:
         sa.sonar_status = "skipped — budget ladder (Sonar degrades first)"
         sa.warnings.append("derating: Sonar verification skipped under the cap")
     else:
+        sonar_ran = True
         claims = [slot.get("story_title", "")] + \
                  [it.get("title", "") for it in items[:4]]
         sonar_results, s_cost, sa.sonar_status = sonar(
@@ -2532,8 +2691,9 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         sa.cost_usd += s_cost
         # NL-95: Sonar is a METERED api — charged == shadow by construction,
         # so the same figure lands on both tracks. `remaining_usd` is now
-        # shadow-denominated, which is what the API-priced est_synth_probe
-        # above and estimate_synthesis_usd below were always comparing against.
+        # shadow-denominated, which is what the API-priced `bound_usd` above
+        # and estimate_synthesis_usd below were always comparing against. The
+        # ordering ruling does NOT touch the denomination (Onna's law).
         sa.shadow_usd += s_cost
         remaining_usd -= s_cost
 
@@ -2590,7 +2750,9 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
                      "breach")
         return sa
 
-    template = (paths.PROMPTS_DIR / "analysis_brief.txt").read_text(encoding="utf-8")
+    # `template` was read above the sonar decision (LADDER PRICING) and is
+    # reused here verbatim — the artifact rung 1 priced IS the artifact rung 2
+    # renders. Re-reading it would reopen the two-addresses class.
     degraded = None
     if sa.fetch_ok == 0:
         degraded = ("no full-text extraction succeeded — brief built from "
@@ -2600,7 +2762,8 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     # discovery BUG-3 class), and the file stays principal-editable without
     # {{escape}} noise.
     prompt = _render_prompt(template, {
-        "word_budget": str(WORD_BUDGETS.get(tier, 450)), "tier": tier,
+        # NL-131 structural kill (was `.get(tier, 450)`)
+        "word_budget": str(word_budget_for(tier)), "tier": tier,
         "date": date, "slot": str(slot_no),
         "story_title": slot.get("story_title", ""),
         "story_summary": slot.get("summary", ""),
@@ -2609,13 +2772,33 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         "source_map": render_source_map(sources),
         "material": render_material(sources)})
 
+    # Ladder rung 2, unchanged in role: the post-render check against the
+    # ACTUAL estimate. Under the ordering ruling 2026-08-01 it is DEFENCE IN
+    # DEPTH — with a correct bound it can no longer fire alone, because the
+    # floor and rung 1 already proved `remaining >= bound >= est`. If it does
+    # fire after rung 1 let Sonar spend, rung 1's bound was WRONG: that is the
+    # "margin proves unboundable" falsifier, and it escalates instead of
+    # passing quietly (Onna's instrumentation clause).
     est = estimate_synthesis_usd(prompt)
+    sa.est_usd = est
     if est > remaining_usd:
         sa.outcome = "skipped-budget"
         sa.detail = (f"synthesis estimate ${est:.3f} exceeds remaining budget "
                      f"${remaining_usd:.3f} — brief skipped, disclosed")
         sa.warnings.append("derating: analysis brief skipped under the cap "
                            "(escalation-flag class)")
+        if sonar_ran:
+            cause = (f"the call-time bound ${bound_usd:.5f} under-priced this "
+                     f"prompt (est ${est:.5f}, {len(prompt)} chars vs the "
+                     f"{brief_bound_chars(template)}-char bound) — "
+                     "PROMPT_MARGIN_CHARS is too small"
+                     if est > bound_usd else
+                     f"Sonar charged ${s_cost:.5f} against its "
+                     f"${SONAR_EST_USD} reserve")
+            sa.warnings.append(
+                "derating: ORDERING INVARIANT VIOLATED — Sonar was paid for a "
+                "slot whose brief then skipped, which the 2026-08-01 ordering "
+                f"ruling makes unreachable: {cause}")
         return sa
 
     try:
@@ -2812,7 +2995,8 @@ def _gap_report_pass(clean: Dict, sources: Dict[str, Dict], tier: str,
     except OSError as exc:
         return clean, None, [f"gap-report pass skipped — prompt unreadable ({exc})"]
     prompt = _render_prompt(template, {
-        "word_budget": str(WORD_BUDGETS.get(tier, 450)), "tier": tier,
+        # NL-131 structural kill (was `.get(tier, 450)`)
+        "word_budget": str(word_budget_for(tier)), "tier": tier,
         "date": date,
         "draft_json": json.dumps(clean, ensure_ascii=False, indent=1),
         "source_map": render_source_map(sources),
@@ -2971,6 +3155,14 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
                 # meaning every historical jsonl row carries); shadow rides
                 # BESIDE it under a new one. No row's meaning moves.
                 "usd_shadow": round(sa.shadow_usd, 6),
+                # Ordering ruling 2026-08-01 (NL-130): the estimate the ladder
+                # priced this slot with, beside what it actually cost. `est_usd`
+                # is null when no prompt was ever rendered. This is a
+                # generation_log field, NOT a DB column — no migration.
+                "est_usd": (None if sa.est_usd is None
+                            else round(sa.est_usd, 6)),
+                "bound_usd": (None if sa.bound_usd is None
+                              else round(sa.bound_usd, 6)),
                 "fetch_ok": sa.fetch_ok, "fetch_attempted": sa.fetch_attempted,
                 "sonar": sa.sonar_status})
             report["warnings"].extend(sa.warnings)

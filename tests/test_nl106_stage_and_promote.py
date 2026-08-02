@@ -28,7 +28,6 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -241,10 +240,17 @@ def test_the_analysis_stage_consumes_the_staged_selection(con, monkeypatch):
 
     def recorder(con_, date_, slot_no, slot, tier, *a, **kw):
         seen.append(slot["story_title"])
-        return SimpleNamespace(slot=slot_no, tier=tier, outcome="ok", detail="",
-                               cost_usd=0.0, shadow_usd=0.0, fetch_ok=False,
-                               fetch_attempted=False, sonar_status="skipped",
-                               warnings=[])
+        # The REAL return type, not a hand-listed duck-type (NL-130,
+        # 2026-08-01). This stub used to be a SimpleNamespace enumerating the
+        # fields `run_analysis` happened to read, so every new StoryAnalysis
+        # field broke a test about staging — the ordering ruling's two
+        # instrumentation fields (est_usd/bound_usd) were the fourth such
+        # field and the one that caught it. A dataclass tracks its own
+        # contract; this test is about which SLOT the stage analyses.
+        return analysis.StoryAnalysis(
+            slot=slot_no, tier=tier, outcome="ok", detail="",
+            cost_usd=0.0, shadow_usd=0.0, fetch_ok=0,
+            fetch_attempted=0, sonar_status="skipped")
 
     monkeypatch.setattr(analysis, "analyze_story", recorder)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
