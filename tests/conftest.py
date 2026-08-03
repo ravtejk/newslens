@@ -212,6 +212,46 @@ _REAL_STATE_FILES = (paths._GUARDED["SOURCES_FILE"],
 _REAL_PROFILES_DIR = paths.PROJECT_ROOT / paths.PROFILES_DIRNAME
 
 
+def _walk_state(root, snap):
+    """RECURSIVE per-file stat of one real-state tree, into `snap`.
+
+    NL-132-B (NL-133 gate rider R-E, 2026-08-02). The top-level dir snapshot
+    below moves only on create/delete/rename IN THAT DIRECTORY, so every write
+    one level deeper — `profiles/<slug>/data/newslens.db` rewritten in place,
+    `profiles/<slug>/data/generation_log.jsonl` appended — was invisible to it.
+    That is the SAME in-place class v7-M2 closed for data/ by naming the db and
+    the log individually; it was never extended to profiles/, and profiles/ has
+    been live surface since NL-134. QA proved the gap by execution, both arms
+    (2026-08-02 QA report §7: arm 1 nested rewrite -> tripwire GREEN; arm 2
+    control append to the watched default db -> tripwire FAILS by name).
+    `_real_state_snapshot` cannot enumerate the profile tree by rule the way
+    _REAL_STATE_FILES enumerates the founder's five, because profiles are
+    minted at will — so the coverage has to be a walk.
+
+    CHEAP BY CONSTRUCTION, because this runs twice per test for the whole
+    suite: os.scandir + DirEntry.stat only — no reads, no hashing, no sorting
+    of the whole tree (dict comparison is order-independent). Measured on the
+    real profiles/ (20 files, 13 dirs, 3.2M): 0.20 ms per snapshot, ~1.3 s
+    across a 3152-test run. Directories are recorded as bare keys so a mkdir
+    or an rmdir is caught even when it moves no file.
+    """
+    try:
+        entries = os.scandir(root)
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return
+    with entries:
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    snap[entry.path] = "dir"
+                    _walk_state(entry.path, snap)
+                else:
+                    st = entry.stat(follow_symlinks=False)
+                    snap[entry.path] = (st.st_mtime_ns, st.st_size)
+            except OSError as exc:                 # raced or unreadable
+                snap[entry.path] = f"unstat-able: {type(exc).__name__}"
+
+
 def _real_state_snapshot():
     snap = {}
     for d in (_REAL_DATA_DIR, _REAL_DATA_DIR / "briefings", _REAL_PROFILES_DIR):
@@ -226,6 +266,9 @@ def _real_state_snapshot():
             snap[str(f)] = (st.st_mtime_ns, st.st_size)
         except FileNotFoundError:
             snap[str(f)] = None
+    # Widened per file, one level and every level below (R-E). Additive: the
+    # top-level watch above is kept, so nothing the M1 pin proved moves.
+    _walk_state(_REAL_PROFILES_DIR, snap)
     return snap
 
 

@@ -65,6 +65,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     prof_create.add_argument("name")
     profile_sub.add_parser("list", help="every profile and its honest status")
+    # NL-132-B: teardown that is not `rm -rf` typed beside the founder's world.
+    prof_delete = profile_sub.add_parser(
+        "delete",
+        help="permanently remove one profile's whole world (database, corpus, "
+        "artifacts, spend ledger, memory.md, sources.yaml). DRY RUN unless "
+        "--confirm repeats the slug exactly; refuses the founder's own world",
+    )
+    prof_delete.add_argument("name")
+    prof_delete.add_argument(
+        "--confirm", default=None, metavar="SLUG",
+        help="type the profile's slug again to actually delete it. Without it "
+        "this prints what WOULD be removed and changes nothing",
+    )
 
     sub.add_parser(
         "doctor",
@@ -767,12 +780,119 @@ def _discovery_clean_command(args) -> int:
     return 0
 
 
+def _human_bytes(n: float) -> str:
+    """Display only — the exact byte count is on the DeletionPlan."""
+    for unit in ("B", "KB", "MB"):
+        if n < 1024:
+            return f"{n:.0f} B" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} GB"
+
+
+def _print_deletion_plan(plan) -> None:
+    print(f"  root:      {plan.root}")
+    print(f"  contents:  {plan.files} file(s), {plan.dirs} directory(ies), "
+          f"{_human_bytes(plan.bytes)}")
+    print(f"  world:     {plan.status.line()}")
+
+
 def _profile_command(args) -> int:
-    """`newslens profile create|list` — Stage-0 M1.
+    """`newslens profile create|list|delete` — Stage-0 M1, delete NL-132-B.
 
     Never touches any profile but the one named. `create` refuses over an
-    existing directory and refuses the founder's own `default` outright."""
+    existing directory and refuses the founder's own `default` outright;
+    `delete` refuses the founder STRUCTURALLY (resolved paths, so a symlink
+    named anything else cannot get past it) and is a dry run until the slug is
+    typed back — the same confirmation shape `discovery-clean` uses (:292-307),
+    with the slug standing in for --apply because this one has no undo."""
     from . import paths, profiles
+
+    if args.profile_command == "delete":
+        try:
+            plan = profiles.deletion_plan(args.name)
+        except (paths.ProfileError, profiles.ProfileMissingError,
+                profiles.ProfileDeleteRefused) as exc:
+            print(f"profile delete: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:                       # CLI boundary: loud
+            print(f"profile delete failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1
+
+        if args.confirm is None:
+            print(f"profile delete: {plan.slug!r} — DRY RUN, nothing was "
+                  "changed\n")
+            _print_deletion_plan(plan)
+            print("\nThis removes that reader's whole world permanently — "
+                  "database, corpus,\nartifacts, spend ledger, memory.md and "
+                  "sources.yaml. There is no undo.\nTo do it, type the slug "
+                  "back:\n")
+            print(f"  newslens profile delete {plan.slug} "
+                  f"--confirm {plan.slug}")
+            return 0
+
+        if args.confirm != plan.slug:
+            print(f"profile delete: refusing — the confirmation must be this "
+                  f"profile's own slug, typed back exactly. Expected "
+                  f"`--confirm {plan.slug}`, got `--confirm {args.confirm}`. "
+                  "Nothing was changed.", file=sys.stderr)
+            return 2
+
+        try:
+            removed = profiles.delete(args.name, confirm=args.confirm)
+        except (paths.ProfileError, profiles.ProfileMissingError,
+                profiles.ProfileDeleteRefused) as exc:
+            print(f"profile delete: {exc}", file=sys.stderr)
+            return 2
+        except OSError as exc:                         # partial removal is real
+            print(f"profile delete failed: {type(exc).__name__}: {exc} — the "
+                  f"directory may be partially removed; inspect "
+                  f"{plan.root}", file=sys.stderr)
+            return 1
+        if removed.survivors:
+            # QA F-3 (2026-08-02): a live serve on this profile re-creates the
+            # world on its very next request — the server opens the DB per
+            # request rather than holding a handle — so the tree can be back
+            # before rmtree's caller gets a line out. Saying "(gone)" over a
+            # directory that is on disk is exactly the silent-success this
+            # milestone exists to remove, so the verb reports what it SAW.
+            print(f"profile delete: removed profile {removed.slug!r} — but "
+                  "THE DIRECTORY IS BACK\n")
+            print(f"  root:      {removed.root}  (ON DISK AGAIN)")
+            print(f"  removed:   {removed.files} file(s), {removed.dirs} "
+                  f"directory(ies), {_human_bytes(removed.bytes)}")
+            print("  on disk now:")
+            for path in removed.survivors:
+                print(f"    {path}")
+            print("\n  The removal itself succeeded; something re-created the "
+                  "tree immediately\n  afterwards. The known cause is a live "
+                  f"`newslens --profile {removed.slug} serve`\n  (or "
+                  f"`scripts/reader-serve {removed.slug}`) still running: it "
+                  "opens that profile's\n  database per request, so the next "
+                  "request re-mints an empty world.\n  Stop that serve, then "
+                  "run this again.", file=sys.stderr)
+            print("  founder:   untouched — your data/, memory.md and "
+                  "sources.yaml were never in this profile's tree")
+            return 1
+        print(f"profile delete: removed profile {removed.slug!r}\n")
+        print(f"  root:      {removed.root}  (gone — re-checked, not assumed)")
+        print(f"  removed:   {removed.files} file(s), {removed.dirs} "
+              f"directory(ies), {_human_bytes(removed.bytes)}")
+        print("  founder:   untouched — your data/, memory.md and sources.yaml "
+              "were never in this profile's tree")
+        # The durability limit, said out loud (QA F-3, and the fix-loop live
+        # reproduction that sharpened it): the re-stat above is honest about
+        # THIS INSTANT, and the zombie is triggered by the next REQUEST to a
+        # live serve, not by the delete — so a serve that is idle right now
+        # will re-create an empty world minutes later and the check above
+        # cannot see it. Refusing to delete a served profile needs a lockfile
+        # in every profile root; until then the operator gets the sentence
+        # instead of a false absolute.
+        print(f"  note:      a still-running serve for {removed.slug} — its "
+              "NEXT request re-creates an empty\n             world there "
+              "(the server opens the database per request). Stop it, then "
+              "`newslens profile list`.")
+        return 0
 
     if args.profile_command == "create":
         try:

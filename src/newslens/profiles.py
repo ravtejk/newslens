@@ -26,11 +26,12 @@ profiles.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import db, paths
 
@@ -41,6 +42,12 @@ class ProfileExistsError(Exception):
 
 class ProfileMissingError(Exception):
     """A profile was named that has never been created."""
+
+
+class ProfileDeleteRefused(Exception):
+    """`profile delete` was pointed at something it must never remove — the
+    founder's own world, a link out of the profile tree, a directory holding
+    real state, or a call that never typed the slug back."""
 
 
 @dataclass
@@ -355,9 +362,13 @@ def create(profile: str, anchor: Optional[Path] = None) -> ProfileStatus:
             "already exists and is never provisioned. Pick another name.")
     root = paths.profile_root(slug, anchor)
     if root.exists():
+        # NL-132-B: this used to say "delete that directory by hand", which was
+        # an `rm -rf` typed beside the founder's own state at review cadence.
+        # There is a guarded verb now, and the exit advice has to be it.
         raise ProfileExistsError(
-            f"profile {slug!r} already exists at {root} — delete that "
-            "directory by hand if you really mean to start it over")
+            f"profile {slug!r} already exists at {root} — start it over with "
+            f"`newslens profile delete {slug} --confirm {slug}` (dry-runs "
+            "first), then create it again")
     if not paths.PROFILE_SOURCES_TEMPLATE.exists():
         raise FileNotFoundError(
             f"source template missing: {paths.PROFILE_SOURCES_TEMPLATE} — run "
@@ -389,6 +400,288 @@ def create(profile: str, anchor: Optional[Path] = None) -> ProfileStatus:
     shutil.copyfile(paths.PROFILE_SOURCES_TEMPLATE, layout["SOURCES_FILE"])
 
     return status(slug, anchor)
+
+
+# ---------------------------------------------------------------------------
+# Teardown (NL-132-B)
+#
+# Until this milestone, `create` refused over an existing profile and the only
+# teardown was the sentence it printed: "delete that directory by hand". At
+# review cadence that is an `rm -rf` typed repeatedly, one mistyped path away
+# from the founder's own world, which is the hazard the scoping named (eng-2,
+# 2026-08-01, Rook). So the removal gets guards, and the guards are structural:
+# a NAME comparison against 'default' is defeated by a symlink called anything
+# else, so every check below runs on RESOLVED paths.
+#
+# HARDENED 2026-08-02 (QA F-1, fix loop 1). The first draft's guards were a
+# TABLE of named paths, and a table only protects what somebody remembered to
+# name: 9 of QA's 28 attacks resolved to a deletable path — data/briefings,
+# data/battery, src/, tests/, profiles/ itself — two of them through nothing
+# but the shipped NEWSLENS_DATA_DIR seam plus one symlink, i.e. reachable from
+# the shipped CLI. Both root causes are closed below: guard 2 (the link one
+# level UP, at profiles/ itself) and guard 6 (containment, which replaces
+# "is it on the list" with "where does it actually resolve to").
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DeletionPlan:
+    """What `profile delete` is about to destroy, or just did — observed, not
+    assumed. `root` is the path as the layout names it; `real_root` is that
+    path with every symlink resolved, and it is the one that gets removed."""
+    slug: str
+    root: Path
+    real_root: Path
+    files: int
+    dirs: int
+    bytes: int
+    status: ProfileStatus
+    # What was ON DISK again the instant after rmtree returned. Empty on a
+    # plan (nothing was removed) and on a clean delete. See `delete`.
+    survivors: Tuple[str, ...] = ()
+
+
+def _within(inner: Path, outer: Path) -> bool:
+    """Is `inner` strictly below `outer`? Both must already be resolved."""
+    return outer in inner.parents
+
+
+def _at_or_within(inner: Path, outer: Path) -> bool:
+    """Is `inner` the same path as `outer`, or below it? Both resolved."""
+    return inner == outer or outer in inner.parents
+
+
+def _real_profiles_root() -> Path:
+    """THIS checkout's own `profiles/` — the only directory inside this
+    checkout whose children this verb is ever allowed to remove.
+
+    Read at CALL time, not import time, for the same reason `_protected_paths`
+    reads `paths._GUARDED` as a plain dict: the suite re-anchors
+    `paths.PROJECT_ROOT` at a tmp mirror (`test_stage0_m1_profiles.py:675`,
+    `test_stage0_m3_personas.py:82`, this batch's `real_route` fixture), and a
+    guard frozen at import would still be pointed at the developer's real
+    checkout from inside those tests — untestable in the one direction that
+    matters.
+    """
+    return (paths.PROJECT_ROOT / paths.PROFILES_DIRNAME).resolve()
+
+
+def _protected_paths(anchor: Optional[Path] = None) -> List[Tuple[str, Path]]:
+    """Everything a delete must never remove — or remove FROM — with a label
+    for the refusal sentence.
+
+    TWO independent tables on purpose. `profile_layout(DEFAULT_PROFILE)` is the
+    founder's world under whatever anchor is in force (so a sandboxed process
+    protects its own sandbox's founder), and `paths._GUARDED` is the CHECKOUT's
+    real table read as a plain dict — no PEP 562, no sanction, the conftest
+    tripwire's own idiom.
+
+    This table is NOT a containment proof, and the first draft of this
+    docstring claimed it was (QA F-1, 2026-08-02: 28 attacks, 9 resolved to a
+    deletable path). It matches a path EXACTLY, or catches a named path sitting
+    inside the target — so every subtree nobody thought to name walked straight
+    through it: `data/briefings`, `data/battery`, `data/follow_altitude`,
+    `src/`, `tests/`, and `profiles/` itself. Naming more paths is not the fix,
+    because the next unnamed subtree is always one `mkdir` away; the fix is
+    guard 6, which asks where the resolved target IS rather than what it is
+    called. This table survives as the arm guard 6 cannot cover: a guarded path
+    sitting INSIDE an otherwise perfectly legitimate profile root.
+    """
+    base = anchor if anchor is not None else paths.anchor_dir()
+    out: List[Tuple[str, Path]] = [
+        ("the profiles directory itself", paths.profiles_dir(anchor)),
+        ("this world's anchor", Path(base)),
+        ("the checkout root", paths.PROJECT_ROOT),
+    ]
+    for key, value in paths.profile_layout(paths.DEFAULT_PROFILE, anchor).items():
+        out.append((f"the founder's {key}", Path(value)))
+    for key, value in paths._GUARDED.items():
+        out.append((f"the checkout's real {key}", Path(value)))
+    return out
+
+
+def _resolve_deletable_root(slug: str, anchor: Optional[Path] = None) -> Path:
+    """The one gate. Returns the resolved directory that may be removed, or
+    raises — and every raise is a refusal somebody could otherwise have talked
+    their way past with a plausible-looking slug.
+
+    SEVEN guards, in order, each with its own born-red pin in
+    tests/test_nl132b_profile_hardening.py (QA F-2, 2026-08-02: a guard the
+    suite cannot notice being removed is not an acceptance contract). Guard 5
+    is the one exception — it is provably unpinnable and says so in place.
+
+    THE CLAIM THIS COMPOSITION EARNS, stated as narrowly as it is true: no
+    `anchor=` argument and no NEWSLENS_DATA_DIR value can make this verb return
+    anything inside THIS checkout except something strictly inside THIS
+    checkout's own `profiles/`. The real `data/` — including every dated subtree under it —
+    the checkout root, `src/`, `tests/` and `profiles/` itself are all
+    unreachable, whether or not anybody remembered to name them.
+
+    WHAT IT DOES NOT CLAIM: anything about a world OUTSIDE this checkout.
+    There the anchor is the operator's own declaration of which world they
+    mean, which is the whole point of the seam — a sandboxed process must be
+    able to tear down its own sandbox. Guard 2 is what keeps that from being
+    aimed back at the checkout by a link.
+    """
+    # --- guard 1: the founder, by name. His root IS the checkout. ----------
+    if slug == paths.DEFAULT_PROFILE:
+        raise ProfileDeleteRefused(
+            f"{paths.DEFAULT_PROFILE!r} is the founder's own profile and its "
+            "root IS this checkout — data/, memory.md and sources.yaml are "
+            "not a profile directory and are never deleted by this verb.")
+    # --- guard 2: `profiles/` ITSELF is a symlink. -------------------------
+    # QA F-1 root cause #1: guard 3 lstats profiles/<slug> and never the
+    # directory above it, so with `profiles/` as the link, <slug> is a REAL
+    # directory in somebody else's world and guard 3 never fires. That is the
+    # v7-M1 pinhole shape one level up, and it is how 8 of QA's 9 holes were
+    # reached — including `profiles/` -> the real profiles/, aimed at a live
+    # reader. A profiles/ that is a link is refused for DELETE only; reading,
+    # creating and serving through it are untouched.
+    holder_link = paths.profiles_dir(anchor)
+    if holder_link.is_symlink():
+        raise ProfileDeleteRefused(
+            f"{holder_link} is a SYMLINK, not a profiles directory. Refusing "
+            "to delete through it — the link decides which world's profiles/ "
+            "this is, and a delete verb must not take that from a link. "
+            "Run the delete against the real directory, or remove the link.")
+    # --- guard 3: profiles/<slug> is a symlink. ----------------------------
+    root = paths.profile_root(slug, anchor)
+    if root.is_symlink():
+        raise ProfileDeleteRefused(
+            f"{root} is a SYMLINK, not a profile directory. Refusing to delete "
+            "through a link — a link can point anywhere, including at your own "
+            "data/. Remove the link by hand if that is what you meant.")
+    # --- guard 4: it is not a directory at all. ----------------------------
+    if not root.is_dir():
+        raise ProfileMissingError(
+            f"no profile named {slug!r} at {root} — nothing to delete "
+            f"(existing: {', '.join(profile_names(anchor))})")
+    real = root.resolve()
+    holder = holder_link.resolve()
+    # --- guard 5: shape. A profile root is one level below its holder. -----
+    # HONEST LABEL (QA F-2): this guard is provably SUBSUMED by guard 3 for
+    # every input reachable today — if root is not a symlink and is a
+    # directory, then root.resolve().parent == profiles_dir().resolve() by
+    # construction, because resolve() expands the same parent components in
+    # both. QA's mutation of it was therefore silent, and no behavioural pin
+    # can make it bite. It stays as a cheap assertion of the invariant the
+    # guards below rely on, and it carries a STRUCTURAL pin instead
+    # (test_the_shape_guard_is_present_even_though_it_cannot_bite) so its
+    # removal is still visible to the suite. Enumerated, not hidden.
+    if real.parent != holder:
+        raise ProfileDeleteRefused(
+            f"{root} resolves to {real}, which is not a directory directly "
+            f"under {holder}. A profile root is always exactly one level below "
+            "profiles/; anything else is a link or an escape, and this verb "
+            "removes neither.")
+    # --- guard 6: CONTAINMENT inside this checkout. ------------------------
+    # QA F-1 root cause #2: the table below matches names, so any subtree
+    # nobody named passed it (data/briefings, data/battery, src/, tests/).
+    # This asks the containment question instead, and it is the guard that
+    # makes the claim in the docstring true: if the resolved target is at or
+    # inside this checkout, it must be strictly inside this checkout's own
+    # profiles/. Outside the checkout it says nothing — that is the sandbox
+    # seam, and guard 2 is what stops a link pointing the sandbox back here.
+    project = paths.PROJECT_ROOT.resolve()
+    if _at_or_within(real, project) and not _within(real, _real_profiles_root()):
+        raise ProfileDeleteRefused(
+            f"refusing to delete {real}: it is inside this checkout "
+            f"({project}) but not inside {_real_profiles_root()}. The only "
+            "thing this verb may remove inside the checkout is one reader's "
+            "own directory under profiles/ — not data/, not the source tree, "
+            "and not profiles/ itself, whatever anchor was in force.")
+    # --- guard 7: the protected table (IS or CONTAINS a named path). -------
+    for label, protected in _protected_paths(anchor):
+        candidate = Path(protected).resolve()
+        if candidate == real or _within(candidate, real):
+            raise ProfileDeleteRefused(
+                f"refusing to delete {real}: it IS or CONTAINS {label} "
+                f"({candidate}). Real state outside the named profile is never "
+                "in the blast radius.")
+    return real
+
+
+def _measure(root: Path) -> Tuple[int, int, int]:
+    """(files, directories, bytes) under `root`. Read-only; lstat, so a link
+    is counted as itself rather than as whatever it points at."""
+    files = dirs = total = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirs += len(dirnames)
+        for name in filenames:
+            files += 1
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                pass                       # raced or unreadable: counted, unsized
+    return files, dirs, total
+
+
+def deletion_plan(profile: str, anchor: Optional[Path] = None) -> DeletionPlan:
+    """What deleting `profile` would destroy. Runs every guard and touches
+    nothing — this is what the CLI's dry run prints, and it is also the
+    measurement `delete` reports afterwards."""
+    slug = paths.normalize_profile(profile)
+    real = _resolve_deletable_root(slug, anchor)
+    files, dirs, total = _measure(real)
+    return DeletionPlan(slug=slug, root=paths.profile_root(slug, anchor),
+                        real_root=real, files=files, dirs=dirs, bytes=total,
+                        status=status(slug, anchor))
+
+
+def delete(profile: str, anchor: Optional[Path] = None,
+           confirm: Optional[str] = None) -> DeletionPlan:
+    """Remove one profile's whole world, permanently. Returns what went.
+
+    `confirm` must be the profile's own slug, typed back exactly. The check
+    lives HERE and not only in the argument parser: a script, the reader-serve
+    door or a future dev portal must not be able to reach the rmtree by
+    skipping the CLI — a guard that only one caller honours is a convention,
+    not a guard.
+
+    Everything else is `_resolve_deletable_root`'s job, on resolved paths.
+
+    OBSERVED, NOT ASSUMED (QA F-3, 2026-08-02): the returned plan carries
+    `survivors` — whatever was on disk again the instant `rmtree` returned.
+    QA sandboxed a delete against a LIVE serve of the same profile and the
+    world partially came back: `server.serve` opens the database per request
+    rather than holding a handle, so the very next HTTP request re-created
+    `profiles/<slug>/data/newslens.db` moments after the CLI had printed
+    "(gone)". A verb that reports an outcome it did not check is the thing
+    this milestone exists to stop, so it checks.
+
+    This is the CHEAP half of that finding and it is honest about being so:
+    a resurrection that lands AFTER this stat is not observable from here.
+    Refusing to delete a profile that is being served needs a lockfile or
+    pidfile in every profile root — new machinery, a new file in every world,
+    a design question — and is tracked as the follow-up, not smuggled in here.
+    """
+    slug = paths.normalize_profile(profile)
+    if confirm != slug:
+        raise ProfileDeleteRefused(
+            f"refusing: this deletes profile {slug!r} permanently — its "
+            "database, corpus, artifacts, spend ledger, memory.md and "
+            f"sources.yaml. Type the slug back to confirm (confirm={slug!r}, "
+            f"got {confirm!r}). Nothing was changed.")
+    plan = deletion_plan(slug, anchor)
+    shutil.rmtree(plan.real_root)
+    plan.survivors = _survivors(plan.real_root)
+    return plan
+
+
+def _survivors(root: Path, limit: int = 8) -> Tuple[str, ...]:
+    """What is on disk under `root` right now — read-only, lstat only, capped.
+
+    Called immediately after `rmtree`. An empty tuple means the removal stuck
+    at the moment we looked; anything else is a world that came back (a live
+    serve is the known cause) and the caller must not say "(gone)"."""
+    if not os.path.lexists(root):
+        return ()
+    found = [str(root)]
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in sorted(dirnames) + sorted(filenames):
+            found.append(os.path.join(dirpath, name))
+            if len(found) >= limit:
+                return tuple(found)
+    return tuple(found)
 
 
 def migrate_all(anchor: Optional[Path] = None) -> Dict[str, List[str]]:

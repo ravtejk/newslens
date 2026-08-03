@@ -717,7 +717,7 @@ def _needs_reexec(prefix: str, venv_dir: "Path", marker: str) -> bool:
     return Path(prefix).resolve() != Path(venv_dir).resolve()
 
 
-def _ensure_runtime() -> None:
+def _ensure_runtime(tool: str = "persona") -> None:
     """Re-exec into the project venv when the current interpreter cannot run.
 
     `scripts/persona-*` carry `#!/usr/bin/env python3` like every other
@@ -726,6 +726,11 @@ def _ensure_runtime() -> None:
     these ones re-exec into `.venv/bin/python` instead, and if that is not
     possible they say which interpreter to use. A tool whose failure mode is a
     stack trace about `yaml` teaches nothing about what to do next.
+
+    `tool` only names the speaker in the fallback sentence — NL-132-B's
+    reader-serve launcher has the same `#!/usr/bin/env python3` problem and the
+    same fix, and a second copy of this function would be a second thing to
+    keep true.
 
     This module stays stdlib-only at IMPORT time (db.py's rule) — the import of
     yaml is lazy, inside load() — so the launcher can always reach this
@@ -742,7 +747,7 @@ def _ensure_runtime() -> None:
                                        os.environ.get(_REEXEC_MARKER, "")):
         env = dict(os.environ, **{_REEXEC_MARKER: "1"})
         os.execve(str(venv), [str(venv)] + sys.argv, env)   # never returns
-    print(f"persona: this tool needs the project's dependencies (PyYAML) and "
+    print(f"{tool}: this tool needs the project's dependencies (PyYAML) and "
           f"{sys.executable} does not have them. Run it with the checkout's "
           f"interpreter:\n    {venv} {' '.join(sys.argv)}", file=sys.stderr)
     raise SystemExit(2)
@@ -846,10 +851,15 @@ def provision_main(argv: Optional[List[str]] = None) -> int:
             # hit "already exists — left untouched" and exit 0 over a zero-tag,
             # un-rankable reader. Say which of the two happened.
             if profiles.exists(persona.slug):
+                # NL-132-B fix loop 1 (QA F-8): this used to end "delete the
+                # directory by hand" — the `rm -rf` beside the founder's own
+                # world that `profile delete` exists to replace. Same fix as
+                # profiles.create's refusal, same reason.
                 print(f"  {persona.slug}: INCOMPLETE — the world WAS created "
                       "before this failure and is still on disk. Left there on "
-                      "purpose; inspect it, then delete the directory by hand "
-                      "to re-mint.", file=sys.stderr)
+                      "purpose; inspect it, then `newslens profile delete "
+                      f"{persona.slug} --confirm {persona.slug}` to re-mint.",
+                      file=sys.stderr)
             else:
                 print(f"  {persona.slug}: nothing was created.",
                       file=sys.stderr)
@@ -863,8 +873,9 @@ def provision_main(argv: Optional[List[str]] = None) -> int:
         if not res.ok:
             print(f"  {persona.slug}: INCOMPLETE — the world exists but its "
                   "reader's tags are only partly applied. Left on disk on "
-                  "purpose; inspect it, then delete the directory by hand to "
-                  "re-mint.", file=sys.stderr)
+                  "purpose; inspect it, then `newslens profile delete "
+                  f"{persona.slug} --confirm {persona.slug}` to re-mint.",
+                  file=sys.stderr)
             rc = 1
     if rc == 0:
         print("\nnext: scripts/persona-ready --all")
