@@ -26,10 +26,20 @@ from newslens import analysis, memory, paths, ranking
 # (11,198 source_items / 175 cluster records) on 2026-08-02. They are the
 # bound's stated PRECONDITION, not decoration: the cap bounds cluster SHAPE,
 # these bound per-key LENGTH, and the margin is a ceiling only under both.
-TITLE_MAX = 183      # max(len(source_items.title))
-OUTLET_MAX = 41      # max(len(source_items.outlet))
-HOST_MAX = 27        # max url host length
-TOPIC_MAX = 64       # max(len(memory.topic))
+#
+# NL-139 (2026-08-02, gate ruling R-B) converted two of those preconditions
+# into ENFORCED clamps, so this pin's worst case now reads them from the
+# shipped constants instead of from an observation: `analysis.
+# SONAR_TITLE_MAX_CHARS` for vendor titles and `memory.TOPIC_MAX_CHARS` for
+# thread names. The numbers below are LARGER than the observations they
+# replace (200 > 183, 80 > 64) — the worst case measured here therefore grew,
+# on purpose, and is now a bound rather than a bet. INGEST's maxima stay
+# observations, because ingest is the one residue owner still unclamped.
+TITLE_MAX = 183      # max(len(source_items.title)) — INGEST, still unclamped
+OUTLET_MAX = 41      # max(len(source_items.outlet)) — his own sources.yaml
+HOST_MAX = 27        # max url host length — INGEST, still unclamped
+SONAR_TITLE = analysis.SONAR_TITLE_MAX_CHARS   # NL-139: enforced, not observed
+TOPIC_MAX = memory.TOPIC_MAX_CHARS             # NL-139: enforced, not observed
 
 
 def _worst_source_map(n_items, n_priors=None):
@@ -37,9 +47,16 @@ def _worst_source_map(n_items, n_priors=None):
 
     Worst on every axis at once: every key full-text (the longest `kind`
     string), every key on ONE host (maximal sibling lists — the quadratic),
-    every title/outlet at its all-time maximum, plus the 8 Sonar results
+    every title/outlet at its all-time maximum, plus the Sonar results
     `_sonar_verify` admits landing on that SAME host (so they join the sibling
     list rather than starting their own), plus the prior-briefing keys.
+
+    NL-139: the Sonar titles and the thread names are now AT THEIR CLAMPS
+    rather than at an observed maximum, and the count is read from
+    `analysis.SONAR_MAX_RESULTS` rather than typed as 8. The other branch of
+    the sibling quadratic — Sonar keys holding a maximal host of their OWN,
+    which is the binding one once titles are clamped — is measured in
+    tests/test_nl139_byte_clamps.py, where the host clamp that closes it lives.
     """
     if n_priors is None:
         n_priors = memory.CONTEXT_CAP
@@ -52,8 +69,9 @@ def _worst_source_map(n_items, n_priors=None):
     records = [analysis.FetchRecord(
         url=it["url"], source_name=outlet, tier="full", outcome=analysis.OK,
         attempted=True, title=title, text="x" * 4000) for it in items]
-    sonar = [{"url": "https://%s/s%d" % (host, i), "title": title,
-              "date": "2026-08-02", "snippet": "s" * 4000} for i in range(8)]
+    sonar = [{"url": "https://%s/s%d" % (host, i), "title": "T" * SONAR_TITLE,
+              "date": "2026-08-02", "snippet": "s" * 4000}
+             for i in range(analysis.SONAR_MAX_RESULTS)]
     priors = [{"date": "2026-08-02", "text": "p" * 4000, "thread": "M" * TOPIC_MAX}
               for _ in range(n_priors)]
     return analysis.build_source_map(records, items, sonar, priors)

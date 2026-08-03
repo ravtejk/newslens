@@ -1395,14 +1395,18 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     # every tier, where the override callout used to sit: the "why am I seeing
     # this" answer arrives before the story, which is NL-117's whole point.
     #
-    # It REPLACES the override note. That block read override_label — which
-    # ranking.py:1320 already stores as OVERRIDE_LABEL_PREFIX + the ranker's
-    # prose reason — and then appended world_impact_reason, THE SAME TEXT, in a
-    # <span class="reason"> with no separator between them. The principal's
-    # fresh1 specimen (2026-08-02) read "…energy prices.Pause in potential…".
-    # The double-render dies with the furniture: the line is now his two-part
-    # format and the ranker's full prose reason is off the front page entirely
-    # (still persisted on the slot; still rendered, labeled, in the deep view).
+    # It REPLACES the override note. That block read the slot's stored
+    # `override_label` (a prose prefix + the ranker's one-sentence reason) and
+    # then appended `world_impact_reason`, THE SAME TEXT, in a <span
+    # class="reason"> with no separator between them. The principal's fresh1
+    # specimen (2026-08-02) read "…energy prices.Pause in potential…".
+    #
+    # NL-138 (his ruling ④, same day) finished the job F1 started: the ranker's
+    # prose reason is gone from the pipeline entirely — not written, not
+    # stored, not rendered anywhere, including the deep view that briefly held
+    # it. Both fields this comment used to name are deleted from RankedSlot.
+    # This line is now the ONLY answer any surface gives to "why am I seeing
+    # this", which is what "just once" was always supposed to mean.
     parts.append(_why_chosen_html(slot, followed_writers))
 
     # NL-68 item 6: the visible "The Lead" kicker DIES — scale + placement carry
@@ -3924,17 +3928,21 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
         ctx.append('<p class="sc-threads">Tracked threads: '
                    f'{_e(", ".join(threads))}</p>')
     ctx.append(f'<p class="sc-herefor">Here for: {_e(_here_for(slot))}.</p>')
-    # NL-134 F3: the ranker's FULL prose reason lives HERE. The front page shows
-    # only the short why-chosen line now (the principal's spec), but provenance
-    # is not destroyed — the reason stays persisted on the slot and surfaces on
-    # this context surface, clearly labeled as what it is. Override-only (a
-    # matched story's pick is already explained by its matches) and empty-safe:
-    # an older row without the field renders nothing, never a placeholder.
-    if slot.get("override"):
-        full_reason = (slot.get("world_impact_reason") or "").strip()
-        if full_reason:
-            ctx.append(f'<p class="sc-reason">{_e(labels.WHY_FULL_REASON)} '
-                       f'{_e(full_reason)}</p>')
+    # NL-138 (principal's ruling ④, DECISIONS 2026-08-02): the WHY_FULL_REASON
+    # block is DELETED. NL-134 F3 had parked the ranker's full prose reason
+    # here — off the front page but preserved, labeled, as provenance. His
+    # accuracy finding retired that compromise a few hours later: the sentence
+    # is not provenance, it is a claim about the reader's interests that the
+    # model was never in a position to make ("implies the user had global oil
+    # … as one of their topics, which they didn't"). Preserving it on a quieter
+    # surface preserves the same inaccuracy in smaller type.
+    #
+    # Provenance is NOT destroyed, because the true provenance is structured
+    # and all of it renders above: matched topics, tracked threads, and the
+    # Here-for rationale — plus world_impact and the override flag in the
+    # ranking_runs ledger the day-14 calibration actually reads. Old rows still
+    # carry `world_impact_reason` in their story_slots JSON; nothing reads it,
+    # so an archived edition's deep view renders exactly what a fresh one does.
     out.append(f'<div class="deep-section" id="{story_anchor}-context">'
                f'<h2 class="deep-section-label">{_e(labels.DEEP_WHY_SEEING)}</h2>'
                + "".join(ctx) + "</div>")
@@ -4467,10 +4475,52 @@ class Handler(BaseHTTPRequestHandler):
             con.close()
 
     def _topic_arg(self, body: Dict) -> str:
+        """The posted thread name, as a MEMORY KEY (NL-139 fix loop 1, QA F-1).
+
+        Clamped HERE, at the door, because everything below this line uses the
+        value to COMPARE against stored rows, to STORE, to ECHO back, or to
+        UNFOLLOW — and storage is clamped. A caller keying on the raw string
+        speaks a different key from the database, and that does not fail
+        loudly: it reads as "no such thread".
+
+        The bug that put this here: `_seed_thread`'s RESUMED-vs-NEW predicate
+        matched `lower(topic) = lower(<raw headline>)`. For a canonical topic
+        over `memory.TOPIC_MAX_CHARS` — the founder's story_slots carry titles
+        to 108 chars today, against an 80 clamp — the predicate MISSED the row
+        its own seed had just created, so an unfollow→refollow took the NEW
+        landing on an EXISTING thread: `_set_altitude_columns` overwrote
+        altitude / disclosure / alt_label and the handler answered
+        `seeded: True`, which LICENSES THE SETTLE TO RE-AIM A THREAD THE READER
+        ALREADY HAD. That is the exact property gate F4 / QA-3 exists to
+        protect, and the one `_seed_thread`'s own docstring promises ("the
+        settle must never re-aim a thread whose identity someone already
+        decided").
+
+        This is the choke point for every topic-keyed endpoint — follow,
+        follow-seed, follow-settle, dismiss, revive, delete, note — so ONE
+        clamp makes predicate, storage, response and unfollow speak one key.
+        Callers that ALSO need the raw string use `_raw_topic_arg` and say why
+        in place.
+
+        The SEPARATOR rejection stays AHEAD of the clamp: a malformed name is
+        refused, never silently repaired into a legal one."""
         topic = str(body.get("topic") or "").strip()
         if memory.SEPARATOR in topic:
             return ""
-        return topic
+        return memory.clamp_topic(topic)[0]
+
+    def _raw_topic_arg(self, body: Dict) -> str:
+        """The posted name UNCLAMPED — for the two uses that are a STORY
+        identity rather than a memory key:
+
+          * `origin_story`, which `_origin_follow_row` / `_resolve_guard_row`
+            match at RENDER time against raw `story_slots` titles. Clamping it
+            would break origin-card recognition for every long-titled story —
+            a second regression in the shape of the first.
+          * the settle's model input, which should see the whole headline.
+
+        Never use this to look up, store, or echo a thread NAME."""
+        return str(body.get("topic") or "").strip()
 
     def _api_follow(self, body: Dict) -> None:
         topic = self._topic_arg(body)
@@ -4513,7 +4563,18 @@ class Handler(BaseHTTPRequestHandler):
             disclosure=disclosure, alt_label=alt_label, confidence=confidence,
             source=source, origin_story=origin_story,
             last_referenced_briefing_id=ref_id)
-        return {"ok": True, "outcome": outcome, "topic": name, "thread_id": tid}
+        # NL-139 fix loop 1 (QA F-1): echo the STORED topic, read back from the
+        # row rather than re-derived from `name`. `add_thread_at_altitude`
+        # clamps, so returning `name` handed the client a key the database does
+        # not hold — and the client keys its unfollow/settle calls on this
+        # value, so the divergence travelled. Read-back rather than
+        # clamp_topic(name) on purpose: the response then reports what IS
+        # stored, which stays true if the storage rule ever changes again.
+        row = con.execute("SELECT topic FROM memory WHERE id = ?",
+                          (tid,)).fetchone()
+        stored = row["topic"] if row is not None else name
+        return {"ok": True, "outcome": outcome, "topic": stored,
+                "thread_id": tid}
 
     def _api_follow_seed(self, body: Dict) -> None:
         """THE TAP — NL-17-M1c, the thread model's first half.
@@ -4530,10 +4591,16 @@ class Handler(BaseHTTPRequestHandler):
         headline = self._topic_arg(body)
         if not headline:
             return self._send_json({"ok": False, "error": "topic required"}, 400)
+        # NL-139 fix loop 1: `headline` is now the CLAMPED memory key (every
+        # predicate, store and echo below speaks it). `raw_topic` is the story's
+        # canonical topic as posted — needed unclamped because origin_story is
+        # a STORY identity matched at render time against raw story_slots
+        # titles, not a thread name.
+        raw_topic = self._raw_topic_arg(body)
         # data-origin is the raw headline (the resting card carries both — see
-        # _follow_control); the story's canonical topic (`headline` here, the
+        # _follow_control); the story's canonical topic (`raw_topic`, the
         # data-topic) is the origin key we STORE, and both are match keys.
-        origin = str(body.get("origin") or "").strip() or headline
+        origin = str(body.get("origin") or "").strip() or raw_topic
         briefing_date = str(body.get("briefing_date") or "").strip() or None
         # XOR / recognition guard (FIX-1): a tap on an ALREADY-followed story is
         # the steady state, not a fresh follow. Return the committed row — never
@@ -4552,13 +4619,15 @@ class Handler(BaseHTTPRequestHandler):
                 "disclosure": existing.get("disclosure") or "",
                 "alt_label": existing.get("alt_label") or ""})
         out = self._with_memory(
-            lambda con: self._seed_thread(con, headline, briefing_date))
+            lambda con: self._seed_thread(con, headline, briefing_date,
+                                          origin_story=raw_topic))
         if out.get("ok") is False:
             return self._send_json(out)          # R-WRITE — nothing followed
         return self._send_json(out)
 
     def _seed_thread(self, con, headline: str,
-                     briefing_date: Optional[str]) -> Dict:
+                     briefing_date: Optional[str],
+                     origin_story: str = "") -> Dict:
         """Commit the story-seeded thread. TWO landings, and the difference is
         the whole reason this is not one call to _commit_altitude:
 
@@ -4582,11 +4651,22 @@ class Handler(BaseHTTPRequestHandler):
         re-seeded a 12-entry thread HE named, dropped its resume clause, and let
         the settle rename it. A row with no altitude never settled and was never
         renamed; it comes back BARE, which is the honest unmigrated render, and
-        the settle stays out of it."""
+        the settle stays out of it.
+
+        NL-139 fix loop 1 (QA F-1): `headline` arrives CLAMPED from
+        `_topic_arg`, which is what makes the predicate below able to find the
+        row this function's own NEW landing stored. Keyed on the raw name it
+        missed every canonical topic over TOPIC_MAX_CHARS, and the miss was
+        silent — it looked exactly like "never followed", so the NEW landing
+        ran on an existing thread and answered `seeded: True`. `topic` is
+        echoed from the STORED row for the same reason: a response carrying a
+        key the client cannot use to unfollow is the same divergence one layer
+        out. `origin_story` stays RAW — it is a story identity, not a thread
+        name (see `_raw_topic_arg`)."""
         prior = None
         try:
             prior = con.execute(
-                "SELECT id, altitude, disclosure, alt_label FROM memory"
+                "SELECT id, topic, altitude, disclosure, alt_label FROM memory"
                 " WHERE lower(topic) = lower(?)", (headline,)).fetchone()
         except sqlite3.OperationalError:      # pre-0019 DB — no altitude columns
             prior = None
@@ -4597,7 +4677,7 @@ class Handler(BaseHTTPRequestHandler):
                 last_referenced_briefing_id=self._ref_id_for(con, briefing_date))
             kept = len(memory_core.ledger_for_thread(con, prior["id"]))
             return {"ok": True, "outcome": outcome, "seeded": False,
-                    "state": "committed", "topic": headline,
+                    "state": "committed", "topic": prior["topic"],
                     "thread_id": prior["id"],
                     "altitude": _row_col(prior, "altitude"),
                     "disclosure": _row_col(prior, "disclosure"),
@@ -4605,7 +4685,8 @@ class Handler(BaseHTTPRequestHandler):
                     "resumed": outcome == "revived", "kept": kept}
         out = self._commit_altitude(
             con, name=headline, altitude="narrow", source="seed",
-            origin_story=headline, briefing_date=briefing_date)
+            origin_story=origin_story or headline,
+            briefing_date=briefing_date)
         out.update({"state": "committed", "seeded": True, "altitude": "narrow",
                     "disclosure": "", "alt_label": ""})
         return out
@@ -4637,8 +4718,15 @@ class Handler(BaseHTTPRequestHandler):
         headline = self._topic_arg(body)
         if not headline:
             return self._send_json({"ok": False, "error": "topic required"}, 400)
-        origin = str(body.get("origin") or "").strip() or headline
-        current = str(body.get("topic_current") or "").strip() or headline
+        # NL-139 fix loop 1 (QA F-1) — the settle needs BOTH keys, and mixing
+        # them up is how the seed lane broke. `raw_topic` is the story identity
+        # (origin_story matching + the model's own input, which should see the
+        # whole headline); `current` is a MEMORY KEY, so it is clamped like any
+        # other thread name before `_resolve_guard_row` compares it.
+        raw_topic = self._raw_topic_arg(body)
+        origin = str(body.get("origin") or "").strip() or raw_topic
+        current = memory.clamp_topic(
+            str(body.get("topic_current") or "").strip())[0] or headline
         # Nothing to settle onto: the seed is gone (unfollowed mid-settle, or
         # never landed). Silence is the honest answer — re-creating the follow
         # here would resurrect an act the reader just undid.
@@ -4682,7 +4770,11 @@ class Handler(BaseHTTPRequestHandler):
                 est_usd=est_usd, cap_usd=cap_usd), 409)
         try:
             res = follow_altitude.resolve_altitude(
-                follow_altitude.ThreadInput(thread_id=None, topic=headline),
+                # NL-139 fix loop 1: the MODEL gets the whole headline. This is
+                # the settle's evidence, not a memory key — truncating it would
+                # hand the namer less story to name from for no bound benefit
+                # (nothing here is stored).
+                follow_altitude.ThreadInput(thread_id=None, topic=raw_topic),
                 retry_transport=False)   # R3: a reader waits — degrade on the
                                          # first timeout window, never retry to ~25s
         except Exception as exc:  # noqa: BLE001 — AltitudeError/LaneUnavailable/transport
@@ -4696,10 +4788,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": True, "state": "unsettled",
                                     "settled": False})
         name, _cls = follow_altitude.split_qualifier(res.disclosure)
+        # NL-139 fix loop 1: this becomes a STORED thread name, and its first
+        # two sources are MODEL output. `move_follow_altitude` clamps it (door
+        # 5) so the column is bounded either way; the fallback uses the clamped
+        # `headline` rather than the raw so the no-name case stores the same
+        # key the seed already stored instead of a longer one that would then
+        # rename the thread for no reason.
         name = name or res.primary_entity or headline
         out = self._with_memory(lambda con: self._settle_onto(
             con, from_topic=seeded["topic"], name=name, res=res,
-            origin_story=headline), verb="follow")
+            origin_story=raw_topic), verb="follow")
         if out.get("ok") is False:
             # The re-aim could not be written. The SEEDED follow still stands —
             # so this is not ○ and it is not loud: it is the same silence as any
@@ -4733,8 +4831,21 @@ class Handler(BaseHTTPRequestHandler):
             primary_entity=res.primary_entity, disclosure=res.disclosure,
             alt_label=res.alt_label, confidence=res.confidence, source="auto",
             log_correction=False, initiator="org")
-        return {"ok": True, "outcome": "settled", "topic": name,
-                "thread_id": survivor if survivor else row["id"]}
+        tid = survivor if survivor else row["id"]
+        # NL-139 fix loop 2 (QA R-1): echo the STORED topic. This was the one
+        # lane that missed the read-back rule the rest of the perimeter
+        # follows — `name` here is MODEL output, so a >TOPIC_MAX_CHARS settle
+        # name stored 80 chars and announced 139. Functionally absorbed today
+        # (every verb the client makes next passes a clamped door, so the raw
+        # key still resolves — QA executed that), which is exactly why it is
+        # fixed as a CONTRACT rather than as a bug: the client is told the
+        # thread's new name, and a name the database does not hold is the
+        # wrong thing to say even when nothing downstream trips over it.
+        settled = con.execute(
+            "SELECT topic FROM memory WHERE id = ?", (tid,)).fetchone()
+        return {"ok": True, "outcome": "settled",
+                "topic": settled["topic"] if settled else name,
+                "thread_id": tid}
 
     def _api_follow_at(self, body: Dict) -> None:
         """A reader PICK at a chosen altitude (a low-confidence option, or a
@@ -4747,7 +4858,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": "name required"}, 400)
         if altitude not in memory.STORED_ALTITUDES:
             return self._send_json({"ok": False, "error": "bad altitude"}, 400)
-        from_topic = str(body.get("from_topic") or "").strip()
+        # NL-139 fix loop 1 (QA F-1, same class one endpoint over — this route
+        # does NOT read `topic`, so `_topic_arg` never saw it). BOTH values are
+        # memory keys: `name` becomes a stored thread name, `from_topic`
+        # RESOLVES the row to move. Unclamped, a switch away from a >80-char
+        # thread found no row and fell through to the CREATE branch — a
+        # divergent second active follow for one story, which is precisely the
+        # double the XOR guard exists to prevent. `origin` below stays raw: it
+        # is a story identity (see _raw_topic_arg).
+        name = memory.clamp_topic(name)[0]
+        from_topic = memory.clamp_topic(
+            str(body.get("from_topic") or "").strip())[0]
         disclosure = str(body.get("disclosure") or "")
         alt_label = str(body.get("alt_label") or "")
         primary_entity = str(body.get("primary_entity") or "")
@@ -4769,8 +4890,14 @@ class Handler(BaseHTTPRequestHandler):
                         con, row["id"], new_name=name, altitude=altitude,
                         primary_entity=primary_entity, disclosure=disclosure,
                         alt_label=alt_label, source="pick")
-                    return {"ok": True, "outcome": "moved", "topic": name,
-                            "thread_id": survivor if survivor else row["id"]}
+                    tid = survivor if survivor else row["id"]
+                    # NL-139 fix loop 1: echo the STORED name, same reason as
+                    # _commit_altitude — the client keys its next call on this.
+                    moved = con.execute(
+                        "SELECT topic FROM memory WHERE id = ?", (tid,)).fetchone()
+                    return {"ok": True, "outcome": "moved",
+                            "topic": moved["topic"] if moved else name,
+                            "thread_id": tid}
             return self._commit_altitude(
                 con, name=name, altitude=altitude, primary_entity=primary_entity,
                 disclosure=disclosure, alt_label=alt_label, source="pick",
@@ -4814,9 +4941,14 @@ class Handler(BaseHTTPRequestHandler):
         topic = self._topic_arg(body)
         if not topic:
             return self._send_json({"ok": False, "error": "topic required"}, 400)
+        # NL-139: 'added-truncated' is a SUCCESSFUL add whose stored name is
+        # shorter than the one posted (memory.TOPIC_MAX_CHARS). Listing it here
+        # is not cosmetic — omitted, this endpoint would answer ok:false for a
+        # revive that actually happened.
         self._send_json(self._with_memory(
             lambda con: {"ok": memory.add_thread(con, topic) in
-                         ("revived", "already-active", "added")}))
+                         ("revived", "already-active", "added",
+                          "added-truncated")}))
 
     def _api_delete(self, body: Dict) -> None:
         topic = self._topic_arg(body)

@@ -56,6 +56,10 @@ from newslens import (config, db, follow_altitude as fa, labels, memory, paths,
 
 class _FollowHandler:
     _topic_arg = server.Handler._topic_arg
+    # NL-139 fix loop 1: the seed/settle handlers now also read the
+    # UNCLAMPED name for origin_story + the model's input, so the
+    # double has to carry both accessors.
+    _raw_topic_arg = server.Handler._raw_topic_arg
     _with_memory = server.Handler._with_memory
     _ref_id_for = server.Handler._ref_id_for
     _commit_altitude = server.Handler._commit_altitude

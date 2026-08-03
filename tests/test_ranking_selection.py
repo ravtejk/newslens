@@ -201,7 +201,17 @@ def test_override_cap_is_one_even_with_two_qualifying_zero_clusters():
     assert slots[0].override is True
 
 
-def test_override_label_carries_prefix_and_reason_and_only_on_the_override():
+def test_the_override_is_marked_by_its_flag_and_only_on_the_override():
+    """NL-138 (ruling ④ 2026-08-02) replaced this test's SUBJECT. It asserted
+    `override_label == OVERRIDE_LABEL_PREFIX + <the model's sentence>`; the
+    constant and the field are both deleted, because that sentence was a
+    world-impact claim landing on the page as a claim about the reader's own
+    interests.
+
+    The invariant that mattered here survives and is what is asserted now: the
+    mark lands on exactly one slot, the one the gate fired for, and on no
+    other. The label composed FROM that flag is pinned at every surface that
+    renders it in tests/test_nl138_override_reason_death.py."""
     clusters = [
         cluster([1], title="Topic", tags=TOPIC, impact=5),
         cluster([2], title="Zero big", impact=9, reason="Global systemic thing"),
@@ -210,10 +220,9 @@ def test_override_label_carries_prefix_and_reason_and_only_on_the_override():
     slots, _ = ranking.select_slots(clusters, items, set())
     override_slots = [s for s in slots if s.override]
     assert len(override_slots) == 1
-    assert override_slots[0].override_label == (
-        ranking.OVERRIDE_LABEL_PREFIX + "Global systemic thing."
-    )
-    assert all(s.override_label is None for s in slots if not s.override)
+    assert override_slots[0].story_title == "Zero big"
+    assert not any(s.override for s in slots if s.story_title != "Zero big")
+    assert not hasattr(override_slots[0], "override_label")
 
 
 def test_override_consumes_one_of_the_seven_slots():
@@ -414,10 +423,12 @@ def test_end_to_end_rank_persists_archives_and_tells_the_truth(
 
     report = ranking.run_rank(date="2026-07-04", con=migrated_con, cfg=rank_cfg(), env=env)
 
-    # Slots: tagged primary first, zero-match override second (labeled).
+    # Slots: tagged primary first, zero-match override second (flagged — NL-138
+    # took the stored prose label off the slot; the disclosure is composed from
+    # this flag at render time).
     assert [s.story_title for s in report.slots] == ["Tagged story", "Zero-match shock"]
     assert report.slots[1].override is True
-    assert report.slots[1].override_label.startswith(ranking.OVERRIDE_LABEL_PREFIX)
+    assert report.slots[0].override is False
     assert report.override_fired and report.override_pool_size == 1
     # Corroboration: two named outlets on the tagged story; wire item excluded.
     assert report.slots[0].corroboration_label == "Reported by 2 named outlets"

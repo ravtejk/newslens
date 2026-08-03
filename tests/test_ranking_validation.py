@@ -154,7 +154,9 @@ def test_boundary_impacts_accepted_and_floats_rounded():
     [
         ("story_title", "", "story_title missing/empty"),
         ("summary", "  ", "summary missing/empty"),
-        ("world_impact_reason", "", "world_impact_reason missing/empty"),
+        # NL-138: world_impact_reason is neither required nor read. Its
+        # required-ness is now pinned in the OTHER direction, in
+        # tests/test_nl138_override_reason_death.py.
         ("item_ids", [], "non-empty list of integers"),
         ("item_ids", ["1"], "non-empty list of integers"),
     ],
@@ -171,7 +173,7 @@ def test_all_problems_reported_not_just_the_first():
     """A retry/report is only actionable if EVERY problem is named."""
     bad = {
         "clusters": [
-            cluster([1, 99], reason=""),                       # invented id + empty reason
+            cluster([1, 99], impact=11),                      # invented id + bad score
             cluster([1], tags=[{"name": "nope", "level": "topic"}]),  # dupe id + bad tag
         ]
     }
@@ -180,7 +182,10 @@ def test_all_problems_reported_not_just_the_first():
     msg = str(excinfo.value)
     for fragment in (
         "invented item_ids [99]",
-        "world_impact_reason missing/empty",
+        # NL-138 swapped the empty-reason problem (retired) for an
+        # out-of-range score — a violation class that still exists, so the
+        # every-problem-named property stays measured on three clusters.
+        "world_impact must be a number 0-10",
         "item_ids [1] already used by another cluster",
         "not an exact listed tag",
     ):
@@ -435,7 +440,7 @@ def test_cluster_emptied_by_repair_is_dropped_whole_and_disclosed(llm):
         (cluster([1], tags=[{"name": "AI regulation", "level": "domain"}]),
          "not an exact listed tag"),
         (cluster([1], impact=11), "world_impact must be a number 0-10"),
-        (cluster([1], reason=""), "world_impact_reason missing/empty"),
+        # NL-138: the empty-reason row is retired with the field.
     ],
 )
 def test_repair_scope_other_violation_classes_still_hard_reject_end_to_end(

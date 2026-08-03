@@ -47,7 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import config, db, llm, memory, paths, ranking
+from . import config, db, labels, llm, memory, paths, ranking
 # NL-69: the repetition-word machinery moved to its home beside
 # has_predating_antecedent (single source of truth; the write-side self-mark in
 # migration 0014 shares it). Imported here so generate._REPETITION_RE and the
@@ -190,10 +190,35 @@ ACTIVE_VOICE = "A"
 VARIANT_A_PARITY = 0
 
 # --- Canonical strings (contract §5.7 / §5.2 / §5.8; verbatim, frozen) -------
-OVERRIDE_TEXT_LABEL = (
-    "**Outside your interests:** this story matches none of the tags or "
-    "threads steering your selection; it's here because {reason}"
-)
+#
+# ‼ FROZEN-SURFACE CHANGE, NL-138 — cited to the principal's ruling ④
+#   (DECISIONS 2026-08-02, "SEVEN-ITEM RULING SLATE"). Saying so loudly because
+#   §5.7 canonical strings are a frozen contract and a re-scope that arrives
+#   quietly is the failure mode.
+#
+#   WAS (frozen since M5):
+#       "**Outside your interests:** this story matches none of the tags or
+#        threads steering your selection; it's here because {reason}"
+#   where {reason} was the ranking model's one-sentence world_impact_reason.
+#
+#   The ruling kills that {reason} everywhere — generation, ledger, and every
+#   reader surface — because the sentence was written about WORLD importance
+#   and read as a claim about the READER'S interests. His finding, verbatim:
+#   it "implies the user had global oil or middle east stability or energy
+#   prices or international shipping as one of their topics, which they
+#   didn't." With the reason gone the old string cannot be filled, so the
+#   edition's override line RE-SCOPES to the ruled tag form — the same two-part
+#   vocabulary NL-134 F3 already ships on every front-page story, composed from
+#   labels.py so the markdown edition and the web front page can never drift:
+#
+#       **Chosen because:** Important World News
+#
+#   No placeholder remains: this is a constant now, not a template. The three
+#   consumers (assemble_narrative, moat_battery's conformance render, and the
+#   spoken-disclosure validator at validate_script) are re-pointed in the same
+#   diff, and `_override_reason` — the helper that unwrapped the stored prose —
+#   is deleted.
+OVERRIDE_TEXT_LABEL = f"**{labels.WHY_CHOSEN_BECAUSE}** {labels.WHY_WORLD_NEWS}"
 WINDOW_LINE = (
     "Generated {timestamp}. Covers items fetched {start} → {end}. NewsLens "
     "sees only its configured sources within this window."
@@ -855,11 +880,13 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str,
     }
 
 
-def _override_reason(slot: Dict) -> str:
-    label = slot.get("override_label") or ""
-    if label.startswith(ranking.OVERRIDE_LABEL_PREFIX):
-        return label[len(ranking.OVERRIDE_LABEL_PREFIX):].strip()
-    return label.strip() or "it cleared a high global-impact bar"
+# `_override_reason` is DELETED (NL-138, ruling ④). It unwrapped the stored
+# `override_label` back into the model's prose sentence for three consumers
+# (the markdown edition line, the writer's spoken-labels block, and the spoken
+# validator's presence check). All three now use the code-owned tag form; there
+# is no stored label left to unwrap. Its "it cleared a high global-impact bar"
+# fallback went with it — that string existed to cover an unparseable label,
+# and a constant cannot be unparseable.
 
 
 def _slot_budget_line(slot_n: int) -> str:
@@ -949,10 +976,15 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
         # is gone — _slot_budget_line already states MEDIUM for it.
         lines.append(f"working title (rewrite it): {s.get('story_title', '')}")
         lines.append(f"what happened (one line): {s.get('summary', '')}")
-        if s.get("world_impact_reason"):
-            lines.append(
-                f"ranking's significance seed (rephrase, never paste): {s['world_impact_reason']}"
-            )
+        # NL-138 (ruling ④): the "ranking's significance seed" line is GONE.
+        # It fed the ranker's one-sentence world_impact_reason to the writer as
+        # seed material for the "Why it matters" movement (content §5.1,
+        # ADR-0007 item 9). The field is no longer generated, so the line could
+        # only ever fire on an archived edition re-run — and re-seeding a new
+        # narrative from prose the ruling retired for a register error is
+        # exactly the leak the ruling's "generation itself" clause closes. The
+        # writer keeps every structured input below (tags, threads, ledger,
+        # baseline, watch-fors) plus the cluster's own summary and material.
         tags = ", ".join(t["name"] for t in s.get("matched_tags", [])) or "(none)"
         threads_m = ", ".join(s.get("matched_memory", [])) or "(none)"
         lines.append(f"matched tags: {tags} | matched threads: {threads_m}")
@@ -1704,7 +1736,9 @@ def assemble_narrative(
     for st, slot in zip(stories, slots):
         parts.append("---")
         if slot.get("override"):
-            parts.append(OVERRIDE_TEXT_LABEL.format(reason=_override_reason(slot)))
+            # NL-138: the constant IS the line now (no .format) — see the
+            # frozen-surface note on OVERRIDE_TEXT_LABEL.
+            parts.append(OVERRIDE_TEXT_LABEL)
             parts.append("")
         parts.append(f"**{st['headline']}**")
         parts.append("")
@@ -1900,7 +1934,18 @@ def build_labels_block(inputs: Dict, covered: Optional[set] = None) -> str:
         if covered is not None and int(n) not in covered:
             continue
         if s.get("override"):
-            lines.append(f"story {n}: OVERRIDE — reason: {_override_reason(s)}")
+            # NL-138 (ruling ④): the writer is no longer handed the ranker's
+            # prose reason to voice. The spoken disclosure now carries the same
+            # tag-form vocabulary the text edition and the front page carry —
+            # named here as the phrase the validator will look for, so the
+            # instruction and the check can never drift.
+            lines.append(
+                f"story {n}: OVERRIDE — this story matched none of the "
+                f"reader's topics or threads; say it was chosen as "
+                f"{labels.WHY_WORLD_NEWS.lower()}. The phrase "
+                f"'{labels.WHY_WORLD_NEWS.lower()}' must be spoken; the rest "
+                f"of the sentence is yours"
+            )
         if s.get("corroboration_count") == 1 and s.get("outlets"):
             lines.append(f"story {n}: SINGLE-SOURCE — outlet: {s['outlets'][0]}")
         for rv in s.get("revived_threads", []):
@@ -2159,12 +2204,33 @@ def validate_script(
         if covered is not None and int(n) not in covered:
             continue
         if s.get("override"):
-            reason = _override_reason(s)
-            reason_head = " ".join(reason.split()[:4]).rstrip(".,").lower()
-            if "outside your" not in low:
-                hard.append(f"story {n}: spoken override missing the outside-your-tags acknowledgment")
-            if reason_head and reason_head not in low:
-                hard.append(f"story {n}: spoken override missing its reason")
+            # ‼ FROZEN-SURFACE RE-SCOPE, NL-138 — principal's ruling ④
+            #   (DECISIONS 2026-08-02). See the OVERRIDE_TEXT_LABEL note above;
+            #   this is the spoken half of the same §5.7 contract change.
+            #
+            #   WAS: two hard checks — (1) the acknowledgment "outside your"
+            #   must be spoken, and (2) the first four words of the ranker's
+            #   prose reason must appear in the script.
+            #
+            #   Check (2) is not weakened, it is UNSATISFIABLE: there is no
+            #   prose reason left to look for. Check (1) folds into it rather
+            #   than surviving alongside, because the ruled tag form carries
+            #   the same fact in the vocabulary every other surface uses — a
+            #   story "chosen as Important World News" IS a story that matched
+            #   none of the reader's tags or threads (true by construction:
+            #   the override pool is the ZERO-personal-signal pool). Keeping a
+            #   second, differently-worded assertion would be the one thing
+            #   NL-134's "just once" spec forbids.
+            #
+            #   NET DISCLOSURE STRENGTH: unchanged. An override the episode
+            #   airs must still voice its disclosure or the script is retried;
+            #   what moved is which words satisfy it. build_labels_block hands
+            #   the writer this exact phrase, so instruction and check read the
+            #   same constant.
+            if labels.WHY_WORLD_NEWS.lower() not in low:
+                hard.append(
+                    f"story {n}: spoken override missing its "
+                    f"{labels.WHY_WORLD_NEWS!r} acknowledgment")
         for rv in s.get("revived_threads", []):
             date_needed = rv.get("last_covered")
             if date_needed and not any(f.lower() in low for f in _date_spoken_forms(date_needed)):

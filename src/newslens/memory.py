@@ -48,7 +48,78 @@ CONTEXT_CAP = 15           # spec §B: N most-recently-referenced active rows
 DORMANT_MATCH_CAP = 40     # dormant topics offered for match-only revival
 SEPARATOR = " — "          # topic/note split in file lines (em-dash, spaced)
 
+# NL-139 (NL-133 gate R-B): the topic LENGTH clamp. CONTEXT_CAP bounds how
+# MANY topics reach a prompt; nothing bounded how LONG one could be, and a
+# topic is the most leveraged string in the analysis prompt — each char costs
+# 30 chars of prompt at the worst renderable shape (CONTEXT_CAP lines in the
+# memory_context block, plus one prior-briefing P-key title per thread, both
+# capped at 15). Measured against `analysis.brief_bound_chars`, IN BOTH
+# REGIMES — labelled, because they are different numbers and the first version
+# of this comment quoted only the first as if it were operative (QA F-5, fix
+# loop 1):
+#   * OBSERVED-MAXIMA regime (other fields at their pre-clamp observed maxima):
+#     ceiling 112, first breach 113.
+#   * AT-THE-CLAMPS regime (the SHIPPED one — vendor titles at their 200
+#     clamp): ceiling 100, first breach 101.
+#
+# 80 is the value: 25% above 64, the all-time maximum topic length across the
+# founder's memory table, and 20 chars inside the SHIPPED ceiling — not the 32
+# the stale-regime reading suggested — so the invariant is not a knife-edge
+# (NL-133's own construction rule: floor from observed data, ceiling from the
+# bound, land inside both).
+#
+# TRUNCATED, and LOUDLY — this is the opposite call from the vendor clamps in
+# analysis.py. A thread name is the reader's own words, rendered back to him in
+# memory.md, the Following spine and every thread page; silently storing 80
+# characters of an 84-character name he wrote is the product renaming his
+# thread. So every truncation is disclosed: `SyncResult.truncated_topics` on
+# the file-sync path (surfaced by summary_lines like every other sync
+# disclosure) and the 'added-truncated' outcome on the verb path.
+#
+# Clamped at the DOOR, not at the INSERT. Both entry points normalise before
+# they look anything up, because `add_thread` resolves tombstones and
+# existing rows by `lower(topic)` and `plan_import` keys the file diff by
+# casefold — clamping later would make the lookup miss the row the insert
+# creates, and every re-sync would insert the same thread again.
+TOPIC_MAX_CHARS = 80
+
 VALID_STATUSES = ("active", "dormant", "dismissed_user")
+
+
+def clamp_topic(topic: str) -> Tuple[str, bool]:
+    """NL-139: (stored_name, was_truncated) — the ONE place a thread name is
+    shortened, so every door shortens it identically.
+
+    FIVE doors call it (the inventory grew in fix loop 1 — see door 5):
+
+      1. `parse_file`               memory.md, the principal's own file
+      2. `add_thread`               the CLI/UI verb
+      3. `add_thread_at_altitude`   the follow-from-story picker (keys on a
+                                    HEADLINE, so the likeliest to fire)
+      4. `cli.py`'s memory handler  runs its own INSERT, not add_thread
+      5. `move_follow_altitude`     the RENAME lane — the tree's only
+                                    `UPDATE memory SET topic`, and the one the
+                                    MODEL can drive (the background settle)
+
+    Doors 1-4 are the `INSERT INTO memory` sites; door 5 is why an
+    insert-only inventory is not the whole perimeter.
+
+    Each calls it BEFORE any casefold/lower() lookup it does — that ordering is
+    the whole design, not a detail: a clamp applied after the lookup would
+    create a row under one name and search for it under another.
+
+    THE CALLER PERIMETER IS PART OF THE CONTRACT (fix loop 1, QA finding F-1):
+    a caller that compares, echoes, or unfollows by a name it did NOT put
+    through this function is speaking a different key from storage, and the
+    divergence is SILENT — it reads as "no such thread" rather than as an
+    error. `server._topic_arg` is the door-side clamp for every topic-keyed
+    HTTP endpoint for exactly that reason.
+
+    `.rstrip()` because a cut mid-space leaves a trailing blank that would
+    then differ from the same name typed again."""
+    if len(topic) <= TOPIC_MAX_CHARS:
+        return topic, False
+    return topic[:TOPIC_MAX_CHARS].rstrip(), True
 
 # FIRST-RUN SEEDING IS KILLED (Stage-0 M1, 2026-07-25; M0 finding F1 / RED-1).
 #
@@ -165,6 +236,11 @@ class SyncResult:
     # failed the generation/identity precondition — when this is set, NEITHER
     # side was mutated (no import, no dormancy pass, no file rewrite).
     blocked_resurrections: List[str] = field(default_factory=list)
+    # NL-139: file lines whose thread name exceeded TOPIC_MAX_CHARS and was
+    # stored short. Rides the same never-silent contract as the guard lines
+    # above — the name the reader gets back is not the name he typed, so the
+    # sync says so, every time, whether or not the line also created a row.
+    truncated_topics: List[str] = field(default_factory=list)
     stale_refusal: Optional[str] = None
     imported: bool = True
     accepted_file: bool = False       # --accept-file overrode a stale file
@@ -186,6 +262,11 @@ class SyncResult:
         if self.stale_refusal:
             out.append(self.stale_refusal)
         out.extend(self.blocked_resurrections)
+        # NL-139: a shortened thread name belongs in the NARROW channel too.
+        # The server's follow/thread JSON surfaces exactly guard_lines(), and
+        # "we stored a different name than you typed" is precisely the class
+        # of fact that channel exists for.
+        out.extend(self.truncated_topics)
         return out
 
     def summary_lines(self) -> List[str]:
@@ -473,6 +554,12 @@ class ImportPlan:
     status_changes: List[Dict] = field(default_factory=list)
     dismissals: List[Dict] = field(default_factory=list)
     blocked: List[Dict] = field(default_factory=list)
+    # NL-139: disclosure lines for file topics parse_file shortened to
+    # TOPIC_MAX_CHARS. Deliberately NOT part of `is_empty`: a truncation is
+    # something that happened to the FILE's reading, not a pending edit to the
+    # database, and counting it as pending would flip a clean bootstrap into a
+    # stale refusal on a file that agrees with the DB in every stored byte.
+    truncated: List[str] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -512,6 +599,16 @@ def plan_import(con: sqlite3.Connection, entries: List[Dict]) -> ImportPlan:
     for e in entries:
         key = e["topic"].casefold()
         seen_keys.add(key)
+        # NL-139: collected for EVERY truncated line, not only the ones that
+        # insert. A line whose long name clamps onto a row that already exists
+        # creates no edit, but the file still said something the database did
+        # not store — and the sync's own file rewrite is about to replace that
+        # line with the short form.
+        if e.get("truncated_from"):
+            plan.truncated.append(
+                f"memory: thread name shortened to {TOPIC_MAX_CHARS} "
+                f"characters — stored {e['topic']!r}, memory.md said "
+                f"{e['truncated_from']!r}")
         row = by_key.get(key)
         if row is None:
             block = tombstone_block(con, e["topic"])
@@ -672,14 +769,33 @@ def parse_file(text: str) -> List[Dict]:
             if not topic:
                 problems.append(f"line {n}: empty topic")
                 continue
+            # NL-139 byte-clamp, DOOR 1 of 5 (see TOPIC_MAX_CHARS). BEFORE the
+            # casefold key below and before plan_import diffs on that key, so
+            # the clamped name is the one the whole import reasons about: the
+            # row it creates and the row a re-sync finds are the same row.
+            # Not a `problems` entry — an over-long thread name is a name, not
+            # a malformed file, and `problems` refuses the WHOLE import, which
+            # is the wrong trade for a file the principal hand-edits. The
+            # original travels on the entry so the sync can say what it did.
+            # Deliberately ahead of the duplicate check, not around it: two
+            # long names that clamp to the same string ARE a duplicate now,
+            # and it is the collision the file has to hear about.
+            original = topic
+            topic, was_cut = clamp_topic(topic)
+            truncated_from = original if was_cut else ""
             key = topic.casefold()
             if key in seen:
                 problems.append(
                     f"line {n}: duplicate topic {topic!r} (also under {seen[key]})"
+                    + (f" — this line was shortened to {TOPIC_MAX_CHARS} chars"
+                       f" from {truncated_from!r}" if truncated_from else "")
                 )
                 continue
             seen[key] = section
-            entries.append({"topic": topic, "note": note, "status": status})
+            entry = {"topic": topic, "note": note, "status": status}
+            if truncated_from:
+                entry["truncated_from"] = truncated_from
+            entries.append(entry)
             continue
         problems.append(f"line {n}: unrecognized line {line[:60]!r}")
     if problems:
@@ -816,6 +932,12 @@ def sync_memory(con: sqlite3.Connection, *,
         entries = parse_file(text)
         verdict, detail = _check_stamp(con, text)
         plan = plan_import(con, entries)
+        # NL-139: attached BEFORE the stale/bootstrap branching below, because
+        # the truncation happened at parse time and is true on every path —
+        # including the refusal path, where nothing else about the plan is
+        # applied but the reader still deserves to know his file names were
+        # read short.
+        result.truncated_topics = list(plan.truncated)
 
         if verdict == "bootstrap":
             # ONE-SHOT adoption of the pre-guard live file: adopt only when it
@@ -1049,9 +1171,23 @@ def prior_briefing_context(
 def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
                last_referenced_briefing_id: Optional[int] = None) -> str:
     """Start tracking (or revive) a thread. Returns 'added' | 'revived' |
-    'already-active'. `last_referenced_briefing_id` is the M7 follow-from-
-    story seam: the edition the follow came from (CLI passes nothing)."""
+    'already-active' | 'added-truncated'. `last_referenced_briefing_id` is the
+    M7 follow-from-story seam: the edition the follow came from (CLI passes
+    nothing).
+
+    NL-139: 'added-truncated' is 'added' plus the disclosure that the stored
+    name is shorter than the one handed in (see TOPIC_MAX_CHARS). It is a
+    fourth outcome rather than a flag because every caller already branches on
+    this return value, so a new state cannot be silently ignored by one of
+    them — and the follow-from-story seam is exactly where an over-long name
+    arrives, since it keys the thread on a HEADLINE."""
     now = _utc_now_iso()
+    # NL-139 byte-clamp, DOOR 2 of 5 (see TOPIC_MAX_CHARS). FIRST — ahead of
+    # lift_tombstone and the lower(topic) lookup below, both of which must
+    # resolve against the name that will actually be stored. Clamping at the
+    # INSERT instead would tombstone-lift one name and create another, and
+    # would make the second call with the same long name miss its own row.
+    topic, truncated = clamp_topic(topic)
     # NL-81 §5.1/§5.3 — THE EXPLICIT LIFT LANE. add_thread is a principal verb
     # surface (the CLI's revive path, the UI create/follow door, every altitude
     # commit), so reaching a tombstoned name HERE is the deliberate "bring it
@@ -1090,7 +1226,7 @@ def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
             (topic, (note or "").strip() or None, last_referenced_briefing_id,
              now, now, now),
         )
-    return "added"
+    return "added-truncated" if truncated else "added"
 
 
 # ---------------------------------------------------------------------------
@@ -1160,8 +1296,22 @@ def add_thread_at_altitude(con: sqlite3.Connection, name: str, *,
     if source not in ALTITUDE_SOURCES:
         raise ValueError(
             f"source must be one of {list(ALTITUDE_SOURCES)}, got {source!r}")
+    # NL-139 byte-clamp, DOOR 3 of 5 (see clamp_topic). This one is LOAD-BEARING,
+    # not defensive: add_thread stores the clamped name, and the lookup two
+    # lines down keys on `name` — with an over-long headline (the seed path's
+    # normal input) the unclamped lookup finds no row and `row["id"]` raises
+    # TypeError on the follow-from-story door. Clamping here means the add,
+    # the id lookup, the altitude columns and the commit event all name the
+    # same thread.
+    name, name_was_cut = clamp_topic(name)
     outcome = add_thread(
         con, name, last_referenced_briefing_id=last_referenced_briefing_id)
+    # add_thread sees an ALREADY-clamped name and so reports a plain 'added';
+    # the truncation happened here, and this door owes the same disclosure the
+    # others give. Only the created-a-row case carries it: a revive resolves to
+    # a row whose (short) name predates this call.
+    if name_was_cut and outcome == "added":
+        outcome = "added-truncated"
     row = con.execute(
         "SELECT id FROM memory WHERE lower(topic) = lower(?)", (name,)).fetchone()
     thread_id = row["id"]
@@ -1230,6 +1380,22 @@ def move_follow_altitude(con: sqlite3.Connection, thread_id: int, *,
     if altitude not in STORED_ALTITUDES:
         raise ValueError(
             f"altitude must be one of {list(STORED_ALTITUDES)}, got {altitude!r}")
+    # NL-139 byte-clamp, DOOR 5 — THE RENAME LANE (fix loop 1). The original
+    # door inventory (mine, and QA's re-derivation) enumerated `INSERT INTO
+    # memory` and found four. This is the tree's only `UPDATE memory SET topic`
+    # — a fifth way an unclamped name reaches the column the clamp exists to
+    # bound, and the most exposed of the five: on the SETTLE lane `new_name` is
+    # MODEL output (`follow_altitude.split_qualifier(res.disclosure)` via
+    # server `_settle_onto`), which is precisely the remote-authored class
+    # NL-139 is about.
+    #
+    # Clamped FIRST — ahead of the clash lookup, the rename tombstone's
+    # comparison, and the successor key it records — so the name that is
+    # STORED, the name a clash resolves against, and the key a stale file's old
+    # name is blocked from re-inserting are all ONE key. Clamping after the
+    # clash lookup would let two names that clamp together miss each other and
+    # then collide on the 0005 unique index.
+    new_name, _ = clamp_topic(new_name)
     row = con.execute(
         "SELECT id, topic, origin_story FROM memory WHERE id = ?",
         (thread_id,)).fetchone()

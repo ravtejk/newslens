@@ -586,16 +586,95 @@ MATERIAL_BUDGET_CHARS = 24_000
 # measures 77,164 chars against a 78,621-char bound — a real ceiling, not a
 # dominating guess. It is conditional on FIELD lengths, not on cluster shape:
 # fields far past their all-time maxima could still breach, and that residue
-# has three owners, none of them the ranker — ingest (feed titles, all-time
+# had THREE owners, none of them the ranker — ingest (feed titles, all-time
 # max 183), `_sonar_verify` (vendor titles/snippets/urls: count-clamped to 8,
 # NOT byte-clamped — 8 titles averaging >=366 chars breach cap 48 by 7), and
-# memory (topic inserts carry no length clamp). Byte-clamp follow-up tracked
-# (NL-133 gate R-B). Raising this constant is bound-safe but NOT money-free —
+# memory (topic inserts carry no length clamp).
+#
+# NL-139 2026-08-02 (NL-133 gate ruling R-B — the chartered byte-clamp) CLOSED
+# TWO OF THE THREE. `_sonar_verify` now truncates vendor titles at
+# SONAR_TITLE_MAX_CHARS and refuses a result whose URL host exceeds
+# SONAR_HOST_MAX_CHARS (below); `memory.TOPIC_MAX_CHARS` clamps topic inserts.
+# THE ONE REMAINING OWNER IS INGEST — feed titles and feed article URL hosts,
+# both remote-authored, neither clamped, 48 of each in the worst map. (The
+# map's third length input, the outlet NAME, is `source.name` straight from
+# the principal's own sources.yaml — config he writes, not a vendor field, so
+# it is not in this residue class at all.)
+#
+# POST-CLAMP WORST CASE, measured through the real constructors at
+# MAX_CLUSTER_ITEMS=48 with every clamped field AT its clamp and ingest at its
+# all-time maxima: 78,012 chars against the same 78,621 bound — 609 slack,
+# worst over BOTH sibling-list branches (Sonar keys sharing the cluster's host
+# vs. holding a maximal host of their own; the second branch is the binding
+# one and is why the host clamp exists). Derivation in
+# research/2026-08-02--nl138-build.md; the arithmetic lives in
+# tests/test_nl139_byte_clamps.py, derived from these constants.
+#
+# Raising this constant is bound-safe but NOT money-free —
 # bound_usd rises with it, so more slots skip under exhaustion (the coupling
 # test's failure message says the same); LOWERING it, or raising
 # MAX_CLUSTER_ITEMS, breaks the bound —
 # tests/test_nl133_cluster_item_cap.py holds the coupling from the constants.
 PROMPT_MARGIN_CHARS = 40_000
+
+# --- NL-139 vendor byte-clamps (NL-133 gate R-B) ----------------------------
+# Sonar returns SOMEONE ELSE'S bytes. `_sonar_verify` has always clamped the
+# COUNT (8 results); these clamp the LENGTH, which is what the bound above
+# actually integrates over. Each value is derived against that bound, and each
+# names which side of the honest-degradation line it lands on.
+#
+# TITLE — TRUNCATED, silently. It renders once per R key in `render_source_map`
+# (8 chars of prompt per char of title) and once in the material header. The
+# all-time observed maximum for ANY title in this product is 183 (11,198
+# ingested items); 200 sits above that, so the clamp cannot bite a headline
+# this product has ever seen, and it costs the bound 8*(200-183) = 136 chars.
+# Silent because the truncated string is read by the analysis MODEL off a
+# citable-key list, not by the reader: no user-meaningful claim is shortened,
+# and a warning per over-long vendor headline would be noise in the one
+# channel that exists for repairs the reader's edition actually inherits.
+# CEILINGS, IN BOTH REGIMES — labelled, because they are different numbers and
+# reading the wrong one over-budgets a future re-derivation (QA F-5, fix loop
+# 1; the first version of this comment quoted only the first as if operative):
+#   * OBSERVED-MAXIMA regime (every OTHER field at its pre-clamp observed max —
+#     how the NL-133 gate measured): ceiling 365. At 366 the bound breaks by 7
+#     chars, the gate's recorded breach, reproduced in the pin.
+#   * AT-THE-CLAMPS regime (the SHIPPED one — the other clamped fields at their
+#     clamps): ceiling 276, first breach 277. Real headroom above this constant
+#     is 76 chars, not 165.
+SONAR_TITLE_MAX_CHARS = 200
+# HOST — the result is DROPPED, and the drop is disclosed in the status line.
+# The URL's PATH never renders into the prompt; its HOST does, twice on every
+# R line plus once on every sibling line, and when the Sonar keys hold a host
+# of their own they form a second maximal sibling list: 16 chars of prompt per
+# char of host. 253 is the DNS maximum length of a hostname (RFC 1035/1123
+# octet limit) — a derived external ceiling, not a taste call, and one no REAL
+# host can exceed. So this clamp only ever fires on a URL whose host is not a
+# hostname at all.
+# CEILINGS, IN BOTH REGIMES (QA F-5): observed-maxima regime — ceiling 329,
+# first breach 330. AT-THE-CLAMPS regime (the shipped one) — ceiling 291, first
+# breach 292. Headroom above this constant is 38 chars, the TIGHTEST of the
+# three: the host clamp is the only one whose value comes from outside this
+# derivation, so it is the first to re-check if the margin ever moves.
+# DROPPED rather than truncated because truncating a URL does not shorten it,
+# it CHANGES it: a half-URL is a citation to somewhere else, and the map key
+# it builds would carry a fabricated outlet identity. Refusing one of eight
+# vendor results and saying so is the honest move.
+SONAR_HOST_MAX_CHARS = 253
+# SNIPPET — TRUNCATED at the material budget, and stated plainly: THE PROMPT
+# BOUND NEVER DEPENDED ON THIS. Snippets reach the prompt only as `text`, and
+# `render_material` water-fills the whole material block into
+# MATERIAL_BUDGET_CHARS, so no snippet of any length can add one rendered char
+# past that. What this clamp bounds is what we HOLD and PERSIST — the
+# analysis_retrieval row and the in-process dict — against a vendor response
+# that hands back megabytes. A snippet longer than the entire material budget
+# is bytes that are provably never read, which is what makes the budget itself
+# the derived value here rather than a number chosen for looking round.
+SONAR_SNIPPET_MAX_CHARS = MATERIAL_BUDGET_CHARS
+# The COUNT clamp, named (it was the bare literal 8 at three addresses: this
+# module, the NL-133 derivation comment, and the arithmetic pin). The worst
+# case integrates over it exactly like the length clamps do, so it belongs in
+# the same block and the pins read it from here.
+SONAR_MAX_RESULTS = 8
 # ---------------------------------------------------------------------------
 # LENGTH REGIME 2026-07-30, Spec-4(c) STEP 0 (NL-118 content leg, batch B):
 # RE-BASED medium 400 -> 450 and full 700 -> 750, in the same change that puts
@@ -2359,6 +2438,41 @@ def brief_bound_usd(template: str) -> float:
     return estimate_synthesis_usd_chars(brief_bound_chars(template))
 
 
+def clamp_sonar_results(results: List[Dict]) -> Tuple[List[Dict], int, int]:
+    """NL-139 (NL-133 gate R-B): the vendor byte-clamp. Returns
+    (kept, n_title_truncated, n_dropped_bad_host).
+
+    Sonar's `search_results` are a remote party's bytes reaching a prompt whose
+    length is a MONEY guard (see PROMPT_MARGIN_CHARS). The count clamp has
+    always been here; this is the length half. Public rather than private so
+    the arithmetic pin can drive it directly with a hostile payload — the
+    clamp is the thing being proven, and proving it through a live Sonar call
+    is not a test anyone can run.
+
+    Order matters: the count clamp applies FIRST, so a vendor cannot spend our
+    per-result budget on results 9..N and it cannot push a good result out of
+    the window by padding earlier ones with junk hosts. That means a dropped
+    bad-host result costs a slot rather than promoting the next one — the
+    conservative direction for a bound, and it keeps the returned count an
+    honest report of what the vendor actually gave us in-window."""
+    kept: List[Dict] = []
+    truncated = dropped = 0
+    for res in results[:SONAR_MAX_RESULTS]:
+        url = (res.get("url") or "").strip()
+        if len(urlparse(url).netloc) > SONAR_HOST_MAX_CHARS:
+            # Not a hostname (the DNS octet limit is 253) — see the constant.
+            dropped += 1
+            continue
+        title = res.get("title") or ""
+        if len(title) > SONAR_TITLE_MAX_CHARS:
+            truncated += 1
+        snippet = res.get("snippet") or ""
+        kept.append({**res, "url": url,
+                     "title": title[:SONAR_TITLE_MAX_CHARS],
+                     "snippet": snippet[:SONAR_SNIPPET_MAX_CHARS]})
+    return kept, truncated, dropped
+
+
 def _sonar_verify(key: str, story_title: str, claims: List[str]) -> Tuple[List[Dict], float, str]:
     """One Sonar verification call per depth story (discovery's call shape).
     Returns (results, cost, status). Failure degrades, never raises."""
@@ -2380,7 +2494,22 @@ def _sonar_verify(key: str, story_title: str, claims: List[str]) -> Tuple[List[D
     tokens = usage.get("total_tokens", 0)
     cost = tokens / 1e6 * discovery.SONAR_USD_PER_MTOK
     results = payload.get("search_results") or []
-    return results[:8], cost, f"ok — {len(results[:8])} results"
+    # NL-139: count clamp + byte clamp, in that order (see clamp_sonar_results).
+    kept, truncated, dropped = clamp_sonar_results(results)
+    # Honest degradation rides the channel this function already has — the
+    # status string, persisted on the brief header (`sa.sonar_status`) and
+    # rendered in the run report. A DROPPED result is named because a
+    # verification source went missing; a truncated TITLE is named as a count
+    # only, because the shortened string is model-facing map furniture and
+    # naming each one would put vendor noise in a repairs channel the reader's
+    # edition inherits.
+    note = ""
+    if dropped:
+        note += (f", {dropped} dropped — URL host over "
+                 f"{SONAR_HOST_MAX_CHARS} chars")
+    if truncated:
+        note += f", {truncated} title(s) truncated at {SONAR_TITLE_MAX_CHARS}"
+    return kept, cost, f"ok — {len(kept)} results{note}"
 
 
 def _cluster_items_for_slot(con: sqlite3.Connection, slot: Dict,

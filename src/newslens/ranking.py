@@ -7,8 +7,10 @@ ranking_runs instrumentation row.
 
 DIVISION OF JUDGMENT (ADR-0004): the LLM decides only what is genuinely
 semantic — which items are the same story, which of the principal's tags a
-story actually matches, and a world-impact score with a one-sentence reason.
-Everything above that layer is deterministic, inspectable code: tag weights
+story actually matches, and a world-impact score. NL-138 (principal ruling
+2026-08-02, DECISIONS "SEVEN-ITEM RULING SLATE" item ④) took the model's
+one-sentence PROSE reason out of that list entirely — see the override label
+below. Everything above that layer is deterministic, inspectable code: tag weights
 (topic 1.0 / domain 0.5 — taxonomy contract §B rule 4), the followed-analyst
 boost, slot selection, the urgency override gate and its cap, and
 corroboration counting. "Why did this story rank?" must always be answerable
@@ -21,11 +23,26 @@ THE URGENCY OVERRIDE (taxonomy contract §E, Kass's dissent binding):
   * Bar: world_impact >= OVERRIDE_THRESHOLD (8/10 = "global systemic
     consequence... not merely widely covered"). Cap: at most 1 of the 5 slots.
     The slot may go unfilled — that is a normal outcome, not a failure.
-  * Label: every fired override carries OVERRIDE_LABEL_PREFIX + the model's
-    reason, stored on the slot AND rendered in output, every time, no silent
-    fallback.
+  * Label (NL-138, principal ruling ④ 2026-08-02 — THE PROSE REASON IS DEAD):
+    a fired override renders the CODE-OWNED tag form, composed at render time
+    from `labels.WHY_CHOSEN_BECAUSE` + `labels.WHY_WORLD_NEWS` ("Chosen
+    because: Important World News"). Nothing about the label is stored on the
+    slot and nothing about it comes from the model. What used to stand here —
+    `override_label = OVERRIDE_LABEL_PREFIX + the model's one-sentence reason`,
+    persisted per slot and rendered verbatim — died with the field it wrapped.
+    His finding, verbatim: a reason like the Iran one "implies the user had
+    global oil or middle east stability or energy prices or international
+    shipping as one of their topics, which they didn't." The model was scoring
+    WORLD importance and the sentence read as a claim about USER relevance;
+    that register error is misinformation about the product's own behaviour,
+    and no amount of prompt tuning makes a world-impact sentence honest about
+    a reader it was never shown. Still rendered every time, still no silent
+    fallback — the form is just no longer prose.
   * Instrumented: every run (fired or not) appends a ranking_runs row with the
     pool size, threshold, and outcome — the day-14 recalibration reads these.
+    NL-138: it reads the STRUCTURED fields (world_impact, fired, matched tags),
+    which is what it always keyed on; the prose `reason` key is gone from the
+    meta for the same reason it is gone from the slot (ledger death, ruled).
 
 STRUCTURED-OUTPUT DISCIPLINE (ENGINEERING.md): the LLM response is validated
 hard (shape, id existence, no cross-cluster id reuse, tag names/levels only
@@ -151,9 +168,15 @@ FOLLOWED_BOOST = 0.35        # additive personal credit for followed writers
 PERSONAL_SHARE = 0.55        # combined = 0.55*personal + 0.45*world/10
 OVERRIDE_THRESHOLD = 8       # of 10 — "global systemic consequence"
 
-OVERRIDE_LABEL_PREFIX = (
-    "This story doesn't match your tagged interests, but we included it because "
-)
+# OVERRIDE_LABEL_PREFIX is DELETED (NL-138, ruling ④ 2026-08-02). It existed
+# only to prefix the model's prose reason ("This story doesn't match your
+# tagged interests, but we included it because " + <sentence>), so it died with
+# the sentence. Deleted rather than kept-as-retired: unlike labels.py — whose
+# RETIRED-NOT-RENDERED marker exists because that module IS the string table
+# every surface imports by name — this constant had four consumers and the
+# NL-138 sweep re-pointed every one of them at labels.WHY_CHOSEN_BECAUSE /
+# labels.WHY_WORLD_NEWS. A dangling name here would be an invitation to
+# re-compose the dead label, not a safety rail.
 
 # Standing caveat — rendered in every rank output AND stored, per the 07-02
 # corroboration ruling ("caveat in the output, not just in docs").
@@ -188,7 +211,13 @@ class RankedSlot:
     world_impact: int
     combined_score: float
     override: bool
-    override_label: Optional[str]
+    # NL-138: `override_label` is GONE from the slot. The override FLAG above
+    # is the whole persisted record of the event — every surface that used to
+    # read the stored label now composes the tag form from the flag at render
+    # time. Old briefings rows still carry the key in their story_slots JSON;
+    # nothing reads it (sweep in research/2026-08-02--nl138-build.md), and
+    # every reader goes through `.get()`, so an archived edition renders the
+    # same tag form a fresh one does.
     corroboration_count: int
     corroboration_label: str
     wire_items_excluded: int
@@ -198,10 +227,14 @@ class RankedSlot:
     # pre-revival coverage date for the narrative's back-reference.
     matched_dormant: List[str] = field(default_factory=list)
     revived_threads: List[Dict] = field(default_factory=list)
-    # M5: the ranker's one-sentence reason is SEED MATERIAL for the writer's
-    # "Why it matters" movement (content contract §5.1) — persisted per slot
-    # from this milestone on; older rows simply lack it (writer handles "").
-    world_impact_reason: str = ""
+    # `world_impact_reason` is DELETED (NL-138, ruling ④ 2026-08-02). M5 added
+    # it as seed material for the writer's "Why it matters" movement (content
+    # §5.1, ADR-0007 item 9) and NL-134 F3 moved it to the deep view; the
+    # ruling ends both. The prose is not written any more (the rank prompt
+    # stopped asking), not stored (this field), and not rendered (the deep
+    # view's WHY_FULL_REASON block is gone). What the day-14 override
+    # calibration reads — world_impact, `override`, matched_tags — is
+    # untouched and was always the structured half.
     # NL-57 quiet-thread demotion: a tracked thread re-covered with only a small
     # development since the last edition surfaces as a demoted "still tracking"
     # In-Brief snippet, never a prominent slot. The note carries the dated
@@ -781,11 +814,16 @@ def validate_payload(
         if not isinstance(impact, (int, float)) or isinstance(impact, bool) or not 0 <= impact <= 10:
             problems.append(f"{where}: world_impact must be a number 0-10")
             impact = 0
-        reason = c.get("world_impact_reason")
-        if not isinstance(reason, str) or not reason.strip():
-            problems.append(f"{where}: world_impact_reason missing/empty")
-            reason = ""
-
+        # NL-138 (ruling ④ 2026-08-02): `world_impact_reason` is no longer
+        # asked for, no longer required, and no longer carried. A model that
+        # still emits it is TOLERATED-AND-IGNORED, not rejected — which is this
+        # function's existing idiom rather than a new leniency: every field
+        # below is WHITELIST-CONSTRUCTED into a fresh dict from keys we name,
+        # so an unknown key has never been able to reach a consumer. There is
+        # no extra-keys rejection pass anywhere in this validator (`matched_
+        # dormant` arrived the same way and old prompts' payloads kept
+        # validating). Rejecting here would also make one stale prompt file
+        # fail every run of a paid seat for a field nothing reads.
         valid.append(
             {
                 "story_title": (title or "").strip()[:300],
@@ -809,7 +847,6 @@ def validate_payload(
                     m for m in mmem if m in memory_set)),
                 "matched_dormant": [m for m in mdorm if m in dormant_set],
                 "world_impact": int(round(float(impact))),
-                "world_impact_reason": reason.strip()[:400],
             }
         )
     if problems:
@@ -1461,7 +1498,6 @@ def select_slots(
     for n, (c, cluster_items, followed, p, comb) in enumerate(chosen, start=1):
         count, label, wire_excluded, named = corroborate(cluster_items)
         is_override = override_pick is not None and c is override_pick[0]
-        reason = c["world_impact_reason"].rstrip(".") + "."
         q = quiet.get(id(c))
         is_still = q is not None and q[0] == "small"
         slots.append(
@@ -1478,14 +1514,12 @@ def select_slots(
                 world_impact=c["world_impact"],
                 combined_score=comb,
                 override=is_override,
-                override_label=(OVERRIDE_LABEL_PREFIX + reason) if is_override else None,
                 corroboration_count=count,
                 corroboration_label=label,
                 wire_items_excluded=wire_excluded,
                 # match-only: never touched personal_score/selection above —
                 # carried through so persist() can apply earned-slot revival
                 matched_dormant=c.get("matched_dormant", []),
-                world_impact_reason=c["world_impact_reason"],
                 still_tracking=is_still,
                 still_tracking_note=(q[1] if is_still else ""),
             )
@@ -1501,7 +1535,14 @@ def select_slots(
             # M3 review cosmetic: the old key read like a combined score)
             "top_zero_match_world_impact": zero_pool[0][0]["world_impact"] if zero_pool else None,
             "story": override_pick[0]["story_title"] if override_pick else None,
-            "reason": override_pick[0]["world_impact_reason"] if override_pick else None,
+            # NL-138 ledger death (ruling ④): the prose `reason` key is gone
+            # from this row. THE DAY-14 OVERRIDE CALIBRATION IS UNHARMED and
+            # that is the ruling's own finding, not a hope — it reads
+            # pool_size, threshold, fired, top_zero_match_world_impact, slot,
+            # and the slot's matched_tags/world_impact, every one of which is
+            # still written here. `story` stays: a title identifies WHICH
+            # story fired so the read can be traced back to the edition; it is
+            # not a justification and makes no claim about the reader.
             "slot": override_slot,
         },
         # NL-63 M2 selection-layer instrumentation (the day-14 read).

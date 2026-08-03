@@ -235,8 +235,12 @@ failed runs), prompt render failure -> RankingError. The LLM call seam is
 `_post_chat` / `call_llm_validated` — monkeypatch or point OPENAI_CHAT_URL at
 the fake server (it already speaks /chat/completions). Keyless rank must build
 no request. Constants QA may pin: OVERRIDE_THRESHOLD=8, MAX_SLOTS=5,
-OVERRIDE_LABEL_PREFIX, CORROBORATION_CAVEAT (rendered in CLI output AND stored
-in corroboration_labels.standing_caveat).
+CORROBORATION_CAVEAT (rendered in CLI output AND stored in
+corroboration_labels.standing_caveat). NL-138 (2026-08-02, ruling ④):
+OVERRIDE_LABEL_PREFIX is DELETED along with the model's prose reason it
+prefixed — the override disclosure is composed at render time from
+labels.WHY_CHOSEN_BECAUSE + labels.WHY_WORLD_NEWS, and the pins live in
+tests/test_nl138_override_reason_death.py.
 
 ### Principal-amendment invariants (2026-07-04) — QA-pinnable
 
@@ -375,8 +379,9 @@ wins (ADR-0006). QA pins the amended surface once:
 ## Implementer contract notes for milestone 5 — §5.9 invariants roll-up (QA)
 
 New surfaces: `generate.py`, three prompt files (narrative A/B, script),
-`generate` CLI, `RankedSlot.world_impact_reason` (defaulted),
-data/generation_log.jsonl. Offline seams: `ranking.OPENAI_CHAT_URL` (both new
+`generate` CLI, data/generation_log.jsonl. (`RankedSlot.world_impact_reason`
+was one of them; NL-138 deleted it — see ADR-0007's "Superseded in part"
+section.) Offline seams: `ranking.OPENAI_CHAT_URL` (both new
 calls go through it via `generate._chat`); every validator is a pure function.
 
 Deterministic §5.9 invariants (contract text: workspace/debates/
@@ -385,9 +390,13 @@ Deterministic §5.9 invariants (contract text: workspace/debates/
    "**Why it matters:**" + "**Watch for:**" + trailing meta-line; footer =
    window line + caveat verbatim (== ranking.CORROBORATION_CAVEAT) + variant
    stamp. (Code-assembled: test `generate.assemble_narrative` directly.)
-2. Override: fired -> generate.OVERRIDE_TEXT_LABEL shape above that story's
-   headline (text) AND script contains outside-your-tags + the reason
+2. Override: fired -> generate.OVERRIDE_TEXT_LABEL above that story's
+   headline (text) AND the script speaks labels.WHY_WORLD_NEWS
    (validate_script hard-fails otherwise). Not fired -> no override language.
+   NL-138 re-scoped both halves of this §5.7 surface under ruling ④: the
+   constant is no longer a {reason} template and the spoken check no longer
+   looks for the model's prose. Disclosure strength is unchanged — an aired
+   override with no disclosure still hard-fails.
 3. Revival: supplied date verbatim in the lede's first two sentences
    (validate_narrative_payload raises) and spoken (ISO or "Month D(th)" forms
    accepted by _date_spoken_forms).

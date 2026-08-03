@@ -77,11 +77,13 @@ def slot(n=1, tags=(), mem=(), override=False, followed=False,
         "followed_analyst": followed,
         "personal_score": 1.0 if (tags or mem) else 0.0,
         "world_impact": 9 if override else 6,
+        # NL-138: `world_impact_reason` is deliberately STILL SET here. New
+        # rows never carry it, but ARCHIVED story_slots rows on the founder's
+        # machine do — so this fixture is now the archived-row shape, and the
+        # F1/F3 pins below are testing that no surface reads it. The stored
+        # `override_label` is gone with the constant that built it.
         "world_impact_reason": reason,
         "combined_score": 0.5, "override": override,
-        "override_label": (
-            ranking.OVERRIDE_LABEL_PREFIX + reason.rstrip(".") + "."
-        ) if override else None,
         "corroboration_count": 1,
         "corroboration_label": "Reported by 1 named outlet",
         "wire_items_excluded": 0, "revived_threads": [],
@@ -134,7 +136,10 @@ def test_f1_the_old_override_note_furniture_is_gone_everywhere(tmp_paths):
     html = render(slot(override=True, reason=SPECIMEN_REASON))
     assert 'class="override-note"' not in html
     assert 'class="reason"' not in html
-    assert ranking.OVERRIDE_LABEL_PREFIX not in html
+    # NL-138 deleted ranking.OVERRIDE_LABEL_PREFIX along with the prose it
+    # prefixed. Its text is quoted literally here so this pin keeps guarding
+    # the exact string that must never come back.
+    assert "This story doesn't match your tagged interests" not in html
 
 
 def test_f1_holds_on_every_tier_including_the_strip(tmp_paths):
@@ -261,11 +266,19 @@ def test_f3_strip_smeta_no_longer_echoes_the_selecting_topic(tmp_paths):
     assert "Related to: Energy policy, Oil markets" in visible(html)
 
 
-def test_f3_full_reason_survives_labeled_in_the_deep_view(tmp_paths):
-    """BORN RED on c3778c9. Provenance is not destroyed by taking the prose
-    reason off the front page: it stays persisted on the slot AND renders,
-    clearly labeled, in the sources-&-context view's why-you're-seeing-this
-    block."""
+def test_f3_full_reason_is_gone_from_the_deep_view_too_nl138(tmp_paths):
+    """SUPERSEDED SUBJECT — this pin used to assert the opposite.
+
+    F3 parked the ranker's full prose reason in the deep view: off the front
+    page but preserved, labeled, as provenance. The principal's ruling ④ later
+    the same day (NL-138) retired that compromise — the sentence is not
+    provenance, it is a claim about the reader's interests the model was never
+    shown ("implies the user had global oil ... as one of their topics, which
+    they didn't"), and preserving it on a quieter surface preserves the same
+    inaccuracy in smaller type.
+
+    Driven with the ARCHIVED shape (the fixture still sets the field), because
+    "we stopped writing it" would not be enough: rows carrying it exist."""
     db.migrate()
     con = db.connect()
     try:
@@ -274,15 +287,19 @@ def test_f3_full_reason_survives_labeled_in_the_deep_view(tmp_paths):
             slot(override=True, reason=SPECIMEN_REASON), con, DATE)
     finally:
         con.close()
-    assert labels.WHY_FULL_REASON in sec
-    assert SPECIMEN_REASON in sec
-    assert 'class="sc-reason"' in sec
+    assert labels.WHY_FULL_REASON not in sec
+    assert SPECIMEN_REASON not in sec
+    assert 'class="sc-reason"' not in sec
+    # The structured provenance this view exists for is untouched.
+    assert "Here for" in sec
 
 
-def test_f3_deep_view_reason_is_override_only_and_empty_safe(tmp_paths):
-    """BORN RED on c3778c9. A matched story's pick is explained by its matches,
-    and an older row without the field renders nothing — never a placeholder,
-    never a bare label."""
+def test_f3_deep_view_reason_is_absent_on_every_slot_shape_nl138(tmp_paths):
+    """F3's original property was "override-only and empty-safe". NL-138 made
+    it unconditional: no slot shape renders the label, so the matched and
+    empty arms below now prove ABSENCE everywhere rather than absence in two
+    special cases. Kept rather than folded into the test above because these
+    two shapes are the ones that used to take the other branch."""
     db.migrate()
     con = db.connect()
     try:

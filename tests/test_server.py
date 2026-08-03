@@ -1249,7 +1249,10 @@ def test_item27_furniture_contract_through_build_page(ui):
             "followed_analyst": False, "personal_score": 0.0,
             "world_impact": 9, "world_impact_reason": "Global systemic thing",
             "combined_score": 0.4, "override": True,
-            "override_label": ranking.OVERRIDE_LABEL_PREFIX + "Global systemic thing.",
+            # NL-138: ranking.OVERRIDE_LABEL_PREFIX is deleted. The
+            # `world_impact_reason` above stays ON PURPOSE — this is now the
+            # ARCHIVED story_slots shape, and the assertion below proves that
+            # no page reads it.
             "corroboration_count": 1,
             "corroboration_label": "Reported by 1 named outlet",
             "wire_items_excluded": 0, "revived_threads": [],
@@ -1302,7 +1305,11 @@ def test_item27_furniture_contract_through_build_page(ui):
     #    the front page (that recital was the F1 double-render).
     assert "Important World News" in page
     assert 'class="why-chosen why-chosen--world"' in page
-    assert ranking.OVERRIDE_LABEL_PREFIX not in page
+    # NL-138: the constant is deleted, so its text is quoted literally here —
+    # and the archived row's own prose reason is asserted absent too, which is
+    # the fact that only became true with this batch.
+    assert "This story doesn't match your tagged interests" not in page
+    assert "Global systemic thing" not in page
     # 3. Meta-footnote: corroboration + outlets + provenance, from slots:
     assert "Reported by 2 named outlets" in page
     assert "Outlet A" in page

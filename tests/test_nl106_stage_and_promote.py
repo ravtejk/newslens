@@ -65,7 +65,8 @@ def _slot(n: int, title: str, outlets=("Outlet A", "Outlet B"), item_ids=()):
         item_ids=list(item_ids), outlets=list(outlets), matched_tags=[],
         matched_memory=[], followed_analyst=False, personal_score=1.0,
         world_impact=6, combined_score=0.8, override=False,
-        override_label=None, corroboration_count=len(outlets),
+        # NL-138: `override_label` left RankedSlot with the prose it wrapped.
+        corroboration_count=len(outlets),
         corroboration_label=f"Reported by {len(outlets)} named outlets",
         wire_items_excluded=0)
 

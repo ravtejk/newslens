@@ -302,8 +302,11 @@ def render_prose_first(date: str, stories: List[Dict], inputs: Dict) -> str:
         parts.append("---")
         if slot.get("override"):
             # Epistemic furniture (class 2) — rides both forms verbatim.
-            parts.append(generate.OVERRIDE_TEXT_LABEL.format(
-                reason=generate._override_reason(slot)))
+            # NL-138 (ruling ④): the constant is the whole line now, no
+            # {reason} to fill. Conformance is preserved by reading the SAME
+            # constant assemble_narrative reads, which is why this render did
+            # not need re-deriving — only the call shape changed.
+            parts.append(generate.OVERRIDE_TEXT_LABEL)
             parts.append("")
         parts.append(f"**{st['headline']}**")
         parts.append("")

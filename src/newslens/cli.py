@@ -629,7 +629,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         import re as _re
         from datetime import datetime as _dt
 
-        from . import config, ranking
+        from . import config, labels, ranking
 
         if args.date:
             # Shape first (strict zero-padding — strptime alone accepts
@@ -685,7 +685,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"personal {s.personal_score:.2f} | tags: {tags}{mem}{fa}"
             )
             if s.override:
-                print(f"     >> {s.override_label}")
+                # NL-138 (ruling ④): was `s.override_label` — the stored
+                # prefix + the ranker's prose reason. Both are gone; the rank
+                # CLI shows the same code-owned tag form every reader surface
+                # shows, read from labels.py at call time.
+                print(f"     >> {labels.WHY_CHOSEN_BECAUSE} "
+                      f"{labels.WHY_WORLD_NEWS}")
         print(f"\n  Note: {report.caveat}")
         for warning in report.warnings:
             print(f"  ⚠ {warning}")
@@ -1008,6 +1013,19 @@ def _memory_command(args) -> int:
             print(f"topic may not contain {memory.SEPARATOR!r} (it separates "
                   "topic from note in memory.md)", file=sys.stderr)
             return 2
+        # NL-139 byte-clamp, DOOR 4 of 5 (memory.clamp_topic). This handler runs its
+        # OWN INSERT rather than going through memory.add_thread, so it needs
+        # its own clamp — and it needs it HERE, above the lower(topic) lookup,
+        # for the reason clamp_topic's docstring gives: the row this verb
+        # creates and the row it later finds must have one name. Every verb
+        # below (add/dismiss/note/delete) reads `topic` from this point on, so
+        # one clamp covers the handler. Disclosed on the spot: a CLI verb IS
+        # the principal, and he should see that we stored something other than
+        # what he typed before he wonders why `memory list` reads short.
+        topic, _was_cut = memory.clamp_topic(topic)
+        if _was_cut:
+            print(f"  ⚠ thread name shortened to {memory.TOPIC_MAX_CHARS} "
+                  f"characters — using {topic!r}")
         row = con.execute(
             "SELECT id, status FROM memory WHERE lower(topic) = lower(?)", (topic,)
         ).fetchone()

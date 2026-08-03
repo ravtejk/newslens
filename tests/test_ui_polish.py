@@ -31,7 +31,7 @@ def slot(n, title, tags=(), mem=(), override=False):
         "followed_analyst": False, "personal_score": 1.0 if tags else 0.0,
         "world_impact": 6, "world_impact_reason": "R", "combined_score": 0.5,
         "override": override,
-        "override_label": (ranking.OVERRIDE_LABEL_PREFIX + "big.") if override else None,
+        # NL-138: the stored prose label is deleted from the slot.
         "corroboration_count": 1, "corroboration_label": "Reported by 1 named outlet",
         "wire_items_excluded": 0, "revived_threads": [],
     }

@@ -144,3 +144,24 @@ Implementation decisions:
   recording, revival, reference updates, and continuity all continue in
   persist(). meta.threads_steer_selection logged per run. --no-threads
   SAMPLE unchanged (that strips recognition too — the cold-start view).
+
+## Superseded in part — 2026-08-02, NL-138
+
+Item 9 ("Ranker's reason persisted per slot") is superseded by the principal's
+ruling ④ of 2026-08-02 (DECISIONS, "SEVEN-ITEM RULING SLATE"). `RankedSlot.
+world_impact_reason` is DELETED, the rank prompt no longer asks for the
+sentence, and §5.1's "Why it matters" movement no longer receives it as seed
+material — the writer composes that movement from the cluster summary, the
+structured matches, the thread ledger and the analyst brief instead.
+
+The finding: a world-impact justification written by the ranking model reads,
+on the page, as a claim about the READER's interests — "implies the user had
+global oil or middle east stability or energy prices or international shipping
+as one of their topics, which they didn't" (his words, on record as the NL-138
+charter evidence). Structured selection data is the only provenance that
+survives; the override disclosure everywhere is now the code-owned tag form
+(labels.WHY_CHOSEN_BECAUSE + labels.WHY_WORLD_NEWS).
+
+Everything else in this ADR stands unchanged, including item 8 (per-step cost
+merge) and the §5.7 canonical-string discipline — NL-138 re-scoped one of those
+strings under an explicit ruling, it did not loosen the rule.

@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from conftest import anthropic_envelope
-from newslens import db, generate, llm, paths, ranking
+from newslens import db, generate, labels, llm, paths, ranking
 
 A_DAY = "2026-07-05"   # dogfood day 1 — even ordinal, variant A of record
 B_DAY = "2026-07-06"
@@ -54,12 +54,11 @@ def slot(
         "followed_analyst": False,
         "personal_score": 1.0,
         "world_impact": 6,
-        "world_impact_reason": reason,
+        # NL-138 (ruling ④): both prose fields left RankedSlot. The fixture
+        # keeps neither — an override slot is now identified by its FLAG, and
+        # every surface composes the disclosure from labels.py.
         "combined_score": 0.8,
         "override": override,
-        "override_label": (
-            ranking.OVERRIDE_LABEL_PREFIX + override_reason + "." if override else None
-        ),
         "corroboration_count": corroboration_count,
         "corroboration_label": (
             f"Reported by {corroboration_count} named outlets"
@@ -140,9 +139,14 @@ def compliant_script(slots, narrative=""):
     for s in slots:
         seg = f"Story {s['slot']}. The development moved today."
         if s.get("override"):
+            # NL-138 (ruling ④): the spoken disclosure is owed in the RULED
+            # vocabulary now — labels.WHY_WORLD_NEWS — not as an
+            # "outside your interests" acknowledgment plus four words of the
+            # ranker's retired prose reason. Composed from the constant so a
+            # copy re-pin moves the stub with the check.
             seg += (
-                " This one sits outside your usual interests — it's here because "
-                "it cleared a high global-impact bar."
+                f" This one is here as {labels.WHY_WORLD_NEWS.lower()}, not "
+                "because it matches anything you follow."
             )
         for rv in s.get("revived_threads", []):
             d = datetime.strptime(rv["last_covered"], "%Y-%m-%d")
@@ -299,8 +303,13 @@ def test_assemble_narrative_owns_all_furniture():
     assert text.count("**Watch for:**") == 1
     assert text.count("**What happens next:**") == 1
     # Override label: canonical, code-assembled, above the override story only.
-    assert text.count("**Outside your interests:**") == 1
-    assert "it's here because it cleared a high global-impact bar" in text
+    # NL-138 re-scoped this §5.7 canonical string to the ruled tag form.
+    assert text.count(generate.OVERRIDE_TEXT_LABEL) == 1
+    assert "**Outside your interests:**" not in text
+    # NL-138: the fallback prose ("it cleared a high global-impact bar") died
+    # with `_override_reason`. The line is a constant now — nothing to fill in,
+    # so nothing to fall back to.
+    assert "it's here because" not in text
     # Meta-lines: corroboration + outlets + provenance.
     assert "Reported by 2 named outlets — Outlet A, Outlet B. Here for: AI regulation." in text
     assert "Here for: editor's override — see note above." in text
@@ -677,8 +686,11 @@ def test_script_hard_failures_override_revival_schedule():
     bare = "A script that says none of the required things. " * 40 + "See you tomorrow."
     _, hard, warns = generate.validate_script(bare, "narrative text", inputs)
     joined = " | ".join(hard)
-    assert "outside-your-tags acknowledgment" in joined
-    assert "missing its reason" in joined
+    assert f"{labels.WHY_WORLD_NEWS!r} acknowledgment" in joined
+    # NL-138: the second hard check ("missing its reason") is retired, not
+    # relaxed — there is no prose reason left to look for. The one check above
+    # carries the whole spoken-override contract; a script that says nothing
+    # still hard-fails, which is what this assertion proves.
     assert "schedule promise" in joined
     # A5: spoken revival downgraded hard -> warn (text disclosure stays hard;
     # the warn wording is "not voiced").
@@ -1582,7 +1594,11 @@ def test_labels_block_carries_the_corrections_placeholder():
     slots = [slot(1, override=True), slot(2, corroboration_count=1, outlets=("Solo",))]
     block = generate.build_labels_block(_inputs_for(slots))
     assert block.splitlines()[-1] == "corrections flagged upstream: none this run"
-    assert "story 1: OVERRIDE — reason:" in block
+    # NL-138: the block names the phrase the validator checks, not a prose
+    # reason to paraphrase.
+    assert "story 1: OVERRIDE" in block
+    assert labels.WHY_WORLD_NEWS.lower() in block.lower()
+    assert "reason:" not in block.lower()
     assert "story 2: SINGLE-SOURCE — outlet: Solo" in block
 
 
@@ -1756,7 +1772,7 @@ def test_A5_relaxations_did_not_leak_into_the_hard_set():
     body, hard, warns = generate.validate_script(bare, "narrative", inputs)
     joined_hard = " | ".join(hard)
     joined_warns = " | ".join(warns)
-    assert "outside-your-tags acknowledgment" in joined_hard      # still hard
+    assert f"{labels.WHY_WORLD_NEWS!r} acknowledgment" in joined_hard  # still hard
     assert "schedule promise" in joined_hard                      # still hard
     assert "not voiced" in joined_warns                           # warn now
     assert "single-source" not in (joined_hard + joined_warns)    # check removed

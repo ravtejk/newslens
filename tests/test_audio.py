@@ -331,6 +331,11 @@ def test_outlet_token_skips_leading_articles():
         slot=1, story_title="T", summary="S", item_ids=[1],
         outlets=["The Hill"], matched_tags=[], matched_memory=[],
         matched_dormant=[], followed_analyst=False, personal_score=0.0,
+        # NL-138 (QA F-9): `world_impact_reason` / `override_label` left
+        # RankedSlot. This is a plain dict, not a slot, so the dead keys are
+        # harmless — and they are kept deliberately rather than tidied away:
+        # this is now the ARCHIVED story_slots shape, so a reader surface that
+        # started reading them again would be caught here too.
         world_impact=5, world_impact_reason="R", combined_score=0.3,
         override=False, override_label=None, corroboration_count=1,
         corroboration_label="Reported by 1 named outlet",

@@ -114,17 +114,28 @@ STILL_TRACKING_NO_DATE = "No next date is set."
 # should be just be displayed as 'Chosen because:' or 'Related to:' and then
 # '{relevant topics the user follows} or Important World News.'" It rides every
 # front-page story on every tier and REPLACES the old override note, which
-# rendered the ranker's full prose reason (twice — the F1 bug). The model's full
-# reason is not destroyed: it stays persisted on the slot and surfaces in the
-# deep view under WHY_FULL_REASON. "just" is load-bearing — no front-page
-# surface says the same thing a second way.
+# rendered the ranker's full prose reason (twice — the F1 bug).
+#
+# NL-138 (his ruling ④, later the same day) widened these constants' reach:
+# with the ranker's prose reason dead pipeline-wide, WHY_CHOSEN_BECAUSE +
+# WHY_WORLD_NEWS are now THE override vocabulary everywhere, not only on the
+# front page — generate.OVERRIDE_TEXT_LABEL (the markdown edition's §5.7 line),
+# the spoken-disclosure check in generate.validate_script, moat_battery's
+# conformance render, and the rank CLI all compose from here. "just" is
+# load-bearing in both directions now: one phrasing, one place, and no surface
+# says the same thing a second way.
 WHY_RELATED_TO = "Related to:"          # the reader follows the named things
 WHY_CHOSEN_BECAUSE = "Chosen because:"  # nothing followed matched
 WHY_WORLD_NEWS = "Important World News"
 WHY_FOLLOWED_WRITER = "a writer you follow"   # composed as "<outlet> (…)" when
                                               # the outlet name resolves, and
                                               # rendered bare when it does not
-WHY_FULL_REASON = "The full reason it was included:"   # deep view only
+# RETIRED-NOT-RENDERED (NL-138, ruling ④ 2026-08-02). This labeled the deep
+# view's full-prose-reason paragraph for the few hours between the NL-134 land
+# and the ruling that killed the sentence it labeled. No surface renders it;
+# kept per this module's header rule so nothing imports a dangling name, and a
+# copy sweep must SKIP it — record-keeping, not live copy.
+WHY_FULL_REASON = "The full reason it was included:"
 
 # --- Following — the Spine (§7/§12.2/§12.5) ----------------------------------
 FOLLOWING_TRIAD_THREADS = "Threads"    # WAS the switcher's "Ongoing stories"
