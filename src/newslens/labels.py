@@ -360,6 +360,48 @@ COMMISSION_COUNT_MANY = "topics picked."
 # FLAG ⑤ as ruled: floor of 1, and this line renders at counts 1–2 only.
 COMMISSION_CONSEQUENCE = (
     "With fewer than three topics, more of the first edition is general news.")
+
+# --- Coverage honesty at pick time (NL-135 Q1, ruled 2026-08-02) -------------
+# THE CLAIM ASYMMETRY IS IN THE WORDS, not only in the code. Absence is
+# provable from the shipped feed→topic map, so it is stated flatly. Presence is
+# INCLUSION — "4 sources cover this area" is a fact about the list and must
+# never be written as a promise of stories ("you're covered", "well covered",
+# "we've got this" are all out of bounds, and none of them can be earned from
+# a static map). Every numeral here is computed by commissioning.py.
+#
+# "regularly" is doing real work and is not padding: the map records a feed's
+# BEAT, so a general front page that mentions a subject during a big week is
+# not counted. Without that word the absence line would be a false claim over
+# a list that holds four world desks.
+COMMISSION_COV_NONE = "No source in your list covers this regularly."
+# Rendered at BOTH grains, because it weakens rather than asserts. It is the
+# one honest thing a static map can say about the Systemic Risk credit topics,
+# where every covering source (Bloomberg, FT, WSJ) is titles-and-summaries.
+COMMISSION_COV_HEADLINES = "Your sources here carry headlines only."
+# "4 sources cover this area." — DOMAIN rows only. A per-topic positive claim
+# is unearnable from a per-feed map (a technology feed proves nothing about
+# one technology topic), so topic rows stay silent unless they carry a warning.
+COMMISSION_COV_ONE = "source covers this area."
+COMMISSION_COV_MANY = "sources cover this area."
+# The consequence summary, computed from the reader's own ticks and recomputed
+# client-side on every toggle: "You picked 3 topics your sources don't cover
+# regularly. Briefings will lean on general news there until sources are
+# added." Unserved names stay PICKABLE — picking one is standing intent and
+# the org's demand signal for the next slate; hiding them would lie by omission.
+COMMISSION_COV_UNSERVED_HEAD = "You picked"
+COMMISSION_COV_UNSERVED_ONE = "topic your sources don’t cover regularly."
+COMMISSION_COV_UNSERVED_MANY = "topics your sources don’t cover regularly."
+COMMISSION_COV_UNSERVED_TAIL = (
+    "Briefings will lean on general news there until sources are added.")
+# The honesty valve for a hand-edited list: the shipped map cannot classify an
+# outlet nobody mapped, and an absence claim made over sources we did not read
+# is exactly the fabrication this mechanism exists to prevent. A fresh profile
+# never sees this line — its list IS the mapped catalog.
+COMMISSION_COV_UNKNOWN_ONE = (
+    "source in your list isn’t classified yet, so it isn’t counted above.")
+COMMISSION_COV_UNKNOWN_MANY = (
+    "sources in your list aren’t classified yet, so they aren’t counted above.")
+
 # "Show 8 narrower topics" / "Hide 8 narrower topics" — count computed.
 COMMISSION_SHOW_NARROWER = "Show"
 COMMISSION_HIDE_NARROWER = "Hide"
@@ -369,7 +411,11 @@ COMMISSION_NARROWER_SUFFIX = "narrower topics"
 COMMISSION_SOURCES_HEAD = "Sources"
 COMMISSION_SOURCES_SHOW = "Show the list"
 COMMISSION_PACK_FETCHED = "FETCHED EACH MORNING"
-COMMISSION_PACK_CITED = "CITED, NOT FETCHED"
+# NL-136 ①, same ruling as the pack sentence's third clause: the group the
+# reader actually opens and reads the four names in should frame them the same
+# way the sentence above it does. "CITED, NOT FETCHED" is mechanically true and
+# reads as a shortfall; the four are a decision.
+COMMISSION_PACK_CITED = "ATTRIBUTION ONLY, BY DESIGN"
 COMMISSION_PACK_OFF = "OFF"
 COMMISSION_PACK_HEADLINES_ONLY = "(headlines only)"
 COMMISSION_SOURCES_SETTINGS = "Sources can be turned off in Settings."
@@ -441,15 +487,27 @@ COMMISSION_LIST_AND = " and "
 
 # --- The source pack's counted clauses (Commissioning act 2) -----------------
 # Assembled by commissioning.source_pack_sentence from the reader's OWN file —
-# the four numbers are counted, never typed. Against the shipped profile
-# template they render the mockup's line exactly: "42 outlets. 37 are fetched
-# each morning. 4 are cited but never fetched. 1 aggregator is off."
+# every number is counted, never typed, and a clause whose count is zero is
+# dropped rather than rendered as "0". Against the shipped profile template
+# after the NL-135 slate they render: "69 outlets. 65 are fetched each morning.
+# 4 are attribution-only by design." (Before that slate the same builder
+# rendered the mockup's original line, "42 outlets. 37 are fetched each
+# morning. 4 are cited but never fetched. 1 aggregator is off." — the numbers
+# moved because the file did, which is the whole point of counting them.)
 COMMISSION_PACK_OUTLET = "outlet"
 COMMISSION_PACK_OUTLETS = "outlets"
 COMMISSION_PACK_FETCHED_ONE = "is fetched each morning"
 COMMISSION_PACK_FETCHED_MANY = "are fetched each morning"
-COMMISSION_PACK_CITED_ONE = "is cited but never fetched"
-COMMISSION_PACK_CITED_MANY = "are cited but never fetched"
+# NL-136 ① (ruled 2026-08-02): the reference_only outlets are a DESIGN, and the
+# copy now says so. "4 are cited but never fetched" read as a shortfall — a
+# reader counts 42 outlets, learns four of them aren't fetched, and reasonably
+# concludes something is broken or withheld. The four (AP, Reuters, NYT,
+# Wikipedia) are wire services and records-of-note that the principal ruled
+# citable-but-never-fetched on purpose: their copy reaches us through other
+# feeds, or the outlet's terms say linkout. The structure is unchanged; only
+# the sentence stops apologising for it.
+COMMISSION_PACK_CITED_ONE = "is attribution-only by design"
+COMMISSION_PACK_CITED_MANY = "are attribution-only by design"
 COMMISSION_PACK_OFF_AGG_ONE = "aggregator is off"
 COMMISSION_PACK_OFF_AGG_MANY = "aggregators are off"
 COMMISSION_PACK_OFF_SRC_ONE = "source is off"

@@ -207,9 +207,15 @@ def test_QA1b_the_page_invents_no_boolean_attributes(fresh, cat):
 def test_QA1c_picker_rows_and_fieldsets_carry_only_declared_attributes(
         picker_html):
     """The other half of QA-1b's original intent, kept at the scope its own
-    name always read: the PICKER's rows and fieldsets, by attribute NAME."""
+    name always read: the PICKER's rows and fieldsets, by attribute NAME.
+
+    `data-cov` joined the declared set on 2026-08-03 (NL-135 Q1): each row
+    carries its own coverage state so the client can recount unserved picks
+    without re-deriving a rule. Declaring it HERE is the deliberate act this
+    pin exists to force — an attribute name nobody declared is still the
+    fingerprint of an unquoted value, and the value is quoted."""
     allowed = {"class", "type", "id", "value", "data-level", "data-name",
-               "onchange", "checked"}
+               "data-cov", "onchange", "checked"}
     p = _parse(picker_html)
     stray = {}
     for box in p.inputs:

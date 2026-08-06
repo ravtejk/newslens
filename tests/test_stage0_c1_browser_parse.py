@@ -248,9 +248,12 @@ def test_the_picker_rows_and_fieldsets_carry_only_declared_attributes(page):
     `aria-describedby="c1-filter-status"` are written verbatim by the binding
     mockup, line 413. That test therefore cannot go green without deleting spec
     bytes; this one asserts the thing the defect was actually about, and it goes
-    red on any unquoted attribute in a picker row or a fieldset.)"""
+    red on any unquoted attribute in a picker row or a fieldset.)
+
+    `data-cov` joined the declared set on 2026-08-03 (NL-135 Q1) — the row's
+    own coverage state, quoted like everything else here."""
     allowed = {"class", "type", "id", "value", "data-level", "data-name",
-               "onchange", "checked"}
+               "data-cov", "onchange", "checked"}
     stray = sorted({k for b in checkboxes(page) for k in b if k not in allowed})
     assert not stray, stray
     fs_stray = sorted({k for f in parse(page).fieldsets for k in f
@@ -317,7 +320,11 @@ def test_the_parse_tooth_bites(fresh, cat, monkeypatch):
     that is fine; this is the falsifier that tells them apart.
 
     The measured damage is the QA's number, reproduced here: 54 of 66."""
-    def unquoted(name, level, idx, checked=False):
+    # `cov` is accepted and DROPPED on purpose: this stub reproduces the row
+    # exactly as it shipped pre-fix, and the pre-fix row had no coverage state.
+    # The signature has to track _pick_row's or the monkeypatch stops standing
+    # in for it (NL-135 Q1 added the parameter, 2026-08-03).
+    def unquoted(name, level, idx, checked=False, cov=None):
         return _PRE_FIX_ROW % (idx, commissioning._attr(name),
                                commissioning._e(level),
                                commissioning._attr(name.lower()),

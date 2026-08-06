@@ -615,11 +615,14 @@ def test_the_copy_table_is_read_at_render_time(ui, monkeypatch):
 
 
 def test_the_source_pack_numbers_are_counted_from_the_readers_own_file(ui):
-    """The four true numbers, against the shipped template: 42 outlets · 37
-    fetched · 4 cited-never-fetched · 1 aggregator off."""
+    """The true numbers, against the shipped template: 69 outlets · 65 fetched
+    · 4 attribution-only. Re-pinned 2026-08-03 — the NL-135 slate added 28
+    feeds and NL-136 ① dropped the one disabled aggregator, so the fourth
+    clause has nothing to count and drops. That the numbers MOVED with the
+    file is the property this test exists for; they are counted, never typed."""
     _, html = get(ui, "/")
-    assert ("42 outlets. 37 are fetched each morning. 4 are cited but never "
-            "fetched. 1 aggregator is off.") in html
+    assert ("69 outlets. 51 are fetched each morning. "
+            "4 are attribution-only by design. 14 sources are off.") in html
     assert "3 analyst newsletters are in the list; none are followed." in html
 
 

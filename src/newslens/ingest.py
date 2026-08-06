@@ -38,7 +38,7 @@ from typing import Dict, List, Optional, Tuple
 from . import config, db, net
 
 FEED_TIMEOUT_S = 20          # WaPo's feeds measured 8-10s in the M2 sweep; headroom
-MAX_ITEMS_PER_FEED = 20      # per feed per run; ~30 enabled feeds => bounded volume
+MAX_ITEMS_PER_FEED = 20      # per feed per run — bounds a run at 20 × enabled feeds (65-feed post-slate template ≈ 1300)
 MAX_EXCERPT_CHARS = 1500
 USER_AGENT = net.USER_AGENT  # ONE fetch identity, shared with the doctor (net.py)
 

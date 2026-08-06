@@ -272,6 +272,13 @@ PROFILE_SOURCES_TEMPLATE = TEMPLATES_DIR / "profile-sources.yaml"
 # Stage-0 C1). Same class as the template above: shipped, read-only, ONE copy
 # for every profile — a catalog is the org's vocabulary, not a reader's state.
 TOPIC_CATALOG = TEMPLATES_DIR / "topic-catalog.yaml"
+# Which feeds are a source for which catalog names (NL-135 Q1). Same class
+# again: org-authored, shipped, read-only, ONE copy for every profile. It is
+# deliberately NOT per-profile data — a reader's coverage state is COMPUTED
+# from this map plus their own enabled sources at render time and never
+# persisted, so approving a feed slate re-grades every profile with no
+# migration and no stale badge anywhere.
+FEED_COVERAGE = TEMPLATES_DIR / "feed-coverage.yaml"
 # SOURCES_FILE / ENV_FILE / MEMORY_FILE are NOT module globals — they resolve
 # through the PEP 562 guard above (see _GUARDED).
 

@@ -1,0 +1,282 @@
+# =============================================================================
+# THE FEED -> TOPIC COVERAGE MAP — which feeds are a source for which of the
+# topic catalog's names. Authored 2026-08-03 WITH the NL-135 slate (product
+# ruling Q1, DECISIONS 2026-08-02).
+#
+# WHAT THIS IS FOR. A reader picking topics at the Commissioning has no way to
+# know whether her sources can serve them. On 2026-08-02 one picked nine health
+# topics against a catalog with no health outlets and got a one-story edition
+# with nothing said. This file is the data behind saying it. The state is
+# computed LIVE at render (newslens.coverage) from this map plus the reader's
+# own enabled sources, and is NEVER written into a profile — so approving a
+# slate flips every reader's badges with no migration and no stale grades.
+#
+# THE ONE LAW: never fabricate abundance or coverage.
+#   * ABSENCE is asserted with confidence, because a static map can PROVE it:
+#     zero mapped feeds for a name means no source in the list has that beat.
+#   * PRESENCE is only ever INCLUSION, never sufficiency: "4 sources cover this
+#     area" is a fact about the list. It is not a promise of stories, and no
+#     surface may render it as one. Mapped feeds != items != matches.
+#
+# THE CALIBRATION ASYMMETRY (why this map leans generous). Adding a name that
+# a feed covers only sometimes weakens a claim we make weakly anyway. LEAVING
+# a name off strengthens a claim we make confidently — and a confidently-wrong
+# "no source covers this" over a list holding four world desks is exactly the
+# fabrication this mechanism exists to prevent. So when in doubt, include.
+#
+# WHAT `covers` MEANS: the feed's REMIT routinely produces items there — its
+# section, its desk, its beat. A general front page that mentions a subject
+# during a big week is not a source for it. That rule is what reproduces the
+# finding of record ("the org catalog carries ZERO health/science outlets")
+# instead of laundering it away, and it is why the reader-facing absence line
+# says a source covers something REGULARLY.
+#
+# TWO GRAINS, and the resolution rule (newslens.coverage.serving):
+#   * A DOMAIN is served by feeds listing the domain, plus feeds listing any of
+#     its topics.
+#   * A TOPIC is served by feeds listing that topic. Only when NO feed lists it
+#     does the topic inherit its domain's feeds. So a beat-level entry always
+#     wins over inheritance — which is how the Systemic Risk credit topics
+#     come out honestly headlines-only while the domain does not.
+#
+# EDITING RULES, enforced at load (coverage.CoverageError):
+#   * Every name must exist in templates/topic-catalog.yaml. A typo would
+#     silently un-cover a beat and nothing on screen would say so.
+#   * Every fetchable feed in templates/profile-sources.yaml must appear here.
+#     An unmapped feed makes absence unprovable, so the map's completeness is
+#     a test, not a habit (tests/test_nl135_slate_land.py).
+#   * `covers: []` is a real answer and is used deliberately below.
+# =============================================================================
+
+feeds:
+
+  # --- Wire / record (reference_only: never fetched) --------------------------
+  # Mapped truthfully, but they cannot serve coverage: coverage counts only
+  # FETCHABLE sources, and these four are cited, never fetched. The policy
+  # lives in code (coverage.state), not in bent data.
+  - name: Associated Press
+    covers: [Geopolitics, Middle East Conflict, Economic Policy]
+  - name: Reuters
+    covers: [Geopolitics, Global Trade, Economic Policy, Central Bank Policy]
+  - name: The New York Times
+    covers: [Geopolitics, Middle East Conflict, Economic Policy]
+  - name: Wikipedia
+    covers: []
+    note: "a reference work, not a news feed — it has no beat"
+
+  # --- Paywalled majors -------------------------------------------------------
+  - name: Bloomberg Markets
+    covers: [Central Bank Policy, Economic Policy, Global Trade, East Asia,
+             Europe, Systemic Risk, Private Credit, Direct Lending,
+             Shadow Banking, Credit Default Risk, Household Debt]
+    note: "credit-market topics listed at BEAT level: Bloomberg runs a dedicated private-credit desk. It is headline_only, which is the point of the disclosure — see the Systemic Risk finding, NL-135 research §3.5"
+  - name: Bloomberg Politics
+    covers: [Economic Policy, Geopolitics, US Legislative Process]
+  - name: Washington Post — World
+    covers: [Geopolitics, Middle East Conflict, International Law, Diplomacy,
+             Europe, Africa, Latin America, East Asia]
+  - name: Washington Post — Business
+    covers: [Economic Policy, Central Bank Policy, Global Trade,
+             Mergers & Acquisitions]
+
+  # --- Broadcast / digital ----------------------------------------------------
+  - name: CNN
+    covers: [Geopolitics, Middle East Conflict, Economic Policy]
+    note: "general front page: the broad news domains only, per the remit rule"
+  - name: NPR
+    covers: [Geopolitics, Middle East Conflict, Economic Policy]
+    note: "general front page; NPR's health and culture BEATS are separate feeds in this catalog and carry their own names"
+  - name: NBC News
+    covers: [Geopolitics, Middle East Conflict, Economic Policy]
+  - name: CNBC
+    covers: [Economic Policy, Central Bank Policy, Global Trade, East Asia,
+             Systemic Risk, Financial Analysis, Federal Reserve, Inflation]
+  - name: BBC News — World
+    covers: [Geopolitics, Middle East Conflict, International Law, Diplomacy,
+             Europe, Africa, Latin America, Oceania, East Asia]
+    note: "the widest regional remit in the catalog — the four topicless regional domains lean on this feed, Guardian World and Al Jazeera"
+  - name: PBS NewsHour
+    covers: [Geopolitics, Economic Policy, US Legislative Process]
+
+  # --- International ----------------------------------------------------------
+  - name: Al Jazeera
+    covers: [Geopolitics, Middle East Conflict, International Law, War Crimes,
+             Diplomacy, Africa, Latin America, East Asia,
+             US-Israel Relations, Proxy Conflicts]
+  - name: Euronews
+    covers: [Europe, European Economy, Geopolitics, Diplomacy]
+  - name: Open Magazine
+    covers: [India Politics, Geopolitics]
+
+  # --- Financial ---------------------------------------------------------------
+  - name: Fortune
+    covers: [Economic Policy, Mergers & Acquisitions, Artificial Intelligence]
+  - name: The Hill
+    covers: [US Legislative Process, Economic Policy, Regulatory Design,
+             Policy Failure]
+  - name: Fox Business
+    covers: [Economic Policy, Central Bank Policy, Global Trade]
+  - name: Washington Times
+    covers: [Economic Policy, Geopolitics, US Legislative Process]
+  - name: InvestmentNews
+    covers: [Financial Analysis, Economic Policy]
+  - name: The Motley Fool
+    covers: [Financial Analysis, Economic Policy]
+  - name: Investing.com
+    covers: [Financial Analysis, Central Bank Policy, Global Trade,
+             Economic Policy]
+  - name: OilPrice.com
+    covers: [Global Trade, Oil Markets, OPEC+, Energy Supply Shock,
+             Strategic Petroleum Reserve]
+  - name: Yahoo Finance
+    covers: [Economic Policy, Central Bank Policy, Financial Analysis,
+             Global Trade]
+  - name: Business Insider
+    covers: [Economic Policy, Artificial Intelligence, Mergers & Acquisitions]
+
+  # --- Policy / public ----------------------------------------------------------
+  - name: Foreign Policy in Focus
+    covers: [Geopolitics, Diplomacy, International Law, Middle East Conflict,
+             Institutional Research]
+  - name: The Fulcrum
+    covers: [US Legislative Process, Policy Failure, Regulatory Design]
+  - name: Federal News Network
+    covers: [Regulatory Design, US Legislative Process, Policy Failure]
+  - name: KPBS
+    covers: []
+    note: "public radio for San Diego — a LOCAL/REGIONAL remit, and the topic catalog has no local domain to hang it from. That gap is flagged in topic-catalog.yaml itself (call 3: NYC Subway, New York Politics, New York City, Micromobility are homeless for the same reason) and belongs to the NL-116 authorship round. Recorded empty rather than mapped to something it is not."
+
+  # --- Government / reference -----------------------------------------------------
+  - name: Congress.gov — Most-Viewed Bills
+    covers: [US Legislative Process]
+  - name: Congress.gov — Presented to the President
+    covers: [US Legislative Process]
+
+  # --- CoS-suggested, principal-approved 2026-07-03 ---------------------------
+  - name: The Guardian — World
+    covers: [Geopolitics, Middle East Conflict, International Law, War Crimes,
+             Diplomacy, Europe, Africa, Latin America, East Asia]
+  - name: Financial Times
+    covers: [Central Bank Policy, Economic Policy, Global Trade, Europe,
+             East Asia, Systemic Risk, Private Credit, Direct Lending,
+             Shadow Banking, Credit Default Risk, Household Debt]
+    note: "credit topics at beat level, same finding as Bloomberg — and headline_only, same disclosure"
+  - name: Axios
+    covers: [Economic Policy, US Legislative Process, Geopolitics,
+             Artificial Intelligence]
+  - name: Politico
+    covers: [US Legislative Process, Economic Policy, Regulatory Design,
+             Policy Failure]
+  - name: The Economist
+    covers: [Economic Policy, Geopolitics, Global Trade, Central Bank Policy,
+             Europe, East Asia]
+
+  # --- Analyst newsletters ------------------------------------------------------
+  - name: Chartbook (Adam Tooze)
+    covers: [Economic Policy, Central Bank Policy, Geopolitics, Systemic Risk,
+             Institutional Research, Europe]
+  - name: Noahpinion (Noah Smith)
+    covers: [Economic Policy, Financial Analysis, East Asia,
+             Artificial Intelligence]
+  - name: Slow Boring (Matt Yglesias)
+    covers: [Economic Policy, Housing Policy, Housing Affordability,
+             US Legislative Process]
+
+  # ===========================================================================
+  # NL-135 SLATE (2026-08-03)
+  # ===========================================================================
+
+  # --- Health & Science — the gap this slate exists to close -------------------
+  # Before these six, the three health domains had ZERO mapped feeds and the
+  # picker sold eight topics nothing could serve.
+  - name: STAT News
+    covers: [Public Health, Health Systems, Biomedical Research,
+             Vaccine Policy, Antimicrobial Resistance, Drug Pricing,
+             Clinical Trials]
+  - name: KFF Health News
+    covers: [Public Health, Health Systems, Vaccine Policy, Hospital Capacity,
+             Medicaid, Drug Pricing, Health Workforce]
+  - name: NPR Health
+    covers: [Public Health, Health Systems, Vaccine Policy,
+             Outbreak Surveillance]
+  - name: CIDRAP — Antimicrobial Stewardship
+    covers: [Public Health, Antimicrobial Resistance, Outbreak Surveillance]
+    note: "dead-centre on AMR; low cadence (20 items over two months at the 2026-08-03 check) — coverage means the beat exists here, never that stories arrive daily"
+  - name: Nature
+    covers: [Biomedical Research, Clinical Trials, Public Health]
+  - name: Fierce Healthcare
+    covers: [Health Systems, Hospital Capacity, Medicaid, Health Workforce,
+             Drug Pricing]
+
+  # --- Technology --------------------------------------------------------------
+  # HONEST LIMIT, unchanged by this slate: the topic catalog's technology
+  # vocabulary is one domain (Civic Tech) with one topic (Artificial
+  # Intelligence), plus Semiconductor Supply parked under Global Trade. A
+  # reader who wants security, platforms or consumer tech has no name to pick.
+  # Feed work cannot fix that; authorship (NL-116-class) can.
+  - name: TechCrunch
+    covers: [Civic Tech, Artificial Intelligence]
+  - name: MIT Technology Review
+    covers: [Civic Tech, Artificial Intelligence]
+  - name: IEEE Spectrum
+    covers: [Civic Tech, Artificial Intelligence, Semiconductor Supply]
+  - name: Ars Technica
+    covers: [Civic Tech, Artificial Intelligence]
+  - name: The Verge
+    covers: [Civic Tech, Artificial Intelligence]
+  - name: Wired
+    covers: [Civic Tech, Artificial Intelligence]
+
+  # --- Entertainment -----------------------------------------------------------
+  # EIGHT ENABLED FEEDS, ZERO NAMES. The topic catalog contains no
+  # entertainment domain and no entertainment topic, so there is nothing here
+  # for these feeds to cover and nothing a reader can pick. This is not an
+  # oversight in this file — it is the state of the vocabulary, recorded as
+  # data so it cannot be forgotten: ENABLING BOUGHT INGESTION, NOT A PERSONA.
+  # Their items enter every profile's candidate pool and can only ever surface
+  # through the world-impact override, which nobody asked for. The vocabulary
+  # work is NL-116-class and rides NL-17's catalog milestones.
+  - name: BBC News — Entertainment & Arts
+    covers: []
+  - name: NPR Culture
+    covers: []
+  - name: NPR Music
+    covers: []
+  - name: NBC News — Pop Culture
+    covers: []
+  - name: PBS NewsHour — Arts
+    covers: []
+  - name: The Guardian — Culture
+    covers: []
+  - name: TheWrap
+    covers: []
+  - name: Stereogum
+    covers: []
+
+  # --- Sports ------------------------------------------------------------------
+  # SIX ENABLED FEEDS, ZERO NAMES — the same vocabulary gap as Entertainment,
+  # and the same consequence. Sports landed ENABLED as ordinary section-feed
+  # news by the principal's 2026-08-02 ruling; the NL-14/NL-19 furniture lock
+  # narrowed to sports ENTITY/THREAD work, which is not this.
+  - name: BBC Sport
+    covers: []
+  - name: Washington Times — Sports
+    covers: []
+  - name: Yahoo Sports
+    covers: []
+  - name: ESPN
+    covers: []
+  - name: CBS Sports
+    covers: []
+  - name: The Guardian — Sport
+    covers: []
+
+  # --- Business deltas ----------------------------------------------------------
+  - name: WSJ — US Business
+    covers: [Economic Policy, Mergers & Acquisitions, Central Bank Policy,
+             Systemic Risk, Private Credit, Direct Lending, Shadow Banking,
+             Credit Default Risk, Household Debt]
+    note: "third headline_only feed on the credit topics — with Bloomberg and FT it makes the Systemic Risk topics an all-headlines beat, which is what the disclosure says out loud"
+  - name: Semafor
+    covers: [Economic Policy, Geopolitics, Global Trade,
+             Artificial Intelligence]

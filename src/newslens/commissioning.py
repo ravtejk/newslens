@@ -60,7 +60,7 @@ from datetime import datetime
 from html import escape
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import catalog, config, labels, webui
+from . import catalog, config, coverage, labels, webui
 
 # ---------------------------------------------------------------------------
 # The first-run state matrix
@@ -533,8 +533,16 @@ def source_pack_sentence(cfg) -> str:
 
     Each clause is dropped when its count is zero, so the sentence can never
     claim "0 aggregators are off". Against the shipped profile template this
-    renders the mockup's line exactly: 42 outlets. 37 are fetched each morning.
-    4 are cited but never fetched. 1 aggregator is off."""
+    renders: 69 outlets. 65 are fetched each morning. 4 are attribution-only by
+    design.
+
+    THE OFF CLAUSE IS ABSENT THERE, and that is the state NL-136 ① created:
+    dropping Whatfinger Business left the template with zero disabled sources,
+    so the fourth clause has nothing to count and drops — the same guard that
+    has always kept "0 aggregators are off" off the page, meeting its first
+    real caller instead of a unit test. (Before the NL-135 slate this same
+    builder rendered the mockup's original line: 42 outlets. 37 are fetched
+    each morning. 4 are cited but never fetched. 1 aggregator is off.)"""
     total = len(cfg.sources)
     fetched = len(cfg.fetchable_sources)
     cited = len(cfg.reference_only_sources)
@@ -617,7 +625,8 @@ def _source_list_html(cfg) -> str:
 
 # --- act 1: the picker ------------------------------------------------------
 
-def _pick_row(name: str, level: str, idx: str, checked: bool = False) -> str:
+def _pick_row(name: str, level: str, idx: str, checked: bool = False,
+              cov: "Optional[coverage.NameState]" = None) -> str:
     """One native checkbox wearing the product's mark.
 
     The input stays in the DOM with every native behaviour intact (space
@@ -639,18 +648,44 @@ def _pick_row(name: str, level: str, idx: str, checked: bool = False) -> str:
 
     `checked` is QA-7: the founding page is reachable repeatedly before the
     first edition publishes, and a picker that renders 66 empty circles over a
-    non-empty file hides state the reader already owns."""
+    non-empty file hides state the reader already owns.
+
+    `cov` is NL-135 Q1: the coverage state for THIS name, computed live from
+    the shipped feed→topic map plus the reader's own enabled sources. It lands
+    two ways — a `data-cov` attribute the client counts without re-deriving
+    anything, and a badge the reader can read. The badge sits INSIDE the label,
+    so it joins the checkbox's accessible name: a screen-reader user hears
+    "Vaccine Policy, No source in your list covers this regularly" as one
+    control, which is the point — the caveat belongs to the pick, not to the
+    page. (Flagged for design/a11y review; the alternative, an
+    aria-describedby sibling outside the label, buys quieter announcement at
+    the cost of the caveat being skippable.)"""
+    badge = ""
+    if cov is not None:
+        if cov.state == coverage.UNSERVED:
+            badge = labels.COMMISSION_COV_NONE
+        elif cov.state == coverage.HEADLINES:
+            badge = labels.COMMISSION_COV_HEADLINES
+        elif level == catalog.DOMAIN:
+            # Positive claims are INCLUSION and stop at the domain grain — see
+            # labels.COMMISSION_COV_ONE. A topic row says nothing when served.
+            badge = "%d %s" % (cov.served_count,
+                               labels.COMMISSION_COV_ONE if cov.served_count == 1
+                               else labels.COMMISSION_COV_MANY)
     return (
         '<label class="pick">'
         '<input class="pk" type="checkbox" id="pk-%s" value="%s" '
-        'data-level="%s" data-name="%s"%s onchange="pickChanged()">'
+        'data-level="%s" data-name="%s" data-cov="%s"%s onchange="pickChanged()">'
         '<span class="mark" aria-hidden="true"></span>'
-        '<span class="pick-name">%s</span></label>'
+        '<span class="pick-name">%s</span>%s</label>'
     ) % (idx, _attr(name), _e(level), _attr(name.lower()),
-         " checked" if checked else "", _e(name))
+         _attr(cov.state if cov is not None else ""),
+         " checked" if checked else "", _e(name),
+         ('<span class="cov">%s</span>' % _e(badge)) if badge else "")
 
 
-def _catalog_html(cat: catalog.Catalog, saved: Optional[set] = None) -> str:
+def _catalog_html(cat: catalog.Catalog, saved: Optional[set] = None,
+                  cov: Optional[coverage.CoverageState] = None) -> str:
     saved = saved or set()
     out = ['<div class="cat" id="cat">']
     for d in cat.domains:
@@ -659,7 +694,8 @@ def _catalog_html(cat: catalog.Catalog, saved: Optional[set] = None) -> str:
                    % _attr(d.name.lower()))
         out.append('<legend class="vh">%s</legend>' % _e(d.name))
         out.append(_pick_row(d.name, catalog.DOMAIN, _slug(d.name),
-                             _fold(d.name) in saved))
+                             _fold(d.name) in saved,
+                             cov.of(d.name) if cov else None))
         if d.topics:
             out.append(
                 '<button class="dom-more" type="button" aria-expanded="false" '
@@ -670,7 +706,8 @@ def _catalog_html(cat: catalog.Catalog, saved: Optional[set] = None) -> str:
             for t in d.topics:
                 out.append('<li>%s</li>'
                            % _pick_row(t, catalog.TOPIC, _slug(t),
-                                       _fold(t) in saved))
+                                       _fold(t) in saved,
+                                       cov.of(t) if cov else None))
             out.append('</ul>')
         out.append('</fieldset>')
     out.append('</div>')
@@ -704,10 +741,66 @@ def _count_line(n_picked: int) -> str:
                       else labels.COMMISSION_COUNT_MANY)
 
 
+def _coverage_line(n_unserved: int) -> str:
+    """"You picked 3 topics your sources don't cover regularly. Briefings will
+    lean on general news there until sources are added."
+
+    The SAME derivation the client's pickChanged() runs, from the same label
+    constants — the count-line precedent, for the same reason: the founding
+    page is reachable over a file that already holds picks, and a server-
+    rendered page that stays silent about them until script runs would tell a
+    reader with JavaScript off nothing at all.
+
+    Empty string at zero. There is no cheerful inverse ("all your topics are
+    covered!") and there must not be: that is a sufficiency claim, and a static
+    map cannot earn it."""
+    if n_unserved <= 0:
+        return ""
+    return "%s %d %s %s" % (
+        labels.COMMISSION_COV_UNSERVED_HEAD, n_unserved,
+        labels.COMMISSION_COV_UNSERVED_ONE if n_unserved == 1
+        else labels.COMMISSION_COV_UNSERVED_MANY,
+        labels.COMMISSION_COV_UNSERVED_TAIL)
+
+
+def _unclassified_line(cov: "Optional[coverage.CoverageState]") -> str:
+    """"2 sources in your list aren't classified yet, so they aren't counted
+    above." — the honesty valve, and the only line here the client never
+    recomputes (it is a property of the FILE, not of the ticks).
+
+    A fresh profile renders nothing: its list is exactly the mapped catalog.
+    A reader who hand-adds an outlet gets this, because every absence badge on
+    the page is then a claim made over sources the map has not read."""
+    if not cov or not cov.unclassified:
+        return ""
+    n = len(cov.unclassified)
+    return "%d %s" % (n, labels.COMMISSION_COV_UNKNOWN_ONE if n == 1
+                      else labels.COMMISSION_COV_UNKNOWN_MANY)
+
+
+def _coverage_state(cfg, cat: catalog.Catalog):
+    """Coverage state, or None if the map cannot be read.
+
+    DEGRADES SILENT ON PURPOSE, and this is the one place in the module that
+    does: every badge this powers is a CLAIM, and a page that cannot read the
+    map has no basis for any of them. Rendering "No source covers this" from a
+    failed load would be the fabrication the mechanism exists to prevent, so a
+    broken map costs the reader the badges and costs nobody the truth. The
+    suite is where a malformed map is supposed to be caught (coverage.load
+    raises CoverageError loudly, and tests/test_nl135_slate_land.py runs it
+    against the shipped files)."""
+    try:
+        return coverage.state(cfg, cat=cat)
+    except (coverage.CoverageError, catalog.CatalogError, OSError):
+        return None
+
+
 def _picker_html(cat: catalog.Catalog, cfg) -> str:
     n = cat.entry_count
     already = saved_picks(cfg, cat)
     n_picked = len(already)
+    cov = _coverage_state(cfg, cat)
+    n_unserved = len(cov.unserved_among(already)) if cov else 0
     return """
 <section class="act" aria-labelledby="c1-topics">
   <h2 class="act-h" id="c1-topics">{head}</h2>
@@ -721,6 +814,8 @@ def _picker_html(cat: catalog.Catalog, cfg) -> str:
   {catalog_html}
   <p class="count" id="c1-count">{count}</p>
   <p class="consequence" id="c1-consequence"{consequence_hidden}>{consequence}</p>
+  <p class="coverage" id="c1-coverage"{coverage_hidden}>{coverage}</p>
+  <p class="cov-note" id="c1-cov-note"{unclassified_hidden}>{unclassified}</p>
 </section>
 <section class="act" aria-labelledby="c1-sources">
   <h2 class="act-h" id="c1-sources">{sources_head}</h2>
@@ -739,12 +834,18 @@ def _picker_html(cat: catalog.Catalog, cfg) -> str:
         n=n,
         topics_word=_e(_plural(n, labels.COMMISSION_TOPIC_WORD,
                                labels.COMMISSION_TOPICS_WORD)),
-        catalog_html=_catalog_html(cat, {_fold(x) for x in already}),
+        catalog_html=_catalog_html(cat, {_fold(x) for x in already}, cov),
         count=_e(_count_line(n_picked)),
         # FLAG ⑤ as ruled and as the client re-computes it: the consequence
         # renders at 1–2 picks only.
         consequence_hidden="" if n_picked in (1, 2) else " hidden",
         consequence=_e(labels.COMMISSION_CONSEQUENCE),
+        # NL-135 Q1: hidden at zero unserved picks, and it stays an element in
+        # the DOM either way so the client can fill it without building markup.
+        coverage_hidden="" if n_unserved else " hidden",
+        coverage=_e(_coverage_line(n_unserved)),
+        unclassified_hidden="" if (cov and cov.unclassified) else " hidden",
+        unclassified=_e(_unclassified_line(cov)),
         sources_head=_e(labels.COMMISSION_SOURCES_HEAD),
         pack=_e(source_pack_sentence(cfg)),
         show_list=_e(labels.COMMISSION_SOURCES_SHOW),
@@ -843,6 +944,15 @@ def nl_c1_js() -> str:
         "matchOne": labels.COMMISSION_FILTER_MATCH_ONE,
         "matchMany": labels.COMMISSION_FILTER_MATCH_MANY,
         "noMatch": labels.COMMISSION_FILTER_NO_MATCH,
+        # NL-135 Q1 — the client re-derives the coverage summary from the same
+        # words the server rendered it with. No coverage RULE crosses the wire:
+        # the client counts `data-cov="unserved"` on the boxes the server
+        # already stamped, so the map, the fetchability rule and the topic
+        # inheritance all stay server-side and there is exactly one of each.
+        "covHead": labels.COMMISSION_COV_UNSERVED_HEAD,
+        "covOne": labels.COMMISSION_COV_UNSERVED_ONE,
+        "covMany": labels.COMMISSION_COV_UNSERVED_MANY,
+        "covTail": labels.COMMISSION_COV_UNSERVED_TAIL,
     })
 
 
@@ -936,6 +1046,15 @@ input:focus-visible, .pk:focus-visible + .mark {
 .consequence { font-size: 0.78rem; font-style: italic; color: var(--ink-faint);
   margin: 0.25rem 0 0; max-width: 34rem; }
 .consequence[hidden] { display: none; }
+/* NL-135 Q1 — the coverage summary sits with the consequence line and reads
+   the same: a quiet statement of fact, not an alert. Nothing here is red,
+   because an unserved pick is not the reader's mistake — it is ours. */
+.coverage { font-size: 0.78rem; font-style: italic; color: var(--ink-faint);
+  margin: 0.25rem 0 0; max-width: 34rem; }
+.coverage[hidden] { display: none; }
+.cov-note { font-size: 0.72rem; font-style: italic; color: var(--ink-faint);
+  margin: 0.2rem 0 0; max-width: 34rem; }
+.cov-note[hidden] { display: none; }
 
 /* ---- the filter: suggestions-only made mechanical ---- */
 .filter-lab { display: block; font-size: 0.8rem; color: var(--ink-soft); margin: 0 0 0.25rem; }
@@ -958,6 +1077,10 @@ fieldset.dom[hidden] { display: none; }
 .pk:checked + .mark::before { content: "\\25CF"; color: var(--terra); }
 .pick-name { font-size: 0.98rem; color: var(--ink-soft); min-width: 0; }
 .pk:checked ~ .pick-name { color: var(--ink); font-weight: 700; }
+/* The per-name coverage badge. Deliberately the quietest thing on the row:
+   it qualifies the name, it does not shout at it. */
+.cov { font-size: 0.72rem; font-style: italic; color: var(--ink-faint);
+  margin-left: auto; padding-left: 0.6rem; text-align: right; }
 .dom > .pick > .pick-name { font-family: var(--font-display); font-size: 1.05rem; }
 .dom-more { background: none; border: none; padding: 0.3rem 0 0.55rem 1.45rem;
   cursor: pointer; font-family: var(--font-sans); font-size: 0.82rem;
@@ -1064,8 +1187,28 @@ function pickChanged() {
   var c = document.getElementById('c1-consequence');
   /* FLAG 5 as ruled: floor of 1, and the consequence renders at 1-2 only. */
   if (c) { c.hidden = !(n === 1 || n === 2); }
+  coverageChanged();
   var r = document.getElementById('c1-refusal');
   if (r && n > 0) { r.textContent = ''; }
+}
+/* NL-135 Q1. Counts the boxes the SERVER stamped data-cov="unserved" — the
+   client owns no coverage rule of its own, so there is one map, one
+   fetchability rule and one inheritance rule, all of them server-side.
+   Absence is the only thing this line ever says; there is deliberately no
+   cheerful inverse, because "all covered" is a sufficiency claim a static map
+   cannot earn. */
+function coverageChanged() {
+  var el = document.getElementById('c1-coverage');
+  if (!el) { return; }
+  var n = 0;
+  document.querySelectorAll('#cat .pk').forEach(function (b) {
+    if (b.checked && b.getAttribute('data-cov') === 'unserved') { n += 1; }
+  });
+  el.hidden = n === 0;
+  if (n > 0) {
+    el.textContent = NL_C1.covHead + ' ' + n + ' '
+      + (n === 1 ? NL_C1.covOne : NL_C1.covMany) + ' ' + NL_C1.covTail;
+  }
 }
 function toggleDomain(btn) {
   var ul = document.getElementById(btn.getAttribute('aria-controls'));

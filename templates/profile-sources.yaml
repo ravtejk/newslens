@@ -26,11 +26,20 @@
 #   To follow one: uncomment its `followed_analyst: true` line. That is the
 #   whole reversal, one line per source.
 #
-# Everything below the header, down to `interests:`, is the ORG SOURCE
-# CATALOG verbatim apart from those three commented lines. It drifts from
-# sources.yaml only when the catalog is edited; test_stage0_m1_profiles.py
-# pins that this file still parses clean with active sources and zero
-# interests, and tests/test_stage0_m2.py pins the zero-follows posture.
+# Everything below the header, down to `interests:`, IS the org source
+# catalog. It was generated verbatim from the committed sources.yaml apart
+# from those three commented lines, and has since been edited HERE — this
+# file is now the catalog of record for provisioning, and the founder's
+# sources.yaml is his own file, not its source. Edits since generation:
+#   2026-08-03  NL-135 slate: +28 feeds (Health & Science, Technology,
+#               Entertainment, Sports, Business deltas), every URL checked
+#               with the doctor's own pipeline-UA fetch that day.
+#   2026-08-03  NL-136 ①: Whatfinger Business (cautious, permanently off)
+#               dropped — a dead entry every new reader inherited.
+# test_stage0_m1_profiles.py pins that this file still parses clean with
+# active sources and zero interests, tests/test_stage0_m2.py pins the
+# zero-follows posture, and tests/test_nl135_slate_land.py pins the slate,
+# the drop, and the feed->topic coverage map that reads this file.
 # =============================================================================
 
 # =============================================================================
@@ -178,12 +187,19 @@ sources:
     rss_url: https://www.congress.gov/rss/presented-to-president.xml
 
   # --- Cautious aggregators (principal's label; DEFAULT-DISABLED) ------------------
-  - name: Whatfinger Business
-    rss_url: https://www.whatfinger.com/category/business/feed/
-    tier: cautious
-    enabled: false
-    wire_syndication: true
-    note: "aggregator/linkblog — enable explicitly if wanted; flagged + down-weighted downstream"
+  # EMPTY BY RULING (NL-136 ①, 2026-08-02). The one entry that lived here —
+  # Whatfinger Business (cautious tier, enabled: false) — is DROPPED from the
+  # org template: a permanently-off aggregator is a dead entry that every new
+  # reader inherits, counts in their source pack ("1 aggregator is off"), and
+  # can do nothing for them. The TIER is untouched and still supported by
+  # config.py: a reader who wants an aggregator adds one here and sets
+  # `tier: cautious` (default-disabled, flagged + down-weighted downstream).
+  #   To restore it, one block:
+  #     - name: Whatfinger Business
+  #       rss_url: https://www.whatfinger.com/category/business/feed/
+  #       tier: cautious
+  #       enabled: false
+  #       wire_syndication: true
 
   # ---------------------------------------------------------------------------
   # NO USABLE FEED (verified 2026-07-03 with the pipeline UA; recorded so the
@@ -241,6 +257,203 @@ sources:
     rss_url: https://www.slowboring.com/feed
     # followed_analyst: true
     note: "analyst newsletter — uncomment followed_analyst to follow (taxonomy contract 2026-07-03)"
+
+  # ===========================================================================
+  # NL-135 SLATE — approved 2026-08-02 (+ §A Entertainment/Sports amendment).
+  #
+  # WHY: the org catalog above is econ/politics/world by construction, so a
+  # reader who picked the C1 catalog's health topics was sold interests the
+  # fetch pool could not serve (the 2026-08-02 fresh-profile walk: 550 items
+  # -> 12 clusters -> 0 interest matches -> a one-story edition).
+  #
+  # HOW EVERY URL BELOW WAS CHECKED: the pipeline's own feed check — the
+  # doctor's `net.head_bytes` with the PIPELINE User-Agent, doctor
+  # FEED_TIMEOUT_S, the doctor's RSS-shape sniff — plus a full
+  # `ingest.parse_entries` parse for item count and newest-item date. Run
+  # 2026-08-03. The research sweep that drafted this slate used a generic
+  # client; this is the binding check, and it moved four verdicts (below).
+  #
+  # FRESHNESS IS PART OF THE CHECK, not a nicety: ranking.py:97 measures
+  # recency by FETCH time, not published_at, so an abandoned feed's archive
+  # would enter the candidate pool as fresh news. A feed whose newest item is
+  # years old is recorded here, never enabled.
+  # ===========================================================================
+
+  # --- Health & Science (NL-135; the proven gap) -------------------------------
+  # 6 feeds, all doctor-verified 2026-08-03. Serves the C1 health topics that
+  # had ZERO beat sources before this slate (Public Health / Health Systems /
+  # Biomedical Research).
+  - name: STAT News
+    rss_url: https://www.statnews.com/feed/
+    note: "biotech/pharma/health-policy newsroom; STAT+ subset paywalled, those arrive as summaries; doctor 2026-08-03: 20 items, newest same-day"
+  - name: KFF Health News
+    rss_url: https://kffhealthnews.org/feed/
+    wire_syndication: true
+    note: "nonprofit, CC-republished widely (NPR/CNN run KFF copy) — wire-flagged so KFF-bylined stories arriving via other feeds don't double-count corroboration; doctor 2026-08-03: 10 items, newest 2 days"
+  - name: NPR Health
+    rss_url: https://feeds.npr.org/1128/rss.xml
+    note: "section arm of an existing catalog outlet; NOT the Shots feed 103537970, which is stale since Jan 2026; doctor 2026-08-03: 10 items, newest same-day"
+  - name: CIDRAP — Antimicrobial Stewardship
+    rss_url: https://www.cidrap.umn.edu/news/48/rss
+    note: "U Minnesota infectious-disease center; serves AMR dead-center; LOW CADENCE — doctor 2026-08-03 read 20 items spanning 2026-05-28..07-27 (newest 7 days old), which is the beat's real pace, not a fault; CIDRAP is per-topic only (~80 feeds), so avian flu /news/49/rss etc. are same-host future adds"
+  - name: Nature
+    rss_url: https://www.nature.com/nature.rss
+    tier: headline_only
+    note: "science record-of-note; journal paywall — titles+summaries, attribution+linkout; doctor 2026-08-03: 20 items, newest same-day"
+  - name: Fierce Healthcare
+    rss_url: https://www.fiercehealthcare.com/rss/xml
+    note: "hospital/payer/provider trade press — the Medicaid/hospital-capacity/workforce beat; doctor 2026-08-03: 20 items, NO per-item dates in the feed (published_at lands NULL; recency is fetch-time anyway per ranking.py:97; the only cost is corpus datelines — analysis corpus keys carry published_at:\"\" and the \"(published …)\" annotation is omitted; nothing filters items on published_at)"
+
+  # --- Technology (NL-135) -----------------------------------------------------
+  # 6 feeds. The three the research sweep could not reach (Ars, Verge, Wired)
+  # were TOOL-BLOCKED, not server-refused — the pipeline UA reaches all three,
+  # so they land ENABLED on the doctor's word rather than on the sweep's.
+  - name: TechCrunch
+    rss_url: https://techcrunch.com/feed/
+    note: "startup/AI-industry beat, free; doctor 2026-08-03: 20 items, newest same-day"
+  - name: MIT Technology Review
+    rss_url: https://www.technologyreview.com/feed/
+    note: "deep AI coverage; site metered, feed carries usable summaries (doctor 2026-08-03: 10 items, ~350-char excerpts, newest 3 days)"
+  - name: IEEE Spectrum
+    rss_url: https://spectrum.ieee.org/feeds/feed.rss
+    note: "the semiconductor-supply + AI-hardware beat, free, full text (doctor 2026-08-03: 20 items at the 1500-char excerpt cap, newest same-day)"
+  - name: Ars Technica
+    rss_url: https://feeds.arstechnica.com/arstechnica/index
+    note: "DOCTOR-PENDING in the slate, RESOLVED PASS 2026-08-03 with the pipeline UA (20 items, newest 2 days) — the sweep's failure was tool-side"
+  - name: The Verge
+    rss_url: https://www.theverge.com/rss/index.xml
+    note: "DOCTOR-PENDING in the slate, RESOLVED PASS 2026-08-03 (10 items, newest same-day); free summaries, full text is a subscriber perk"
+  - name: Wired
+    rss_url: https://www.wired.com/feed/rss
+    tier: headline_only
+    note: "DOCTOR-PENDING in the slate, RESOLVED PASS 2026-08-03 (20 items, newest same-day); paywalled — titles+summaries, attribution+linkout"
+
+  # --- Entertainment (NL-135 §A; his amendment: section arms of outlets the
+  #     reader already follows, plus the one reachable trade) ------------------
+  # 8 feeds. VOCABULARY HONESTY, stated where it can't be missed: C1 carries
+  # ZERO entertainment domains or topics today, so these feeds INGEST but no
+  # reader can express an entertainment interest until the vocabulary is
+  # authored (NL-116-class work, riding NL-17's catalog milestones). Enabling
+  # buys ingestion, not a persona. templates/feed-coverage.yaml records the
+  # same fact as data.
+  - name: BBC News — Entertainment & Arts
+    rss_url: https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm of an existing catalog outlet; doctor 2026-08-03: 20 items, newest same-day"
+  - name: NPR Culture
+    rss_url: https://feeds.npr.org/1008/rss.xml
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm of an existing catalog outlet; doctor 2026-08-03: 10 items, newest same-day"
+  - name: NPR Music
+    rss_url: https://feeds.npr.org/1039/rss.xml
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm, full text; doctor 2026-08-03: 10 items, newest 2 days"
+  - name: NBC News — Pop Culture
+    rss_url: https://feeds.nbcnews.com/nbcnews/public/pop-culture
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm of an existing catalog outlet; doctor 2026-08-03: 20 items, newest same-day"
+  - name: PBS NewsHour — Arts
+    rss_url: https://www.pbs.org/newshour/feeds/rss/arts
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm of an existing catalog outlet; doctor 2026-08-03: 20 items, newest 3 days"
+  - name: The Guardian — Culture
+    rss_url: https://www.theguardian.com/culture/rss
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm of an existing catalog outlet; DOCTOR-PENDING in the slate, RESOLVED PASS 2026-08-03 (20 items, full text, newest 1 day) — the sweep's failure was tool-side, exactly as inferred from the verified /world/rss sibling"
+  - name: TheWrap
+    rss_url: https://www.thewrap.com/feed/
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "the one reachable film/TV industry trade — Variety/THR/Deadline/Rolling Stone are licensing-blocked (below); doctor 2026-08-03: 10 items, newest same-day"
+  - name: Stereogum
+    rss_url: https://www.stereogum.com/feed/
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "independent music news/criticism alongside NPR Music; doctor 2026-08-03: 20 items, newest 1 day"
+
+  # --- Sports (NL-135 §A; ENABLED as ordinary section-feed news) ---------------
+  # 6 feeds. CONSTRAINT LINE OF RECORD, carried verbatim in scope: the
+  # NL-14/NL-19 furniture lock is NARROWED to sports ENTITY/THREAD work only
+  # (principal ruling ⑤, 2026-08-02) — sports lands here as plain news from
+  # outlets the reader already chose ("we're just giving them sports news that
+  # they would've gotten from the chosen sources anyway"). Sports-specific
+  # entity/thread features still owe the NL-19 work.
+  # Same vocabulary honesty as Entertainment: ZERO C1 sports names exist.
+  - name: BBC Sport
+    rss_url: https://feeds.bbci.co.uk/sport/rss.xml
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm of an existing catalog outlet; global/football counterweight to the US majors; doctor 2026-08-03: 20 items, newest same-hour"
+  - name: Washington Times — Sports
+    rss_url: https://www.washingtontimes.com/rss/headlines/sports/
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    wire_syndication: true
+    note: "section arm of an existing catalog outlet; sampled items are AP wire copy — wire-flagged so the same AP game story here and via Yahoo doesn't double-count corroboration; doctor 2026-08-03: 20 items, newest same-day"
+  - name: Yahoo Sports
+    rss_url: https://sports.yahoo.com/rss/
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    wire_syndication: true
+    note: "arm of the existing Yahoo presence; heavy AP/BBC/Gannett republisher — wire-flagged (Yahoo Finance precedent); HIGHEST-CADENCE FEED IN THE CATALOG — doctor 2026-08-03 read 20 items spanning 20 MINUTES"
+  - name: ESPN
+    rss_url: https://www.espn.com/espn/rss/news
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "new outlet: the US sports record, ordinary-news usable; doctor 2026-08-03: 20 items, newest same-hour"
+  - name: CBS Sports
+    rss_url: https://www.cbssports.com/rss/headlines/
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "new outlet: an independent US newsroom next to ESPN and the wire copy; doctor 2026-08-03: 20 items, newest same-hour"
+  - name: The Guardian — Sport
+    rss_url: https://www.theguardian.com/sport/rss
+    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    note: "section arm of an existing catalog outlet; DOCTOR-PENDING in the slate, RESOLVED PASS 2026-08-03 (20 items, full text, newest same-hour)"
+
+  # --- Business deltas (NL-135 gap-check; deltas only) -------------------------
+  # The catalog already owns this ground (Bloomberg x2, CNBC, Fortune, FT,
+  # Economist, InvestmentNews, Motley Fool, Investing.com, OilPrice, Yahoo
+  # Finance, Business Insider, Fox Business, WaPo Business). Two real gaps:
+  - name: WSJ — US Business
+    rss_url: https://feeds.content.dowjones.io/public/rss/WSJcomUSBusiness
+    tier: headline_only
+    note: "the US business record-of-note was absent; hard paywall — titles+summaries, attribution+linkout; serves M&A/corporates beyond the markets tilt; doctor 2026-08-03: 20 items, newest same-day"
+  - name: Semafor
+    rss_url: https://www.semafor.com/rss.xml
+    note: "free full-text feed (rare among majors); business/CEO vertical plus tech+world spillover on one sitewide feed; doctor 2026-08-03: 20 items, newest same-day"
+
+  # ---------------------------------------------------------------------------
+  # NL-135: CHECKED AND NOT SLATED (recorded so the outcome is visible)
+  #
+  # STALE — feed resolves and parses, but the content is abandoned. Enabling
+  # one would inject an archive into the candidate pool as fresh news, because
+  # recency is measured by fetch time (ranking.py:97). Doctor 2026-08-03:
+  #   CNN Entertainment — http://rss.cnn.com/rss/cnn_showbiz.rss
+  #                       HTTP 200, 20 items, NEWEST ITEM 2022-12-06
+  #                       (top item: Kirstie Alley's obituary). The slate
+  #                       carried this as doctor-pending on a broken-TLS
+  #                       inference; the http endpoint is fine — the FEED is
+  #                       dead. Re-check if CNN revives it.
+  #   CNN Sport         — http://rss.cnn.com/rss/edition_sport.rss
+  #                       HTTP 200, 20 items, NEWEST ITEM 2023-04-16. Same.
+  #   Yahoo Entertainment — news.yahoo.com/rss/entertainment: live, titles-only,
+  #                       newest item Sep 2025 (research sweep 2026-08-02).
+  #
+  # LICENSING-BLOCKED (research sweep 2026-08-02, generic client — NOT re-run
+  #   under the binding check): Variety, The Hollywood
+  #   Reporter, Deadline, Rolling Stone — all Penske Media; /feed/ 307-redirects
+  #   to tollbit.<domain>.com, which answers HTTP 402 Payment Required. The
+  #   entertainment trades of record now charge automated clients. Billboard and
+  #   IndieWire are PMC siblings, presumed the same, untested. Revisiting this
+  #   is a licensing decision, not a feed decision.
+  #   Gate re-check 2026-08-03, pipeline UA: Variety /feed/ answers 200 with
+  #   current RSS — these verdicts are sweep-grade; doctor-check this block
+  #   next slate round.
+  #
+  # NO FEED FOUND: Al Jazeera sport (xml/rss/sport.xml 404s — AJ sport arrives
+  #   only inside the existing all.xml feed). Science.org, Fierce Biotech,
+  #   Endpoints News: 403 bot walls (research sweep). MarketWatch top-stories is
+  #   live and free but duplicates the retail-investor beat three catalog feeds
+  #   already cover — noise, not coverage.
+  #
+  # NOT ASSESSED: The Athletic (NYT-owned, paywalled; the principal's NYT
+  #   reference-only posture may apply). Pitchfork, Vulture, Entertainment
+  #   Weekly (tool-blocked in the sweep, never doctor-checked).
+  # ---------------------------------------------------------------------------
 
 # --- Interests ---------------------------------------------------------------
 # EMPTY BY DESIGN (see the header). Fill these in with THIS reader's tags:
