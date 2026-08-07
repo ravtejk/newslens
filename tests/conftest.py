@@ -584,6 +584,34 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ENG-M0 (2026-08-06) — THE SSE ACCEPT, served centrally.
+    # ranking.MAX_COMPLETION_TOKENS rose 3,000 -> 36,000, which crosses
+    # llm._STREAM_MIN_MAX_TOKENS (5,000), so the rank seat now POSTs
+    # `"stream": true` on the api lane exactly as the writer and analyst already
+    # did. Before this, every rank api-lane test routed a NON-streaming JSON body
+    # and the provider's SSE accumulator (correctly) rejected it with
+    # "SSE stream ended without a message_stop event".
+    #
+    # THE FIX BELONGS HERE, NOT IN ~40 TESTS. The request itself says whether it
+    # asked to stream, so the fake server can answer the way the WIRE would:
+    # same routed payload, serialised either way. That keeps every existing
+    # `route(..., body=anthropic_envelope(...))` call site correct and unchanged,
+    # and — more importantly — it means a future seat crossing the streaming
+    # threshold does not silently break its tests again.
+    # Scoped tightly: POST /v1/messages, status 200, request asked to stream.
+    # Error envelopes (401/429/400) and every non-anthropic route are untouched,
+    # so the transport-failure taxonomy tests keep testing what they tested.
+    def _maybe_stream(self, spec, body: bytes) -> "tuple":
+        if self.path != "/v1/messages" or spec.get("status") != 200 or not body:
+            return body, spec.get("content_type", "application/xml")
+        if not (getattr(self, "_req_body", None) or {}).get("stream"):
+            return body, spec.get("content_type", "application/xml")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except ValueError:
+            return body, spec.get("content_type", "application/xml")
+        return anthropic_sse_bytes(payload), "text/event-stream"
+
     def _try_route(self) -> bool:
         """Dynamic per-test routes (FakeAPI.add_route). Returns True if handled."""
         spec = self.server.routes.get(self.path)
@@ -594,8 +622,8 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", spec["location"])
         for name, value in (spec.get("headers") or {}).items():
             self.send_header(name, value)
-        body = spec.get("body", b"")
-        self.send_header("Content-Type", spec.get("content_type", "application/xml"))
+        body, ctype = self._maybe_stream(spec, spec.get("body", b""))
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if body:
@@ -647,6 +675,9 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
             body = json.loads(raw.decode("utf-8"))
         except ValueError:
             body = None
+        # ENG-M0: stashed so _maybe_stream can answer the way the wire would —
+        # the REQUEST is what says whether this response should be SSE.
+        self._req_body = body if isinstance(body, dict) else None
         self.server.recorded.append(
             {
                 "method": "POST",
@@ -681,7 +712,14 @@ class _FakeAPIHandler(http.server.BaseHTTPRequestHandler):
             # bodies come via FakeAPI.add_route("/v1/messages", ...) with
             # anthropic_envelope(...).
             if self.headers.get("x-api-key", "") == self.server.good_key:
-                self._send(200, anthropic_envelope("ok"))
+                # ENG-M0: the default canned reply streams too when asked.
+                canned = anthropic_envelope("ok")
+                if (self._req_body or {}).get("stream"):
+                    self._send(200,
+                               anthropic_sse_bytes(json.loads(canned.decode("utf-8"))),
+                               ctype="text/event-stream")
+                else:
+                    self._send(200, canned)
             else:
                 self._send(401, b'{"type": "error", '
                                 b'"error": {"type": "authentication_error", '

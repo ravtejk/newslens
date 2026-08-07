@@ -102,13 +102,15 @@ def _rank_req(json_mode: bool = True, prompt: str = "cluster these stories"):
 
 def test_haiku_seats_default_to_the_subscription_lane():
     # 2026-07-17 (option a): state joined the Haiku/subscription seats.
+    # ENG-M0 2026-08-06: these are no longer "the Haiku seats" — rank is Sonnet 5
+    # and editor/script/state are Opus 4.8. What this test actually guards is the
+    # LANE default (subscription), which is unchanged, so it now pins the lane for
+    # every anthropic seat and reads each model off its row.
     for seat in ("rank", "editor", "script", "state"):
         cfg = llm.resolve_seat(seat, {})
-        assert cfg.provider == "anthropic" and cfg.model == "claude-haiku-4-5"
+        assert cfg.provider == "anthropic" and cfg.model == llm.SEATS[seat].model
         assert cfg.lane == "subscription", seat
-    # item C (2026-07-17): writer/analyst are on the subscription lane too, but
-    # keep their Opus/Sonnet models (not Haiku).
-    for seat, model in (("writer", "claude-opus-4-8"), ("analyst", "claude-sonnet-5")):
+    for seat, model in (("writer", "claude-opus-4-8"), ("analyst", "claude-opus-4-8")):
         cfg = llm.resolve_seat(seat, {})
         assert cfg.provider == "anthropic" and cfg.model == model
         assert cfg.lane == "subscription", seat
@@ -157,7 +159,8 @@ def test_invocation_disables_tools_and_the_injection_surface(tmp_path, monkeypat
     llm.chat(_rank_req())
     argv = json.loads(rec.read_text())["argv"]
     assert argv[:3] == ["-p", "--output-format", "json"]
-    assert "--model" in argv and argv[argv.index("--model") + 1] == "claude-haiku-4-5"
+    assert ("--model" in argv
+            and argv[argv.index("--model") + 1] == llm.SEATS["rank"].model)
     # tools OFF ("" disables all), injection surface OFF, hermetic session
     ti = argv.index("--tools")
     assert argv[ti + 1] == ""
@@ -310,7 +313,7 @@ def test_reported_usage_ledgers_charged_zero_shadow_api_priced(tmp_path, monkeyp
     fields = llm.cost_fields(llm.resolve_seat("rank"), resp.raw["usage"])
     assert fields["lane"] == "subscription"
     assert fields["usd_charged"] == 0.0
-    assert fields["usd_shadow"] == pytest.approx(1.00)
+    assert fields["usd_shadow"] == pytest.approx(llm.SEATS["rank"].usd_per_mtok_in)
     assert "usd_shadow_estimated" not in fields          # metered, not estimated
 
 
@@ -431,7 +434,9 @@ def test_D1_rank_cost_sink_legacy_usd_is_charged_zero_on_subscription(monkeypatc
     e = sink[0]
     assert e["lane"] == "subscription"
     assert e["usd"] == e["usd_charged"] == 0.0
-    assert e["usd_shadow"] == pytest.approx(1000 / 1e6 * 1.00 + 200 / 1e6 * 5.00)
+    _r = llm.SEATS["rank"]
+    assert e["usd_shadow"] == pytest.approx(
+        1000 / 1e6 * _r.usd_per_mtok_in + 200 / 1e6 * _r.usd_per_mtok_out)
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +457,9 @@ def test_D2_armed_fallback_falls_to_api_when_subscription_unavailable(monkeypatc
         cfg, {"prompt_tokens": 1_000_000, "completion_tokens": 0},
         fallback_reason=reason)
     assert fields["lane"] == "api(fallback:subscription_unavailable)"
-    assert fields["usd_charged"] == pytest.approx(1.00)   # the api lane bills real money
-    assert fields["usd_shadow"] == pytest.approx(1.00)
+    _rin = llm.SEATS["rank"].usd_per_mtok_in
+    assert fields["usd_charged"] == pytest.approx(_rin)   # the api lane bills real money
+    assert fields["usd_shadow"] == pytest.approx(_rin)
 
 
 def test_D2_unarmed_subscription_unavailable_still_dies_loud(monkeypatch):

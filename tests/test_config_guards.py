@@ -36,7 +36,11 @@ def test_budget_cap_unset_or_blank_uses_documented_default(env):
     # which prices the 16k Opus ceiling at ~$0.40). A PRINCIPAL MONEY
     # CHECKPOINT — the gate presents it; this pin makes the next raise
     # deliberate too. (History: 0.50 -> 0.25 at M9 2026-07-06.)
-    assert config.budget_cap_usd_per_run(env) == 1.50
+    # ENG-M0 RE-PIN 2026-08-06: 1.50 -> 4.25. The full seat batch put rank on
+    # Sonnet 5 and analyst/editor/script/state on Opus 4.8; the measured
+    # post-flip 7-slot edition is $2.832882 and the cap carries ~50% margin over
+    # it. Arithmetic per seat is in config.py. Still a MONEY CHECKPOINT.
+    assert config.budget_cap_usd_per_run(env) == 4.25
 
 
 @pytest.mark.parametrize("raw", ["abc", "$1", "1,50", "0", "0.0", "-1", "-inf"])
@@ -80,16 +84,19 @@ def test_doctor_nudges_a_cap_pinned_above_the_recommended_default():
     # old 0.50 (or anything higher than default) gets a visible worth-a-look
     # nudge, never a silent pass and never a hard failure (it's the
     # principal's value to set).
-    # B4: default is 1.50 now — the nudge fires on a cap pinned ABOVE it.
-    line = _guard_line({"BUDGET_CAP_USD_PER_RUN": "2.50"}, "BUDGET_CAP_USD_PER_RUN")
+    # ENG-M0: default is 4.25 now, so the nudge needs a cap pinned above THAT.
+    # 2.50 is no longer "above the recommended default" — it is below it, and
+    # pinning the old probe value here would have asserted a warning the doctor
+    # is right not to emit.
+    line = _guard_line({"BUDGET_CAP_USD_PER_RUN": "6.00"}, "BUDGET_CAP_USD_PER_RUN")
     assert line.status == doctor.WARN
-    assert "2.50" in line.text and "1.50 recommended" in line.text
+    assert "6.00" in line.text and "4.25 recommended" in line.text
 
 
 def test_doctor_reports_unset_budget_cap_as_default_info():
     line = _guard_line({}, "BUDGET_CAP_USD_PER_RUN")
     assert line.status == doctor.INFO
-    assert "default 1.50" in line.text  # B4 raise 2026-07-16 (0.25 at M9 before)
+    assert "default 4.25" in line.text  # ENG-M0 raise 2026-08-06 (1.50 before)
 
 
 @pytest.mark.parametrize("raw", ["nan", "inf"])

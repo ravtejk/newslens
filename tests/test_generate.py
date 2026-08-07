@@ -505,10 +505,10 @@ def test_writer_model_seam_and_rates():
     # can pass.
     assert generate.WRITER_MODEL == "claude-opus-4-8"
     assert generate.WRITER_MODEL == llm.SEATS["writer"].model
-    assert ranking.RANK_MODEL == "claude-haiku-4-5"           # B2: Haiku
+    assert ranking.RANK_MODEL == "claude-sonnet-5"            # ENG-M0: Sonnet 5
     assert ranking.RANK_MODEL == llm.SEATS["rank"].model      # derived from the seat
-    assert ranking.RANK_USD_PER_MTOK_IN == 1.00
-    assert ranking.RANK_USD_PER_MTOK_OUT == 5.00
+    assert ranking.RANK_USD_PER_MTOK_IN == 3.00
+    assert ranking.RANK_USD_PER_MTOK_OUT == 15.00
     assert ranking.MODEL == "gpt-4o-mini"  # the fallback rung, kept documented
     assert generate.WRITER_USD_PER_MTOK_IN == llm.SEATS["writer"].usd_per_mtok_in == 5.00
     assert generate.WRITER_USD_PER_MTOK_OUT == llm.SEATS["writer"].usd_per_mtok_out == 25.00
@@ -533,7 +533,7 @@ def test_each_generate_step_logs_its_own_seat_model(migrated_con, fake_model):
     assert by_step.get("narrative_A", "claude-opus-4-8") == "claude-opus-4-8"
     for step, model in by_step.items():
         if step.startswith("script") or step.startswith("editor"):
-            assert model == "claude-haiku-4-5", step
+            assert model == llm.SEATS[step.split("_")[0]].model, step
     tc = json.loads(migrated_con.execute(
         "SELECT token_cost FROM briefings WHERE date = ?", (A_DAY,)
     ).fetchone()["token_cost"])
@@ -541,7 +541,7 @@ def test_each_generate_step_logs_its_own_seat_model(migrated_con, fake_model):
         if s["step"].startswith("narrative"):
             assert s["model"] == "claude-opus-4-8", s
         elif s["step"].startswith(("script", "editor")):
-            assert s["model"] == "claude-haiku-4-5", s
+            assert s["model"] == llm.SEATS[s["step"].split("_")[0]].model, s
 
 
 def test_doctor_cost_line_matches_the_measured_pipeline():
@@ -1230,10 +1230,12 @@ def test_cost_sink_records_every_api_reaching_attempt(monkeypatch):
     per = llm.cost_fields(script_cfg,
                           {"prompt_tokens": 1000, "completion_tokens": 500}
                           )["usd_charged"]
-    assert per == pytest.approx(0.0035)  # Haiku 1.00/5.00, NOT writer 2.50/10.00
+    # ENG-M0: derived from the script seat (Opus 4.8 now), not a frozen literal.
+    assert per == pytest.approx(1000 / 1e6 * script_cfg.usd_per_mtok_in
+                                + 500 / 1e6 * script_cfg.usd_per_mtok_out)
     assert all(e["usd"] == per and e["usd"] > 0 for e in sink)
     for e in sink:
-        assert e["model"] == script_cfg.model == "claude-haiku-4-5"
+        assert e["model"] == script_cfg.model == llm.SEATS["script"].model
         assert e["lane"] == "api"
         assert e["usd"] == e["usd_charged"] == e["usd_shadow"]
 
@@ -1957,8 +1959,9 @@ def test_editor_success_discloses_and_merges_cost(migrated_con, fake_model):
     assert "% tighter)" in notes[0]
     assert "Tighter and better." in rep.narrative_text  # the EDIT shipped
     editor_steps = [s for s in rep.steps if s["step"] == "editor_pass"]
-    # B2: the editor seat runs on the Claude API lane (Haiku 4.5).
-    assert len(editor_steps) == 1 and editor_steps[0]["model"] == "claude-haiku-4-5"
+    # ENG-M0: the editor seat is Opus 4.8 now — derived, never a frozen literal.
+    assert (len(editor_steps) == 1
+            and editor_steps[0]["model"] == llm.SEATS["editor"].model)
     entry = json.loads(
         (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()[-1]
     )

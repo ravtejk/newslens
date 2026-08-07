@@ -147,11 +147,20 @@ def test_the_retune_touches_nothing_but_watchdogs_and_the_thinking_env():
     wearing this one's clothes. NOTE what is deliberately NOT asserted here any
     more: `thinking is None` on the seat rows is unchanged and still true — the
     flip did not touch the seat rows at all, it made the TRANSPORT obey them."""
-    for seat in ("rank", "editor", "script", "state"):
+    # ENG-M0 RE-PIN 2026-08-06. This test's CLAIM is unchanged — a wall re-tune
+    # must not smuggle a lane/model/price move — but the baseline it compares
+    # against did move, deliberately and in a different diff (the seat batch).
+    # So it now pins the POST-BATCH stack: rank on Sonnet 5, the other three on
+    # Opus 4.8, all declaring adaptive thinking. Pinning Haiku/None here would
+    # be this test asserting a stack the org has ruled out of existence.
+    for seat, model in (("rank", "claude-sonnet-5"),
+                        ("editor", "claude-opus-4-8"),
+                        ("script", "claude-opus-4-8"),
+                        ("state", "claude-opus-4-8")):
         cfg = llm.SEATS[seat]
         assert cfg.lane == "subscription", seat
-        assert cfg.model == "claude-haiku-4-5", seat
-        assert cfg.thinking is None and cfg.effort is None, seat
+        assert cfg.model == model, seat
+        assert cfg.thinking == "adaptive" and cfg.effort is not None, seat
     # api-lane timeouts UNCHANGED — no api pinned path moves with this diff.
     assert llm.SEATS["rank"].timeout_s == 90
     assert llm.SEATS["editor"].timeout_s == 120
@@ -159,7 +168,7 @@ def test_the_retune_touches_nothing_but_watchdogs_and_the_thinking_env():
     assert llm.SEATS["state"].timeout_s == 60
     # The standing ratifications stand.
     assert llm.SEATS["writer"].timeout_sub_s == 900
-    assert llm.SEATS["analyst"].timeout_sub_s == 540
+    assert llm.SEATS["analyst"].timeout_sub_s == 720   # ENG-M0 re-measure
     # The interactive seat is NOT a batch seat and must never drift into this
     # family — a reader waits on it (fix loop 1 FIX-3).
     assert llm.SEATS["follow_altitude"].timeout_s == 8
@@ -181,4 +190,4 @@ def test_a_raised_wall_cannot_slow_a_healthy_call(monkeypatch):
     llm.chat(llm.LaneRequest(
         cfg=llm.resolve_seat("editor"), prompt="p", temperature=0,
         max_tokens=10, json_mode=True, user_agent="ua", api_key="k"))
-    assert seen["timeout"] == 180   # editor, post-flip
+    assert seen["timeout"] == 240   # editor, post-ENG-M0 re-measure

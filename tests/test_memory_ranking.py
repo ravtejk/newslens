@@ -123,7 +123,10 @@ def _posts(fake_api):
 
 def test_constants_pins():
     assert ranking.MEMORY_WEIGHT == 1.0
-    assert ranking.MAX_COMPLETION_TOKENS == 3000
+    # ENG-M0 2026-08-06: 3,000 -> 36,000. 3,000 was truncating real days on the
+    # api fall-over (the subscription lane sends no max_tokens, which is why it
+    # stayed latent). Sized at 1.5x the all-time observed 22,748-token ceiling.
+    assert ranking.MAX_COMPLETION_TOKENS == 36000
     assert memory.DORMANT_AFTER_DAYS == 14
     assert memory.CONTEXT_CAP == 15
 

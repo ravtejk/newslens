@@ -62,13 +62,14 @@ test_b3_subscription_lane_qa.py.
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
 import time
 import urllib.request
 
 import pytest
 
-from conftest import anthropic_envelope
+from conftest import anthropic_envelope, anthropic_sse_bytes
 from newslens import analysis, config, doctor, generate, llm, memory_core, ranking
 
 KNOWN_IDS = {1, 2}
@@ -113,9 +114,29 @@ OPENAI_CANNED = {
 class _Resp:
     def __init__(self, payload):
         self._b = json.dumps(payload).encode("utf-8")
+        # ENG-M0 (2026-08-06): dual-mode — the NL-93 pattern this file was the
+        # last scripted fake to miss. ranking.MAX_COMPLETION_TOKENS rose past
+        # llm._STREAM_MIN_MAX_TOKENS, so the RANK seat now streams on the api
+        # lane and reads via readline(); short seats keep read()/json.load. Same
+        # payload serialised either way, so no call site has to know which path
+        # it is on. A non-dict payload yields a minimal valid stream.
+        self._sse = io.BytesIO(anthropic_sse_bytes(
+            payload if isinstance(payload, dict) else {}))
 
-    def read(self):
+    def read(self, *a):
         return self._b
+
+    def readline(self, *a):
+        return self._sse.readline()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
 
     def __enter__(self):
         return self
@@ -156,7 +177,18 @@ def _no_sleep(monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda s: None)
 
 
-HAIKU_1000_200 = 1000 / 1e6 * 1.00 + 200 / 1e6 * 5.00  # = 0.002
+# ENG-M0 RE-PIN (2026-08-06): DERIVED from the seat row, not frozen to a model.
+# This constant was `1000/1e6*1.00 + 200/1e6*5.00` — Haiku's rates, hand-written.
+# The rank seat is Sonnet 5 now, and the next flip will move it again, so the
+# arithmetic reads its rates off SEATS (the NL-133 constants-derived discipline).
+# Same shape as before: a 1000-in / 200-out attempt priced at the RANK seat.
+def _rank_1000_200():
+    c = llm.SEATS["rank"]
+    return 1000 / 1e6 * c.usd_per_mtok_in + 200 / 1e6 * c.usd_per_mtok_out
+
+
+def _seat_model(seat):
+    return llm.SEATS[seat].model
 
 
 # ===========================================================================
@@ -201,9 +233,9 @@ def test_rank_wrapped_json_recovers_on_the_first_attempt_via_extraction(
     # money honesty: ONE Haiku-priced attempt, no double-spend on the wrapper
     assert [(e["step"], e["attempt"]) for e in sink] == [("rank_select", 1)]
     e = sink[0]
-    assert e["model"] == "claude-haiku-4-5" and e["lane"] == "api"
+    assert e["model"] == _seat_model("rank") and e["lane"] == "api"
     assert e["usd"] == e["usd_charged"] == e["usd_shadow"] \
-        == pytest.approx(HAIKU_1000_200)
+        == pytest.approx(_rank_1000_200())
 
 
 def test_rank_extraction_proof_malformation_still_takes_the_corrected_retry(
@@ -232,9 +264,9 @@ def test_rank_extraction_proof_malformation_still_takes_the_corrected_retry(
     assert [(e["step"], e["attempt"]) for e in sink] == [
         ("rank_select", 1), ("rank_select", 2)]
     for e in sink:
-        assert e["model"] == "claude-haiku-4-5" and e["lane"] == "api"
+        assert e["model"] == _seat_model("rank") and e["lane"] == "api"
         assert e["usd"] == e["usd_charged"] == e["usd_shadow"] \
-            == pytest.approx(HAIKU_1000_200)
+            == pytest.approx(_rank_1000_200())
 
 
 def test_script_step_no_json_nudge_and_correction_echoes_the_validator(
@@ -379,7 +411,7 @@ def test_cache_fields_reach_the_rank_ledger_and_never_discount_shadow(
     row = sink[0]
     assert row["cache_read_tokens"] == 222
     assert row["cache_creation_tokens"] == 111
-    assert row["usd_shadow"] == pytest.approx(HAIKU_1000_200)  # undiscounted
+    assert row["usd_shadow"] == pytest.approx(_rank_1000_200())  # undiscounted
     assert row["usd"] == row["usd_charged"] == row["usd_shadow"]
 
 
@@ -518,8 +550,17 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
     # BODY's model instead of the URL. The tooth is unchanged: the inner editor
     # call may not drag the outer retry onto the editor's seat, and every ledger
     # row carries its own step's seat.
+    # ENG-M0 RE-PIN: this discriminator used to key on the MODEL — the editor
+    # was Haiku, the writer was Opus, so the model string identified the inner
+    # call. Both seats are Opus 4.8 now, so the model can no longer tell them
+    # apart and keying on it silently routed BOTH calls to the outer reply
+    # (which is how this test failed: the editor row billed the writer's
+    # 1000/200 usage). Key on the PROMPT instead — "INNER" vs "OUTER" is the
+    # thing that actually distinguishes the two calls, and it stays true however
+    # the seat map moves.
     def by_body(body, url):
-        if body.get("model") == "claude-haiku-4-5":
+        prompt = body.get("messages", [{}])[0].get("content", "")
+        if "INNER" in prompt:
             return ant_native("inner-edit", inp=10, out=20)
         return ant_native("ok", inp=1000, out=200)
 
@@ -540,19 +581,26 @@ def test_nested_call_llm_each_transport_rides_its_own_seat_and_outer_restores(
     assert content == "ok"
     assert [s["url"] for s in sent] == [llm.ANTHROPIC_MESSAGES_URL] * 3
     assert [s["body"]["model"] for s in sent] == [
-        "claude-opus-4-8",              # outer attempt 1 (writer seat)
-        "claude-haiku-4-5",             # inner editor
-        "claude-opus-4-8",              # outer attempt 2 — RESTORED, not Haiku
+        _seat_model("writer"),          # outer attempt 1 (writer seat)
+        _seat_model("editor"),          # inner editor (ENG-M0: Opus 4.8 now)
+        _seat_model("writer"),          # outer attempt 2 — RESTORED, not the inner seat
     ]
     rows = [(e["step"], e["attempt"], e["model"], e["lane"]) for e in sink]
     assert rows == [
-        ("narrative", 1, "claude-opus-4-8", "api"),
-        ("editor", 1, "claude-haiku-4-5", "api"),
-        ("narrative", 2, "claude-opus-4-8", "api"),
+        ("narrative", 1, _seat_model("writer"), "api"),
+        ("editor", 1, _seat_model("editor"), "api"),
+        ("narrative", 2, _seat_model("writer"), "api"),
     ]
-    # and the money followed each row's own seat (Opus 5/25, Haiku 1/5):
-    assert sink[0]["usd"] == pytest.approx(1000 / 1e6 * 5.00 + 200 / 1e6 * 25.00)
-    assert sink[1]["usd"] == pytest.approx(10 / 1e6 * 1.00 + 20 / 1e6 * 5.00)
+    # and the money followed each row's OWN seat. Derived, because the point of
+    # this test is that two different seats bill differently in one call stack —
+    # if both seats ever priced identically the assertion would go vacuous, so
+    # it also asserts they are genuinely distinct rows.
+    w, ed = llm.SEATS["writer"], llm.SEATS["editor"]
+    assert sink[0]["usd"] == pytest.approx(
+        1000 / 1e6 * w.usd_per_mtok_in + 200 / 1e6 * w.usd_per_mtok_out)
+    assert sink[1]["usd"] == pytest.approx(
+        10 / 1e6 * ed.usd_per_mtok_in + 20 / 1e6 * ed.usd_per_mtok_out)
+    assert sink[0]["usd"] != sink[1]["usd"]
     assert generate._ACTIVE_SEAT_CFG is None
 
 
@@ -613,7 +661,8 @@ def test_state_cost_derives_from_the_seam_not_module_constants(monkeypatch, tmp_
         {"prompt_tokens": 1000, "completion_tokens": 500})
     assert cost == pytest.approx(fields["usd_charged"]) == pytest.approx(0.0)
     assert shadow == pytest.approx(fields["usd_shadow"]) \
-        == pytest.approx(0.0035)   # Haiku 1.00/5.00 on 1000in / 500out
+        == pytest.approx(1000 / 1e6 * llm.SEATS["state"].usd_per_mtok_in
+                         + 500 / 1e6 * llm.SEATS["state"].usd_per_mtok_out)
 
 
 def test_state_lane_misconfig_degrades_stale_never_raises(
@@ -696,7 +745,7 @@ def test_state_rewrites_step_row_carries_the_shadow_ledger_keys(
     assert len(rows) == 1
     row = rows[0]
     state_cfg = llm.resolve_seat("state")
-    assert row["model"] == state_cfg.model == "claude-haiku-4-5"
+    assert row["model"] == state_cfg.model == _seat_model("state")
     assert row["lane"] == state_cfg.lane == "subscription"
     assert row["usd"] == row["usd_shadow"] == row["usd_charged"] \
         == pytest.approx(0.02)

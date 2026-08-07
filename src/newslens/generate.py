@@ -429,6 +429,16 @@ def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
     # gpt-4o seats; the anthropic provider synthesises the same shape for the
     # Claude lane) so call_llm's parse/retry law is untouched. Keeps its exact
     # signature: it is the suite's monkeypatch target.
+    #
+    # ENG-M0 (2026-08-06) — THE TEMPERATURE PASSED HERE NOW REACHES NO WIRE for
+    # any step this function serves. narrative/editor/script all resolve to Opus
+    # 4.8 seats carrying sampling=False, and the Claude 4.6+ family rejects
+    # temperature with a 400, so the anthropic api provider OMITS it. The
+    # parameter stays in the signature deliberately — it is the suite's
+    # monkeypatch surface and the openai/Haiku rollback targets still honor it —
+    # but nothing here should be read as "these steps are temperature-controlled"
+    # any more. Whatever determinism these seats have now comes from their
+    # prompts and their validators, not from a sampling knob.
     cfg = _ACTIVE_SEAT_CFG or llm.resolve_seat("writer")
     system, user = _split_cache_prefix(cfg, prompt)   # B4: narrative caching
     return llm.chat(

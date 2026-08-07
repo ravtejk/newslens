@@ -95,6 +95,13 @@ from test_generate import (A_DAY, ENV, compliant_script, run, seed_briefing,
 # recording (argv/env/cwd/stdin/pid/cwd-listing) to rec-<n>.json.
 # ---------------------------------------------------------------------------
 
+def _rank_shadow_1000_200():
+    """ENG-M0: the rank seat's shadow for a 1000-in/200-out attempt, DERIVED.
+    Was the frozen literal 0.002 (Haiku 1.00/5.00); rank is Sonnet 5 now."""
+    c = llm.SEATS["rank"]
+    return round(1000 / 1e6 * c.usd_per_mtok_in + 200 / 1e6 * c.usd_per_mtok_out, 6)
+
+
 def make_scripted_stub(dir_path: Path, specs, version="2.1.212 (QA scripted stub)"):
     """`specs` is a list of per-call dicts consumed in call order (the last
     repeats). Keys: mode (success|garbage|nonzero|is_error|hang|no_usage),
@@ -263,8 +270,9 @@ def test_rank_transport_miss_retries_original_bytes_once_and_recovers(
     # sink twin in test_b1_llm_seam_qa and the persisted twin below.)
     assert [(e["attempt"], e["lane"], e["usd_charged"]) for e in sink] \
         == [(2, "subscription", 0.0)]
-    assert sink[0]["usd_shadow"] == pytest.approx(1000 / 1e6 * 1.00
-                                                  + 200 / 1e6 * 5.00)
+    _r = llm.SEATS["rank"]
+    assert sink[0]["usd_shadow"] == pytest.approx(
+        1000 / 1e6 * _r.usd_per_mtok_in + 200 / 1e6 * _r.usd_per_mtok_out)
     assert http == []
 
 
@@ -868,7 +876,7 @@ def test_default_lane_generate_run_ships_with_charged_zero_editor_script(
     for step in ("editor_pass", "script_adapt"):
         row = by_step[step]
         assert row["lane"] == "subscription", step
-        assert row["model"] == "claude-haiku-4-5", step
+        assert row["model"] == llm.SEATS[step.split("_")[0]].model, step
         assert row["usd"] == row["usd_charged"] == 0.0, step
         assert row["usd_shadow"] > 0.0, step
     charged_total = sum(s.get("usd_charged") or 0 for s in rep.steps)
@@ -916,7 +924,12 @@ def test_mid_run_cap_exhaustion_on_shadow_kills_the_run_before_the_script(
     assert entry["status"] == "failed"
     editor_rows = [s for s in entry["steps"] if s.get("step") == "editor"]
     assert editor_rows and editor_rows[0]["usd"] == 0.0
-    assert editor_rows[0]["usd_shadow"] == pytest.approx(1.001, abs=0.01)
+    # ENG-M0: DERIVED — the editor seat is Opus 4.8 ($5/$25), not Haiku ($1/$5).
+    # The stub reports 1,000,000 in / 200 out, so this tracks the seat's rates.
+    _e = llm.SEATS["editor"]
+    assert editor_rows[0]["usd_shadow"] == pytest.approx(
+        1_000_000 / 1e6 * _e.usd_per_mtok_in + 200 / 1e6 * _e.usd_per_mtok_out,
+        abs=0.01)
     assert entry["total_usd"] < 0.01                      # real money: pennies
     # the record was never touched (death before persist)
     row = migrated_con.execute(
@@ -1396,8 +1409,8 @@ def test_run_rank_fall_is_disclosed_and_the_persisted_row_is_labeled(
     step = token_cost["steps"][0]
     assert step["lane"] == "api(fallback:subscription_unavailable)"
     assert step["usd"] == step["usd_charged"] == step["usd_shadow"] \
-        == pytest.approx(0.002)
-    assert token_cost["total_usd"] == pytest.approx(0.002)
+        == pytest.approx(_rank_shadow_1000_200())
+    assert token_cost["total_usd"] == pytest.approx(_rank_shadow_1000_200())
 
 
 def test_generate_fall_discloses_editor_and_script_and_labels_the_ledger(
@@ -1425,25 +1438,27 @@ def test_generate_fall_discloses_editor_and_script_and_labels_the_ledger(
     # api so the narrative rides the api wire DIRECTLY (not a fall), keeping this
     # test's disclosure surface exactly the two seats it is about: editor+script.
     monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
-    # the narrative rides the anthropic wire (writer = Opus/api), so the fake
-    # routes by request-body MODEL — Opus ->
-    # the narrative envelope; Haiku (the fallen editor/script) -> the scripted
-    # replies in order. The fall tooth itself is unchanged.
-    anthropic_replies = [_ant(narrative, inp=1000, out=200),          # editor
-                         _ant(compliant_script(slots), inp=1200, out=400)]
+    # ENG-M0 RE-PIN: this fake used to route by request-body MODEL — Opus meant
+    # "the writer", anything else meant "a fallen editor/script". The seat batch
+    # put editor and script on Opus 4.8 as well, so the model no longer
+    # identifies anyone: all three calls matched the writer arm, the script step
+    # was handed the narrative payload, and it died on the 120-word brokenness
+    # backstop. Route by CALL ORDER instead — narrative, then editor, then
+    # script, which is the order run_generate issues them and is independent of
+    # which model each seat happens to be on. The fall tooth is unchanged.
+    anthropic_replies = [
+        {"id": "msg_fall", "type": "message", "role": "assistant",
+         "model": "claude-opus-4-8",
+         "content": [{"type": "text", "text": json.dumps(narrative)}],
+         "stop_reason": "end_turn",
+         "usage": {"input_tokens": 900, "output_tokens": 200}},   # narrative
+        _ant(narrative, inp=1000, out=200),                       # editor
+        _ant(compliant_script(slots), inp=1200, out=400),         # script
+    ]
     state = {"anthropic_served": 0}
 
     def fake_urlopen(req, timeout=None):
         if req.full_url == llm.ANTHROPIC_MESSAGES_URL:
-            body = json.loads(req.data.decode())
-            if body.get("model") == "claude-opus-4-8":
-                return _RResp({
-                    "id": "msg_fall", "type": "message", "role": "assistant",
-                    "model": "claude-opus-4-8",
-                    "content": [{"type": "text",
-                                 "text": json.dumps(narrative)}],
-                    "stop_reason": "end_turn",
-                    "usage": {"input_tokens": 900, "output_tokens": 200}})
             i = min(state["anthropic_served"], len(anthropic_replies) - 1)
             state["anthropic_served"] += 1
             return _RResp(anthropic_replies[i])
@@ -1460,7 +1475,11 @@ def test_generate_fall_discloses_editor_and_script_and_labels_the_ledger(
         row = by_step[step_name]
         assert row["lane"] == "api(fallback:subscription_unavailable)", row
         assert row["usd"] == row["usd_charged"] == row["usd_shadow"] > 0.0, row
-    assert state["anthropic_served"] == 2
+    # ENG-M0: 3, not 2 — the narrative is served from this same list now that
+    # the fake routes by call order rather than by model (the writer, editor and
+    # script are all Opus 4.8, so the model can no longer separate them). The
+    # tooth is unchanged: exactly the two FALLEN seats are disclosed above.
+    assert state["anthropic_served"] == 3
     entry = json.loads((paths.DATA_DIR / "generation_log.jsonl")
                        .read_text().splitlines()[-1])
     assert entry["status"] == "ok"
@@ -1591,7 +1610,7 @@ def _d7_flap_run(migrated_con, tmp_path, monkeypatch, armed: bool):
         "D7 fork: persisted lane diverged from the transport lane: "
         + json.dumps(step))
     assert step["usd"] == step["usd_charged"] == 0.0, step
-    assert step["usd_shadow"] == pytest.approx(0.002)
+    assert step["usd_shadow"] == pytest.approx(_rank_shadow_1000_200())
     assert token_cost["total_usd"] == 0.0
 
 
@@ -1668,5 +1687,5 @@ def test_run_rank_persisted_token_cost_is_charged_honest_on_subscription(
         "persisted rank row claims charged spend on the $0 lane: "
         + json.dumps(step))
     assert step.get("usd_charged") == 0.0
-    assert step.get("usd_shadow") == pytest.approx(0.002)
+    assert step.get("usd_shadow") == pytest.approx(_rank_shadow_1000_200())
     assert token_cost["total_usd"] == 0.0

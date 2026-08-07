@@ -338,35 +338,35 @@ sources:
   # same fact as data.
   - name: BBC News — Entertainment & Arts
     rss_url: https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm of an existing catalog outlet; doctor 2026-08-03: 20 items, newest same-day"
   - name: NPR Culture
     rss_url: https://feeds.npr.org/1008/rss.xml
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm of an existing catalog outlet; doctor 2026-08-03: 10 items, newest same-day"
   - name: NPR Music
     rss_url: https://feeds.npr.org/1039/rss.xml
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm, full text; doctor 2026-08-03: 10 items, newest 2 days"
   - name: NBC News — Pop Culture
     rss_url: https://feeds.nbcnews.com/nbcnews/public/pop-culture
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm of an existing catalog outlet; doctor 2026-08-03: 20 items, newest same-day"
   - name: PBS NewsHour — Arts
     rss_url: https://www.pbs.org/newshour/feeds/rss/arts
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm of an existing catalog outlet; doctor 2026-08-03: 20 items, newest 3 days"
   - name: The Guardian — Culture
     rss_url: https://www.theguardian.com/culture/rss
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm of an existing catalog outlet; DOCTOR-PENDING in the slate, RESOLVED PASS 2026-08-03 (20 items, full text, newest 1 day) — the sweep's failure was tool-side, exactly as inferred from the verified /world/rss sibling"
   - name: TheWrap
     rss_url: https://www.thewrap.com/feed/
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "the one reachable film/TV industry trade — Variety/THR/Deadline/Rolling Stone are licensing-blocked (below); doctor 2026-08-03: 10 items, newest same-day"
   - name: Stereogum
     rss_url: https://www.stereogum.com/feed/
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "independent music news/criticism alongside NPR Music; doctor 2026-08-03: 20 items, newest 1 day"
 
   # --- Sports (NL-135 §A; ENABLED as ordinary section-feed news) ---------------
@@ -379,29 +379,29 @@ sources:
   # Same vocabulary honesty as Entertainment: ZERO C1 sports names exist.
   - name: BBC Sport
     rss_url: https://feeds.bbci.co.uk/sport/rss.xml
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm of an existing catalog outlet; global/football counterweight to the US majors; doctor 2026-08-03: 20 items, newest same-hour"
   - name: Washington Times — Sports
     rss_url: https://www.washingtontimes.com/rss/headlines/sports/
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     wire_syndication: true
     note: "section arm of an existing catalog outlet; sampled items are AP wire copy — wire-flagged so the same AP game story here and via Yahoo doesn't double-count corroboration; doctor 2026-08-03: 20 items, newest same-day"
   - name: Yahoo Sports
     rss_url: https://sports.yahoo.com/rss/
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     wire_syndication: true
     note: "arm of the existing Yahoo presence; heavy AP/BBC/Gannett republisher — wire-flagged (Yahoo Finance precedent); HIGHEST-CADENCE FEED IN THE CATALOG — doctor 2026-08-03 read 20 items spanning 20 MINUTES"
   - name: ESPN
     rss_url: https://www.espn.com/espn/rss/news
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "new outlet: the US sports record, ordinary-news usable; doctor 2026-08-03: 20 items, newest same-hour"
   - name: CBS Sports
     rss_url: https://www.cbssports.com/rss/headlines/
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "new outlet: an independent US newsroom next to ESPN and the wire copy; doctor 2026-08-03: 20 items, newest same-hour"
   - name: The Guardian — Sport
     rss_url: https://www.theguardian.com/sport/rss
-    enabled: false  # held until NL-142 dedupe lands (pool-cap posture ruling 2026-08-06: bridge per (a), re-enable with (c))
+    enabled: true  # ENG-M0 2026-08-06: the hold is DISCHARGED — NL-142's URL-key dedupe landed (872113e) and the pool cap rose 550 -> 780 with fair-fill, which is the (c) condition this line named
     note: "section arm of an existing catalog outlet; DOCTOR-PENDING in the slate, RESOLVED PASS 2026-08-03 (20 items, full text, newest same-hour)"
 
   # --- Business deltas (NL-135 gap-check; deltas only) -------------------------

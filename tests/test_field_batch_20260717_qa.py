@@ -316,8 +316,9 @@ def test_timeout_sub_map_is_pinned_exactly():
     # excluded pending an n>=10-per-arm first-attempt-validity measurement, so
     # it is still emitting taxed output and still needs the taxed wall.
     # writer 900 / analyst 540 stand (standing ratifications).
-    sub = {"rank": 600, "analyst": 540, "writer": 900, "editor": 180,
-           "script": 120, "synthesis": None, "state": 60,
+    # ENG-M0 RE-MEASURE 2026-08-06 (derivation in llm.py above SEATS).
+    sub = {"rank": 600, "analyst": 720, "writer": 900, "editor": 240,
+           "script": 240, "synthesis": None, "state": 120,
            "follow_altitude": 20}
     api = {"rank": 90, "analyst": 240, "writer": 600, "editor": 120,
            "script": 120, "synthesis": 120, "state": 60, "follow_altitude": 8}
@@ -328,7 +329,7 @@ def test_timeout_sub_map_is_pinned_exactly():
 
 
 @pytest.mark.parametrize("seat,expect,force_lane", [
-    ("state", 60, None),
+    ("state", 120, None),         # ENG-M0 re-measure (owed probe: 29.8s)
     ("follow_altitude", 20, "subscription"),   # the subscription escape-hatch knob (explicit selection; no auto-fall)
 ])
 def test_subscription_provider_uses_the_sub_knob_per_seat(
@@ -394,7 +395,8 @@ def test_state_chat_subscription_fenced_state_json_metered(monkeypatch, tmp_path
     raw, charged, shadow = memory_core._default_state_chat("k", "prompt")
     assert raw == {"state": "S."}
     assert charged == 0.0
-    assert shadow == pytest.approx(0.0035)       # 1000/1e6*1.00 + 500/1e6*5.00
+    # ENG-M0: the state seat is Opus 4.8 ($5/$25), not Haiku ($1/$5).
+    assert shadow == pytest.approx(0.0175)       # 1000/1e6*5.00 + 500/1e6*25.00
 
 
 def test_state_chat_subscription_estimated_usage_still_zero_charged(

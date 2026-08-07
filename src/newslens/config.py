@@ -56,7 +56,50 @@ NO_INTERESTS_MSG = (
 # clears the pessimistic ceiling-based pre-check with margin for the lead retry.
 # usd_shadow stays UNDISCOUNTED (caching not yet assumed), so the cap over-counts
 # — the safe direction for a money guard. TUNE DOWN once measured spend lands.
-DEFAULT_BUDGET_CAP_USD_PER_RUN = 1.50
+#
+# ENG-M0 RAISE 1.50 -> 4.25 — PRINCIPAL-CONFIRMED 2026-08-06 (money checkpoint:
+# pre-authorized in principle, the gate presented the number, he confirmed it;
+# B4 precedent for the idiom). The full seat batch moved five seats: rank
+# Haiku -> Sonnet 5, and
+# analyst/editor/script/state -> Opus 4.8 (the analyst from Sonnet, the other
+# three from Haiku AND from thinking-off to adaptive thinking).
+#
+# THE ARITHMETIC, against TODAY's real 7-slot edition (2026-08-06). Every
+# pre-flip figure was read read-only from generation_log.jsonl + ranking_runs;
+# every post-flip figure is either MEASURED by the 2026-08-06 probe battery or
+# scaled by a stated ratio:
+#
+#   seat              pre-flip      post-flip     basis
+#   rank              $0.105816     $0.313677     MEASURED (Sonnet, 780-item draw)
+#   analyst           $0.909476     $1.515793     rate x 5/3 (Sonnet -> Opus)
+#   writer            $0.646280     $0.646280     unchanged — did not move
+#   editor            $0.020027     $0.193180     MEASURED (Opus adaptive, n=2)
+#   script            $0.019490     $0.135773     rate x5, volume x1.39
+#   state             $0.004045     $0.028179     rate x5, volume x1.39
+#   ------------------------------------------------------------------------
+#   EDITION TOTAL     $1.705134     $2.832882     = 1.66x
+#
+#   $2.832882 x 1.50 margin = $4.2493  ->  SHIP 4.25  (1.50x the measured edition)
+#
+# The 1.39 volume ratio is the MEASURED Opus-adaptive / Haiku-thinking-off ratio
+# on the editor seat (5,867 / 4,211), extrapolated to script and state. Stated as
+# an inference, not a measurement, because it is one.
+#
+# TWO FACTS THE NUMBER SHOULD BE READ AGAINST, both uncomfortable and both true:
+#   1. THE OLD CAP WAS ALREADY BREACHED. The pre-flip edition above cost $1.705
+#      against a $1.50 cap. The cap did not abort it because it binds per-step
+#      pre-checks, never the running total — so "1.50" had already stopped
+#      describing the envelope before this batch touched anything.
+#   2. THE FLOOR ROSE WITH THE ANALYST. brief_bound_usd is analyst-priced, so the
+#      analyst's out-rate $15 -> $25 moved the slot-atomic floor $0.149 -> $0.248
+#      (+67%) by pure derivation. That makes budget exhaustion MORE reachable per
+#      slot, not less — which is precisely why the C-5 corner (the free slot-3
+#      demoted-quick verdict row vanishing under exhaustion) had to be closed in
+#      this same batch rather than left for the cap tune-down.
+#
+# Cap stays SHADOW-denominated per NL-95: it binds usd_shadow on both lanes, so a
+# $0-charged subscription run is still governed by what it WOULD have cost.
+DEFAULT_BUDGET_CAP_USD_PER_RUN = 4.25
 DEFAULT_GENERATE_HOUR_LOCAL = 6
 
 # --- Tier-2 discovery: PAUSED BY RULING (principal 2026-07-25) ----------------

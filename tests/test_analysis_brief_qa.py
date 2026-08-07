@@ -262,9 +262,25 @@ ENV_OK = {"OPENAI_API_KEY": "sk-test-not-real",
           "PERPLEXITY_API_KEY": "pplx-test-not-real"}
 
 
+def _brief_bound():
+    """The slot-atomic floor, read from the SHIPPED template + analyst rates."""
+    from newslens import paths as _p
+    return analysis.brief_bound_usd(
+        (_p.PROMPTS_DIR / "analysis_brief.txt").read_text(encoding="utf-8"))
+
+
+# ENG-M0 RE-PIN (2026-08-06): this default was the literal 0.25 — chosen when
+# the analyst was Sonnet-priced and the brief bound was ~$0.149. The analyst
+# moved to Opus 4.8, so the bound rose to ~$0.248 by derivation and 0.25 stopped
+# being "a funded slot": it sat $0.002 above the floor, which put every default
+# slot into the Sonar-skipped rung and (for slot 3) into the demoted-quick
+# verdict. Derive it, so a funded slot stays funded through the next re-price.
+_FUNDED_BUDGET = _brief_bound() * 4
+
+
 def story_kwargs(**over):
     kw = dict(tier="medium", cfg=CFG_STUB, openai_key="sk-test-not-real",
-              pplx_key="pplx-test-not-real", remaining_usd=0.25,
+              pplx_key="pplx-test-not-real", remaining_usd=_FUNDED_BUDGET,
               memory_lines=[], prior=[], fetch=fetch_fixture,
               chat=chat_sentinel, sonar=sonar_none, sleep=lambda s: None)
     kw.update(over)
@@ -937,15 +953,28 @@ def test_a_violated_ordering_invariant_escalates_instead_of_passing_quietly(
             analysis.estimate_synthesis_usd = orig_est
         est = seen["est"]
 
-        # ---- (1) a 5x Sonar overcharge strands the brief -> escalation
-        overcharge = 5 * analysis.SONAR_EST_USD
+        # ---- (1) a Sonar OVERCHARGE strands the brief -> escalation
+        # ENG-M0 RE-PIN: this was a flat `5 * SONAR_EST_USD`. That figure only
+        # stranded the brief while the slot-atomic floor was ~$0.149; with the
+        # analyst on Opus the floor is ~$0.248, so a slot that clears it now has
+        # enough left after a 5x overcharge to still fund synthesis — and the
+        # test was asserting a violation that (correctly) no longer happened.
+        # Derive the overcharge from the actual gap instead: whatever it takes to
+        # leave LESS than the synthesis estimate. That is the invariant this test
+        # is really about — Sonar paid, brief unaffordable — and it survives the
+        # next re-price.
+        _remaining = _brief_bound() + 4 * analysis.SONAR_EST_USD
+        overcharge = round(_remaining - est + 0.01, 6)
+        assert overcharge > analysis.SONAR_EST_USD    # it IS an overcharge
 
         def sonar_overcharging(key, title, claims):
             return [], overcharge, "ok — 0 results"
 
         sa = analysis.analyze_story(
             con, DATE, 1, slot, **story_kwargs(
-                remaining_usd=est + 4 * analysis.SONAR_EST_USD,
+                # ENG-M0: bound-derived — enough to clear the floor and pay
+                # Sonar, so the OVERCHARGE is what stranded the slot.
+                remaining_usd=_remaining,
                 sonar=sonar_overcharging,
                 chat=lambda k, p: (s_brief(), 0.01),
                 fetch=_long_article_fetch))

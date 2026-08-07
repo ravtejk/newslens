@@ -8,7 +8,7 @@ Pinned here:
     names the per-seat fix.
   * TRANSPORT: the writer's subscription spawn path rides the shim (stub-shim
     guard extended to the Opus seat), with the 900s sub timeout captured at the
-    subprocess boundary; analyst 540; the api fall-over still passes the api
+    subprocess boundary; analyst 720 (ENG-M0); the api fall-over still passes the api
     knob (600) at urlopen.
   * BATTERY EXPERIMENTAL INTEGRITY: _run_arm restores BOTH env pins on a
     crashed arm (to prior values, not just popped); manifest lane +
@@ -109,7 +109,8 @@ def _fake_call_llm(record, usage=None, fail=False):
 
 @pytest.mark.parametrize("seat,model,rate_in,rate_out", [
     ("writer", "claude-opus-4-8", 5.00, 25.00),
-    ("analyst", "claude-sonnet-5", 3.00, 15.00),
+    # ENG-M0 2026-08-06: the analyst seat moved Sonnet 5 -> Opus 4.8.
+    ("analyst", "claude-opus-4-8", 5.00, 25.00),
 ])
 def test_flipped_seats_metered_subscription_charged_zero_shadow_at_seat_rate(
         monkeypatch, tmp_path, seat, model, rate_in, rate_out):
@@ -158,7 +159,7 @@ def test_writer_armed_fall_and_unarmed_loud_death(monkeypatch):
 # transport + timeouts at the mechanical boundary
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("seat,expect", [("writer", 900), ("analyst", 540)])
+@pytest.mark.parametrize("seat,expect", [("writer", 900), ("analyst", 720)])
 def test_subscription_provider_uses_the_new_sub_knobs(monkeypatch, tmp_path,
                                                       seat, expect):
     shim_dir = tmp_path / f"shim-{seat}"

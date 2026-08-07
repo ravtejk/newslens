@@ -199,16 +199,24 @@ def test_subscription_seat_timeouts_are_generous():
     # 14-48s path. editor 54.5s -> 180 (3.3x); script 28.5s -> 120 (4.2x);
     # state 6.0s -> 60 (10x). Each also outlasts a call that trips its own
     # token band, so the alarm can be read before the wall lands.
-    assert llm.SEATS["editor"].timeout_sub_s == 180
-    assert llm.SEATS["script"].timeout_sub_s == 120
-    assert llm.SEATS["state"].timeout_sub_s == 60
+    # ENG-M0 RE-MEASURE 2026-08-06 — A THIRD ERA. editor/script/state are no
+    # longer "flipped (thinking suppressed)": they left the allowlist and now run
+    # Opus 4.8 with adaptive thinking. Walls re-derived against a MEASURED Opus
+    # subscription throughput of 90.1-94.3 tok/s: editor 62.2s measured -> 240
+    # (3.9x); script 33.4s derived -> 180 (5.4x); state 5.8s derived -> 90
+    # (15.5x, deliberately fat — it writes the durable thread memory).
+    assert llm.SEATS["editor"].timeout_sub_s == 240
+    assert llm.SEATS["script"].timeout_sub_s == 240
+    assert llm.SEATS["state"].timeout_sub_s == 120
     # follow_altitude is the INTERACTIVE exception (fix loop 1 FIX-3): a reader
     # waits on it, so it runs a SHORT timeout (45s sub since 2026-07-20; 12s until then) that degrades a stuck
     # provider fast — pinned in test_nl17_m1b_fixloop1, NOT here among the
     # generous batch seats.
     # item C (2026-07-17): writer/analyst joined the subscription lane — sub
     # timeout = api ceiling + a ~300s lane tax (subprocess + harness overhead).
-    assert llm.SEATS["analyst"].timeout_sub_s == 540   # 240 api + 300 tax
+    # ENG-M0: analyst Sonnet 5 -> Opus 4.8. 540 x the measured 111/90 tok/s
+    # throughput ratio Opus pays = 664 -> 720.
+    assert llm.SEATS["analyst"].timeout_sub_s == 720
     assert llm.SEATS["writer"].timeout_sub_s == 900    # 600 api + 300 tax
     # api-lane timeouts are UNCHANGED (the api fall-over paths do not move)
     assert llm.SEATS["rank"].timeout_s == 90

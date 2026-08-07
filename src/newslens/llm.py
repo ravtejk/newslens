@@ -217,19 +217,117 @@ _OPUS_WRITER_SUB = dict(
     thinking="adaptive", effort="xhigh", sampling=False,
 )
 
-# B4: the analyst seat is Sonnet 5. 2026-07-17 (item C): flipped onto the
-# subscription lane with the writer's (field-proven edition 7: analyst Sonnet on
-# subscription, green end-to-end). Same truncation-gap caveat as the writer — the
-# analyst has hard validate_brief teeth, and on the subscription lane (no
-# max_tokens) those teeth, not a length-finish, are what catch a truncated brief.
-# adaptive thinking on, effort "high". sampling=False: Sonnet 5 rejects
-# temperature. Shadow uses standard $3/$15 (API-priced regardless of lane). The
-# api lane is the registered fall-over (NEWSLENS_LANE_ANALYST=api).
-_SONNET_ANALYST_SUB = dict(
+# B4: the analyst seat WAS Sonnet 5 (2026-07-17 item C, field-proven edition 7).
+# ENG-M0 (seat ruling (b), 2026-08-02 rank + 2026-08-06 amendment): the analyst
+# is now OPUS 4.8. The analyst is the seat that reads the retrieved corpus and
+# writes the evidence-bound brief every downstream seat quotes from; it is
+# reasoning work, and it was the cheapest seat still doing reasoning.
+# adaptive thinking on, effort "high" (unchanged from the Sonnet row — the
+# analyst's job did not change, the model under it did). sampling=False: Opus 4.8
+# rejects temperature with a 400, exactly as Sonnet 5 did, so the omission that
+# was already correct for this seat stays correct.
+# THE LADDER MOVES WITH THIS ROW, by derivation and not by hand: analysis.py's
+# ANALYSIS_USD_{IN,OUT}_PER_MTOK read this dict, so the out-rate $15 -> $25 and
+# every constants-derived pin downstream (brief_bound_usd, the sonar ladder line,
+# the NL-130 sweep, the NL-133 arithmetic) re-derives with no other edit.
+# Same truncation-gap caveat as the writer — validate_brief's teeth, not a
+# length-finish, are what catch a truncated brief on the subscription lane.
+# The api lane is the registered fall-over (NEWSLENS_LANE_ANALYST=api).
+_OPUS_ANALYST_SUB = dict(
+    provider="anthropic", model="claude-opus-4-8", lane="subscription",
+    usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
+    usd_per_mtok_out=OPUS_USD_PER_MTOK_OUT,
+    thinking="adaptive", effort="high", sampling=False,
+)
+
+# ENG-M0: the RANK seat, Haiku 4.5 -> SONNET 5 on the subscription lane.
+#
+# WHY THIS SEAT MOVES AT ALL — THE SLIP CLASS, with two live specimens. rank's
+# job is to copy ~550 sparse [id=KEY] codes verbatim out of a long list and
+# cluster them; a single mis-copied character kills the whole edition, because
+# the closed-vocab guard (correctly) hard-rejects a fabricated id rather than
+# silently mis-attributing it. Haiku slipped twice in the record:
+#   * run 48 (2026-08-02, founder DB): "item_id key 'B15H' failed its check
+#     symbol (a mis-copied id)" — failed after the one corrected retry, NO
+#     briefing row written for that day;
+#   * fresh1 run 3 (the second profile) — the same class.
+# That is the transcription discipline the M4 temp-0 finding was protecting, and
+# it is now protected by a more capable seat instead of by a sampling parameter
+# the model no longer accepts.
+#
+# THE COUPLING TO THE POOL RAISE, stated because it is load-bearing in both
+# directions: MAX_INPUT_ITEMS 550 -> 780 makes this prompt ~1.42x longer, i.e.
+# ~230 more ids to transcribe without slipping. The raise is VALID ONLY WITH
+# this seat — a bigger list under the seat that already slipped twice at the
+# smaller list is the wrong direction. Both halves land together or neither does.
+#
+# thinking="adaptive": rank is NOT in _THINKING_OFF_SUB_SEATS and does not join
+# it — its deliberation is doing real work (clustering ~550 headlines), and
+# Rook's gate (an unmeasured off-arm first-attempt validity, where a format miss
+# costs a whole extra call and a second miss kills the generate) still stands.
+# Declaring it here makes the api fall-over honest too: it now SENDS the thinking
+# param it was already paying for on the subscription lane. effort "high" — the
+# same rung the analyst runs; rank is a judgment task, not a mechanical one.
+# sampling=False: Sonnet 5 rejects temperature with a 400. See the temp-0
+# retry-law rework in ranking.RETRY_CORRECTION — the exact-copy discipline now
+# rests on the prompt's rule text and the corrected retry, not on temp 0.
+_SONNET_RANK_SUB = dict(
     provider="anthropic", model="claude-sonnet-5", lane="subscription",
     usd_per_mtok_in=SONNET_USD_PER_MTOK_IN,
     usd_per_mtok_out=SONNET_USD_PER_MTOK_OUT,
     thinking="adaptive", effort="high", sampling=False,
+)
+
+# ENG-M0: the three remaining Haiku CONTENT seats -> OPUS 4.8, subscription.
+#
+# These three (editor, script, state) were the seats the 2026-07-26 thinking-seam
+# flip put in _THINKING_OFF_SUB_SEATS: cheap Haiku models whose deliberation was
+# measured to be 84-97% of their output tokens while the ANSWER stayed the same
+# size. That was the right fix for a Haiku seat asked to do mechanical work.
+# ENG-M0 changes the premise: these seats stop being mechanical. The editor makes
+# real editorial judgment (what to cut, what a hedge costs, which A9 marks must
+# survive), the script seat adapts prose for the ear, and the state seat writes
+# the durable thread memory every later edition reads. So all three LEAVE
+# _THINKING_OFF_SUB_SEATS in this same diff and declare adaptive thinking.
+#
+# THE CONSEQUENCE THAT MUST NOT BE MISSED — this is a DOUBLE flip (model AND
+# thinking), and the thinking half moves the token volume far more than the model
+# half does. The production record, read read-only from generation_log.jsonl:
+#   editor_pass   thinking ON (pre-07-26, Haiku):  17,878 / 21,596 / 28,772 out
+#                 thinking OFF (post-07-26):        3,429 /  4,211 /  4,005 out
+#   script_adapt  thinking ON (pre-07-26, Haiku):  12,551 / 13,866 / 22,707 out
+#                 thinking OFF (post-07-26):        1,896 /  2,135 /  2,033 out
+# The 180s/120s/60s walls these seats carry TODAY were sized at 3.3x/4.2x/10x the
+# THINKING-OFF ceiling. Turning thinking back on returns these seats to the
+# thinking-ON regime — at which the shipped walls are not margin, they are a
+# guaranteed timeout (editor 28,772 tok at the 71 tok/s throughput floor is
+# ~405s against a 180s wall). The timeouts below are therefore RE-MEASURED on
+# the flipped seats, never inherited; see the timeout block above SEATS.
+# effort: the editor and script seats run "high" (judgment over prose the reader
+# reads and hears); state runs "medium" — it writes five sentences of durable
+# memory, and its off-arm ceiling was 6.0s, so the cheapest rung that still
+# deliberates is the honest one.
+# sampling=False on all three: Opus 4.8 rejects temperature with a 400. Their
+# callers still PASS a temperature (generate._chat, memory_core's 0.2); the
+# anthropic api provider now omits it for these seats, and the callers' comments
+# are reworked in the same batch to stop claiming a determinism temp 0 buys.
+_OPUS_EDITOR_SUB = dict(
+    provider="anthropic", model="claude-opus-4-8", lane="subscription",
+    usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
+    usd_per_mtok_out=OPUS_USD_PER_MTOK_OUT,
+    thinking="adaptive", effort="high", sampling=False,
+)
+_OPUS_SCRIPT_SUB = dict(
+    provider="anthropic", model="claude-opus-4-8", lane="subscription",
+    usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
+    usd_per_mtok_out=OPUS_USD_PER_MTOK_OUT,
+    thinking="adaptive", effort="high", sampling=False,
+)
+_OPUS_STATE_SUB = dict(
+    provider="anthropic", model="claude-opus-4-8", lane="subscription",
+    usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
+    usd_per_mtok_out=OPUS_USD_PER_MTOK_OUT,
+    thinking="adaptive", effort="medium", sampling=False,
 )
 
 # TIMEOUT RE-TUNE 2026-07-26 (principal ruling: per-seat subscription timeouts
@@ -293,21 +391,90 @@ _SONNET_ANALYST_SUB = dict(
 # tok/s): editor 6,000 tok = 86s < 180s; script 4,000 = 57s < 120s; state 1,200
 # = 18s < 60s. The alarm can always fire and be read before the wall lands.
 #
-# rank KEEPS 600 — it is excluded from the flip (see _THINKING_OFF_SUB_SEATS),
-# so it is still taxed and still needs the taxed wall. writer 900 / analyst 540
-# untouched: they declare adaptive thinking and were never in this family.
+# --- RE-MEASURED 2026-08-06, ENG-M0 (the seat flip's chartered re-measure) -----
+# EVERY wall below was re-derived against the seats as they now ship, because
+# the flip changed BOTH factors that set a wall: the model (Haiku -> Opus 4.8 /
+# Sonnet 5) and the thinking regime (editor/script/state left
+# _THINKING_OFF_SUB_SEATS). Inheriting the old numbers was not an option in
+# either direction — the thinking-OFF-sized walls would have been a guaranteed
+# timeout if volume had returned to the taxed regime, and (as it turns out) the
+# stopgap walls are now far too loose for what the seats actually do.
+#
+# THE THROUGHPUT MEASUREMENT, live on the subscription lane against real
+# production prompts (probe battery 2026-08-06; full receipts in the ENG-M0
+# report). This is the number the record could NEVER supply: generation_log
+# stores tokens but never elapsed, so Opus throughput did not exist at any n
+# until this probe.
+#   Opus 4.8   67.1 -  94.3 tok/s (n=5: editor n=2, script/state/analyst n=1 each)
+#   Sonnet 5  111.0 - 115.5 tok/s (n=6: rank, 550- and 780-item pools, n=3 each)
+# CORRECTION ON RECORD: the first cut of this block claimed a 90 tok/s Opus floor
+# off the editor alone. The three owed probes (script/state/analyst, run after
+# the editor) measured 67.1-73.4 — the editor is the FAST end of the Opus band,
+# not the floor. Every derived wall below was recomputed against 67.
+# Both sit inside the previously-measured Haiku band (71-106, n=11, mean 88), so
+# the lane's throughput is a property of the LANE more than of the model. The
+# derivations below use a 90 tok/s FLOOR for Opus and 111 for Sonnet.
+#
+# THE HEADLINE FINDING, because it inverts the pre-flip fear: OPUS WITH ADAPTIVE
+# THINKING IS DRAMATICALLY MORE TOKEN-EFFICIENT THAN HAIKU WITH THE CLI'S DEFAULT
+# EXTENDED THINKING. The editor seat, same real prompt, three regimes:
+#   Haiku + CLI default thinking (pre-07-26):   17,878 - 28,772 out
+#   Haiku + MAX_THINKING_TOKENS=0 (post-07-26):  3,429 -  4,211 out
+#   Opus 4.8 + adaptive         (MEASURED now):   5,382 -  5,867 out
+# Adaptive thinking decides how much to deliberate; the taxed Haiku regime spent
+# 84-97% of output on deliberation unconditionally. So turning thinking back ON
+# costs ~1.4x the thinking-off volume, NOT the ~5-7x the taxed record implied.
+# That ratio (5,867/4,211 = 1.39) is MEASURED on the editor and EXTRAPOLATED to
+# script and state below — stated plainly because it is the one inference here.
+#
+# PER-SEAT DERIVATION. Provenance is labelled per row; a wall marked DERIVED is
+# not a guess but it is not a live measurement of THAT seat either, and the
+# report lists the probes still owed.
+#
+#   seat     ceiling (provenance)              /throughput   x margin   SHIPPED
+#   rank     148.7s MEASURED (550-item draw,   —             4.0x        600
+#            16,508 out; the 780 draw was
+#            FASTER at 120.1s/13,407 out)
+#   editor    62.2s MEASURED (5,867 out)       —             3.9x        240
+#   script    66.8s MEASURED (4,670 out)       —             3.6x        240
+#   state     29.8s MEASURED (2,000 out)       —             4.0x        120
+#   analyst   71.9s MEASURED (5,278 out)       —            10.0x        720
+#
+# WHAT THE THREE OWED PROBES CHANGED, kept on the record because the derivation
+# was wrong in a way worth naming. The first cut DERIVED these three from the
+# editor's throughput and each seat's thinking-off production ceiling, and both
+# inputs were optimistic: script shipped at 180s (a 2.7x margin against its real
+# 66.8s, UNDER the family's >=3x rule) and state at 90s off a derived 5.8s
+# ceiling that measured 29.8s — 5x out. Derivation is not measurement, and this
+# is what the charter meant by RE-MEASURED, not guessed.
+#   writer   900 UNTOUCHED — the writer did not move in this batch.
+#   follow_altitude 20 UNTOUCHED — the flagged exception, still Haiku, still
+#            thinking-off, still the 8s reader-facing UI wall. DO NOT TOUCH.
+#
+# state keeps a deliberately fat 15.5x: it is a 5.8s call, the absolute wall is
+# still only 90s, and what it writes is the DURABLE thread memory every later
+# edition reads — the asymmetry between "wait 90s" and "lose the thread record"
+# is not close. This is the same reasoning that gave it 10x at 60s pre-flip.
+#
+# SECOND PROPERTY, checked exactly as the 07-26 down-tune checked it: each wall
+# must also outlast a call that TRIPS this seat's token band (below), or the
+# watchdog would kill the very call the alarm exists to report. At each band
+# ceiling and the MEASURED Opus 67 tok/s floor: editor 10,000 tok = 149s < 240s;
+# script 10,000 = 149s < 240s; state 4,000 = 60s < 120s. rank at its 30,000 band
+# and the Sonnet 111 floor = 270s < 600s. Every alarm can fire and be read
+# before its wall lands.
 SEATS: Dict[str, SeatConfig] = {
-    "rank":      SeatConfig("rank",      timeout_s=90,  timeout_sub_s=600, **_HAIKU_SUB),
+    "rank":      SeatConfig("rank",      timeout_s=90,  timeout_sub_s=600, **_SONNET_RANK_SUB),
     # item C (2026-07-17): writer/analyst on the subscription lane. timeout_sub_s
     # = the api-calibrated ceiling + a ~300s subscription lane tax (claude -p
     # subprocess spin-up + agentic-harness verbosity — the same absolute tax the
     # mechanical Haiku seats pay over their api timeouts). analyst 240->540,
     # writer 600->900 (Opus xhigh on the harness is the slowest path in the
     # system; edition 7 ran fine but uninstrumented — pad the tax generously).
-    "analyst":   SeatConfig("analyst",   timeout_s=240, timeout_sub_s=540, **_SONNET_ANALYST_SUB),
+    "analyst":   SeatConfig("analyst",   timeout_s=240, timeout_sub_s=720, **_OPUS_ANALYST_SUB),
     "writer":    SeatConfig("writer",    timeout_s=600, timeout_sub_s=900, **_OPUS_WRITER_SUB),
-    "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=180, **_HAIKU_SUB),
-    "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=120, **_HAIKU_SUB),
+    "editor":    SeatConfig("editor",    timeout_s=120, timeout_sub_s=240, **_OPUS_EDITOR_SUB),
+    "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=240, **_OPUS_SCRIPT_SUB),
     # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver
     # seat. A cheap mechanical single-turn classification (given a followed
     # thread, pick entity|storyline + the primary entity + a disclosure line) —
@@ -382,7 +549,7 @@ SEATS: Dict[str, SeatConfig] = {
     # escalate to the battery's state arm. The thinking revert is the FIRST
     # rung now: it is smaller than the lane revert and it is the thing that
     # changed.
-    "state":     SeatConfig("state",     timeout_s=60,  timeout_sub_s=60,  **_HAIKU_SUB),
+    "state":     SeatConfig("state",     timeout_s=60,  timeout_sub_s=120, **_OPUS_STATE_SUB),
 }
 
 # Seats DECLARED in the roster but with no live call site anywhere in the product
@@ -1053,10 +1220,22 @@ def resolve_claude_bin(env: Optional[Dict[str, str]] = None) -> Tuple[Optional[s
 # allowlist is a temporary lie; the correct end state is cfg.thinking honored
 # unconditionally on both lanes with no exception list. This set is scaffolding
 # and should shrink to nothing, not grow a governance process.
+# ENG-M0 (2026-08-06): state / script / editor LEFT this set in the same diff
+# that flipped them Haiku -> Opus 4.8 with thinking="adaptive". The 07-26 flip
+# was correct for a cheap seat doing mechanical work; the seat ruling changes the
+# premise (these seats now do editorial and memory JUDGMENT), so declining their
+# deliberation would be declining the thing they were promoted to do. Their walls
+# were re-measured in the same diff — see the timeout block above SEATS — because
+# leaving thinking-OFF-sized walls on thinking-ON seats is a guaranteed timeout,
+# not a margin.
+# ADA'S DISSENT IS NOW MOSTLY SATISFIED (eng-4 §5.5: "the correct end state is
+# cfg.thinking honored unconditionally with no exception list"). The set is down
+# to ONE member and it is the principal's own flagged exception, not scaffolding:
+# follow_altitude is the 8s UI wall — a reader waits out that wall before the
+# proven degrade, and the measured thinking-off resolve is 1.85-2.89s against a
+# thinking-on 9.38-46.1s. The list should shrink to nothing only if that seat
+# ever stops being a synchronous reader-facing path.
 _THINKING_OFF_SUB_SEATS: FrozenSet[str] = frozenset({
-    "state",
-    "script",
-    "editor",
     "follow_altitude",   # NL-99: the seat this mechanism was diagnosed on
 })
 _MAX_THINKING_TOKENS_VAR = "MAX_THINKING_TOKENS"
@@ -1506,12 +1685,48 @@ def fallback_armed(env: Optional[Dict[str, str]] = None) -> bool:
 # count. The day a band fires, nine days of per-step history are available to
 # diff against without adding a table.
 _TOKEN_BANDS: Dict[str, int] = {
-    "editor": 6000,
-    "script": 4000,
-    "state": 1200,
+    # RE-MEASURED 2026-08-06 (ENG-M0). THE DETECTOR'S PREMISE CHANGED and the
+    # bands had to be re-founded, not merely re-scaled. As the block above
+    # explains, these existed to catch a `claude` release quietly ceasing to
+    # honor MAX_THINKING_TOKENS=0. For editor/script/state that env var IS NO
+    # LONGER SENT — those seats left _THINKING_OFF_SUB_SEATS — so the original
+    # failure mode is structurally gone for them and a band sized against it
+    # would be measuring nothing. The bands are kept and re-sized to a DIFFERENT,
+    # still-live question: "is this seat emitting far more than it was measured
+    # to emit?" — which catches a model/CLI regression, a prompt blow-up, or an
+    # effort-knob mistake.
+    #
+    #   seat    post-flip ceiling (provenance)        band    still trips the
+    #                                                         taxed Haiku arm?
+    #   editor  5,867 MEASURED (Opus adaptive, n=2)  >10,000  yes (22,384-28,772)
+    #   script  4,670 MEASURED (Opus adaptive, n=1)  >10,000  yes (15,929-17,047)
+    #   state   2,000 MEASURED (Opus adaptive, n=1)   >4,000  yes (13,465-14,509)
+    #   rank   17,425 MEASURED (Sonnet adaptive, n=6) >30,000 NEW — see below
+    #
+    # THE STATE BAND WAS BROKEN AND THE PROBE CAUGHT IT. Its first cut derived a
+    # 525-token ceiling and set the band at 1,500; the seat's real thinking-on
+    # call emits 2,000, so the alarm would have fired on EVERY normal state
+    # rewrite — the precise failure the block above forbids ("normal variance
+    # cannot fire it"). A band that always fires is not armor, it is noise that
+    # trains the reader to ignore the one trip that matters. 4,000 is 2x the
+    # measured call and still 3.4x under the taxed arm it exists to catch.
+    # Each band is ~1.7-2.9x its seat's post-flip ceiling, so normal variance
+    # cannot fire it; and each is still blown 2-9x by the old taxed arm, so the
+    # ORIGINAL detection power is retained for free rather than traded away.
+    "editor": 10000,
+    "script": 10000,
+    "state": 4000,
+    # rank JOINS the armor. It never had a band (it was never a thinking-off
+    # seat), but post-flip it is the seat with the largest output budget, and
+    # 30,000 sits deliberately BELOW ranking.MAX_COMPLETION_TOKENS (36,000): on
+    # the api lane the alarm therefore fires BEFORE the hard cap would truncate,
+    # turning a silent truncation-death into a warned one.
+    "rank": 30000,
     # NL-99 (eng-4 §5.4): an honest resolver answer is 51-61 tokens — a
     # three-field JSON object. 200 is ~3.3x that and ~1/70th of the taxed
     # 14,000-token arm, so the signal is unambiguous in both directions.
+    # UNTOUCHED by ENG-M0: this is the one seat still on the thinking-off
+    # mechanism, so for follow_altitude the ORIGINAL premise still holds exactly.
     "follow_altitude": 200,
 }
 

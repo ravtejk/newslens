@@ -1396,6 +1396,10 @@ def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float, float]:
         try:
             raw = llm.chat(
                 llm.LaneRequest(
+                    # ENG-M0 (2026-08-06): the state seat is Opus 4.8 with
+                    # sampling=False, so this 0.2 is OMITTED by the provider
+                    # (Opus rejects temperature with a 400). Kept because the
+                    # openai/Haiku rollback targets still honor it.
                     cfg=state_cfg, prompt=prompt, temperature=0.2,
                     max_tokens=STATE_MAX_TOKENS, json_mode=True,
                     user_agent=STATE_UA, api_key=key,

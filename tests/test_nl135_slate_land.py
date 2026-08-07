@@ -32,9 +32,11 @@ import pytest
 from newslens import catalog, commissioning, config, labels, paths
 
 # The slate exactly as chartered: name -> (tier, wire_syndication, enabled)
-# `enabled` carries the pool-cap posture ruling 2026-08-06 (DECISIONS): the 14
-# Entertainment/Sports feeds land staged-but-held until NL-142's dedupe ends
-# the eviction class; everything else lands live.
+# `enabled` carried the pool-cap posture ruling 2026-08-06 (DECISIONS) — the 14
+# Entertainment/Sports feeds landed staged-but-held "until NL-142's dedupe ends
+# the eviction class". THAT CONDITION IS SPENT: NL-142 landed (872113e) and
+# ENG-M0 raised the pool cap 550 -> 780 and added fair-fill, which is the
+# eviction class it named. POSTURE A: every slated feed is enabled.
 SLATE = {
     # Health & Science — the proven gap
     "STAT News": ("full", False, True),
@@ -50,23 +52,26 @@ SLATE = {
     "Ars Technica": ("full", False, True),
     "The Verge": ("full", False, True),
     "Wired": ("headline_only", False, True),
-    # Entertainment — held disabled (pool-cap posture ruling 2026-08-06:
-    # bridge per option (a); re-enable rides NL-142's dedupe)
-    "BBC News — Entertainment & Arts": ("full", False, False),
-    "NPR Culture": ("full", False, False),
-    "NPR Music": ("full", False, False),
-    "NBC News — Pop Culture": ("full", False, False),
-    "PBS NewsHour — Arts": ("full", False, False),
-    "The Guardian — Culture": ("full", False, False),
-    "TheWrap": ("full", False, False),
-    "Stereogum": ("full", False, False),
-    # Sports — held disabled (same ruling)
-    "BBC Sport": ("full", False, False),
-    "Washington Times — Sports": ("full", True, False),
-    "Yahoo Sports": ("full", True, False),
-    "ESPN": ("full", False, False),
-    "CBS Sports": ("full", False, False),
-    "The Guardian — Sport": ("full", False, False),
+    # Entertainment — ENABLED (ENG-M0 2026-08-06, POSTURE A). These eight were
+    # held disabled under the pool-cap posture ruling's bridge (option (a)),
+    # explicitly "until NL-142's dedupe lands". It landed (872113e), and ENG-M0
+    # raised the pool cap 550 -> 780 with fair-fill, so the hold is discharged
+    # and the condition that wrote it is spent.
+    "BBC News — Entertainment & Arts": ("full", False, True),
+    "NPR Culture": ("full", False, True),
+    "NPR Music": ("full", False, True),
+    "NBC News — Pop Culture": ("full", False, True),
+    "PBS NewsHour — Arts": ("full", False, True),
+    "The Guardian — Culture": ("full", False, True),
+    "TheWrap": ("full", False, True),
+    "Stereogum": ("full", False, True),
+    # Sports — ENABLED (same ruling, same discharge as Entertainment above).
+    "BBC Sport": ("full", False, True),
+    "Washington Times — Sports": ("full", True, True),
+    "Yahoo Sports": ("full", True, True),
+    "ESPN": ("full", False, True),
+    "CBS Sports": ("full", False, True),
+    "The Guardian — Sport": ("full", False, True),
     # Business deltas
     "WSJ — US Business": ("headline_only", False, True),
     "Semafor": ("full", False, True),
@@ -102,10 +107,11 @@ def _by_name(cfg):
 
 def test_every_slated_feed_landed_enabled_with_its_charted_tier(template_cfg):
     """The slate is IN the org template at the tier the doctor's own run
-    earned it, with the ENABLED posture the 2026-08-06 pool-cap ruling set
-    (the 14 Entertainment/Sports feeds staged-but-held until NL-142). A
-    paywalled outlet at `full` would put article text in a briefing it is
-    not licensed to carry."""
+    earned it. ENG-M0 2026-08-06 — POSTURE A: the 14 Entertainment/Sports feeds
+    were held under posture B "until NL-142 dedupe lands"; NL-142 landed
+    (872113e) and the pool cap rose 550 -> 780 with fair-fill, so the hold is
+    discharged and every slated feed is enabled. A paywalled outlet at `full`
+    would put article text in a briefing it is not licensed to carry."""
     found = _by_name(template_cfg)
     missing = [n for n in SLATE if n not in found]
     assert not missing, "slate feeds absent from the template: %s" % missing
@@ -400,8 +406,10 @@ def test_the_dead_aggregator_is_gone_from_the_template(template_cfg):
     """A permanently-off aggregator every new reader inherited, counted in
     their pack, able to do nothing for them."""
     assert "Whatfinger Business" not in {s.name for s in template_cfg.sources}
+    # POSTURE A (ENG-M0): nothing in the slate is held any more, so the
+    # disabled set is empty. Derived from SLATE either way, never typed.
     assert {s.name for s in template_cfg.disabled_sources} == {
-        n for n, (_, _, enabled) in SLATE.items() if not enabled}
+        n for n, (_, _, enabled) in SLATE.items() if not enabled} == set()
     assert not [s for s in template_cfg.sources if s.tier == "cautious"]
     # NOT a source-text sweep: the file still NAMES the outlet in the comment
     # that records the drop and the one-block restore recipe, and that comment
@@ -413,8 +421,10 @@ def test_the_pack_sentence_presents_attribution_only_as_design(template_cfg):
     """Ruling ①. 'cited but never fetched' read as a shortfall; the four are a
     decision. Numbers still counted, never typed."""
     sentence = commissioning.source_pack_sentence(template_cfg)
-    assert sentence == ("69 outlets. 51 are fetched each morning. "
-                        "4 are attribution-only by design. 14 sources are off.")
+    # POSTURE A (ENG-M0): the 14 held feeds are enabled, so the fetched count
+    # rises 51 -> 65 and the "sources are off" clause DROPS (the zero guard).
+    assert sentence == ("69 outlets. 65 are fetched each morning. "
+                        "4 are attribution-only by design.")
     assert "cited but never fetched" not in sentence
     assert "aggregator is off" not in sentence
     html = commissioning.render("picking", template_cfg, {})
@@ -422,13 +432,13 @@ def test_the_pack_sentence_presents_attribution_only_as_design(template_cfg):
 
 
 def test_the_pack_arithmetic_survives_the_zero_disabled_case(template_cfg):
-    """Counted, never typed — re-based for the 2026-08-06 posture ruling (the
-    14 held feeds ARE the disabled set now; the zero-disabled state left the
-    template with them). The '0' guard stays: a zero count drops its clause,
-    never renders."""
-    assert len(template_cfg.disabled_sources) == 14
+    """Counted, never typed. ENG-M0 restores POSTURE A: the 14 held feeds are
+    enabled, so the disabled set is EMPTY again and this test returns to being
+    what its name says — the zero-disabled case. The '0' guard is what it was
+    always for: a zero count drops its clause rather than rendering ' 0 '."""
+    assert len(template_cfg.disabled_sources) == 0
     assert len(template_cfg.sources) == 69
-    assert len(template_cfg.fetchable_sources) == 51
+    assert len(template_cfg.fetchable_sources) == 65
     assert len(template_cfg.reference_only_sources) == 4
     assert " 0 " not in commissioning.source_pack_sentence(template_cfg)
 

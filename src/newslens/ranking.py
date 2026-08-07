@@ -86,7 +86,48 @@ LLM_TIMEOUT_S = 90
 # title+summary+reason+matches measured right at the old cap and the model's
 # JSON truncated mid-string on a live run (~$0.0018 worst case at 4o-mini
 # rates — the budget guard scales with this constant automatically).
-MAX_COMPLETION_TOKENS = 3000
+#
+# ENG-M0 (2026-08-06): 3,000 -> 36,000. THE BUG THIS CLOSES, stated plainly:
+# 3,000 has been truncating real days on the API lane for months and nobody saw
+# it, because the SUBSCRIPTION lane — the default since B3 — sends no max_tokens
+# at all and therefore ignores this constant entirely. The api lane is the
+# registered fall-over, so the failure was latent: the day the subscription lane
+# went unavailable and NEWSLENS_LANE_FALLBACK=api fired, rank would have
+# truncated at 3,000 and died on `finish_reason == "length"` (ranking.py's
+# truncation guard) on BOTH attempts, killing the edition — with the cap-hit
+# error naming a number nobody had revisited since gpt-4o-mini.
+#
+# THE ARITHMETIC (measured, not guessed):
+#   * observed all-time rank output ceiling on this seat, read read-only from
+#     ranking_runs.token_usage (n=9 subscription runs): 22,748 completion tokens
+#     (run 45, 2026-07-25, Haiku 4.5 + thinking, 550-item pool). p50 ~16,750.
+#   * MEASURED on the SHIPPED post-flip seat (Sonnet 5, adaptive/high,
+#     subscription, live probe 2026-08-06, n=2 against the real founder pool):
+#     16,508 out @ 550 items (148.7s) and 13,407 out @ 780 items (120.1s) —
+#     both comfortably BELOW the historical Haiku ceiling, and the 780 draw
+#     LOWER than the 550 draw, so the bigger pool does not inflate output.
+#   * size against the CONSERVATIVE ceiling, not the measurement: 22,748 x 1.5
+#     margin = 34,122 -> ship 36,000. That is 1.58x the all-time observed
+#     ceiling and 2.7x the measured 780-item draw.
+# Thinking BILLS AS OUTPUT and counts against max_tokens on the api lane, so
+# this budget covers deliberation + JSON together — which is why it is sized off
+# a thinking-ON observation and not off the ~6.5KB of JSON the seat actually
+# returns.
+#
+# TWO CONSEQUENCES, both deliberate and both load-bearing:
+#   1. STREAMING. 36,000 is above llm._STREAM_MIN_MAX_TOKENS (5,000), so the api
+#      fall-over now takes the SSE streaming path. That is the point, not a side
+#      effect: streaming turns llm's cfg.timeout_s from a TOTAL wall-clock cap
+#      into a per-read INTER-EVENT idle bound, which is the only way a 120-150s
+#      rank call survives on a 90s api timeout. At 3,000 the call was on the
+#      blocking json.load path and a slow draw idle-died (the NL-93 class).
+#   2. THE PRE-CALL ESTIMATE RISES. estimate_cost_usd prices the full output
+#      ceiling, and ranking.py's `est > cap` check is a HARD ABORT before the
+#      call. At Sonnet $3/$15 with a 780-item prompt the estimate goes
+#      ~$0.114 -> ~$0.609. That is intentional headroom-pricing, it is ~2x the
+#      measured real spend (~$0.31), and the run cap must accommodate it — which
+#      is exactly why the cap re-derivation rides in this same batch.
+MAX_COMPLETION_TOKENS = 36000
 PROMPT_FILE = "rank_select.txt"
 USER_AGENT = "NewsLens/0.1 (personal news briefing prototype; ranking)"
 
@@ -119,7 +160,57 @@ USER_AGENT = "NewsLens/0.1 (personal news briefing prototype; ranking)"
 # development re-enters as its own URL.
 # Full reasoning: adr/0022-nl142-url-identity-and-first-seen-recency.md.
 RECENCY_CAP_DAYS = 14
-MAX_INPUT_ITEMS = 550       # most-recent cap so the prompt stays bounded
+# ENG-M0 (2026-08-06): 550 -> 780, and VALID ONLY WITH THE SONNET RANK SEAT.
+#
+# THE NUMBER. NL-142 measured the raise at 1.42x; 550 x 1.42 = 781 -> 780 (a
+# round number that keeps the arithmetic pins legible). What makes it SAFE is not
+# arithmetic but a live measurement: the rank seat flipped Haiku -> Sonnet 5 in
+# this same batch, and the probe battery ran the REAL founder pool at both sizes
+# on the shipped seat (2026-08-06, subscription lane):
+#     550 items -> 148.7s, 16,508 out, 12 clusters, 0 repairs, VALID
+#     780 items -> 120.1s, 13,407 out, 12 clusters, 0 repairs, VALID
+# The bigger prompt was FASTER and used FEWER output tokens, and neither draw
+# reproduced the id-transcription slip class that killed run 48 (a mis-copied
+# 'B15H') and fresh1 run 3 under Haiku. A bigger list under the seat that already
+# slipped twice at the smaller list would be the wrong direction — both halves
+# land together or neither does.
+MAX_INPUT_ITEMS = 780
+
+# ---------------------------------------------------------------------------
+# FAIR-FILL (ENG-M0) — the cap stops evicting whole ingest runs
+# ---------------------------------------------------------------------------
+# THE PATHOLOGY, measured read-only on the founder DB (2026-08-06). One ingest
+# run stamps every row it writes with a single shared `fetched_at` (NL-142), so
+# `ORDER BY fetched_at DESC, id DESC LIMIT N` consumes runs WHOLE, newest first.
+# The real 14-day window held SEVEN ingest stamps totalling 4,014 items:
+#     2026-08-06  574 | 08-03  583 | 08-02  563 | 08-01  583
+#     07-26       561 | 07-25  585 | 07-24  565
+# At a 550 cap the pool was therefore 550 rows of the 2026-08-06 run and NOTHING
+# ELSE — six in-window ingest runs evicted entirely, every day, silently. That is
+# the class NL-142's pool receipts made visible ("eviction follows your
+# sources.yaml order, not story age"); this is the fix that surface was asking
+# for, and it is why the raise ALONE would not have been enough: 780 still only
+# reaches one-and-a-bit runs.
+#
+# THE RULE — a guaranteed floor per stamp, then recency takes the rest.
+# Every distinct in-window ingest stamp is guaranteed up to
+# FAIR_FILL_MIN_PER_STAMP slots; whatever remains is filled newest-stamp-first
+# until the cap is full. Within a stamp, order is unchanged (id DESC).
+#
+# WHY A FLOOR AND NOT AN EQUAL QUOTA. An equal split (780/7 = 111 each) would be
+# "fairer" and WRONG: this is a daily briefing, the recency law is deliberate,
+# and handing a 14-day-old ingest run the same weight as this morning's would
+# invert it. The floor ends the wholesale-eviction pathology without touching the
+# recency bias. Worked against the real window above: 7 stamps x 20 = 140
+# guaranteed, 640 left; the newest run takes ALL 574 of its rows, the next takes
+# 106, the remaining five keep their 20 apiece. The reader's newest ingest is
+# still complete — it just no longer consumes the entire pool.
+#
+# 20 IS DELIBERATELY SMALL: a presence guarantee, not a quota. It costs the
+# newest run nothing while the window holds few stamps, and it degrades
+# gracefully — a stamp with fewer rows than the floor contributes what it has and
+# its unused slots return to the recency fill.
+FAIR_FILL_MIN_PER_STAMP = 20
 MAX_CLUSTERS = 12
 # ---------------------------------------------------------------------------
 # PER-CLUSTER ITEM CAP (NL-133, chartered by the NL-130 gate ruling R-B /
@@ -363,10 +454,74 @@ def gather_items(con: sqlite3.Connection, start_iso: str) -> List[sqlite3.Row]:
     rows = con.execute(
         "SELECT id, source_type, outlet, url, title, published_at, fetched_at,"
         " wire_syndication_flag FROM source_items WHERE fetched_at >= ?"
-        " ORDER BY fetched_at DESC, id DESC LIMIT ?",
-        (start_iso, MAX_INPUT_ITEMS),
+        " ORDER BY fetched_at DESC, id DESC",
+        (start_iso,),
     ).fetchall()
-    return rows
+    return fair_fill(rows, MAX_INPUT_ITEMS, FAIR_FILL_MIN_PER_STAMP)
+
+
+def fair_fill(rows, cap, floor):
+    """Apply the cap WITHOUT evicting whole ingest runs (ENG-M0 — see the
+    FAIR_FILL_MIN_PER_STAMP block above for the measured pathology).
+
+    `rows` arrives newest-stamp-first, id DESC within a stamp; the return
+    preserves exactly that order, so nothing downstream sees a reordering — the
+    only thing that changes is WHICH rows survive the cap.
+
+    Two passes, both cheap and both pure:
+      1. FLOOR — walk the stamps newest-first and reserve up to `floor` rows for
+         each. A stamp with fewer rows than the floor reserves only what it has,
+         and the slack returns to pass 2 automatically (the reservation is
+         counted, not assumed).
+      2. RECENCY FILL — spend whatever the cap has left, newest stamp first,
+         topping each stamp up beyond its floor until the cap is full.
+
+    Degenerate cases are the important ones and they are all no-ops: a window
+    with ONE stamp reduces to the old `LIMIT cap` behaviour exactly (pass 1
+    reserves `floor`, pass 2 hands the same stamp everything else); a window
+    already under the cap returns every row; floor <= 0 disables fair-fill
+    entirely and restores the pre-ENG-M0 semantics."""
+    if cap <= 0:
+        return []
+    if len(rows) <= cap:
+        return list(rows)
+
+    by_stamp = {}                       # stamp -> [row, ...] (order preserved)
+    order = []                          # stamps, newest first
+    for r in rows:
+        stamp = r["fetched_at"]
+        if stamp not in by_stamp:
+            by_stamp[stamp] = []
+            order.append(stamp)
+        by_stamp[stamp].append(r)
+
+    # Pass 1: the floor.
+    take = {}
+    budget = cap
+    if floor > 0:
+        for stamp in order:
+            n = min(floor, len(by_stamp[stamp]), budget)
+            take[stamp] = n
+            budget -= n
+            if budget <= 0:
+                break
+    # Pass 2: recency fill.
+    for stamp in order:
+        if budget <= 0:
+            break
+        room = len(by_stamp[stamp]) - take.get(stamp, 0)
+        if room <= 0:
+            continue
+        extra = min(room, budget)
+        take[stamp] = take.get(stamp, 0) + extra
+        budget -= extra
+
+    kept = set()
+    for stamp, n in take.items():
+        for r in by_stamp[stamp][:n]:
+            kept.add(r["id"])
+    # Re-emit in the ORIGINAL order so the caller's contract is unchanged.
+    return [r for r in rows if r["id"] in kept]
 
 
 def pool_composition(con: sqlite3.Connection, start_iso: str) -> Dict:
@@ -1032,20 +1187,44 @@ def repair_duplicate_ids(payload: object) -> Tuple[object, Dict]:
 
 
 # The ONE retry, CORRECTED (run 28, 2026-07-14 live finding). A blind retry
-# re-POSTs byte-identical bytes, so at temperature 0 the model returns the
+# re-POSTs byte-identical bytes, so at temperature 0 the model returned the
 # byte-identical output: run 28's call+retry both emitted the SAME fabricated
 # id-lattice (ids 383-613, arithmetic step ~20, none of them in the real
 # 3679-4228 window) — ~$0.025 spent twice for a guaranteed-identical failure,
 # the retry powerless by construction. The retry for the MALFORMED-OUTPUT class
-# now carries a concrete correction turn: temperature stays 0 (the M4 exact-copy
-# finding holds — raising temp trades away the transcription discipline that
-# temp 0 buys), but the retry INPUT differs, so attempt 2 is a genuine second
-# draw steered at the exact rule that failed. Scoped to malformed output only —
-# a 5xx/timeout/429 retry re-sends the original prompt unchanged (those failures
-# are transport, not the model's doing). The id vocabulary is NOT compressed:
-# the closed-vocab guard's power is that fabricated ids land OUTSIDE the real
-# (sparse, 4-digit) id set and hard-reject; a dense 1..N remap would put the
-# same fabrication INSIDE the vocabulary and silently mis-attribute it.
+# therefore carries a concrete correction turn: the retry INPUT differs, so
+# attempt 2 is a genuine second draw steered at the exact rule that failed.
+#
+# THE TEMP-0 REWORK (ENG-M0, 2026-08-06) — WHAT THIS PARAGRAPH USED TO CLAIM AND
+# WHY IT NO LONGER HOLDS. It used to read "temperature stays 0 (the M4 exact-copy
+# finding holds)". That sentence is now FALSE and had to go rather than quietly
+# rot: the rank seat is Sonnet 5, and the Claude 4.6+ family REJECTS temperature
+# with a 400, so `sampling=False` on the seat makes the anthropic api provider
+# OMIT the parameter entirely. `temperature=0` is still passed by _post_chat
+# below — it is part of the LaneRequest contract and the openai/Haiku rollback
+# targets still honor it — but for the shipped seat it reaches no wire.
+#
+# WHAT ACTUALLY BUYS THE TRANSCRIPTION DISCIPLINE NOW, in the order it bites:
+#   1. the PROMPT's rule text — the bracketed [id=KEY] render, the sparse-id law,
+#      and the "copy verbatim, never invent" instruction in rank_select.txt;
+#   2. the CHECK SYMBOL on every key (NL-70) — a mis-copied character fails
+#      decode_keys and hard-rejects rather than mis-attributing;
+#   3. this corrected retry — still the second line, and now strictly MORE
+#      useful than it was: with sampling omitted the retry is no longer
+#      identical-by-construction even before the correction text is added, so
+#      the run-28 "powerless by construction" property cannot recur on this seat.
+#   4. the seat itself — Sonnet 5 replaced Haiku 4.5 precisely because Haiku
+#      slipped this class twice in the record (run 48; fresh1 run 3).
+# Nothing here weakened: the guard that CATCHES a slip is unchanged, and the
+# thing that was doing the work (the closed vocabulary + check symbol) was never
+# the sampling parameter.
+#
+# Scoped to malformed output only — a 5xx/timeout/429 retry re-sends the original
+# prompt unchanged (those failures are transport, not the model's doing). The id
+# vocabulary is NOT compressed: the closed-vocab guard's power is that fabricated
+# ids land OUTSIDE the real (sparse, 4-digit) id set and hard-reject; a dense
+# 1..N remap would put the same fabrication INSIDE the vocabulary and silently
+# mis-attribute it.
 RETRY_CORRECTION = (
     "CORRECTION — your previous response was rejected as invalid, most likely "
     "for one of these hard rules:\n"

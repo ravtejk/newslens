@@ -873,6 +873,12 @@ class StoryAnalysis:
     # is a different fact from "priced at zero".
     est_usd: Optional[float] = None
     bound_usd: Optional[float] = None
+    # C-5 (principal ruling (a), 2026-08-06): True when the slot-atomic budget
+    # floor fired AND the free slot-3 demoted-quick verdict row was persisted
+    # anyway. Distinguishes "skipped-budget, reader still got a verdict" from
+    # "skipped-budget, reader fell back to A2" in the generation_log — the two
+    # used to be indistinguishable because only the second existed.
+    slot3_verdict_under_floor: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -2295,12 +2301,19 @@ def _clear_analyst() -> None:
 
 def _analysis_chat(key: str, prompt: str) -> Dict:
     """One-retry synthesis call on the ANALYSIS_MODEL seam. Transport delegates
-    to the provider seam (llm.py): analyst seat = Claude Sonnet 5 / api / timeout
-    240s (llm.SEATS["analyst"]), adaptive thinking at effort high. temperature is
-    OMITTED by the provider (Sonnet 5 rejects it — sampling=False; the 0.2 passed
-    here is ignored). Returns the OpenAI-shaped .raw so call_analysis_model's
-    parse/retry law is untouched. Keeps its signature: it is a monkeypatch
-    target.
+    to the provider seam (llm.py): analyst seat = Claude OPUS 4.8 / subscription
+    (api is the registered fall-over) / timeout 240s api, 720s subscription
+    (llm.SEATS["analyst"]), adaptive thinking at effort high. temperature is
+    OMITTED by the provider (Opus 4.8 rejects it with a 400 — sampling=False; the
+    0.2 passed here is ignored, exactly as it was under Sonnet 5). Returns the
+    OpenAI-shaped .raw so call_analysis_model's parse/retry law is untouched.
+    Keeps its signature: it is a monkeypatch target.
+
+    ENG-M0 (2026-08-06): the seat moved Sonnet 5 -> Opus 4.8. Nothing in THIS
+    function changed — that is the derive-from-SEATS contract working: model,
+    prices, thinking, effort, sampling and both timeouts all arrive from the seat
+    row, so the analyst's out-rate $15 -> $25 (and the brief bound $0.149 ->
+    $0.248 that follows from it) needed no edit here.
 
     B4: the static instruction block rides a cache_control system prefix (the
     per-slot data stays the volatile user prompt); openai (a revert) sends the
@@ -2791,16 +2804,59 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     # afforded at ALL skips WHOLE, before rung 1 — paying Sonar here would buy
     # verification for a brief that will never run. Same disclosed exit as
     # rung 2: outcome, derating warning, escalation-flag class.
-    # KNOWN PREEMPTION (NL-130 gate F-2 ruling, 2026-08-02): this floor sits
-    # before the slot-3 demotion check below, so under exhaustion slot 3 gets
-    # NO demoted-quick verdict row — `analyst_slot3_tier` returns None (the
-    # writer's A2 fallback) and the run summary counts the slot outside
-    # `good` (ok -> partial). Unreachable until the cap tune-down
-    # (config.py:57-58) — the same decision rider (a)'s sunset waits on — and
-    # that decision must resolve this corner (restore the free verdict row,
-    # or ratify A2) before the cap moves. sonar_results are consumed by the
-    # prompt, by the demotion predicate as evidence, or not at all.
+    #
+    # C-5 RESOLVED — the principal's ruling (a), 2026-08-06: RESTORE THE FREE
+    # VERDICT ROW. The preemption this comment used to describe (NL-130 gate
+    # F-2, 2026-08-02) was real: the floor returned 64 lines above the slot-3
+    # demotion, so under exhaustion slot 3 got NO demoted-quick row,
+    # `analyst_slot3_tier` returned None, and the writer silently fell back to
+    # A2. The corner is now CLOSED here, and the close is cheap because the
+    # demotion verdict is FREE: its predicate reads two already-computed values
+    # (sa.fetch_ok from the $0 article fetch; the Sonar result count, which is
+    # necessarily EMPTY on this path because rung 1 has not run and will not)
+    # and its persist is one SQLite INSERT at cost 0.0. No model call, no Sonar
+    # call, no new spend of any kind — the row was only ever suppressed by
+    # ordering, never by cost.
+    #
+    # WHY THE PRE-CHECK IS SCOPED TO THIS BLOCK AND NOT HOISTED ABOVE THE FLOOR.
+    # `sonar_results` is [] until rung 1 runs, so an unconditionally-hoisted
+    # predicate would read `len([]) < 2` as TRUE on the FUNDED path too and
+    # demote every slot-3 medium with no full text BEFORE Sonar got its chance
+    # to supply the two results that keep it medium. That would be a real
+    # regression on the path that has the money. The exhausted path is the only
+    # one where "no Sonar evidence" is already final, which is exactly why the
+    # verdict is knowable here and nowhere earlier.
+    #
+    # TWO PROPERTIES, DELIBERATELY SPLIT (both wanted, they do not conflict):
+    #   * the READER gets the verdict — the row persists, so
+    #     `analyst_slot3_tier` returns "quick" and the writer treats slot 3 as a
+    #     quick hit instead of falling back to A2;
+    #   * the RUN still discloses the derate — `sa.outcome` stays
+    #     "skipped-budget", NOT "demoted-quick", so the slot stays outside
+    #     `good` (analysis.py `good = {"ok", "demoted-quick"}`) and the run
+    #     summary still degrades ok -> partial with the derating warning.
+    #     Setting the outcome to "demoted-quick" would restore the row by
+    #     HIDING the exhaustion, which is the opposite of the ruling.
     if remaining_usd < bound_usd:
+        if slot_no == 3 and tier == "medium" and sa.fetch_ok == 0:
+            # The demotion verdict, persisted at $0. `sonar_results` is [] on
+            # this path by construction, so the `< 2` conjunct of the live
+            # predicate below is satisfied and not re-tested here.
+            sa.slot3_verdict_under_floor = True
+            verdict_detail = (
+                "slot-3 medium -> quick by analyst (thin material: no full "
+                "text, and the budget floor stopped this slot before any "
+                "retrieval could be bought) — C-5 ruling (a) 2026-08-06: the "
+                "verdict row is free and persists under exhaustion")
+            persist_brief(con, date, slot_no, tier, "rejected", None,
+                          f"demoted-quick: {verdict_detail}", 0.0,
+                          {"slot": slot_no, "tier": tier, "date": date,
+                           "verdict": "demoted-quick", "model": ANALYSIS_MODEL,
+                           "under_budget_floor": True},
+                          sources=build_source_map(records, items, [], []))
+            sa.warnings.append(
+                "slot 3: demoted-quick verdict persisted under the budget "
+                "floor (free, deterministic) — the writer reads quick, not A2")
         sa.outcome = "skipped-budget"
         sa.sonar_status = "skipped — slot skipped whole (budget floor)"
         sa.detail = (f"slot skipped whole: remaining ${remaining_usd:.3f} is "

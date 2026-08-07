@@ -33,7 +33,7 @@ import time
 
 import pytest
 
-from newslens import analysis, db, generate, paths, server, webui
+from newslens import analysis, config, db, generate, paths, server, webui
 from test_generate import (A_DAY, _inputs_for, compliant_script,
                            seed_briefing, slot, stories_payload)
 
@@ -302,10 +302,16 @@ def test_quick_tier_never_carries_the_ladder_label():
 # ---------------------------------------------------------------------------
 
 def test_already_spent_rides_into_the_one_cap(tmp_paths):
-    """Cap 1.50 (the B4 default) with 1.49 already spent: both money
-    sentinels stay cold, outcomes are the disclosed budget rungs, and
-    total_usd reports only the stage's OWN delta (0 here). B4 flip
-    (conscious): same tooth as the 0.25/0.24 original, at the raised cap."""
+    """The cap with all but a sliver already spent: both money sentinels stay
+    cold, outcomes are the disclosed budget rungs, and total_usd reports only
+    the stage's OWN delta (0 here).
+
+    ENG-M0 RE-PIN: `already_spent` is DERIVED from the cap now (cap - $0.01)
+    rather than frozen at 1.49. The cap moved 0.25 -> 1.50 -> 4.25 and this
+    tooth has been hand-rewritten at every step; deriving it means the next
+    raise cannot silently turn "no headroom" into "plenty of headroom", which
+    is exactly how this test failed (1.49 against a 4.25 cap left $2.76 free
+    and the Sonar sentinel fired)."""
     db.migrate()
     con = db.connect()
     try:
@@ -320,7 +326,8 @@ def test_already_spent_rides_into_the_one_cap(tmp_paths):
         rep = analysis.run_analysis(
             date=DATE, con=con, env=dict(ENV), chat=chat_sentinel,
             sonar=sonar_sentinel, fetch=lambda *a, **k: b"",
-            sleep=lambda s: None, already_spent=1.49)
+            sleep=lambda s: None,
+            already_spent=config.DEFAULT_BUDGET_CAP_USD_PER_RUN - 0.01)
         assert rep["per_story"][0]["outcome"] == "skipped-budget"
         assert rep["derating"] is True
         assert rep["total_usd"] == 0.0
@@ -515,21 +522,24 @@ def test_no_refresh_reuses_persisted_briefs_and_never_reruns_analysis(
 
 def test_cap_exhausted_by_analysis_aborts_the_writer_disclosed(
         tmp_paths, fake_chat, monkeypatch):
-    """Mid-writer cap probe, B4 arithmetic (conscious flip): analysis
-    legitimately spends 1.45 of the 1.50 cap; the narrative pre-call
-    estimate (~$0.40 at the 16k Opus ceiling) no longer fits the 0.05
-    remaining -> disclosed budget abort (GenerateError, M5 :831 precedent)
-    BEFORE any writer spend. Money honesty on abort: the analysis stage self-logs its own
-    spend via its M2 stage entry, so the $0.24 is on the record even
-    though the writer entry never happens."""
+    """Mid-writer cap probe. Analysis legitimately spends all but a sliver of
+    the cap; the narrative pre-call estimate (~$0.40 at the 16k Opus ceiling)
+    no longer fits what remains -> disclosed budget abort (GenerateError, M5
+    :831 precedent) BEFORE any writer spend. Money honesty on abort: the
+    analysis stage self-logs its own spend via its M2 stage entry, so the
+    figure is on the record even though the writer entry never happens.
+
+    ENG-M0 RE-PIN: the analysis spend is DERIVED from the cap (cap - $0.05)
+    instead of frozen at 1.45, for the same reason as the sibling test above —
+    a frozen number stops being "exhaustion" the moment the cap rises."""
     db.migrate()
     con = db.connect()
     try:
         slots = _stage_fakes(monkeypatch)
         monkeypatch.setattr(analysis, "run_analysis",
-                            lambda **kw: canned_report(total_usd=1.45,
-                                                       derating=False,
-                                                       warnings=[]))
+                            lambda **kw: canned_report(
+                                total_usd=config.DEFAULT_BUDGET_CAP_USD_PER_RUN - 0.05,
+                                derating=False, warnings=[]))
         fake_chat.narrative = stories_payload(slots)
         fake_chat.script = compliant_script(slots)
         with pytest.raises(generate.GenerateError,

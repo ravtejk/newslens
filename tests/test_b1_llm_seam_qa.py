@@ -155,12 +155,18 @@ def test_rank_request_bytes_are_the_anthropic_messages_shape(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-qa")
     seen = _capture(monkeypatch)
     ranking._post_chat("sk-qa", "PROMPT-R")
+    # ENG-M0 RE-PIN: the rank byte contract MOVED, in three coupled ways —
+    # Sonnet 5 replaces Haiku; sampling=False drops `temperature` (the 4.6+
+    # family 400s on it); and the 36,000-token budget crosses the streaming bar
+    # so `"stream": true` is appended LAST. Order matters: this is a byte pin.
     expected = json.dumps({
-        "model": "claude-haiku-4-5",
+        "model": "claude-sonnet-5",
         "max_tokens": ranking.MAX_COMPLETION_TOKENS,
         "messages": [{"role": "user", "content": "PROMPT-R"}],
-        "temperature": 0,                     # int 0, not 0.0 (exact-copy law)
         "system": llm._ANTHROPIC_JSON_SYSTEM,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+        "stream": True,
     }).encode("utf-8")
     assert seen["data"] == expected
     assert seen["url"] == llm.ANTHROPIC_MESSAGES_URL
@@ -238,7 +244,7 @@ def test_analysis_request_bytes_identical_and_historical_url(monkeypatch):
     seen = _capture(monkeypatch)
     analysis._analysis_chat("sk-qa", "PROMPT-A")
     expected = json.dumps({
-        "model": "claude-sonnet-5",
+        "model": "claude-opus-4-8",              # ENG-M0: analyst -> Opus 4.8
         "max_tokens": analysis.ANALYSIS_MAX_TOKENS,
         "messages": [{"role": "user", "content": "PROMPT-A"}],
         "system": llm._ANTHROPIC_JSON_SYSTEM,
@@ -564,9 +570,9 @@ def test_generate_steps_default_env_transport_and_ledger_agree(monkeypatch):
     monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     expect = {"narrative": ("claude-opus-4-8", "api"),
               "narrative_retry": ("claude-opus-4-8", "api"),
-              "editor": ("claude-haiku-4-5", "subscription"),
-              "script": ("claude-haiku-4-5", "subscription"),
-              "script_retry": ("claude-haiku-4-5", "subscription")}
+              "editor": (llm.SEATS["editor"].model, "subscription"),
+              "script": (llm.SEATS["script"].model, "subscription"),
+              "script_retry": (llm.SEATS["script"].model, "subscription")}
     for step, (model, lane) in expect.items():
         sink = []
         before_http = len(http_calls)
@@ -751,7 +757,7 @@ def test_rank_sink_entry_full_shape_legacy_usd_untouched(monkeypatch):
     # legacy `usd` == usd_charged, both from the (now Haiku) rank seat's prices
     assert e["usd"] == round(ranking.usage_to_usd(_RANK_SINK_GOOD["usage"]), 6)
     assert e["usd"] == e["usd_shadow"] == e["usd_charged"]
-    assert e["model"] == "claude-haiku-4-5" and e["lane"] == "api"
+    assert e["model"] == llm.SEATS["rank"].model and e["lane"] == "api"
     assert e["cache_read_tokens"] == 1000
     assert e["prompt_tokens"] == 1234 and e["completion_tokens"] == 567
 
@@ -795,7 +801,7 @@ def test_rank_sink_entry_subscription_lane_legacy_usd_is_charged_zero(
     assert set(e) == {"step", "attempt", "prompt_tokens", "completion_tokens",
                       "usd", "model", "lane", "cache_read_tokens",
                       "cache_creation_tokens", "usd_shadow", "usd_charged"}
-    assert e["model"] == "claude-haiku-4-5" and e["lane"] == "subscription"
+    assert e["model"] == llm.SEATS["rank"].model and e["lane"] == "subscription"
     assert e["usd"] == e["usd_charged"] == 0.0
     assert e["usd_shadow"] == round(ranking.usage_to_usd(_RANK_SINK_GOOD["usage"]), 6)
     assert "usd_shadow_estimated" not in e
@@ -867,9 +873,9 @@ def test_seat_table_pins_the_b3_stack_exactly():
             assert cfg.sampling is False
         elif name == "analyst":
             assert (cfg.provider, cfg.model, cfg.lane) == \
-                ("anthropic", "claude-sonnet-5", "subscription")
-            assert cfg.usd_per_mtok_in == 3.00
-            assert cfg.usd_per_mtok_out == 15.00
+                ("anthropic", "claude-opus-4-8", "subscription")   # ENG-M0
+            assert cfg.usd_per_mtok_in == 5.00
+            assert cfg.usd_per_mtok_out == 25.00
             assert cfg.thinking == "adaptive" and cfg.effort == "high"
             assert cfg.sampling is False
         elif name == "follow_altitude":
@@ -884,13 +890,13 @@ def test_seat_table_pins_the_b3_stack_exactly():
             assert cfg.thinking is None and cfg.effort is None
             assert cfg.sampling is True, name    # Haiku still sends temperature
         elif name in haiku_sub:
+            # ENG-M0: rank -> Sonnet 5, editor/script/state -> Opus 4.8, all
+            # declaring adaptive thinking and all rejecting temperature.
             assert cfg.lane == "subscription", name
             assert cfg.provider == "anthropic"
-            assert cfg.model == "claude-haiku-4-5"
-            assert cfg.usd_per_mtok_in == 1.00
-            assert cfg.usd_per_mtok_out == 5.00
-            assert cfg.thinking is None and cfg.effort is None
-            assert cfg.sampling is True, name    # Haiku still sends temperature
+            assert cfg.model in ("claude-sonnet-5", "claude-opus-4-8"), name
+            assert cfg.thinking == "adaptive" and cfg.effort is not None, name
+            assert cfg.sampling is False, name
         else:
             assert cfg.lane == "api", name
             assert cfg.provider == "openai"
@@ -1181,7 +1187,7 @@ def test_writer_lane_override_does_not_leak_into_editor_step(monkeypatch):
     generate.call_llm("k", "p", "editor", 100, 0.5, False, cost_sink=sink)
     assert calls == []                          # subscription: never HTTP
     assert sink and sink[0]["lane"] == "subscription"
-    assert sink[0]["model"] == "claude-haiku-4-5"
+    assert sink[0]["model"] == llm.SEATS["editor"].model
     assert sink[0]["usd"] == sink[0]["usd_charged"] == 0.0
     assert sink[0]["usd_shadow"] > 0.0
 

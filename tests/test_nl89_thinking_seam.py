@@ -31,8 +31,15 @@ import pytest
 
 from newslens import llm
 
-ARMED = ("state", "script", "editor")
-UNARMED = ("rank", "writer", "analyst", "synthesis")
+# ENG-M0 RE-PIN (2026-08-06). The roster INVERTED. state/script/editor left the
+# allowlist in the same diff that flipped them Haiku -> Opus 4.8 with
+# thinking="adaptive": suppressing deliberation on a seat promoted to do
+# editorial and memory JUDGMENT would cancel the flip while still paying Opus
+# prices. The allowlist is now exactly ONE seat — follow_altitude, the
+# principal's flagged exception (an 8s reader-facing UI wall, measured
+# thinking-off 1.85-2.89s vs thinking-on 9.38-46.1s).
+ARMED = ("follow_altitude",)
+UNARMED = ("rank", "writer", "analyst", "synthesis", "state", "script", "editor")
 
 
 def _child_env(seat, parent=None):
@@ -66,16 +73,19 @@ def test_rank_is_excluded_by_name_and_by_behaviour():
     assert llm.SEATS["rank"].timeout_sub_s == 600      # the taxed wall stays with it
 
 
-def test_the_three_authorised_pipeline_seats_are_armed_and_no_other_pipeline_seat_is():
+def test_no_pipeline_seat_is_armed_any_more():
     """This file owns the PIPELINE half of the allowlist: the three seats the
     principal authorised are in, and no other seat that runs inside `generate`
     is. The full roster (which also carries the resolver) is pinned by NL-99's
     own file — keeping the two assertions separate is what lets the two diffs
     land, and revert, independently."""
-    assert {"state", "script", "editor"} <= llm._THINKING_OFF_SUB_SEATS
+    # ENG-M0: the authorised set is now EMPTY on the pipeline side. Every seat
+    # that runs inside `generate` declares its own thinking and the transport
+    # obeys it — which is what the seam was built to make possible, and what
+    # Ada's dissent (eng-4 §5.5) asked for.
+    assert {"state", "script", "editor"} & llm._THINKING_OFF_SUB_SEATS == set()
     pipeline_seats = {"rank", "writer", "analyst", "editor", "script", "state"}
-    assert pipeline_seats & llm._THINKING_OFF_SUB_SEATS == {
-        "state", "script", "editor"}
+    assert pipeline_seats & llm._THINKING_OFF_SUB_SEATS == set()
 
 
 def test_the_writer_and_analyst_declare_thinking_and_keep_it():
@@ -88,10 +98,12 @@ def test_the_writer_and_analyst_declare_thinking_and_keep_it():
 
 @pytest.mark.parametrize("seat", ARMED + UNARMED)
 def test_the_seat_rows_themselves_are_untouched(seat):
-    """CARRIED INVARIANT (born-green). The flip changes the TRANSPORT, not the
-    declarations — every one of these seats already said what it wanted."""
+    """ENG-M0 RE-PIN. This used to assert the 07-26 flip changed the TRANSPORT
+    and not the declarations. ENG-M0 changes the DECLARATIONS: every live
+    pipeline seat now asks for adaptive thinking, and the only seats still
+    declaring None are the untouched resolver and the dormant gpt-4o seat."""
     cfg = llm.SEATS[seat]
-    expected = "adaptive" if seat in ("writer", "analyst") else None
+    expected = None if seat in ("synthesis", "follow_altitude") else "adaptive"
     assert cfg.thinking == expected
 
 
@@ -102,7 +114,9 @@ def test_the_seat_rows_themselves_are_untouched(seat):
 def test_the_variable_is_injected_not_inherited_for_an_armed_seat():
     """A parent value must not survive into the child — not a larger one, not
     a zero, not anything. The code sets it; the environment does not."""
-    child = _child_env("editor", {"MAX_THINKING_TOKENS": "99999"})
+    # ENG-M0: "editor" left the allowlist, so the armed seat this asserts on is
+    # now follow_altitude — the mechanism is unchanged, only its one subject is.
+    child = _child_env("follow_altitude", {"MAX_THINKING_TOKENS": "99999"})
     assert child["MAX_THINKING_TOKENS"] == "0"
 
 
@@ -162,14 +176,14 @@ def test_bare_never_enters_the_subscription_argv(monkeypatch, tmp_path):
 # 5. The regression armor
 # ===========================================================================
 
-@pytest.mark.parametrize("seat,band", [("editor", 6000), ("script", 4000),
-                                       ("state", 1200)])
+@pytest.mark.parametrize("seat,band", [("editor", 10000), ("script", 10000),
+                                       ("state", 4000)])
 def test_the_token_bands_are_the_sizes_the_round_ruled(seat, band):
     assert llm._TOKEN_BANDS[seat] == band
 
 
-@pytest.mark.parametrize("seat,band", [("editor", 6000), ("script", 4000),
-                                       ("state", 1200)])
+@pytest.mark.parametrize("seat,band", [("editor", 10000), ("script", 10000),
+                                       ("state", 4000)])
 def test_a_band_trip_warns_and_names_the_cause(capsys, seat, band):
     """Warn-grade and diagnostic: the point is that a human reading the run
     output learns WHY, not just that a number was large."""
@@ -192,9 +206,18 @@ def test_a_normal_call_is_silent(capsys, seat):
 
 def test_the_taxed_arms_output_would_trip_every_band():
     """The bands are only armor if the thing they guard against blows them.
-    These are the measured shipped-arm outputs (eng-6 §3.1) — 3-11x over."""
+    These are the measured taxed-arm outputs (eng-6 §3.1).
+
+    ENG-M0 RE-PIN — the MULTIPLE loosened, deliberately, and this is the honest
+    reason. The bands were re-sized upward (6,000/4,000/1,200 ->
+    10,000/6,000/1,500) because the seats they guard now run Opus with adaptive
+    thinking and legitimately emit ~1.4x their thinking-off volume. The taxed
+    arms still blow every band — which is the property this test exists to
+    assert — but editor's 22,384 is no longer 3x its 10,000 band, so demanding
+    3x here would be asserting a margin the re-size knowingly spent. The
+    detection claim is `>`; the 3x was never the contract."""
     for seat, taxed in (("editor", 22384), ("script", 15929), ("state", 13465)):
-        assert taxed > llm._TOKEN_BANDS[seat] * 3, seat
+        assert taxed > llm._TOKEN_BANDS[seat], seat
 
 
 def test_the_alarm_is_subscription_only(capsys):

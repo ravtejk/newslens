@@ -63,8 +63,9 @@ def test_the_flip_is_paired_with_the_seam_fix_not_shipped_bare():
 def test_the_full_thinking_allowlist_roster():
     """DIFF 2 owns the exact set (DIFF 1 owns the pipeline subset), so the two
     can land and revert independently without either pin lying."""
-    assert llm._THINKING_OFF_SUB_SEATS == frozenset({
-        "state", "script", "editor", "follow_altitude"})
+    # ENG-M0 RE-PIN: the three pipeline seats left in the seat-flip diff
+    # (they declare adaptive thinking now). The resolver is the whole roster.
+    assert llm._THINKING_OFF_SUB_SEATS == frozenset({"follow_altitude"})
 
 
 def test_the_timeouts_the_dispatch_ruled():

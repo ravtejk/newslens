@@ -238,16 +238,20 @@ def test_sampling_omitted_for_claude46_seats_kept_for_haiku_and_gpt4o(
 
     writer_b, analyst_b, rank_b = (s["body"] for s in seen)
     assert writer_b["model"] == "claude-opus-4-8"
-    assert analyst_b["model"] == "claude-sonnet-5"
-    assert rank_b["model"] == "claude-haiku-4-5"
+    # ENG-M0: analyst Sonnet 5 -> Opus 4.8; rank Haiku -> Sonnet 5, and rank
+    # therefore STOPS sending temperature (sampling=False on the 4.6+ family).
+    assert analyst_b["model"] == "claude-opus-4-8"
+    assert rank_b["model"] == "claude-sonnet-5"
     assert "temperature" not in writer_b
     assert "temperature" not in analyst_b
-    assert rank_b["temperature"] == 0            # Haiku: byte-unchanged from B2
+    assert "temperature" not in rank_b
     # the schema knob that drives it, pinned per seat — both directions:
     assert llm.SEATS["writer"].sampling is False
     assert llm.SEATS["analyst"].sampling is False
-    assert llm.SEATS["rank"].sampling is True
-    assert llm.SEATS["state"].sampling is True       # Haiku now — keeps temperature
+    # ENG-M0: rank (Sonnet 5) and state (Opus 4.8) joined the 4.6+ family, which
+    # rejects temperature — so sampling is False on every live anthropic seat now.
+    assert llm.SEATS["rank"].sampling is False
+    assert llm.SEATS["state"].sampling is False
     assert llm.SEATS["synthesis"].sampling is True   # the lone gpt-4o seat keeps it
 
 
@@ -509,14 +513,18 @@ def test_model_constants_equal_their_seat_rows_exactly():
     assert generate.WRITER_MODEL == w.model == "claude-opus-4-8"
     assert generate.WRITER_USD_PER_MTOK_IN == w.usd_per_mtok_in == 5.00
     assert generate.WRITER_USD_PER_MTOK_OUT == w.usd_per_mtok_out == 25.00
-    assert analysis.ANALYSIS_MODEL == a.model == "claude-sonnet-5"
-    assert analysis.ANALYSIS_USD_IN_PER_MTOK == a.usd_per_mtok_in == 3.00
-    assert analysis.ANALYSIS_USD_OUT_PER_MTOK == a.usd_per_mtok_out == 15.00
+    # ENG-M0: the analyst moved Sonnet 5 -> Opus 4.8 ($3/$15 -> $5/$25). This is
+    # the chartered ladder re-price; brief_bound_usd follows it by derivation.
+    assert analysis.ANALYSIS_MODEL == a.model == "claude-opus-4-8"
+    assert analysis.ANALYSIS_USD_IN_PER_MTOK == a.usd_per_mtok_in == 5.00
+    assert analysis.ANALYSIS_USD_OUT_PER_MTOK == a.usd_per_mtok_out == 25.00
     # 2026-07-17 (option a): state flipped to Haiku/subscription — the derived
     # STATE_* constants follow the seat row (R-B4a), never a stale literal.
-    assert memory_core.STATE_MODEL == st.model == "claude-haiku-4-5"
-    assert memory_core.STATE_USD_IN_PER_MTOK == st.usd_per_mtok_in == 1.00
-    assert memory_core.STATE_USD_OUT_PER_MTOK == st.usd_per_mtok_out == 5.00
+    # ENG-M0: state flipped Haiku -> Opus 4.8; the derived STATE_* constants
+    # follow the seat row (R-B4a), never a stale literal.
+    assert memory_core.STATE_MODEL == st.model == "claude-opus-4-8"
+    assert memory_core.STATE_USD_IN_PER_MTOK == st.usd_per_mtok_in == 5.00
+    assert memory_core.STATE_USD_OUT_PER_MTOK == st.usd_per_mtok_out == 25.00
 
 
 @pytest.mark.parametrize("seat,module", [
@@ -743,7 +751,8 @@ def test_battery_dry_run_makes_zero_calls_and_zero_writes(monkeypatch,
     assert "DRY RUN" in out
     assert "claude-opus-4-8" in out and "claude-fable-5" in out \
         and "claude-sonnet-5" in out                  # the default arms
-    assert "budget cap $1.50/run" in out              # the B4 default binds
+    assert (f"budget cap ${config.DEFAULT_BUDGET_CAP_USD_PER_RUN:.2f}/run"
+            in out)                                  # the default binds
 
 
 def test_battery_run_refuses_keyless_before_any_spend(monkeypatch, capsys):
