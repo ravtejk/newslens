@@ -96,6 +96,28 @@ USER_AGENT = "NewsLens/0.1 (personal news briefing prototype; ranking)"
 # (ADR-0004 amendment). First-ever briefing defaults to the cap. "Developed"
 # is measured by fetch time (first-seen) — published_at is too unreliable
 # across feeds to anchor eligibility.
+#
+# NL-142 (2026-08-06) — WHAT "FETCH TIME (FIRST-SEEN)" NOW MEANS. Read this
+# before reasoning about the window; the words above did not change but the
+# fact underneath them did.
+#   BEFORE: ingest keyed on (url, UTC fetch-day), so an item still sitting in
+#   a feed re-inserted every day carrying that day's stamp. "Fetched inside
+#   the window" therefore decoded to "STILL SITTING IN THE FEED": nothing
+#   aged out while its feed kept carrying it, and a frozen feed (see
+#   ingest.STALE_FEED_DAYS) became a perpetual-freshness machine pumping
+#   years-old stories in as fresh candidates, forever. Live specimen: the CNN
+#   top-stories feed, frozen at 2023-04-25, contributed 20 pool slots a day.
+#   AFTER: one URL is one row and its fetched_at is its FIRST sighting, which
+#   never moves. "Fetched inside the window" now decodes to "FIRST SEEN
+#   INSIDE THE WINDOW" — what this comment always claimed it meant.
+# THE REAL BEHAVIORAL CONSEQUENCE, stated plainly so nobody rediscovers it as
+# a bug: a slow-developing story that lingers in a feed under one unchanged
+# URL for longer than RECENCY_CAP_DAYS now LEAVES the candidate pool, where
+# before it stayed indefinitely. That is the recency law as written, finally
+# enforced — and it is the mechanism by which the pool ages honestly instead
+# of accumulating until the cap evicts by file position. A genuinely fresh
+# development re-enters as its own URL.
+# Full reasoning: adr/0022-nl142-url-identity-and-first-seen-recency.md.
 RECENCY_CAP_DAYS = 14
 MAX_INPUT_ITEMS = 550       # most-recent cap so the prompt stays bounded
 MAX_CLUSTERS = 12
@@ -345,6 +367,85 @@ def gather_items(con: sqlite3.Connection, start_iso: str) -> List[sqlite3.Row]:
         (start_iso, MAX_INPUT_ITEMS),
     ).fetchall()
     return rows
+
+
+def pool_composition(con: sqlite3.Connection, start_iso: str) -> Dict:
+    """What the candidate window actually held, and what the cap threw away.
+
+    NL-142 item 2 — RECEIPTS, NOT SILENCE. The 550-item cap is a SELECTION
+    CAPACITY DERATE and it had been firing unremarked: 27 of 48 ranking runs
+    sat at item_count=550 with nothing in the record naming what fell off the
+    end, so a reader's chosen outlet could lose its entire day, every day,
+    invisibly. (Measured on the real DB: the 2026-08-06 run evicted 24 items —
+    all 20 Bloomberg Markets plus 4 Bloomberg Politics. Bloomberg Markets is
+    simply first in the file.) This extends the routine-derating-is-a-
+    checkpoint law to the pool: every run records its composition, and a run
+    that evicts anything says so by name.
+
+    WHY EVICTION IS POSITIONAL AND NOT "OLDEST". One ingest run stamps every
+    row it writes with a single shared `fetched_at`, so `ORDER BY fetched_at
+    DESC, id DESC` degenerates to reverse INSERTION order within a run, and
+    insertion order is the reader's sources.yaml order. The cap therefore
+    evicts from the TOP OF THE FILE, deterministically, not from the oldest
+    news. Nothing here fixes that — fair-fill is ENG-M0's surface. This makes
+    it VISIBLE, which is the precondition for anyone noticing it needs fixing.
+
+    Read-only: one COUNT and one grouped read over the same window predicate
+    gather_items uses. Returns window_total, capped_to, evicted, and the
+    evicted outlets in eviction order (first to fall off first)."""
+    total = con.execute(
+        "SELECT COUNT(*) AS n FROM source_items WHERE fetched_at >= ?",
+        (start_iso,),
+    ).fetchone()["n"]
+    evicted = max(0, total - MAX_INPUT_ITEMS)
+    by_outlet: List[Tuple[str, int]] = []
+    if evicted:
+        # The rows the LIMIT would have dropped: same ordering, skipped past
+        # the cap. OFFSET is exactly the cap, so this is the complement of
+        # gather_items' result set over an identical predicate and sort.
+        rows = con.execute(
+            "SELECT outlet FROM source_items WHERE fetched_at >= ?"
+            " ORDER BY fetched_at DESC, id DESC LIMIT -1 OFFSET ?",
+            (start_iso, MAX_INPUT_ITEMS),
+        ).fetchall()
+        counts: Dict[str, int] = {}
+        order: List[str] = []
+        for row in rows:
+            name = row["outlet"]
+            if name not in counts:
+                order.append(name)
+            counts[name] = counts.get(name, 0) + 1
+        by_outlet = [(name, counts[name]) for name in order]
+    return {
+        "window_total": total,
+        "capped_to": min(total, MAX_INPUT_ITEMS),
+        "evicted": evicted,
+        "evicted_by_outlet": by_outlet,
+    }
+
+
+def pool_warning(composition: Dict) -> Optional[str]:
+    """The run-log line for a capped pool — names the count AND the outlets.
+
+    Born from the 27 silent runs: 'hit the cap' alone told the reader nothing
+    actionable. Naming the first-evicted outlets is what turns the warning
+    into something a reader can act on (reorder the file, cut a feed, or
+    escalate the cap)."""
+    if not composition["evicted"]:
+        return None
+    named = ", ".join(
+        f"{outlet} ({count})" for outlet, count in composition["evicted_by_outlet"][:3]
+    )
+    more = len(composition["evicted_by_outlet"]) - 3
+    if more > 0:
+        named += f", +{more} more outlet(s)"
+    return (
+        f"item window hit the {MAX_INPUT_ITEMS}-item cap: "
+        f"{composition['window_total']} candidates in window, "
+        f"{composition['evicted']} EVICTED before ranking — "
+        f"first to fall: {named}. Eviction follows your sources.yaml order "
+        "(top of the file dies first), not story age"
+    )
 
 
 def active_memory_topics(con: sqlite3.Connection) -> List[str]:
@@ -1980,6 +2081,7 @@ def _run_rank_body(
     window = candidate_window(con, date)
     history = ingested_history_days(con)
     items = gather_items(con, window["start_iso"])
+    composition = pool_composition(con, window["start_iso"])
     if not items:
         raise RankingError(
             f"no ingested items inside the candidate window "
@@ -2051,6 +2153,11 @@ def _run_rank_body(
     meta["threads_steer_selection"] = cfg.threads_steer_selection
     meta["window"] = window
     meta["history_days"] = history
+    # NL-142 item 2: pool composition on EVERY run, capped or not. Recorded
+    # unconditionally on purpose — "no eviction today" is itself the receipt
+    # that makes the 27-silent-runs history readable going forward, and a
+    # metric that only appears when it is bad cannot show a trend.
+    meta["pool"] = composition
     if (repair_sink.get("repaired") or repair_sink.get("tag_shape_normalized")
             or repair_sink.get("clusters_truncated")):
         # Disclosed repair/tolerance (never silent, never unpersisted): the
@@ -2185,11 +2292,12 @@ def _run_rank_body(
             f"ingested history available: {history:g}d — early runs see "
             "less than the window requests"
         )
-    if len(items) == MAX_INPUT_ITEMS:
-        report.warnings.append(
-            f"item window hit the {MAX_INPUT_ITEMS}-item cap — oldest items in "
-            "the window were not considered"
-        )
+    # NL-142 item 2: the cap's receipts. `composition` is computed for EVERY
+    # run (it lands in ranking_runs.meta, so a quiet run is still on record as
+    # quiet); the warning fires only when something was actually thrown away.
+    _pool_warning = pool_warning(composition)
+    if _pool_warning:
+        report.warnings.append(_pool_warning)
     revived = persist(con, report, meta)
     if revived:
         # Every automatic transition is surfaced, dated, never silent

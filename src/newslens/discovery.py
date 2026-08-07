@@ -372,12 +372,18 @@ def _store_results(
     con: sqlite3.Connection, results: List[dict], now_iso: str
 ) -> Tuple[int, Dict[str, int]]:
     """search_results -> source_items rows (source_type='sonar'), idempotent
-    per (url, UTC fetch-day) like RSS rows. raw_excerpt stays NULL: we have
-    title/url/date for these, not source text, and we don't fabricate.
+    per URL across all days, exactly like RSS rows. raw_excerpt stays NULL: we
+    have title/url/date for these, not source text, and we don't fabricate.
+
+    NL-142 (2026-08-06): this is the TWIN of ingest.upsert_item and moves with
+    it. Keying on (url, UTC day) here would leave discovery re-inserting the
+    same URLs daily after ingest stopped — half a dedupe is no dedupe. Same
+    law, same reason. Discovery only ever INSERTS (it has no update branch),
+    so there is no path here through which a re-sighting could move an
+    existing row's fetched_at: the first sighting stands by construction.
 
     NL-101: returns (stored, {reject_reason: count}) so the caller can degrade
     LOUDLY — a dropped row is reported, never silently swallowed."""
-    day = now_iso[:10]
     stored = 0
     dropped: Dict[str, int] = {}
 
@@ -397,12 +403,12 @@ def _store_results(
                 continue
             outlet = urlparse(url).netloc or "unknown"
             existing = con.execute(
-                "SELECT id FROM source_items WHERE url = ? AND date(fetched_at) = ?",
-                (url, day),
+                "SELECT id FROM source_items WHERE url = ? LIMIT 1",
+                (url,),
             ).fetchone()
             if existing is not None:
-                drop("already-known-today")
-                continue  # already known today (RSS beat us to it, or re-run)
+                drop("already-known")
+                continue  # already known (RSS beat us to it, or any re-run)
             con.execute(
                 "INSERT INTO source_items"
                 " (source_type, outlet, url, title, published_at, fetched_at,"
@@ -416,7 +422,7 @@ def _store_results(
 
 def _dropped_phrase(dropped: Dict[str, int]) -> str:
     """'2 dropped (feed-or-sitemap-file 1, homepage 1)' — or '' when clean."""
-    real = {k: v for k, v in dropped.items() if k != "already-known-today"}
+    real = {k: v for k, v in dropped.items() if k != "already-known"}
     if not real:
         return ""
     detail = ", ".join(f"{k} {v}" for k, v in sorted(real.items()))

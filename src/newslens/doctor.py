@@ -666,13 +666,155 @@ def check_database() -> List[Result]:
                     "it's corrupt, move it aside and re-run: newslens migrate",
                 )
             )
+        out.extend(check_pool_capacity())
 
+    return out
+
+
+def check_pool_capacity(limit: int = 10) -> List[Result]:
+    """Is the ranking pool losing items to the cap? (NL-142 item 2.)
+
+    THE THING THIS EXISTS TO PREVENT: 27 of 48 ranking runs sat at
+    item_count=550 — the cap binding on more than half of all runs — and
+    nothing ever said so out loud. A capacity derate that only shows up in a
+    JSON blob nobody reads is a silent derate. The doctor is where a reader
+    looks when something feels off, so the doctor answers it.
+
+    Strictly read-only (mode=ro URI, same law as every other real-DB probe in
+    this file), and every failure degrades to silence: an old DB with no
+    `pool` key in meta, a missing table, an unparseable blob — none of those
+    are the reader's problem, and none of them may turn into a doctor FAIL."""
+    from . import db, ranking
+
+    out: List[Result] = []
+    try:
+        con = db.connect_readonly()
+    except sqlite3.Error:
+        return out
+    try:
+        try:
+            rows = con.execute(
+                "SELECT meta FROM ranking_runs ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        except sqlite3.Error:
+            return out  # table absent on an older schema — nothing to report
+        capped = 0
+        seen = 0
+        newest: Optional[dict] = None
+        for row in rows:
+            try:
+                meta = json.loads(row["meta"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            pool = meta.get("pool")
+            if not isinstance(pool, dict):
+                # Pre-NL-142 run: item_count is the only signal it left behind,
+                # and "== the cap" is the best inference available from it.
+                count = meta.get("item_count")
+                if isinstance(count, int):
+                    seen += 1
+                    if count >= ranking.MAX_INPUT_ITEMS:
+                        capped += 1
+                continue
+            seen += 1
+            if pool.get("evicted"):
+                capped += 1
+            if newest is None:
+                newest = pool
+        if not seen:
+            return out
+        if newest and newest.get("evicted"):
+            named = ", ".join(
+                f"{o} ({n})" for o, n in (newest.get("evicted_by_outlet") or [])[:3]
+            )
+            out.append(
+                Result(
+                    WARN,
+                    f"ranking pool: last run had {newest.get('window_total')} "
+                    f"candidates against a {ranking.MAX_INPUT_ITEMS}-item cap — "
+                    f"{newest.get('evicted')} evicted before ranking "
+                    f"({named}). Eviction follows sources.yaml order, so the "
+                    f"top of your file loses its day first",
+                )
+            )
+        if capped:
+            out.append(
+                Result(
+                    WARN,
+                    f"ranking pool: {capped} of the last {seen} run(s) lost items "
+                    f"to the {ranking.MAX_INPUT_ITEMS}-item cap — a cap binding "
+                    f"this often is a capacity decision, not an edge case",
+                )
+            )
+        else:
+            out.append(
+                Result(
+                    PASS,
+                    f"ranking pool: none of the last {seen} run(s) hit the "
+                    f"{ranking.MAX_INPUT_ITEMS}-item cap",
+                )
+            )
+    finally:
+        con.close()
     return out
 
 
 # ---------------------------------------------------------------------------
 # Sources & interests
 # ---------------------------------------------------------------------------
+
+# NL-142 item 3: how much of each feed the doctor reads to date it. The
+# shape sniff below only ever needed the first few hundred bytes; the
+# staleness check needs actual entries. 64KB covers the newest several items
+# of every feed measured in the slate probes while keeping this ONE round
+# trip per feed — no second fetch, no full download of a 1MB feed.
+STALE_SNIFF_BYTES = 65536
+
+
+def _feed_age_result(source_name: str, head: bytes) -> Optional[Result]:
+    """The doctor-grade half of the staleness tooth (gate charter R-E).
+
+    A frozen archive answers HTTP 200 with valid RSS, so `check_feed_urls`
+    passes it and the ingest zero-entry warning never fires. This dates the
+    feed and says so. Returns None when there is nothing to report — a healthy
+    fresh feed adds no line, so the doctor's output does not grow by 65 rows.
+
+    Reads the SAME prefix bytes the shape check already fetched. feedparser
+    tolerates a truncated document (it yields the entries it got), and we take
+    the MAX published_at over whatever parsed — so a feed ordered oldest-first
+    is judged on the newest date actually seen, never on position.
+
+    Failure is silent BY DESIGN: this is a bonus verdict riding a fetch that
+    already produced its own PASS/WARN/FAIL. A parser hiccup here must not
+    turn a reachable feed into a doctor failure."""
+    from . import ingest
+
+    try:
+        items, _ = ingest.parse_entries(head)
+        staleness = ingest.feed_staleness(items)
+    except Exception:
+        return None
+    if not items:
+        return None
+    if staleness["dateless"]:
+        # Exempt, and told the truth about rather than passed over in silence.
+        return Result(
+            INFO,
+            f"{source_name}: feed publishes no item dates — exempt from the "
+            f"staleness check (its items are still fully eligible; only the "
+            f"corpus dateline is omitted)",
+        )
+    age = staleness["age_days"]
+    if age is None or age <= ingest.STALE_FEED_DAYS:
+        return None
+    return Result(
+        WARN,
+        f"{source_name}: newest item is {age:.0f} days old (published "
+        f"{str(staleness['newest'])[:10]}) — the feed resolves and parses, but "
+        f"it may be a frozen archive. Threshold is "
+        f"{ingest.STALE_FEED_DAYS}d; check the rss_url or disable the source",
+    )
+
 
 def check_feed_urls(sources) -> List[Result]:
     from . import net  # shared 308-following opener + pipeline UA: the doctor
@@ -682,7 +824,9 @@ def check_feed_urls(sources) -> List[Result]:
     for source in sources:
         started = time.monotonic()
         try:
-            head, status = net.head_bytes(source.rss_url, timeout=FEED_TIMEOUT_S)
+            head, status = net.head_bytes(
+                source.rss_url, timeout=FEED_TIMEOUT_S, n=STALE_SNIFF_BYTES
+            )
             elapsed = time.monotonic() - started
             if any(marker in head for marker in (b"<rss", b"<feed", b"<?xml", b"<rdf")):
                 out.append(
@@ -691,6 +835,11 @@ def check_feed_urls(sources) -> List[Result]:
                         f"feed resolves: {source.name} (HTTP {status}, {elapsed:.1f}s)",
                     )
                 )
+                # NL-142 item 3: date the feed off the bytes we already have.
+                # Only speaks when there is something to say.
+                age_result = _feed_age_result(source.name, head)
+                if age_result is not None:
+                    out.append(age_result)
             else:
                 out.append(
                     Result(

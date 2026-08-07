@@ -58,13 +58,25 @@ def test_same_utc_day_updates_in_place_and_preserves_fetched_at(migrated_con):
     assert all_rows[0]["fetched_at"] == DAY1_MORNING
 
 
-def test_next_utc_day_inserts_a_new_snapshot_row(migrated_con):
+def test_next_utc_day_updates_in_place_and_does_not_move_recency(migrated_con):
+    """CONTRACT CHANGED BY NL-142 (2026-08-06), deliberately.
+
+    This test previously asserted the OPPOSITE — that a new UTC day inserts a
+    second snapshot row. That behavior was the pool-cap defect's engine: every
+    item still sitting in a feed re-inserted daily, so nothing ever aged out
+    of the candidate window and the 550-item cap evicted by sources.yaml
+    position rather than by age. The identity key is now the URL, all days.
+
+    Both halves are pinned here because only the pair is a fix: the row must
+    not duplicate AND its fetched_at must not move. A version that dedupes but
+    refreshes fetched_at re-creates the identical defect, keyed on URL."""
     src = mk_source()
     assert ingest.upsert_item(migrated_con, src, mk_item(title="day1"), DAY1_EVENING) == "new"
-    assert ingest.upsert_item(migrated_con, src, mk_item(title="day2"), DAY2) == "new"
+    assert ingest.upsert_item(migrated_con, src, mk_item(title="day2"), DAY2) == "updated"
     all_rows = rows(migrated_con)
-    assert len(all_rows) == 2
-    assert {r["title"] for r in all_rows} == {"day1", "day2"}
+    assert len(all_rows) == 1
+    assert all_rows[0]["title"] == "day2"             # mutable field follows upstream
+    assert all_rows[0]["fetched_at"] == DAY1_EVENING  # the recency anchor does NOT
 
 
 def test_utc_fetch_day_is_the_utc_prefix():
