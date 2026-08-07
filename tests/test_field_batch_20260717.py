@@ -201,10 +201,12 @@ def test_subscription_seat_timeouts_are_generous():
     # token band, so the alarm can be read before the wall lands.
     # ENG-M0 RE-MEASURE 2026-08-06 — A THIRD ERA. editor/script/state are no
     # longer "flipped (thinking suppressed)": they left the allowlist and now run
-    # Opus 4.8 with adaptive thinking. Walls re-derived against a MEASURED Opus
-    # subscription throughput of 90.1-94.3 tok/s: editor 62.2s measured -> 240
-    # (3.9x); script 33.4s derived -> 180 (5.4x); state 5.8s derived -> 90
-    # (15.5x, deliberately fat — it writes the durable thread memory).
+    # Opus 4.8 with adaptive thinking. Walls sized against the MEASURED Opus
+    # subscription throughput FLOOR of 67 tok/s (the editor's 90.1-94.3 is the
+    # fast end of the band, not the floor — deriving off it under-walled two
+    # seats, the self-caught defect in the build record): editor 62.2s MEASURED
+    # -> 240 (3.9x); script 66.8s MEASURED -> 240 (3.6x); state 29.8s MEASURED
+    # -> 120 (4.0x); analyst 71.9s MEASURED -> 720 (10x).
     assert llm.SEATS["editor"].timeout_sub_s == 240
     assert llm.SEATS["script"].timeout_sub_s == 240
     assert llm.SEATS["state"].timeout_sub_s == 120

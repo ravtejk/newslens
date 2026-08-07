@@ -167,9 +167,11 @@ RECENCY_CAP_DAYS = 14
 # arithmetic but a live measurement: the rank seat flipped Haiku -> Sonnet 5 in
 # this same batch, and the probe battery ran the REAL founder pool at both sizes
 # on the shipped seat (2026-08-06, subscription lane):
-#     550 items -> 148.7s, 16,508 out, 12 clusters, 0 repairs, VALID
-#     780 items -> 120.1s, 13,407 out, 12 clusters, 0 repairs, VALID
-# The bigger prompt was FASTER and used FEWER output tokens, and neither draw
+#     550 items, n=3 -> 132.0-148.7s, 15,034-16,508 out, 12 clusters, 0 repairs
+#     780 items, n=3 -> 120.1-156.6s, 13,407-17,425 out, 12 clusters, 0 repairs
+# The n=6 battery shows overlapping ranges, not a faster-bigger claim; the
+# output budget is sized off the 22,748 all-time output ceiling, never off any
+# single draw pair. Neither size in any draw
 # reproduced the id-transcription slip class that killed run 48 (a mis-copied
 # 'B15H') and fresh1 run 3 under Haiku. A bigger list under the seat that already
 # slipped twice at the smaller list would be the wrong direction — both halves

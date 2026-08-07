@@ -210,7 +210,8 @@ def test_the_taxed_arms_output_would_trip_every_band():
 
     ENG-M0 RE-PIN — the MULTIPLE loosened, deliberately, and this is the honest
     reason. The bands were re-sized upward (6,000/4,000/1,200 ->
-    10,000/6,000/1,500) because the seats they guard now run Opus with adaptive
+    10,000/10,000/4,000 — the shipped dict; the parametrize above is the
+    source of truth) because the seats they guard now run Opus with adaptive
     thinking and legitimately emit ~1.4x their thinking-off volume. The taxed
     arms still blow every band — which is the property this test exists to
     assert — but editor's 22,384 is no longer 3x its 10,000 band, so demanding

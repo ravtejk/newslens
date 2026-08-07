@@ -1,7 +1,9 @@
 """ENG-M0 — the full seat batch, pinned.
 
-Every test here is BORN RED at 872113e (the HEAD this batch was cut from); the
-born-red run is quoted in research/2026-08-06--engm0-build.md. Two classes:
+28 of 33 tests here are BORN RED at 872113e (the HEAD this batch was cut from);
+5 are labelled carried-invariants (born green — the list is in the build record
+§COMPLETION). The born-red run is quoted in
+research/2026-08-06--engm0-build.md. Two classes:
 
   * CONSTANTS pins (the seat map, the walls, the bands, the cap, the rank output
     budget). These are the "derive from SEATS or die" contract made testable —

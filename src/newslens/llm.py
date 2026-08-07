@@ -432,9 +432,9 @@ _OPUS_STATE_SUB = dict(
 # report lists the probes still owed.
 #
 #   seat     ceiling (provenance)              /throughput   x margin   SHIPPED
-#   rank     148.7s MEASURED (550-item draw,   —             4.0x        600
-#            16,508 out; the 780 draw was
-#            FASTER at 120.1s/13,407 out)
+#   rank     156.63s MEASURED (n=6 battery     —             3.83x       600
+#            max, 780-item draw, 17,425 out;
+#            ranges overlap across sizes)
 #   editor    62.2s MEASURED (5,867 out)       —             3.9x        240
 #   script    66.8s MEASURED (4,670 out)       —             3.6x        240
 #   state     29.8s MEASURED (2,000 out)       —             4.0x        120
@@ -783,9 +783,10 @@ _STREAM_MIN_MAX_TOKENS = 5000
 
 def _should_stream(cfg: SeatConfig, max_tokens: int) -> bool:
     """Stream the LONG-call class only (NL-93 constraint 4): a per-call max_tokens
-    budget at/above _STREAM_MIN_MAX_TOKENS. Real writer (16000) and analyst (6000)
-    calls stream; every current short/medium api call (editor 4600, rank/script
-    3000, state 400, follow_altitude 400, and any cheap small-budget probe) stays
+    budget at/above _STREAM_MIN_MAX_TOKENS. Real writer (16000), analyst (6000),
+    and — since ENG-M0 — rank (36,000) calls stream on the api lane (rank's pins
+    moved with the SSE accept); every current short/medium api call (editor,
+    script, state, follow_altitude, and any cheap small-budget probe) stays
     below the bar, so its request bytes (no `stream` key) and its blocking
     json.load transport are UNCHANGED — its pinned tests do not move, and the
     latency-sensitive interactive follow_altitude path keeps its exact
