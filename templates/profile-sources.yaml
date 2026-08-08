@@ -36,6 +36,10 @@
 #               with the doctor's own pipeline-UA fetch that day.
 #   2026-08-03  NL-136 ①: Whatfinger Business (cautious, permanently off)
 #               dropped — a dead entry every new reader inherited.
+#   2026-08-07  ENG-M0 (a9f61d9): the 14 staged-held feeds ENABLED — pool
+#               780 + fair-fill made room; hold comments discharged in-file.
+#   2026-08-07  NL-142b (5d69a8f): cnn_topstories DISABLED — frozen feed,
+#               newest 2023-04-25; founder half 5a74455; family born-red pinned.
 # test_stage0_m1_profiles.py pins that this file still parses clean with
 # active sources and zero interests, tests/test_stage0_m2.py pins the
 # zero-follows posture, and tests/test_nl135_slate_land.py pins the slate,
