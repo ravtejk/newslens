@@ -615,18 +615,20 @@ def test_the_copy_table_is_read_at_render_time(ui, monkeypatch):
 
 
 def test_the_source_pack_numbers_are_counted_from_the_readers_own_file(ui):
-    """The true numbers, against the shipped template: 69 outlets · 65 fetched
-    · 4 attribution-only. Re-pinned 2026-08-03 — the NL-135 slate added 28
-    feeds and NL-136 ① dropped the one disabled aggregator, so the fourth
-    clause has nothing to count and drops. That the numbers MOVED with the
-    file is the property this test exists for; they are counted, never typed."""
+    """The true numbers, against the shipped template: 69 outlets · 64 fetched
+    · 4 attribution-only · 1 off. That the numbers MOVE with the file is the
+    property this test exists for; they are counted, never typed — this pin
+    has now been re-measured through three catalog edits (NL-135's 28 feeds,
+    NL-136 ①'s dropped aggregator, ENG-M0's 14 enables) and one disable."""
     _, html = get(ui, "/")
-    # ENG-M0 2026-08-06 — POSTURE A restored: the 14 held Entertainment/Sports
-    # feeds are enabled (NL-142's dedupe landed, the pool cap rose to 780 with
-    # fair-fill), so fetched goes 51 -> 65 and the off-clause drops again. The
-    # docstring's own "69 · 65 · 4" is finally what the page renders.
-    assert ("69 outlets. 65 are fetched each morning. "
-            "4 are attribution-only by design.") in html
+    # NL-142b 2026-08-07 — MEASURED from the shipped file, not predicted:
+    # ENG-M0 enabled the 14 held Entertainment/Sports feeds (fetched 51 -> 65)
+    # and this batch disabled the frozen CNN front page (65 -> 64, the
+    # principal's ruling (a) 2026-08-06), so the off-clause returns carrying
+    # the NEUTRAL noun — CNN is a full-tier outlet, not a cautious aggregator.
+    # This is the sentence every new reader is shown on the commissioning page.
+    assert ("69 outlets. 64 are fetched each morning. "
+            "4 are attribution-only by design. 1 source is off.") in html
     assert "3 analyst newsletters are in the list; none are followed." in html
 
 

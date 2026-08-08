@@ -533,16 +533,20 @@ def source_pack_sentence(cfg) -> str:
 
     Each clause is dropped when its count is zero, so the sentence can never
     claim "0 aggregators are off". Against the shipped profile template this
-    renders: 69 outlets. 65 are fetched each morning. 4 are attribution-only by
-    design.
+    renders (measured NL-142b, 2026-08-07): 69 outlets. 64 are fetched each
+    morning. 4 are attribution-only by design. 1 source is off.
 
-    THE OFF CLAUSE IS ABSENT THERE, and that is the state NL-136 ① created:
-    dropping Whatfinger Business left the template with zero disabled sources,
-    so the fourth clause has nothing to count and drops — the same guard that
-    has always kept "0 aggregators are off" off the page, meeting its first
-    real caller instead of a unit test. (Before the NL-135 slate this same
-    builder rendered the mockup's original line: 42 outlets. 37 are fetched
-    each morning. 4 are cited but never fetched. 1 aggregator is off.)"""
+    THE OFF CLAUSE CAME BACK WITH THE NEUTRAL NOUN, and that pairing is what
+    the `agg` branch below exists for: the one off source is CNN — a full-tier
+    outlet whose feed has been frozen since 2023-04-25, disabled at the
+    principal's ruling (a) 2026-08-06 — so calling it an aggregator would be a
+    small lie in the one sentence whose whole job is being countable. Between
+    NL-136 ① (which dropped Whatfinger Business and left the template with zero
+    disabled sources) and that ruling the clause was ABSENT, which is the same
+    zero-count guard doing its work on a real caller instead of a unit test.
+    (Before the NL-135 slate this same builder rendered the mockup's original
+    line: 42 outlets. 37 are fetched each morning. 4 are cited but never
+    fetched. 1 aggregator is off.)"""
     total = len(cfg.sources)
     fetched = len(cfg.fetchable_sources)
     cited = len(cfg.reference_only_sources)

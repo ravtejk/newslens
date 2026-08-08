@@ -123,6 +123,7 @@ sources:
   # --- Broadcast / digital ---------------------------------------------------
   - name: CNN
     rss_url: http://rss.cnn.com/rss/cnn_topstories.rss
+    enabled: false  # FROZEN FEED: newest item 2023-04-25 — re-measured 2026-08-07 (pipeline UA, ingest.parse_entries): 20 items, 20 distinct URLs, newest 1,200 days old (NL-142: 380 archive rows in the real DB, zero genuinely-new items on any measured ingest day; the FIFTH instance of the frozen-feed class ingest.STALE_FEED_DAYS warns on). Disabled at the principal's ruling (a), 2026-08-06 (DECISIONS e684ec6) — NL-142b, the template half of the same ruling that disabled it in the founder catalog (5a74455); the two halves must not drift apart. Re-check if CNN revives the feed.
     note: "http-only: CNN's https feed endpoint has broken TLS; content identical"
   - name: NPR
     rss_url: https://feeds.npr.org/1001/rss.xml

@@ -132,15 +132,38 @@ def test_the_stale_cnn_section_feeds_did_not_land(template_cfg):
     ranking.py measures recency by FETCH time, so enabling a frozen archive
     would hand the ranker twenty three-year-old stories as today's news. This
     is the pin on 'never enabled on hope' — a feed that answers is not a feed
-    that publishes."""
+    that publishes.
+
+    NL-142b 2026-08-07 — THE FRONT PAGE JOINED THE FAMILY, so this pin now
+    covers all three CNN feeds. cnn_topstories was the one CNN feed that
+    shipped ENABLED, and NL-142's measurement pass found it frozen too: newest
+    item 2023-04-25, 380 archive rows in the real DB across 20 distinct URLs,
+    zero genuinely-new items on any measured ingest day. Re-measured at this
+    commit with the pipeline UA: 20 items, 20 distinct URLs, newest 1,200 days
+    old. The principal ruled (a) on 2026-08-06 and it was disabled in his own
+    catalog (5a74455); this is the template half of that one ruling. The
+    assertions below are what stop it coming back SILENTLY — deleting the
+    `enabled:` line or flipping it to true reds here, at the diff, instead of
+    in a reader's briefing three weeks later."""
     urls = {(s.rss_url or "") for s in template_cfg.sources}
     assert "http://rss.cnn.com/rss/cnn_showbiz.rss" not in urls
     assert "http://rss.cnn.com/rss/edition_sport.rss" not in urls
     names = {s.name for s in template_cfg.sources}
     assert "CNN Entertainment" not in names
     assert "CNN Sport" not in names
-    # and the live CNN front page is untouched by all of this
+    # The front page STAYS IN THE CATALOG — the outlet is not dropped, only its
+    # FETCH is off, so reviving it is one line the day CNN revives the feed.
+    # That is the frozen-note idiom, identical in the founder catalog.
     assert "CNN" in names
+    front = _by_name(template_cfg)["CNN"]
+    assert front.rss_url == "http://rss.cnn.com/rss/cnn_topstories.rss"
+    assert front.enabled is False, (
+        "cnn_topstories is enabled again: that feed has been frozen since "
+        "2023-04-25 and recency is measured at FETCH time, so enabling it "
+        "hands the ranker a three-year-old archive as today's news "
+        "(NL-142 measurement; principal's ruling (a) 2026-08-06; NL-142b)")
+    assert front.fetchable is False
+    assert front in template_cfg.disabled_sources
 
 
 def test_the_slate_did_not_disturb_the_existing_catalog(template_cfg):
@@ -404,12 +427,22 @@ def test_entertainment_and_sports_feeds_map_to_nothing_on_purpose():
 
 def test_the_dead_aggregator_is_gone_from_the_template(template_cfg):
     """A permanently-off aggregator every new reader inherited, counted in
-    their pack, able to do nothing for them."""
+    their pack, able to do nothing for them.
+
+    The exact-disabled-set census rides here, and NL-142b (2026-08-07) is why
+    it earns its keep: an OFF entry in a template every new reader inherits is
+    a thing that has to be named on purpose, one at a time."""
     assert "Whatfinger Business" not in {s.name for s in template_cfg.sources}
-    # POSTURE A (ENG-M0): nothing in the slate is held any more, so the
-    # disabled set is empty. Derived from SLATE either way, never typed.
-    assert {s.name for s in template_cfg.disabled_sources} == {
-        n for n, (_, _, enabled) in SLATE.items() if not enabled} == set()
+    # POSTURE A (ENG-M0): nothing in the SLATE is held any more — the 14
+    # Entertainment/Sports feeds are enabled — so the slate's contribution to
+    # the disabled set is empty. Derived from SLATE, never typed.
+    assert {n for n, (_, _, enabled) in SLATE.items() if not enabled} == set()
+    # NL-142b: and the template's WHOLE disabled set is the one non-slate entry
+    # the principal's ruling (a) turned off — the frozen CNN front page, and
+    # nothing else. Pinned as an exact set: a new silent disable anywhere in
+    # this file has to come through this line and be read by someone.
+    assert {s.name for s in template_cfg.disabled_sources} == {"CNN"}
+    # NL-136 ① unchanged: the cautious TIER is still supported and still unused.
     assert not [s for s in template_cfg.sources if s.tier == "cautious"]
     # NOT a source-text sweep: the file still NAMES the outlet in the comment
     # that records the drop and the one-block restore recipe, and that comment
@@ -421,26 +454,57 @@ def test_the_pack_sentence_presents_attribution_only_as_design(template_cfg):
     """Ruling ①. 'cited but never fetched' read as a shortfall; the four are a
     decision. Numbers still counted, never typed."""
     sentence = commissioning.source_pack_sentence(template_cfg)
-    # POSTURE A (ENG-M0): the 14 held feeds are enabled, so the fetched count
-    # rises 51 -> 65 and the "sources are off" clause DROPS (the zero guard).
-    assert sentence == ("69 outlets. 65 are fetched each morning. "
-                        "4 are attribution-only by design.")
+    # NL-142b 2026-08-07, MEASURED from the shipped file: ENG-M0 enabled the 14
+    # held feeds (fetched 51 -> 65) and this batch disabled the frozen CNN
+    # front page (65 -> 64), so the off-clause is BACK — with the neutral noun,
+    # because the one off source is a full-tier outlet, not a cautious
+    # aggregator. The 69 total does not move: a disabled outlet is still in
+    # the reader's pack, which is exactly why the sentence has to say so.
+    assert sentence == ("69 outlets. 64 are fetched each morning. "
+                        "4 are attribution-only by design. 1 source is off.")
     assert "cited but never fetched" not in sentence
+    # The noun branch, now with a live customer: calling CNN an aggregator
+    # would be a small lie in the one sentence whose job is being countable.
     assert "aggregator is off" not in sentence
     html = commissioning.render("picking", template_cfg, {})
     assert sentence in html
 
 
-def test_the_pack_arithmetic_survives_the_zero_disabled_case(template_cfg):
-    """Counted, never typed. ENG-M0 restores POSTURE A: the 14 held feeds are
-    enabled, so the disabled set is EMPTY again and this test returns to being
-    what its name says — the zero-disabled case. The '0' guard is what it was
-    always for: a zero count drops its clause rather than rendering ' 0 '."""
-    assert len(template_cfg.disabled_sources) == 0
+def test_the_pack_arithmetic_is_counted_from_the_file_never_typed(template_cfg):
+    """Counted, never typed — the four census numbers, read off the shipped
+    file. RENAMED at NL-142b 2026-08-07 (was
+    `test_the_pack_arithmetic_survives_the_zero_disabled_case`): the shipped
+    template no longer HAS a zero disabled set — the frozen CNN front page is
+    off by the principal's ruling (a) — and a test name asserting a spent
+    condition is the exact staleness this batch exists to clear. The
+    zero-disabled case it was named for is not lost: it is re-run below
+    against this same 69-outlet file with the one disable lifted in memory,
+    which is a stronger customer for the ' 0 ' guard than the one-source toy
+    config the carried invariant uses."""
     assert len(template_cfg.sources) == 69
-    assert len(template_cfg.fetchable_sources) == 65
+    assert len(template_cfg.fetchable_sources) == 64
     assert len(template_cfg.reference_only_sources) == 4
+    assert len(template_cfg.disabled_sources) == 1
+    # every outlet is in exactly one bucket — the arithmetic has to close
+    assert (len(template_cfg.fetchable_sources)
+            + len(template_cfg.reference_only_sources)
+            + len(template_cfg.disabled_sources)) == len(template_cfg.sources)
     assert " 0 " not in commissioning.source_pack_sentence(template_cfg)
+
+    # THE ZERO-DISABLED CASE, on the real file: lift the one disable and the
+    # off-clause has nothing to count, so it drops rather than rendering ' 0 '.
+    revived = config.SourcesConfig(
+        sources=[config.Source(**{**vars(s), "enabled": True})
+                 for s in template_cfg.sources],
+        interests_broad=list(template_cfg.interests_broad),
+        interests_granular=list(template_cfg.interests_granular))
+    assert len(revived.disabled_sources) == 0
+    assert len(revived.fetchable_sources) == 65
+    revived_sentence = commissioning.source_pack_sentence(revived)
+    assert revived_sentence == ("69 outlets. 65 are fetched each morning. "
+                                "4 are attribution-only by design.")
+    assert " 0 " not in revived_sentence
+    assert "is off" not in revived_sentence
 
 
 # ---------------------------------------------------------------------------

@@ -489,11 +489,15 @@ COMMISSION_LIST_AND = " and "
 # Assembled by commissioning.source_pack_sentence from the reader's OWN file —
 # every number is counted, never typed, and a clause whose count is zero is
 # dropped rather than rendered as "0". Against the shipped profile template
-# after the NL-135 slate they render: "69 outlets. 65 are fetched each morning.
-# 4 are attribution-only by design." (Before that slate the same builder
-# rendered the mockup's original line, "42 outlets. 37 are fetched each
-# morning. 4 are cited but never fetched. 1 aggregator is off." — the numbers
-# moved because the file did, which is the whole point of counting them.)
+# they render (measured NL-142b, 2026-08-07): "69 outlets. 64 are fetched each
+# morning. 4 are attribution-only by design. 1 source is off." (Before the
+# NL-135 slate the same builder rendered the mockup's original line, "42
+# outlets. 37 are fetched each morning. 4 are cited but never fetched. 1
+# aggregator is off." — the numbers moved because the file did, which is the
+# whole point of counting them.) The off clause has now been all three of its
+# states on the shipped file: an aggregator (pre-NL-136), absent (NL-136 ①
+# through ENG-M0), and a full-tier outlet under the NEUTRAL noun — the frozen
+# CNN front page, disabled at the principal's ruling (a) 2026-08-06.
 COMMISSION_PACK_OUTLET = "outlet"
 COMMISSION_PACK_OUTLETS = "outlets"
 COMMISSION_PACK_FETCHED_ONE = "is fetched each morning"
