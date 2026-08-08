@@ -35,6 +35,7 @@ header; the em-dash split keeps parsing forgiving and line-based).
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -1236,6 +1237,16 @@ def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
 # is an unmigrated follow (pre-M1b) — renders bare, nothing fabricated.
 # ---------------------------------------------------------------------------
 STORED_ALTITUDES: Tuple[str, ...] = ("entity", "storyline", "narrow")
+# NL-17 M1 — the altitudes a READER may choose. Narrower than STORED_ALTITUDES,
+# and the gap is the principal's 2026-08-07 amendment (i): 'narrow' remains a
+# STORED value (the seed writes it — that is the instant-commit law's landing,
+# system-owned and auto-widenable) but is no longer a CHOOSABLE one. A
+# reader-chosen narrow altitude forks a thread's vocabulary permanently, which
+# is the junk-data class the amendment names; a seed that merely has not widened
+# yet is the same bytes with the opposite lifecycle. The pick door
+# (server._api_follow_at) validates against THIS tuple, so the banned row cannot
+# be minted even by a request that no rendered control produced.
+PICKABLE_ALTITUDES: Tuple[str, ...] = ("entity", "storyline")
 # 'seed'    NL-17-M1c: the INSTANT commit. The tap writes a story-seeded thread
 #           locally with nothing consulted — distinct from 'auto' (a settle
 #           named it) and from 'pick' (the reader chose this rung deliberately).
@@ -1505,6 +1516,197 @@ def medium_correction_stats(con: sqlite3.Connection) -> Dict[str, object]:
             "ratio": round(ratio, 4),
             "flip_threshold": 0.2,
             "flip_would_trigger": bool(medium_auto and ratio >= 0.2)}
+
+
+# --- NL-17 M1: SETTLE OUTCOMES + the entity column (0024/0025) --------------
+# The settle's answer is recorded as an append-only EVENT, never as a flip of a
+# memory column (product council 2026-08-08 §5 item 3). Two reasons, and both
+# are load-bearing: a column can only ever say what happened LAST, and the
+# retry bound needs to know what happened BEFORE.
+SETTLE_OUTCOMES: Tuple[str, ...] = (
+    "settled_entity",   # an actor was named AND minted/matched (entity_id set)
+    "settled_none",     # the settle RAN and AFFIRMATIVELY found nothing broader
+                        # — terminal, auto-widenable forever (0024 header, (a))
+    "settled_low",      # the settle RAN and came back UNCONFIDENT, holding named
+                        # candidates. The SAME silent surface as settled_none; a
+                        # DIFFERENT fact, kept apart for two reasons (0025
+                        # header): the terminal-none denominator the principal
+                        # rules on stays clean, and this row's `detail` carries
+                        # the candidates the management surfaces afford.
+    "settle_failed",    # the settle could not run to an answer — case (b),
+                        # and the ONLY outcome that licenses a retry
+)
+# THE BOUND: after a settle FAILS, exactly ONE re-settle is permitted. Expressed
+# as a limit on CONSECUTIVE trailing failures rather than on the raw attempt
+# counter, because the two lanes have different shapes: a failure streak must be
+# capped, while a terminal-none thread stays widenable indefinitely (0024
+# header) and would otherwise burn the counter and lock itself out of a genuine
+# later failure retry. One successful run — of either outcome — clears the
+# streak, which is the right reading: the thing being bounded is repeating a
+# failure for free, not trying again on new evidence.
+SETTLE_FAILURE_RETRIES = 1
+
+
+def log_settle_outcome(con: sqlite3.Connection, thread_id: Optional[int],
+                       topic: str, outcome: str, *, attempt: int = 1,
+                       entity_id: Optional[int] = None,
+                       detail: str = "") -> None:
+    """Append one settle outcome (0025, append-only).
+
+    Raises ValueError on an outcome outside SETTLE_OUTCOMES — FOUR values since
+    the fix loop added `settled_low`. The vocabulary is closed in three places
+    that must agree (0025's CHECK, SETTLE_OUTCOMES, and this guard), so a
+    caller with a typo fails here rather than halfway through a settle
+    transaction on an IntegrityError.
+
+    `detail` is MACHINE diagnostics and never reader copy — cases (a) and (b)
+    both render nothing on screen, and this column is what keeps that silence
+    accountable. The ONE exception is `settled_low`, whose detail carries the
+    candidates the management surfaces afford (0025's header says so, and
+    encode/decode_settle_candidates are the only code that touches it).
+    """
+    if outcome not in SETTLE_OUTCOMES:
+        raise ValueError(
+            f"outcome must be one of {list(SETTLE_OUTCOMES)}, got {outcome!r}")
+    con.execute(
+        "INSERT INTO follow_settle_events (thread_id, topic, outcome, attempt,"
+        " entity_id, detail, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (thread_id, topic, outcome, int(attempt), entity_id, detail,
+         _utc_now_iso()))
+
+
+def encode_settle_candidates(candidates: List[Dict], *,
+                             reason: str = "low-confidence",
+                             primary_entity: str = "") -> str:
+    """The `settle_low` detail payload, composed in ONE place.
+
+    A candidate is `{"altitude": "entity"|"storyline", "disclosure": "<compact
+    qualifier name>"}` — the resolver's own two rungs, in its own grammar, with
+    nothing added and nothing authored. Anything malformed is dropped rather than
+    stored: a candidate the render cannot use is worse than one that is absent,
+    because the absent one degrades to silence and the malformed one degrades to
+    a broken sentence on a management surface."""
+    clean = []
+    for c in candidates or []:
+        alt = str((c or {}).get("altitude") or "").strip()
+        disc = str((c or {}).get("disclosure") or "").strip()
+        if alt in PICKABLE_ALTITUDES and disc:
+            clean.append({"altitude": alt, "disclosure": disc})
+    return json.dumps({"reason": reason, "primary_entity": primary_entity,
+                       "candidates": clean}, ensure_ascii=False)
+
+
+def decode_settle_candidates(detail: str) -> List[Dict]:
+    """THE ONLY PARSER of that payload — the 0018/0019 dumb-render law's
+    requirement, met by construction: no renderer ever touches the column, they
+    are handed a plain list. A malformed or legacy (non-JSON) detail degrades to
+    [] rather than raising; this runs on a render path, and a management surface
+    losing an affordance is recoverable while a 500 is not."""
+    if not (detail or "").strip().startswith("{"):
+        return []
+    try:
+        payload = json.loads(detail)
+    except (ValueError, TypeError):
+        return []
+    out = []
+    for c in (payload.get("candidates") or []) if isinstance(payload, dict) else []:
+        if not isinstance(c, dict):
+            continue
+        alt = str(c.get("altitude") or "").strip()
+        disc = str(c.get("disclosure") or "").strip()
+        if alt in PICKABLE_ALTITUDES and disc:
+            out.append({"altitude": alt, "disclosure": disc})
+    return out
+
+
+def settle_candidates(con: sqlite3.Connection,
+                      thread_id: Optional[int]) -> List[Dict]:
+    """The candidates a thread's LATEST unconfident settle left behind, or [].
+
+    Reads the most recent `settled_low` row and stops — an older one describes a
+    story this thread has since moved past, and offering last week's candidates
+    beside this week's would be the surface claiming a choice nobody was offered.
+    [] on a pre-0025 database, which is the same as "no affordance": the ruling's
+    own degenerate case, and the shipped behaviour."""
+    if thread_id is None:
+        return []
+    try:
+        row = con.execute(
+            "SELECT detail FROM follow_settle_events"
+            " WHERE thread_id = ? AND outcome = 'settled_low'"
+            " ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return []
+    return decode_settle_candidates(row["detail"]) if row else []
+
+
+def settle_attempts(con: sqlite3.Connection, thread_id: Optional[int]) -> int:
+    """How many settle attempts this thread has on record (0 on a pre-0025 DB,
+    which degrades to "never tried" — the safe direction: a missing log can
+    license one attempt, never suppress one)."""
+    if thread_id is None:
+        return 0
+    try:
+        row = con.execute(
+            "SELECT COALESCE(MAX(attempt), 0) AS n FROM follow_settle_events"
+            " WHERE thread_id = ?", (thread_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row["n"] or 0)
+
+
+def settle_allowed(con: sqlite3.Connection,
+                   thread_id: Optional[int]) -> bool:
+    """MAY THIS THREAD'S SETTLE RUN? The ONE eligibility predicate — deliberately
+    one, because a second copy of this rule is how the two copies disagree.
+
+    Three cases, and the asymmetry between the last two IS the product ruling:
+
+      no history          -> True. The settle at the tap, attempt 1.
+      last = settled_none -> True, indefinitely. THE AUTO-WIDEN CASE (a): the
+                             thread settled correctly and found no actor, so a
+                             later story with new evidence gets a fresh attempt,
+                             not a retry. Nothing is being repeated, so nothing
+                             needs bounding.
+      last = settle_failed-> True only while the TRAILING FAILURE STREAK is
+                             within SETTLE_FAILURE_RETRIES. THE BOUND, case (b):
+                             one failure earns one re-settle; the re-settle's own
+                             failure ends it. Only failure is bounded, because
+                             only failure can repeat for free.
+
+    (`settled_entity` never reaches here — a settled thread's altitude is no
+    longer 'narrow', and the settle door's mutation-law guard returns first.)
+
+    Enforced SERVER-SIDE, at the door that can spend: a bound the client is
+    trusted to honour is not a bound. A pre-0025 database degrades to True —
+    the safe direction, since a missing log may license an attempt but must
+    never silently suppress one.
+    """
+    if thread_id is None:
+        return True
+    try:
+        rows = con.execute(
+            "SELECT outcome FROM follow_settle_events WHERE thread_id = ?"
+            " ORDER BY id DESC LIMIT ?",
+            (thread_id, SETTLE_FAILURE_RETRIES + 1)).fetchall()
+    except sqlite3.OperationalError:
+        return True
+    streak = 0
+    for r in rows:
+        if r["outcome"] != "settle_failed":
+            break
+        streak += 1
+    return streak <= SETTLE_FAILURE_RETRIES
+
+
+def set_thread_entity(con: sqlite3.Connection, thread_id: int,
+                      entity_id: Optional[int]) -> None:
+    """Point a thread at its entity (0024's nullable FK). NULL is a first-class
+    value here, not an erasure: "storyline thread, no broader concept (yet)".
+    Rides the caller's transaction."""
+    con.execute(
+        "UPDATE memory SET entity_id = ?, updated_at = ? WHERE id = ?",
+        (entity_id, _utc_now_iso(), thread_id))
 
 
 def dismiss_thread(con: sqlite3.Connection, topic: str, *,

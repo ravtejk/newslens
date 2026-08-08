@@ -300,10 +300,16 @@ def test_following_rows_render_the_altitude_qualifier():
         html = server._following_threads_subview(server._following_rows(con))
         assert '<span class="alt-q">(company)</span>' in html
         assert '<span class="alt-q">(fund-withdrawal story)</span>' in html
-        assert '<span class="alt-q">— this story</span>' in html
+        # NL-17 M1 — the narrow arm is BURIED (amendment (i): "this story"
+        # appears nowhere, "not as label, not as qualifier, not as rung"). The
+        # story-seeded row renders its name BARE, so this assertion inverts and
+        # the row's own name is what has to still be there.
+        assert '<span class="alt-q">— this story</span>' not in html
+        assert "Some headline" in html
         # ONLY the three qualified rows carry alt-q (bare storyline + unmigrated
         # do not — unconditional disclosure, but the NAME may carry it)
-        assert html.count('class="alt-q"') == 3
+        # 2, not 3: the narrow row's qualifier is buried (NL-17 M1).
+        assert html.count('class="alt-q"') == 2
     finally:
         con.close()
 

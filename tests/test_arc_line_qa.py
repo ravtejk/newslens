@@ -451,7 +451,10 @@ def test_0018_applies_over_armed_append_only_triggers_and_keeps_them(tmp_path):
                         "0020_follow_altitude_events.sql",
                         "0021_memory_follow_origin.sql",
                         "0022_memory_sync_guard.sql",
-                        "0023_briefings_pending.sql"]
+                        "0023_briefings_pending.sql",
+                        # NL-17 M1: entity identity + the settle-outcome log.
+                        "0024_entities.sql",
+                        "0025_follow_settle_events.sql"]
     con = db.connect(db_path)
     try:
         row = con.execute("SELECT arc_line FROM thread_state").fetchone()

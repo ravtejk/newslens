@@ -404,7 +404,17 @@ def test_row21_retired_constants_are_marked_and_rendered_nowhere():
     # the content pass's §5.1 Arm A. Every one is KEPT (the ruled strings stay
     # on record, nothing imports a dangling name) and rendered NOWHERE — which
     # the loop below is what actually enforces.
+    # NL-17 M1 joins FOLLOW_NARROW + FOLLOW_RUNG_THIS_STORY to the set: the
+    # qualifier and rung seats of "this story", buried by amendment (i). Kept
+    # under the same retired-but-named convention, rendered nowhere — which the
+    # loop below is what actually enforces.
+    # Fix loop 2b adds the worded-fallback pair — the "wider story" / "the
+    # company" switch that died whole with the offer class (RECONVENE-2, ruling
+    # (b)). Same convention: kept named, rendered nowhere, which the loop below
+    # is what actually enforces.
     assert marked == {"KICKER_LEAD", "FOLLOW_STORY_ACTIVE",
+                      "FOLLOW_NARROW", "FOLLOW_RUNG_THIS_STORY",
+                      "FOLLOW_ALT_FALLBACK_ENTITY", "FOLLOW_ALT_FALLBACK_STORYLINE",
                       "FOLLOW_STORY_CONFIRM",
                       "FOLLOW_RESOLVING", "FOLLOW_LOW_LEAD",
                       "FOLLOW_JUST_THIS_STORY_OPTION",

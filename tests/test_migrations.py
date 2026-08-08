@@ -38,6 +38,8 @@ MIGRATION_0020 = "0020_follow_altitude_events.sql"    # NL-17-M1b: Axel's medium
 MIGRATION_0021 = "0021_memory_follow_origin.sql"      # NL-17-M1b FIX LOOP 1: the origin-story bridge (recognize an altitude-renamed follow on its origin card)
 MIGRATION_0022 = "0022_memory_sync_guard.sql"          # NL-81: the sync resurrection guard (tombstones + generation stamp + dismissal provenance)
 MIGRATION_0023 = "0023_briefings_pending.sql"          # NL-106: stage-and-promote — a regenerate no longer destroys the readable edition
+MIGRATION_0024 = "0024_entities.sql"                   # NL-17 M1: entity identity — the entities table + memory.entity_id (nullable, NULL = "no broader concept")
+MIGRATION_0025 = "0025_follow_settle_events.sql"       # NL-17 M1: the append-only settle-outcome log (settled_entity / settled_none / settle_failed) + the retry bound
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
@@ -45,7 +47,7 @@ ALL_MIGRATIONS = [
     MIGRATION_0011, MIGRATION_0012, MIGRATION_0013, MIGRATION_0014,
     MIGRATION_0015, MIGRATION_0016, MIGRATION_0017, MIGRATION_0018,
     MIGRATION_0019, MIGRATION_0020, MIGRATION_0021, MIGRATION_0022,
-    MIGRATION_0023,
+    MIGRATION_0023, MIGRATION_0024, MIGRATION_0025,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
@@ -62,6 +64,13 @@ EXPECTED_TABLES = {
     # instead of destroying the live row, and persist_generation promotes it
     # atomically with the new body. Server/UI code never reads it.
     "briefings_pending",
+    # NL-17 M1 (0024/0025): entity identity and the settle-outcome record.
+    # `entities` is the durable actor table every thread about one actor points
+    # at (memory.entity_id, nullable — NULL is the first-class "storyline
+    # thread, no broader concept"); `follow_settle_events` is the append-only
+    # log of what each settle found, which is what makes cases (a) and (b)'s
+    # ruled SILENCE accountable and what the one-retry bound is decided from.
+    "entities", "follow_settle_events",
 }
 
 

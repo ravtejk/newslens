@@ -200,17 +200,11 @@ FOLLOW_STEADY_PREFIX = "Following —"         # "● Following — Volkswagen (
 # OBJECT seats, story takes the SCOPE seats. Same deictic shape, different seat —
 # they are not interchangeable and neither may take the other's place.
 FOLLOW_THREAD_SELF = "this thread"           # object seat  — "● Following this thread"
-FOLLOW_NARROW = "this story"                 # scope  seat — the row qualifier "— this story"
 FOLLOW_DOT_ON = "●"
 FOLLOW_DOT_OFF = "○"
-# The acts line on a MANAGEMENT surface: "Instead: <alt> · this story · Unfollow".
+# The acts line on a MANAGEMENT surface: "Instead: <alt> · Unfollow".
 # Never on a card (his 07-25 ruling ②: today cards are clean A3).
 FOLLOW_INSTEAD_PREFIX = "Instead:"
-# Lawful worded fallback when the settle named no alternative (alt_label ''):
-# name the other coverage in words, never a bare symbol.
-FOLLOW_ALT_FALLBACK_ENTITY = "the company"
-FOLLOW_ALT_FALLBACK_STORYLINE = "the wider story"   # NL-103 row 14
-FOLLOW_RUNG_THIS_STORY = "this story"        # NL-103 row 13 — bare rung, "just" dead
 FOLLOW_UNFOLLOW = "Unfollow"                 # the symmetry-law verb (2026-07-18)
 # Receipts (§2.1.4). The unfollow receipt reverts ~3s to the resting CTA — no
 # undo affordance (his 07-25 verdict killed A11). A receipt never takes a pronoun
@@ -262,9 +256,44 @@ REFUSAL_MEM_FALLBACK_FIX = "Run newslens memory sync to see what’s wrong."
 FOLLOW_RESOLVING = "Deciding what this follow covers…"   # RETIRED-NOT-RENDERED (v11 ruling ①)
 FOLLOW_LOW_LEAD = "What would you like to follow?"       # RETIRED-NOT-RENDERED (v11 ruling ④)
 FOLLOW_JUST_THIS_STORY_OPTION = "Just this story"        # RETIRED-NOT-RENDERED (v11 ruling ④)
-FOLLOW_DEGRADE_LEAD = "Following — this story."          # RETIRED-NOT-RENDERED (NL-103 row 3)
-FOLLOW_DEGRADE_UPGRADE = "Couldn't fetch broader follow — choose it anytime."  # RETIRED-NOT-RENDERED (NL-103 row 3)
-FOLLOW_DEGRADE_COMMITTED = FOLLOW_DEGRADE_LEAD + " " + FOLLOW_DEGRADE_UPGRADE  # RETIRED-NOT-RENDERED (NL-103 row 3)
+# --- NL-17 M1: BURIED BY AMENDMENT (i) ---------------------------------------
+# The principal's 2026-08-07 amendment (i) kills "this story" as an offered
+# choice, and the product council's case (a) extends that to every seat it held:
+# "'This story' appears nowhere — not as label, not as qualifier, not as rung."
+# These two were the QUALIFIER (a Following row's "— this story") and the RUNG
+# (the acts line's narrow switch). Both emit sites are deleted; kept here under
+# the retired-but-named convention so nothing imports a dangling constant and so
+# the ruled strings stay on the record. NOTHING REPLACES THEM — the council ruled
+# the rung out with no substitute and the row now renders its name bare.
+FOLLOW_NARROW = "this story"             # RETIRED-NOT-RENDERED (NL-17 M1, amendment (i))
+FOLLOW_RUNG_THIS_STORY = "this story"    # RETIRED-NOT-RENDERED (NL-17 M1, amendment (i))
+# --- THE WORDED-FALLBACK ARM, BURIED (NL-17 M1 fix loop 2b) ------------------
+# Product RECONVENE-2, unanimous, ruling (b), on QA's F-4. These named the OTHER
+# RUNG IN WORDS when a settle never named it — "Instead: the wider story" — an
+# anchor with an aria promise and no target identity behind it, which fix loop 1
+# turned into a silent no-op (bucket 1051). The council killed the arm rather
+# than repair it: a restore is definitionally empty (the state exists only when
+# nothing resolved, and the one nameable target left is the seed storyline that
+# amendment (i) bans), inert prose states nothing and fails the register, and a
+# bare "Instead:" asserts alternatives that do not exist.
+#
+# THE LAST GENERIC-WIDEN GHOST: v10 killed the language, v11 the posture, this
+# makes the burial deliberate. Unnamed scope switches are no longer offered
+# anywhere; Unfollow and the next story's follow line remain. Kept named under
+# the retired-but-named convention so nothing imports a dangling constant and
+# the ruled strings stay on the record — rendered NOWHERE, and absent from the
+# client label table so no branch can reach them.
+FOLLOW_ALT_FALLBACK_ENTITY = "the company"          # RETIRED-NOT-RENDERED (fix loop 2b)
+FOLLOW_ALT_FALLBACK_STORYLINE = "the wider story"   # RETIRED-NOT-RENDERED (fix loop 2b; was NL-103 row 14)
+# THE 07-18 FAILURE COPY, FORMALLY BURIED (product council 2026-08-08 §1 + case
+# (b)). It was already dead twice — v11 ruling ① (the settle is invisible) and
+# ruling ④ (an unsettled follow simply stands) — and case (b) makes the burial a
+# ruling of record: a failed or timed-out settle renders NO STRING AT ALL.
+# Silence is the ruling. The failure now exists in exactly one place, the 0025
+# `settle_failed` event, which is a record and not a surface.
+FOLLOW_DEGRADE_LEAD = "Following — this story."          # RETIRED-NOT-RENDERED (NL-103 row 3; BURIED NL-17 M1)
+FOLLOW_DEGRADE_UPGRADE = "Couldn't fetch broader follow — choose it anytime."  # RETIRED-NOT-RENDERED (NL-103 row 3; BURIED NL-17 M1)
+FOLLOW_DEGRADE_COMMITTED = FOLLOW_DEGRADE_LEAD + " " + FOLLOW_DEGRADE_UPGRADE  # RETIRED-NOT-RENDERED (NL-103 row 3; BURIED NL-17 M1)
 # Switch refused (FIX LOOP 2 R2). SUPERSEDED by the R-WRITE frame above: an act
 # refusal now states its REASON in reader-world terms and names no transience
 # the client cannot know ("just now"). Kept as the record of the string it

@@ -81,6 +81,10 @@ class _FollowHandler:
     _api_dismiss = server.Handler._api_dismiss
     _api_follow_at = server.Handler._api_follow_at
     _settle_onto = server.Handler._settle_onto
+    # NL-17 M1: the settle now APPENDS its outcome (0025). The logger is a
+    # handler method, so the double carries it — copied, never stubbed, so
+    # these proofs keep exercising the real append path.
+    _log_settle = server.Handler._log_settle
     _api_revive = server.Handler._api_revive
 
     def __init__(self):
@@ -448,10 +452,16 @@ def test_the_pick_lane_echoes_the_stored_key_on_both_branches(con):
     same client/storage divergence F-1's symptom 1 was — and here it survives
     the door clamp, because this route never passes through `_topic_arg`.
 
-    RED against pre-fix land: both branches echo the raw 108-char name."""
+    RED against pre-fix land: both branches echo the raw 108-char name.
+
+    NL-17 M1: the CREATE branch's altitude moves 'narrow' -> 'storyline'. The
+    pick door now REFUSES 'narrow' (memory.PICKABLE_ALTITUDES — amendment (i)
+    bans the reader-chosen narrow follow), and this proof was never about which
+    rung got picked: it is about the ECHOED key matching the STORED key on a
+    108-char name. Any pickable altitude exercises the identical code path."""
     # CREATE branch (no from_topic).
     h = _FollowHandler()
-    h._api_follow_at({"name": HEADLINE, "altitude": "narrow"})
+    h._api_follow_at({"name": HEADLINE, "altitude": "storyline"})
     created, _ = h.sent[-1]
     stored = con.execute(
         "SELECT topic FROM memory WHERE id = ?",

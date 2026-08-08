@@ -214,8 +214,18 @@ article.story { scroll-margin-top: 0.75rem; }
 .deck { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1.1rem;
   margin: 0 0 1.15rem; padding: 0.45rem 0; border-bottom: 1px solid var(--rule); font-size: 0.88rem; }
 .deck > * { min-width: 0; }
-.tracked-marker, .deck-follow { background: none; border: none; padding: 0; cursor: pointer;
+/* F-5 rider (design mini 2026-08-08, Axel's one-token finding): `cursor` leaves
+   this SHARED rule. .tracked-marker is a NON-INTERACTIVE node — a pointer cursor
+   on it is a fabricated affordance, promising a tap that does nothing. (Landed
+   state, stated honestly: .tracked-marker's own rule below already set
+   `cursor: default` and, being later at equal specificity, already won — so the
+   declaration here was dead, not live. The rider is hygiene, not a bug fix: it
+   removes the trap where a future reorder or a specificity bump resurrects the
+   promise. Scoping the cursor to .deck-follow is what makes it structurally
+   impossible instead of cascade-dependent.) */
+.tracked-marker, .deck-follow { background: none; border: none; padding: 0;
   text-align: left; font-family: var(--font-sans); font-size: 0.88rem; font-weight: 700; color: var(--terra); }
+.deck-follow { cursor: pointer; }
 /* NL-17-M1c: THE ONE FOLLOW-LINE COMPONENT — ONE persistent .follow-slot node
    (single-rendering law) mounted on four surfaces: today card, continuation
    card, deep view, Following row. Lines of type — no box, no background, no
@@ -265,6 +275,60 @@ article.story { scroll-margin-top: 0.75rem; }
 .alt-q { font-weight: 400; color: var(--ink-soft); }
 .tracked-marker { color: var(--moved); cursor: default; }
 .tracked-marker::before { content: "\\25CF "; }
+/* ===========================================================================
+   F-5 — COARSE-POINTER TAP TARGETS (design mini 2026-08-08, adjudicated).
+
+   THE FINDING. Every target in the .deck-follow family measures ~17px tall on
+   mobile — the verb on cards AND strips (one component: the box is 0.88rem
+   times the UA button reset's ~1.2 line-height, because this component never
+   sets line-height), and ~16px for the committed anchor and the acts links.
+   WCAG 2.5.8 AA passes on all four surfaces, but ONLY through the spacing
+   exception — which is an accident of editorial whitespace, not a property
+   anyone chose. Any future tightening breaks AA silently. That is the "inherited
+   a third time" mechanism the NL-143 gate named when it routed this.
+
+   THE TREATMENT. Invisible padding with negative-margin compensation, on the
+   SHARED selectors — so both the server emit and the JS re-renderers are covered
+   by one block, and the single-rendering law is not grazed: we are styling the
+   one path, not forking it. Zero visual change and zero layout shift by
+   construction (the margin box is unchanged in both axes; an inline-block's line
+   box is computed from its MARGIN box, which is why the compensation works on
+   the strip's inline mounts too).
+
+   TWO ASYMMETRIES, both ruled, both load-bearing:
+
+   1. VERTICAL ONLY on the acts row (Ines, adopted). Three targets share one line
+      ~17px apart and one of them is DESTRUCTIVE. Horizontal padding would
+      convert that dead gutter — where a miss costs a retry — into live
+      edge-to-edge borders, where a thumb aiming at Unfollow and landing 20px
+      left performs an ALTITUDE SWITCH instead. Bigger targets, worse errors. So
+      the acts grow with padding-block only and the gutters are untouched.
+
+   2. COARSE POINTER ONLY (Greta, adopted; AXEL DISSENTS ON RECORD). Unconditional
+      padding puts the verb's invisible box over the strip's .smeta line, and a
+      button box over text blocks selection for desktop readers who copy that
+      metadata. Desktop passes AA on the exception with wide margins (~30px
+      clearances against a 3.5px overhang). Axel's dissent: a mouse tremor does
+      not care about a media query, and this leaves desktop motor-impaired
+      readers at 17px. Recorded, not gated — falsifier is any observed desktop
+      miss-click, which drops the query.
+
+   THE VERB IS 0.7rem, NOT 0.85rem — THE DESIGN'S OWN RECORDED FALLBACK, and the
+   build-time assert is what fired it. At 390px a today-grid card puts
+   h2.headline (margin-bottom 0.4rem = 6.4px) directly above .deck (padding-top
+   0.35rem = 5.6px), so the headline LINK's box sits ~12px above the verb's. The
+   ruled 0.85rem (13.6px) of upward padding would have overlapped it by ~1.6px —
+   two live targets sharing pixels, which is worse than the undersized target it
+   fixes. 0.7rem (11.2px) clears by ~0.8px. Result: verb 17 + 22.4 = 39.4px
+   (2.5.8 AA by BOX, exception no longer load-bearing; short of 2.5.5's 44px,
+   which the design named as unreachable in that case and accepted). Acts:
+   16 + 17.6 = 33.6px, clearing the Following row's h2 link by ~4.6px.
+   tests/test_nl17_m1_f5_targets.py pins every number in this paragraph. */
+@media (pointer: coarse) {
+  .deck-follow { display: inline-block; padding: 0.7rem 0.5rem; margin: -0.7rem -0.5rem; }
+  .fl-alts a, .fl-alts .fl-unfollow { display: inline-block;
+    padding-block: 0.55rem; margin-block: -0.55rem; }
+}
 /* NL-65: the deep-view entry moves to the story BOTTOM, before the furniture */
 .story-more { margin: 1.1rem 0 0; font-size: 0.88rem; }
 .deep-view-entry-link { color: var(--terra); font-weight: 700; text-decoration: none; }
@@ -909,7 +973,11 @@ function restoreViewAfterReload() {
                  "nothing followed" over a live follow is the same lie in the
                  other direction.
      R-COVERAGE  only the broadening was refused -> renders NOTHING. The
-                 "— this story" row qualifier is the whole disclosure.
+                 thread stands under its own name, which is the whole
+                 disclosure. (NL-17 M1: this used to say the "— this story" row
+                 qualifier was — that qualifier is buried by amendment (i), and
+                 a comment claiming a mechanism that no longer exists is the
+                 gate-F5 class. The RENDER is unchanged: nothing, either way.)
    An ok:false with no class at all (a transport failure, an unmapped raise)
    falls to the frame's fallback arm — words, never silence.
 
@@ -1015,51 +1083,168 @@ function flHold(slot) {
    flRenderCommitted rewrites data-topic only — never data-story/data-origin,
    which is why those two are the stable spine); exact-duplicate stories still
    sync on story↔story; rows still match on topic; cross-edition mounts of one
-   thread still match on the stored topic. */
+   thread still match on the stored topic.
+
+   NL-17 M1 / F-6 — MARKS JOIN THE KEY SET, and they join it TYPED. A tracked
+   marker is now a .follow-slot (server._tracked_marker_html) whose identity is
+   the THREAD NAMES it matched — data-marks, a newline-joined list because one
+   story can match several threads. Marks are topic-typed, so they meet marks
+   and they meet topics, and nothing else: the cross-type crossing fix loop 1
+   landed stays exactly as narrow as it was. */
 function flIdentity(slot) {
   var keys = {}, names = ['story', 'origin', 'topic'], i, v;
   for (i = 0; i < names.length; i++) {
     v = flDA(slot, names[i]);
     keys[names[i]] = v ? v.toLowerCase() : '';
   }
+  keys.marks = [];
+  v = flDA(slot, 'marks');
+  if (v) {
+    var parts = v.split(/\\r?\\n/);
+    for (i = 0; i < parts.length; i++) {
+      if (parts[i]) keys.marks.push(parts[i].toLowerCase());
+    }
+  }
   return keys;
 }
 function flKeyEq(a, b) { return !!a && a === b; }
+/* any mark of A against any mark of B, and either side's marks against the
+   other's topic — all topic-typed comparisons (see flIdentity's note). */
+function flMarksMeet(a, b) {
+  var i, j;
+  for (i = 0; i < a.marks.length; i++) {
+    if (flKeyEq(a.marks[i], b.topic)) return true;
+    for (j = 0; j < b.marks.length; j++) {
+      if (flKeyEq(a.marks[i], b.marks[j])) return true;
+    }
+  }
+  for (i = 0; i < b.marks.length; i++) {
+    if (flKeyEq(b.marks[i], a.topic)) return true;
+  }
+  return false;
+}
 function flSameThread(keys, slot) {
   var id = flIdentity(slot);
   return flKeyEq(keys.story, id.story)
     || flKeyEq(keys.origin, id.origin)
     || flKeyEq(keys.topic, id.topic)
     || flKeyEq(keys.topic, id.story)
-    || flKeyEq(keys.story, id.topic);
+    || flKeyEq(keys.story, id.topic)
+    || flMarksMeet(keys, id);
 }
-/* THE SWEEP ITSELF — the only place that walks the document. */
-function flSyncOthers(slot, keys, fn) {
-  var all = document.querySelectorAll('.follow-slot'), i, o;
+/* THE SWEEP ITSELF — the only place that walks the document, and after F-6 it
+   walks TWO node families under ONE predicate.
+
+   THE GATE'S FINDING (nl143-gate.md:174, routed here): the sweep truthened a
+   Following row's follow-SLOT and left the row's h2 chrome — the thread name
+   and its altitude qualifier — reading the OLD name after a cross-surface
+   rename. Both nodes are derived from the same follow state; only one of them
+   was a .follow-slot, so only one got swept. A settle-rename produced the same
+   split, from the other direction.
+
+   The fix is not a second sweep with a second matching rule — that is how the
+   four mounts drifted apart in the first place. It is ONE walk, ONE predicate
+   (flSameThread), and a renderer chosen by what the node IS: slots morph
+   through the state renderers; [data-follow-name] chrome re-truthens its text.
+   `chromeFn` is optional, so callers that have nothing to say to chrome (there
+   are none today, and the argument exists so a future one cannot quietly
+   half-sweep) simply pass one function. */
+function flSyncOthers(slot, keys, fn, chromeFn) {
+  var all = document.querySelectorAll('.follow-slot, [data-follow-name]'), i, o;
   for (i = 0; i < all.length; i++) {
     o = all[i];
     if (o === slot) continue;
     if (!flSameThread(keys, o)) continue;
-    fn(o);
+    if (o.hasAttribute('data-follow-name')) {
+      if (chromeFn) chromeFn(o);
+    } else {
+      fn(o);
+    }
   }
 }
-/* COMMIT, EVERYWHERE. The single entry for follow / settle / switch / narrow:
+/* THE ALTITUDE QUALIFIER, client side — the twin of server._altitude_qualifier
+   _html, and it must render the same bytes for the same row or a rename makes
+   the chrome disagree with itself on reload. Two arms only, because NL-17 M1
+   deleted the third: a disclosure carrying a "(class)" renders the quiet
+   parenthetical; everything else renders BARE. The narrow arm ("— this story")
+   is gone with amendment (i) — not replaced, removed. */
+function flAltQualifier(altitude, disclosure) {
+  var m = String(disclosure || '').match(/^(.*) \\(([^()]*)\\)$/);
+  if (!m) return '';
+  return ' <span class="alt-q">(' + flEsc(m[2]) + ')</span>';
+}
+/* FOLLOW-STATE-DERIVED CHROME, re-truthened (F-6). A Following row's h2 carries
+   the thread's NAME and its altitude qualifier, both read off the follow — so a
+   rename anywhere on the page (a reader switch, or a settle naming the thread
+   two seconds after the tap) makes this heading stale, and it is not a
+   .follow-slot so nothing used to walk it.
+
+   It rewrites the LINK's inner content only. The <a>, its onclick, its title and
+   the heading itself are untouched: the row's single action still opens the same
+   thread, because a rename does not move a thread — it renames one (the mutation
+   law). The identity keys are re-stamped so a SECOND rename in the same session
+   still finds this node. */
+/* the BARE name out of a compact qualifier: "OpenAI (company)" -> "OpenAI".
+   The twin of follow_altitude.split_qualifier's first element, and the reason
+   the server's h2 renders a name and a class rather than a class twice. */
+function flNameOnly(s) {
+  var m = String(s || '').match(/^(.*) \\(([^()]*)\\)$/);
+  return m ? m[1] : String(s || '');
+}
+function flRenderChrome(node, topic, altitude, disclosure) {
+  var a = node.querySelector('a');
+  if (!a) return;
+  // FIX LOOP 2 / QA F-5 — THE TWIN DIVERGENCE. This used to compose
+  // `disclosure` PLUS the qualifier derived from that same disclosure, so an
+  // entity rename rendered "OpenAI (company) (company)" live and disagreed with
+  // the server on reload (which self-healed to "OpenAI (company)" — a display
+  // lie that repaired itself, the hardest kind to notice).
+  //
+  // The server twin composes the row's STORED TOPIC + one qualifier
+  // (_thread_name_link with _altitude_qualifier_html), and the stored topic is
+  // already the split head — `_settle_onto` stores split_qualifier(disclosure).
+  // So `topic` is the right name here and the qualifier renders exactly once.
+  // The fallback splits the disclosure itself rather than using it whole, so a
+  // caller that has no topic still cannot double the class.
+  var name = topic || flNameOnly(disclosure);
+  a.innerHTML = flEsc(name) + flAltQualifier(altitude, disclosure);
+  if (topic) {
+    node.setAttribute('data-topic', topic);
+    node.setAttribute('data-story', topic);
+  }
+}
+/* COMMIT, EVERYWHERE. The single entry for follow / settle / switch:
    whatever moved the thread, every mount of it now says the same thing.
    `kept` is passed to the ACTING node ONLY, and that is deliberate: the resume
    clause ("picking up 4 entries") is a RECEIPT of the reader's act, not a
    property of the thread. Rendering it on three other mounts would announce one
-   act four times and leave it standing on surfaces the reader never touched. */
+   act four times and leave it standing on surfaces the reader never touched.
+
+   NL-17 M1 / F-6: the same call now also carries the SETTLE-RENAME to the row's
+   h2 chrome. Nothing new decides when — the settle already routes through here
+   (flSettle -> flCommitAll), so the rename reaches slots and chrome on the one
+   sweep, which is the point of there being one. */
 function flCommitAll(slot, topic, altitude, disclosure, altLabel, kept) {
   var keys = flIdentity(slot);
   flRenderCommitted(slot, topic, altitude, disclosure, altLabel, kept);
   flSyncOthers(slot, keys, function (o) {
     flRenderCommitted(o, topic, altitude, disclosure, altLabel);
+  }, function (o) {
+    flRenderChrome(o, topic, altitude, disclosure);
   });
 }
 /* UNFOLLOW, EVERYWHERE. Same asymmetry, same reason: the acting surface shows
    the ~3s receipt (the announcement of what the reader just did) and every
    other mount goes straight to rest. Four simultaneous receipts would be four
-   claims that four separate unfollows happened. */
+   claims that four separate unfollows happened.
+
+   NO chromeFn (F-6, and this is a ruling not an omission): an unfollowed
+   thread's Following row still carries that thread's NAME, and the name is
+   still true — the row is a stale LISTING, not a false statement, and it is
+   re-rendered from the server on the next Following open. Rewriting it here
+   would be inventing an "unfollowed row" treatment nobody ruled on. The node
+   that WAS lying — the tracked marker, which claims a follow that no longer
+   exists — is a .follow-slot now, so it rests through the ordinary renderer. */
 function flRestAll(slot, name) {
   var keys = flIdentity(slot);
   flReceipt(slot, name);
@@ -1089,10 +1274,17 @@ function flFollow(slot) {
       if (!d || d.ok === false) return flRefused(slot, d, 'follow');
       flCommitAll(slot, d.topic, d.altitude, d.disclosure, d.alt_label,
                   d.resumed ? d.kept : null);
-      // Only a genuinely NEW story-seeded thread settles. A thread that came
-      // back from the past fold resumes at the scope it already had — the
-      // system never re-aims a scope a reader chose.
-      if (d.seeded === true) flSettle(slot, origin);
+      // WHETHER A SETTLE MAY RUN IS THE SERVER'S ANSWER (NL-17 M1), read off
+      // `settle` — not the client's inference from `seeded`. It used to be
+      // `d.seeded === true`: only a brand-new thread settled. That was right
+      // while the only settle was the one at birth, and it is wrong now that a
+      // case-(a) thread stays AUTO-WIDENABLE — a later story rejoining a thread
+      // that never found an actor is exactly when the ruling wants another
+      // attempt, and case (b)'s ONE bounded retry rides the same question. Both
+      // depend on the settle history and on a spend bound, neither of which a
+      // browser can be trusted to know. A thread whose scope someone already
+      // decided still never re-settles: the server answers false.
+      if (d.settle === true) flSettle(slot, origin);
     });
 }
 /* THE SETTLE — invisible by contract, and that is a POSITIVE gate: the ONLY
@@ -1128,7 +1320,8 @@ function flSettle(slot, origin) {
    here and they carry OPPOSITE marks, so the class is the only honest key. */
 function flRefused(slot, d, verbKey) {
   // R-COVERAGE — the follow STANDS; only the broadening was refused. Renders
-  // NOTHING: the "— this story" qualifier is the whole disclosure.
+  // NOTHING: the thread stands under its own name (NL-17 M1 — the "— this
+  // story" qualifier this line used to name is buried by amendment (i)).
   if (d && d.refusal === 'coverage') return;
   // R-WRITE on the FOLLOW itself — nothing was followed. ○, loud.
   if (verbKey === 'follow') return flRenderRefusal(slot, d, verbKey);
@@ -1215,31 +1408,65 @@ function flSteadyVerb(slot, disclosure, altitude) {
 /* THE ACTS LINE — management surfaces only, and the whole surviving
    scope-affordance law. Every act NAMES its target; no bare directional verb
    exists. The "Instead:" prefix renders only when a candidate does — a prefix
-   with nothing after it is a broken sentence, and a fabricated "the company"
-   would name a company nothing ever resolved. The narrow rung renders only
-   when there is something to narrow TO. */
+   with nothing after it is a broken sentence.
+
+   FIX LOOP 2b: the worded-fallback arm is deleted (RECONVENE-2, ruling (b)).
+   With no NAMED target there is no anchor, no prose, no aria action and no
+   "Instead:" label — the row renders exactly Unfollow. The deleted strings are
+   deliberately not quoted anywhere in this emitted script: they are retired in
+   labels.py, and a comment naming them would put them back into the shipped
+   bytes the ruling says to clear.
+
+   NL-17 M1 — THE NARROW RUNG IS DELETED (twin of server._follow_acts_line, and
+   the two must stay twins: this is the same acts line rendered by the other
+   half of the single-rendering law). It offered "this story" as a choice on
+   every settled thread, which is exactly what the principal's 2026-08-07
+   amendment (i) kills. No replacement rung — the council ruled it out without
+   one. flPickNarrow went with it: an unreachable handler that can still perform
+   a banned write is a door, not dead code. */
+/* THE TWIN of server._swap_targets (FIX LOOP 1): the thread's known candidates
+   minus wherever it is aimed now. Same rule, same order, same subtraction — and
+   the subtraction is what makes "the prior aim joins the swap targets after any
+   swap" true without anything having to remember history: the candidate list
+   does not change when the reader swaps, so the rung they just left is still in
+   it and is no longer the aim, so it renders. The SEED is never a target: it is
+   not in the list, because amendment (i) bans offering it back. */
+function flSwapTargets(slot) {
+  var aim = flDA(slot, 'disclosure').toLowerCase(), out = [], seen = {}, i;
+  var raw = flDA(slot, 'candidates'), list = [];
+  if (raw) { try { list = JSON.parse(raw) || []; } catch (e) { list = []; } }
+  for (i = 0; i < list.length; i++) {
+    var c = list[i] || {};
+    var disc = String(c.disclosure || ''), a = String(c.altitude || '');
+    var key = disc.toLowerCase();
+    if (!disc || (a !== 'entity' && a !== 'storyline')) continue;
+    if (key === aim || seen[key]) continue;
+    seen[key] = 1;
+    out.push({ altitude: a, disclosure: disc });
+  }
+  if (out.length) return out;
+  var label = flDA(slot, 'alt-label');
+  if (label && label.toLowerCase() !== aim) {
+    return [{ altitude: flOtherAltitude(flDA(slot, 'altitude')),
+              disclosure: label }];
+  }
+  return [];
+}
 function flActsLine(slot, name) {
-  var altitude = flDA(slot, 'altitude'), alt = flDA(slot, 'alt-label');
-  var settled = (altitude === 'entity' || altitude === 'storyline');
-  var bits = [];
-  var broadVis = '', broadTarget = '';
-  if (alt) { broadVis = flQualified(alt); broadTarget = alt; }
-  else if (settled) {
-    broadTarget = (flOtherAltitude(altitude) === 'storyline')
-      ? NL_LABELS.altFallbackStoryline : NL_LABELS.altFallbackEntity;
-    broadVis = flEsc(broadTarget);
+  var bits = [], targets = flSwapTargets(slot), i, t;
+  for (i = 0; i < targets.length; i++) {
+    t = targets[i];
+    bits.push('<a href="#" data-alt="' + flEsc(t.altitude)
+      + '" data-disc="' + flEsc(t.disclosure)
+      + '" aria-label="' + flEsc('Switch to ' + t.disclosure + ' — ' + name)
+      + '" onclick="flSwitch(this); return false;">'
+      + flQualified(t.disclosure) + '</a>');
   }
-  if (broadVis) {
-    bits.push('<a href="#" aria-label="'
-      + flEsc('Switch to ' + broadTarget + ' — ' + name)
-      + '" onclick="flSwitch(this); return false;">' + broadVis + '</a>');
-  }
-  if (settled) {
-    bits.push('<a href="#" aria-label="'
-      + flEsc('Switch to ' + NL_LABELS.rungThisStory + ' — ' + name)
-      + '" onclick="flPickNarrow(this); return false;">'
-      + flEsc(NL_LABELS.rungThisStory) + '</a>');
-  }
+  // FIX LOOP 2b: the worded-fallback arm is DELETED here too (twin of
+  // server._follow_acts_line — the two must render the same bytes or a reload
+  // changes what the reader is offered). With no named target there is no
+  // anchor, no prose, no aria action and no "Instead:" label: the row renders
+  // exactly Unfollow.
   var prefix = bits.length ? flEsc(NL_LABELS.insteadPrefix) + ' ' : '';
   bits.push('<button class="fl-unfollow" type="button" aria-label="'
     + flEsc(NL_LABELS.unfollow + ' ' + name)
@@ -1262,6 +1489,15 @@ function flRenderResting(slot) {
   slot.removeAttribute('data-altitude');
   slot.removeAttribute('data-alt-label');
   slot.removeAttribute('data-disclosure');
+  // F-6: a TRACKED marker resting is the remote-unfollow case — the thread it
+  // was matched against is gone, so its marks are no longer identity. Leaving
+  // them would keep this node syncing on a thread the reader dropped, which is
+  // the same false claim one layer in from the one we just removed.
+  slot.removeAttribute('data-marks');
+  // FIX LOOP 1: an unfollowed thread has no aim to swap, so its candidates are
+  // not an affordance any more. Leaving them would offer "Instead:" beside a
+  // thread the reader just dropped.
+  slot.removeAttribute('data-candidates');
   // R1 (fix loop 2): the committed render re-stamped data-topic to the STORED
   // follow NAME; on unfollow, restore the card's canonical STORY topic (stamped
   // by the server as data-story) so a re-tap follows the STORY — not the stale
@@ -1271,7 +1507,16 @@ function flRenderResting(slot) {
     slot.setAttribute('data-topic', story);
     if (!flDA(slot, 'origin')) slot.setAttribute('data-origin', story);
   }
-  slot.innerHTML = '<button class="deck-follow not-following" type="button" '
+  slot.innerHTML = flRestingButton(slot);
+}
+/* THE RESTING CTA, in ONE builder — the twin of the server's own resting arm
+   (_follow_control / _follow_slot_html). Two renderers now mount it: rest
+   (flRenderResting) and refusal (flRenderRefusal, F-4), and a third hand-written
+   copy is exactly how the four follow mounts drifted apart before NL-143. It
+   returns markup rather than writing innerHTML so a caller can compose it under
+   other content — which is the whole shape of the F-4 fix. */
+function flRestingButton(slot) {
+  return '<button class="deck-follow not-following" type="button" '
     + 'aria-expanded="false" aria-label="'
     + flEsc(NL_LABELS.followInactiveAria + ' — '
             + (flDA(slot, 'story') || flDA(slot, 'topic')))
@@ -1281,7 +1526,40 @@ function flRenderResting(slot) {
 /* R-WRITE — nothing was followed, so the mark is ○ and the line is LOUD. The
    reason and remedy come from the PAYLOAD: the branch that produced the failure
    is the branch that names it, so a copy re-pin can never leave the render
-   describing a different condition than the one that fired. */
+   describing a different condition than the one that fired.
+
+   ===========================================================================
+   NL-17 M1 / F-4 — THE REFUSED MOUNT KEEPS ITS CONTROL.
+
+   THE BUG (nl143-gate.md:171, routed here as M1 input; pre-existing, untouched
+   by that batch). This renderer replaced the whole slot with two <p>s and
+   stopped. The reason rendered — the refusal law was satisfied — but the
+   FOLLOW CONTROL WAS GONE, and nothing put it back short of a page reload. A
+   reader whose memory.md was briefly unwritable lost the ability to follow that
+   story for the rest of the session, and lost it silently: the surface looked
+   like a finished explanation rather than a dead end.
+
+   That is the same never-vanishes law the whole M1c milestone is built on,
+   failing one case out. A tap must never vanish — and a tap whose ONLY outcome
+   is an epitaph has vanished, just more politely.
+
+   THE FIX. Render the reason AND re-mount the resting CTA beneath it, so a
+   re-tap re-runs the act against the server:
+     * REFUSED (a policy arm — unreadable/unparseable memory.md): the re-tap
+       RE-ADJUDICATES server-side and honestly refuses again. That is not a
+       pointless loop, it is the truth staying true; the reader can fix the file
+       and try again without hunting for a reload.
+     * DECLINED (a transient arm — unwritable, transport): the re-tap simply
+       retries and succeeds once the condition clears.
+   The client cannot and must not tell those apart — which arm fired is the
+   SERVER's adjudication, and re-asking is how you find out. So there is one
+   behaviour here, not two, and it is correct for both.
+
+   data-state stays 'refused' (the CSS block-level rule and any state-shaped
+   test still see the refusal; followTap only short-circuits on committed /
+   expanded, so the button is live). The button is built by flRestingButton —
+   the SAME builder flRenderResting uses — because two hand-written copies of
+   the resting CTA is how the four mounts drifted apart in the first place. */
 function flRenderRefusal(slot, d, verbKey) {
   flHold(slot);
   slot.setAttribute('data-state', 'refused');
@@ -1291,7 +1569,8 @@ function flRenderRefusal(slot, d, verbKey) {
   slot.innerHTML = '<p class="fl-refusal">'
     + '<span class="fl-dot-off" aria-hidden="true">' + flEsc(NL_LABELS.dotOff)
     + '</span> ' + flEsc(frame) + ' ' + flEsc(r.reason) + '.</p>'
-    + '<p class="fl-refusal-why">' + flEsc(r.remedy) + '</p>';
+    + '<p class="fl-refusal-why">' + flEsc(r.remedy) + '</p>'
+    + flRestingButton(slot);
 }
 /* ACT-LEVEL refusal — the follow STANDS. The state line above is left exactly
    as it was (a refusal never unwinds an existing follow) and the reason renders
@@ -1328,14 +1607,35 @@ function flRefusalReason(d) {
            remedy: NL_LABELS.refusalFallbackFix };
 }
 /* the SWITCH ("Instead"): the follow MOVES to the named coverage (from_topic
-   set) — never a re-settle. Swap disclosure<->alt_label for the switch-back. */
+   set) — never a re-settle.
+
+   FIX LOOP 1 — ONE SWAP PATH, and the target comes off the LINK. It used to be
+   derived from the slot (always alt_label, always the other rung), which could
+   only ever express a single alternative; the ratified "Instead:" row can now
+   carry several, and a second handler for the new ones is how two handlers
+   start disagreeing about what a swap is. So every target — persisted
+   candidate or stored alt_label — renders as the same link shape with
+   data-alt/data-disc, and this one function performs all of them.
+
+   $0 ON THE TAP PATH: nothing here consults a model. The candidates were
+   resolved at settle time; the swap is a local write.
+
+   THE GUARD BELOW IS NOW A BACKSTOP, NOT A BEHAVIOUR. The only link that ever
+   lacked a target was the worded-fallback arm, and fix loop 2b deleted it — so
+   no rendered link reaches this without both attributes. The guard stays
+   because a POST built from a missing name is the worse failure, and a
+   defensive branch is cheap; it is no longer describing something a reader can
+   tap. (The pin that used to enshrine that dead tap now asserts the state
+   mounts no swap affordance at all.) */
 function flSwitch(a) {
   var slot = flSlot(a);
-  var cur = flDA(slot, 'topic'), altLabel = flDA(slot, 'alt-label');
-  var newAlt = flOtherAltitude(flDA(slot, 'altitude'));
-  var newName = altLabel.replace(/ \\([^()]*\\)$/, '') || cur;
+  var cur = flDA(slot, 'topic');
+  var newAlt = a.getAttribute('data-alt') || '';
+  var disc = a.getAttribute('data-disc') || '';
+  if (!disc || !newAlt) return;
+  var newName = disc.replace(/ \\([^()]*\\)$/, '') || cur;
   api('/api/follow/at', {
-    name: newName, altitude: newAlt, disclosure: altLabel,
+    name: newName, altitude: newAlt, disclosure: disc,
     alt_label: flDA(slot, 'disclosure'), from_topic: cur,
     briefing_date: flWhen(slot)
   }, function (d) {
@@ -1343,21 +1643,14 @@ function flSwitch(a) {
     flCommitAll(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
   });
 }
-/* the narrow rung ("this story"): MOVE the committed follow to the story it was
-   seeded from. Bucket 1051 — a silent `return;` before this milestone: the
-   reader tapped the rung the register just promoted, and nothing happened and
-   nothing was said. */
-function flPickNarrow(a) {
-  var slot = flSlot(a);
-  var cur = flDA(slot, 'topic'), origin = flDA(slot, 'origin') || cur;
-  api('/api/follow/at', {
-    name: origin, altitude: 'narrow', from_topic: cur,
-    briefing_date: flWhen(slot)
-  }, function (d) {
-    if (!d || d.ok === false) return flRefused(slot, d, 'switch');
-    flCommitAll(slot, d.topic, 'narrow', '', '');
-  });
-}
+/* NL-17 M1: flPickNarrow is DELETED (grep-verified zero call sites at the diff).
+   It was the narrow rung's handler — it POSTed altitude:'narrow' with
+   source='pick', which is precisely the reader-chosen narrow follow the
+   principal's 2026-08-07 amendment (i) bans. Deleting the rung from both
+   renderers removed the offer; deleting this removes the act, and
+   memory.PICKABLE_ALTITUDES refuses the write even if something still called
+   it. Three layers, because a banned data class deserves more than a hidden
+   button. */
 /* SYMMETRY LAW: one-tap unfollow from the same surface, on ANY entry of a
    followed thread (records the altitude correction server-side for Axel's
    instrument). Bucket 1060 — a silent `return;` before this milestone: the

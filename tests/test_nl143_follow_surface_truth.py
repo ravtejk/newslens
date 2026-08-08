@@ -111,14 +111,18 @@ def test_1a_one_sweep_mechanism_not_a_copy_per_verb():
     and stop. The fix is ONE mechanism: exactly one function in the whole
     client walks the document for follow slots. A second walker is the
     beginning of the same drift that produced this bug."""
+    # NL-17 M1 / F-6: the ONE walker's selector grew to cover follow-state-
+    # DERIVED chrome (a Following row's h2) as well as slots — same walk, same
+    # flSameThread predicate, a renderer chosen by node type. The tooth is
+    # unchanged and is the point: still exactly one function walks the document.
     walkers = [name for name in re.findall(r"function (\w+)\(", webui.JS)
-               if "'.follow-slot'" in _js_code(_fn(name))
+               if ".follow-slot" in _js_code(_fn(name))
                and "querySelectorAll" in _js_code(_fn(name))]
     assert walkers == ["flSyncOthers"], walkers
 
 
 @pytest.mark.parametrize("verb", ["flFollow", "flSettle", "flSwitch",
-                                  "flPickNarrow", "flUnfollow"])
+                                  "flUnfollow"])   # flPickNarrow deleted (NL-17 M1)
 def test_1b_every_state_change_routes_through_the_sweep(verb):
     """BORN RED — THE BUG ITSELF. His repro is exactly the case where a verb
     morphs its own node and leaves the others lying. No verb may call a
@@ -655,7 +659,12 @@ def test_f1_a_tracked_story_is_never_offered_the_picker_in_its_deep_view(
     assert 'class="tracked-marker"' in line
     assert labels.TRACKED_ONGOING_PREFIX in line and "Hormuz" in line
     # …and no picker anywhere on the surface: nothing to tap, nothing to mint.
-    assert 'class="follow-slot"' not in deep
+    # NL-17 M1 / F-6: the marker is now itself a .follow-slot (state "tracked")
+    # so the cross-mount sweep can reach it on a remote unfollow. "No slot" was
+    # only ever a PROXY for "no picker"; the tooth is pinned directly now, and
+    # more tightly than the proxy was — no button, no tap handler, no CTA.
+    assert 'data-state="tracked"' in line
+    assert "<button" not in line and "followTap" not in line
     assert labels.FOLLOW_THREAD_INACTIVE not in deep
     # CONTROL — the mount item 2b added is not blanket-killed: an unmatched
     # quick story's $0 view still offers the follow it always should have.

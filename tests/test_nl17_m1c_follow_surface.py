@@ -51,6 +51,10 @@ class _FollowHandler:
     _api_follow_settle = server.Handler._api_follow_settle
     _seed_thread = server.Handler._seed_thread
     _settle_onto = server.Handler._settle_onto
+    # NL-17 M1: the settle now APPENDS its outcome (0025). The logger is a
+    # handler method, so the double carries it — copied, never stubbed, so
+    # these proofs keep exercising the real append path.
+    _log_settle = server.Handler._log_settle
     _api_follow_at = server.Handler._api_follow_at
     _api_dismiss = server.Handler._api_dismiss
 
@@ -794,7 +798,8 @@ def test_d5_the_client_routes_on_the_class_never_on_the_status():
     ("flFollow", "follow"),        # bucket 863 — was a silent revert to resting
     ("flSettle", None),            # the SYSTEM act — never routes here (gate F1)
     ("flSwitch", "switch"),        # bucket 1024 — surfaced, but stated no reason
-    ("flPickNarrow", "switch"),    # bucket 1051 — was a silent `return;`
+    # ("flPickNarrow", "switch") — bucket 1051, DELETED by NL-17 M1: the
+    # narrow rung is no longer an offered choice, so its handler is gone.
     ("flUnfollow", "unfollow"),    # bucket 1060 — was a silent `return;`
 ])
 def test_d6_all_four_silent_buckets_render_their_reason(fn, verb):
@@ -867,7 +872,10 @@ def test_d6b_a_classless_settle_failure_renders_nothing(monkeypatch):
     assert "flRenderCommitted" not in body           # …reached via the sweep
     # …and the reader-act legs are untouched by this fix — the line between the
     # two laws is a line, not a retreat
-    for leg in ("flFollow", "flSwitch", "flPickNarrow", "flUnfollow"):
+    # NL-17 M1: flPickNarrow is DELETED with the narrow rung (amendment (i)
+    # kills "this story" as an offered choice). The remaining reader-act legs
+    # keep the routing, which is what this half of the tooth is about.
+    for leg in ("flFollow", "flSwitch", "flUnfollow"):
         assert "flRefused(slot, d, '" in _fn(leg), leg
 
     # 2 — the class-less payload is really producible on this route, over a
@@ -950,8 +958,11 @@ def test_d9_refusal_payload_lands_in_the_client_refusal_branch(monkeypatch):
     monkeypatch.setattr(memory, "sync_memory", _raise)
 
     h = _FollowHandler()
-    h._api_follow_at({"name": STORY, "altitude": "narrow",
-                      "from_topic": "Volkswagen"})          # the narrow rung
+    # NL-17 M1: the narrow rung is dead and the pick door refuses 'narrow'
+    # (memory.PICKABLE_ALTITUDES). The bucket this pin actually guards is the
+    # SWITCH lane's write refusal, which a lawful switch exercises identically.
+    h._api_follow_at({"name": STORY, "altitude": "storyline",
+                      "from_topic": "Volkswagen"})          # the switch rung
     h._api_dismiss({"topic": "Volkswagen"})                 # unfollow
 
     for payload, status in h.sent:
@@ -1036,16 +1047,30 @@ def test_e1_the_instead_prefix_never_renders_without_a_candidate():
                                          STORY)
     assert labels.FOLLOW_INSTEAD_PREFIX not in unsettled
     assert labels.FOLLOW_UNFOLLOW in unsettled
-    assert labels.FOLLOW_RUNG_THIS_STORY not in unsettled   # nothing to narrow to
 
     named = server._follow_acts_line(
         {"altitude": "entity", "alt_label": "Volkswagen job cuts"}, "Volkswagen")
     assert labels.FOLLOW_INSTEAD_PREFIX in named
-    assert labels.FOLLOW_RUNG_THIS_STORY in named           # something to narrow to
 
+    # NL-17 M1 — AMENDMENT (i), and the assertion INVERTS here. This pin used to
+    # require the narrow rung on a settled thread ("something to narrow to").
+    # The principal's 2026-08-07 directive kills "this story" as an offered
+    # choice, so the rung is gone from BOTH arms with no replacement: a settled
+    # thread offers its named alternative and Unfollow, and nothing else.
+    assert labels.FOLLOW_RUNG_THIS_STORY not in unsettled
+    assert labels.FOLLOW_RUNG_THIS_STORY not in named
+
+    # FIX LOOP 2b — the assertion INVERTS. This used to require the worded
+    # fallback ("the wider story") when the settle named no alternative. The
+    # council killed that arm whole (RECONVENE-2, ruling (b)): with no NAMED
+    # target the row renders exactly Unfollow — no anchor, no prose, no aria
+    # promise, and no bare "Instead:" label.
     unnamed = server._follow_acts_line({"altitude": "entity", "alt_label": ""},
                                        "Volkswagen")
-    assert labels.FOLLOW_ALT_FALLBACK_STORYLINE in unnamed  # "the wider story"
+    assert labels.FOLLOW_ALT_FALLBACK_STORYLINE not in unnamed
+    assert labels.FOLLOW_INSTEAD_PREFIX not in unnamed
+    assert "<a " not in unnamed
+    assert labels.FOLLOW_UNFOLLOW in unnamed  # "the wider story"
 
 
 def test_e2_every_act_names_its_object_in_its_accessible_name():
@@ -1056,7 +1081,8 @@ def test_e2_every_act_names_its_object_in_its_accessible_name():
     acts = server._follow_acts_line(
         {"altitude": "entity", "alt_label": "Volkswagen job cuts"}, "Volkswagen")
     assert 'aria-label="Switch to Volkswagen job cuts — Volkswagen"' in acts
-    assert 'aria-label="Switch to this story — Volkswagen"' in acts
+    # the narrow rung's accessible name went with the rung (NL-17 M1)
+    assert 'aria-label="Switch to this story — Volkswagen"' not in acts
     assert 'aria-label="Unfollow Volkswagen"' in acts
 
     db.migrate(db_path=paths.DB_PATH)
@@ -1327,5 +1353,14 @@ def test_f4_the_two_referent_noun_law_holds_seat_by_seat():
     inner = server._committed_verb_inner({"altitude": "narrow"})
     assert labels.FOLLOW_THREAD_SELF in inner
     assert "this story" not in inner
+
+    # NL-17 M1 — THE SCOPE SEAT IS EMPTY NOW, and this half of the pin inverts.
+    # The law itself is unchanged and still binding: thread takes the OBJECT
+    # seats (asserted above, unchanged). What changed is that its SCOPE seat has
+    # no occupant — the principal's amendment (i), as the product council read
+    # it, removes "this story" from every seat it held: "not as label, not as
+    # qualifier, not as rung". A story-seeded row renders its name BARE.
     qualifier = server._altitude_qualifier_html({"altitude": "narrow"})
-    assert "— this story" in qualifier
+    assert qualifier == ""
+    assert "this story" not in server._altitude_qualifier_html(
+        {"altitude": "narrow", "disclosure": "Volkswagen (company)"})

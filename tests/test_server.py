@@ -1329,7 +1329,15 @@ def test_item27_furniture_contract_through_build_page(ui):
     # bottom). One .deck per story; the marker/button split is unchanged.
     today = page[page.index('id="view-today"'):page.index('id="view-following"')]
     assert today.count('class="tracked-marker"') == 1     # the tracked story
-    assert today.count('class="follow-slot"') == 1        # only the override story
+    # NL-17 M1 / F-6: the marker is now WRAPPED in a .follow-slot so the
+    # cross-mount sweep can truthen it when the thread is unfollowed elsewhere.
+    # So both stories carry a slot, and the marker/button split — which is what
+    # this line has always been about — is now a STATE split. Pinned as such,
+    # which says more than the count did: one tracked (no control), one resting
+    # (the offer).
+    assert today.count('class="follow-slot"') == 2
+    assert today.count('data-state="tracked"') == 1       # the tracked story
+    assert today.count('data-state="resting"') == 1       # only the override story
     assert today.count('class="deck"') == 2               # under-title control row per story
     assert 'class="glance"' not in page                   # glance removed (NL-11)
 

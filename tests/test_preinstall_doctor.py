@@ -130,7 +130,7 @@ def test_preinstall_doctor_is_friendly_exit_1_with_zero_network(tmp_path):
     # The stdlib-only schema check still works pre-install:
     assert (
         "migrations apply cleanly to a scratch DB — tables: "
-        "analysis_briefs, analysis_retrieval, briefings, briefings_history, briefings_pending, concept_explanations, consumption_events, follow_altitude_events, memory, memory_tombstones, ranking_runs, source_items, sync_state"
+        "analysis_briefs, analysis_retrieval, briefings, briefings_history, briefings_pending, concept_explanations, consumption_events, entities, follow_altitude_events, follow_settle_events, memory, memory_tombstones, ranking_runs, source_items, sync_state"
     ) in proc.stdout
 
     assert "Doctor exit 1" in proc.stdout

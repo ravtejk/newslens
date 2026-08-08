@@ -62,6 +62,10 @@ class _FollowHandler:
     _api_follow_settle = server.Handler._api_follow_settle
     _seed_thread = server.Handler._seed_thread
     _settle_onto = server.Handler._settle_onto
+    # NL-17 M1: the settle now APPENDS its outcome (0025). The logger is a
+    # handler method, so the double carries it — copied, never stubbed, so
+    # these proofs keep exercising the real append path.
+    _log_settle = server.Handler._log_settle
     _api_follow_at = server.Handler._api_follow_at
 
     def __init__(self):
@@ -371,4 +375,9 @@ def test_fix4_the_collapse_toggle_is_dead_and_the_card_verb_is_a_door():
     steady = _fn_body(webui.JS, "flSteadyVerb")
     assert "openDeepView(" in steady                         # the door
     # and the resting CTA keeps its honest closed-state declaration
-    assert 'aria-expanded="false"' in _fn_body(webui.JS, "flRenderResting")
+    # NL-17 M1 / F-4: the resting CTA moved into ONE builder (flRestingButton)
+    # so the refusal renderer can mount the same control beneath its reason
+    # instead of leaving a dead surface. flRenderResting delegates to it, and
+    # the attribute this pin guards lives with the markup it belongs to.
+    assert 'aria-expanded="false"' in _fn_body(webui.JS, "flRestingButton")
+    assert "flRestingButton(slot)" in _fn_body(webui.JS, "flRenderResting")

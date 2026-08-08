@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""NewsLens NL-17 M1 entity-backfill proposal launcher.
+
+Thin on purpose (the scripts/doctor + scripts/follow-altitude pattern):
+bootstraps sys.path so the runner works from a fresh checkout, then delegates to
+src/newslens/backfill.py. All logic lives there and is offline-testable.
+
+    scripts/nl17-backfill                # print the proposal
+    scripts/nl17-backfill --out DIR      # …and write DIR/proposal.json
+
+READ-ONLY, $0, ZERO MODEL CALLS, and there is NO --apply. Classification
+re-reads answers the resolver already gave and stored (the 0019 disclosure
+columns); it never re-resolves, so the same record always produces the same
+list. The record is opened read-only, so this cannot write to it even by
+mistake.
+
+The proposal is the principal's to read and bless at the M1 checkpoint —
+application is M4. The no-entity COUNT is the evidence the product council
+routed to him for ratifying the case-(a) terminal reading.
+"""
+
+import sys
+from pathlib import Path
+
+PROTOTYPE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
+
+from newslens.backfill import main  # noqa: E402  (path bootstrap first)
+
+if __name__ == "__main__":
+    sys.exit(main())

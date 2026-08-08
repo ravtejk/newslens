@@ -833,8 +833,11 @@ def test_the_fix_is_read_side_only_and_the_append_only_law_is_untouched():
     trigger: `analysis_briefs` is still the forensic record, and the dead run's
     brief is still on it — hidden from readers, never removed."""
     names = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
-    assert names[-1] == "0023_briefings_pending.sql"
-    assert len(names) == 23
+    # NL-17 M1 added 0024/0025; this tripwire is about NL-107 adding NONE,
+    # so it tracks the roster rather than freezing a number that any later
+    # milestone legitimately moves.
+    assert names[-1] == "0025_follow_settle_events.sql"
+    assert len(names) == 25
     sql = (MIGRATIONS / "0009_analysis_append_only_and_retrieval.sql").read_text(
         encoding="utf-8")
     assert "RAISE(ABORT" in sql

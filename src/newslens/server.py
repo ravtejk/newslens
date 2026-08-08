@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import (analysis, catalog, commissioning, config, db, events,
+from . import (analysis, catalog, commissioning, config, db, entities, events,
                follow_altitude, labels, memory, paths, webui)
 
 DEFAULT_PORT = 8484
@@ -677,6 +677,12 @@ def _following_rows(con: sqlite3.Connection) -> Dict[str, List[Dict]]:
             # "Instead:" prefix does not render at all (never a fabricated
             # candidate).
             "alt_label": _row_col(r, "alt_label"),
+            # FIX LOOP 1: what an unconfident settle came back holding (0025's
+            # `settled_low` detail). Read HERE because this is the loop that
+            # already has the connection open per row; the row-mount renderer
+            # has never taken one. [] on a pre-0025 record, which renders as the
+            # shipped silence — the ruling's own degenerate case.
+            "settle_candidates": memory.settle_candidates(con, r["id"]),
             "note": r["principal_note"] or "",
             "since": _short_date(r["created_at"]),
             "last": last,
@@ -716,12 +722,29 @@ def _row_col(r, name: str, default: str = "") -> str:
 def _altitude_qualifier_html(row: Dict) -> str:
     """Kass's disclosure, persistent form (mockup-v9 grammar): the altitude
     qualifier appended to a Following row's NAME. entity/ambiguous-storyline ->
-    the quiet '(class)' parenthetical; narrow -> '— this story'; a descriptive
-    storyline OR an unmigrated follow -> BARE (the name states its own class, or
-    no altitude exists — never a fabricated qualifier). Words only; the .alt-q
-    register (serif 400 ink-soft) carries it — color is never the signal."""
+    the quiet '(class)' parenthetical; everything else -> BARE (the name states
+    its own class, or no altitude exists — never a fabricated qualifier). Words
+    only; the .alt-q register (serif 400 ink-soft) carries it — color is never
+    the signal.
+
+    NL-17 M1 — THE NARROW ARM IS DELETED. It rendered '— this story' on every
+    story-seeded row, and the principal's 2026-08-07 amendment (i) kills that
+    phrase outright: the product council's case (a) says "'This story' appears
+    nowhere — not as label, not as qualifier, not as rung." This was the
+    QUALIFIER seat. A story-seeded thread's row now renders its NAME BARE, which
+    is the ruling's own copy ("Following <thread name>", storyline name bare) and
+    costs no new string — one was removed, not added. The row is still telling
+    the whole truth: a thread that has not settled has no class to state, and
+    stating one it does not have was the only reason this arm existed.
+
+    What survives is a BARE narrow branch, and that is not a leftover: a
+    story-seeded thread carries no disclosure by construction (the seed writes
+    ''), so falling through to the disclosure arm could only ever matter for a
+    row holding a STALE one — and rendering that row's old class would claim a
+    scope this thread does not have. Bare is the honest answer for narrow
+    whatever else the row happens to be carrying."""
     if (row.get("altitude") or "") == "narrow":
-        return f' <span class="alt-q">— {_e(labels.FOLLOW_NARROW)}</span>'
+        return ""
     disclosure = row.get("disclosure") or ""
     if not disclosure:
         return ""                              # unmigrated — honest bare
@@ -1589,7 +1612,7 @@ def _follow_altitude_row(con, topic: str) -> Dict:
         return {}
     try:
         r = con.execute(
-            "SELECT altitude, primary_entity, disclosure, alt_label,"
+            "SELECT id, altitude, primary_entity, disclosure, alt_label,"
             " altitude_source FROM memory"
             " WHERE lower(topic) = lower(?) AND status = 'active'", (topic,)
         ).fetchone()
@@ -1611,7 +1634,7 @@ def _origin_follow_row(con, story_topic: str, headline: str) -> Dict:
         return {}
     try:
         r = con.execute(
-            "SELECT altitude, primary_entity, disclosure, alt_label,"
+            "SELECT id, altitude, primary_entity, disclosure, alt_label,"
             " altitude_source, topic, origin_story FROM memory"
             " WHERE status = 'active' AND origin_story != ''"
             "   AND lower(origin_story) IN (lower(?), lower(?))"
@@ -1629,12 +1652,18 @@ def _resolve_guard_row(con, story_topic: str, headline: str) -> Dict:
     endpoint returns THIS committed row and never runs a second paid resolve or
     creates a divergent second active follow (QA's double: "…job cuts" +
     "Volkswagen" for one story). Read-only; {} when unfollowed / on an unmigrated
-    DB (the guard degrades off, resolve proceeds as before)."""
+    DB (the guard degrades off, resolve proceeds as before).
+
+    NL-17 M1: `id` rides the projection. The settle door needs the thread's id to
+    append its 0025 outcome and to ask the retry bound about it, and re-looking
+    that id up by name afterwards would be a SECOND predicate that can disagree
+    with the one that already resolved this row — the NL-139 divergence class,
+    one layer over."""
     if con is None:
         return {}
     try:
         r = con.execute(
-            "SELECT altitude, primary_entity, disclosure, alt_label,"
+            "SELECT id, altitude, primary_entity, disclosure, alt_label,"
             " altitude_source, topic, origin_story FROM memory"
             " WHERE status = 'active' AND ("
             "     lower(topic) IN (lower(?), lower(?))"
@@ -1724,15 +1753,115 @@ def _follow_recognition(con, topic: str, headline: str,
     return topic, bool(name_followed or origin_row), origin_row
 
 
-def _tracked_marker_html(marks: List[str]) -> str:
+MARKS_SEPARATOR = "\n"
+
+
+def _settle_candidate_pair(res) -> List[Dict]:
+    """The two rungs an unconfident settle came back holding, as candidates.
+
+    The resolver's contract already names both (prompts/follow_altitude.txt:
+    "At low the reader is asked to choose — so make BOTH the disclosure (your
+    best rung) and alt_label (the other rung) clean, named options"), so this
+    RE-SHAPES that answer and authors nothing: `disclosure` is whichever rung it
+    leaned toward, `alt_label` is the other one. Order is leaned-toward first,
+    which is the only ranking information the resolver gave us and the order the
+    "Instead:" row renders in.
+
+    Degrades to the one candidate it has when alt_label is empty (the M1a-shaped
+    answer the validator still admits) — a one-item Instead: row is a lawful
+    sentence; a fabricated second option would not be.
+    """
+    other = "storyline" if res.altitude == "entity" else "entity"
+    pair = [{"altitude": res.altitude, "disclosure": res.disclosure}]
+    if (res.alt_label or "").strip():
+        pair.append({"altitude": other, "disclosure": res.alt_label})
+    return pair
+
+
+def _apply_entity_identity(con, thread_id: int, *, altitude: str,
+                           disclosure: str, primary_entity: str) -> Tuple:
+    """THE ENTITY-IDENTITY RULE, in one place, for BOTH doors that can aim a
+    thread — the system settle (`_settle_onto`) and the reader swap
+    (`_api_follow_at`). Returns `(entity_id, detail)`.
+
+    One implementation on purpose: a second copy of this rule is how the two
+    copies disagree about what a thread's identity is, and "one concept = one
+    vocabulary" (NL-17 acceptance (a)) cannot survive two answers.
+
+    WEIGHT REPLACES, NEVER STACKS (criterion (b)), and that is what the
+    unconditional write below is for: aiming at an entity points the thread at
+    that entity; aiming at a storyline clears the column to NULL. A thread
+    therefore holds AT MOST ONE identity at any instant — there is no reachable
+    state in which an old aim's entity and a new aim's entity both apply, which
+    is the no-stacking property expressed as a schema fact rather than as a
+    ranking-time subtraction. (Ranking itself is M2; nothing here scores.)
+
+    Callers hold the transaction; this never opens one.
+    """
+    eid, detail = (None, "not-entity-altitude")
+    if altitude == "entity":
+        eid, detail = entities.mint_or_match(
+            con, disclosure=disclosure, primary_entity=primary_entity)
+    elif altitude == "storyline":
+        detail = "storyline"
+    memory.set_thread_entity(con, thread_id, eid)
+    return eid, detail
+
+
+def _tracked_marker_html(marks: List[str], *, slot_id: str = "",
+                         mount: str = "card", story_topic: str = "",
+                         headline: str = "", date: str = "") -> str:
     """THE ONE tracked-ongoing marker rendering (NL-143 fix loop 1, QA F-1).
 
     It was a literal inside _follow_control while the card was the only surface
     that could render it. The deep view now needs the same state — and a second
     literal is exactly how the four follow mounts drifted apart in the first
-    place, which is the bug this whole batch exists to close."""
-    return (f'<span class="tracked-marker">{_e(labels.TRACKED_ONGOING_PREFIX)} '
-            f'{_e(", ".join(marks))}</span>')
+    place, which is the bug this whole batch exists to close.
+
+    ========================================================================
+    NL-17 M1 / F-6 — THE MARKER IS NOW A .follow-slot, and that is the whole
+    fix for NL-143's fix-loop surprise 4.
+
+    THE BUG. This marker is DERIVED FROM FOLLOW STATE: it renders because the
+    story matched a thread the reader follows. Unfollow that thread anywhere
+    else on the page and the claim becomes false — but the marker was a bare
+    <span> outside every .follow-slot, so the cross-mount sweep walked straight
+    past it and it kept announcing "Tracked ongoing story" until a reload.
+    Exactly the class NL-143 exists to kill, hiding one node outside the sweep's
+    reach.
+
+    THE FIX IS NOT A SECOND MECHANISM. Wrapping the marker in the same
+    .follow-slot the sweep already walks means ONE predicate keeps covering
+    everything (the F-6 ruling's own word: "one predicate, one sweep"). On a
+    remote unfollow the sweep hands this node to flRenderResting and it becomes
+    the honest resting CTA — the story is no longer tracked and IS followable,
+    which also keeps his 08-07 directive ③ (a story must never be left with no
+    follow control) true on this surface instead of leaving a dead marker.
+
+    IDENTITY IS THE MARKS, and they are THREAD NAMES — the same type as
+    data-topic, never a story key. That matters for the typed comparison
+    NL-143's fix loop 1 landed: marks meet marks and marks meet topics, and the
+    cross-type crossing that once rendered one story's follow over another's
+    card stays impossible. data-marks carries the whole list (one story can
+    match several threads) newline-joined; data-topic carries the first, so a
+    node that never syncs still names something true.
+    """
+    marker = (f'<span class="tracked-marker">{_e(labels.TRACKED_ONGOING_PREFIX)} '
+              f'{_e(", ".join(marks))}</span>')
+    attrs = [f'data-mount={_e_attr(mount)}',
+             f'data-marks={_e_attr(MARKS_SEPARATOR.join(marks))}']
+    if slot_id:
+        attrs.insert(0, f'id={_e_attr(slot_id)}')
+    if marks:
+        attrs.append(f'data-topic={_e_attr(marks[0])}')
+    if story_topic:
+        attrs.append(f'data-story={_e_attr(story_topic)}')
+    if headline:
+        attrs.append(f'data-origin={_e_attr(headline)}')
+    if date:
+        attrs.append(f'data-briefing-date={_e_attr(date)}')
+    return (f'<span class="follow-slot" {" ".join(attrs)} '
+            f'data-state="tracked">{marker}</span>')
 
 
 def _follow_control(st: Dict, slot: Dict, marks: List[str],
@@ -1755,13 +1884,19 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
     the RESOLVER's name (not in active_topics under the story's title), bridged
     back to its origin card by the 0021 origin_story column, and its committed
     data-topic is the STORED name so unfollow/switch exact-match the real row."""
-    if marks:
-        return _tracked_marker_html(marks)
     topic, followed, origin_row = _follow_recognition(
         con, slot.get("story_title") or st.get("headline") or "",
         st.get("headline") or "", active_topics)
     headline = st.get("headline") or ""
     slot_id = f"follow-{slug}" if slug else "follow-slot"
+    if marks:
+        # F-6: the marker carries this card's identity so the sweep can find it
+        # and truthen it (see _tracked_marker_html). Recognition is resolved
+        # ABOVE this branch now — it costs one read that the marks path used to
+        # skip, and it buys the story key the swept node rests onto.
+        return _tracked_marker_html(
+            marks, slot_id=slot_id, mount="card", story_topic=topic,
+            headline=headline, date=date)
     date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
     origin_attr = f' data-origin={_e_attr(headline)}' if headline else ""
     # R1 (fix loop 2): the card's canonical STORY topic. Once committed, data-topic
@@ -1840,7 +1975,60 @@ def _thread_display_name(alt: Dict, fallback: str) -> str:
     return disclosure or (alt.get("topic") or "").strip() or fallback
 
 
-def _follow_acts_line(alt: Dict, name: str, unfollow_name: str = "") -> str:
+def _swap_targets(alt: Dict, candidates: Optional[List[Dict]] = None) -> List[Dict]:
+    """THE "Instead:" TARGET SET — one function, so the server render, the client
+    render and the swap door can never disagree about what is on offer.
+
+    `targets = the thread's known candidates, minus wherever it is aimed now`.
+    Two sources, in priority order:
+
+      1. PERSISTED CANDIDATES (fix loop 1) — what an unconfident settle came back
+         holding, read from its `settled_low` event. This is the new case: a
+         thread sitting at seed, with two named rungs nobody chose, on a
+         management surface.
+      2. THE STORED alt_label — the single alternative a CONFIDENT settle named,
+         which is the shipped behaviour and stays exactly as it was.
+
+    "THE PRIOR AIM JOINS THE SWAP TARGETS AFTER ANY SWAP" (Ines's fixability;
+    supplemental ruling §R.3) FALLS OUT OF THE SUBTRACTION rather than needing
+    machinery: the candidate list does not change when the reader swaps, so
+    whichever rung they just left is still in it and is no longer the current
+    aim — so it renders. A mis-swap is one tap from home, permanently, without
+    anything having to remember history.
+
+    AND THE SEED IS NOT A TARGET, deliberately. The prior aim of a FIRST swap is
+    the story-seeded state, and amendment (i) bans offering that back: a
+    reader-chosen narrow follow is the junk class the whole milestone removes.
+    That is why targets come from the CANDIDATE list rather than from "wherever
+    this thread has been" — every target is a rung the resolver named, and
+    'narrow' is not one of them. Leaving the thread entirely is still one tap,
+    on the same line, under the symmetry law (Unfollow).
+    """
+    aim = (alt.get("disclosure") or "").strip().casefold()
+    out: List[Dict] = []
+    seen = set()
+    for c in (candidates or []):
+        disc = (c.get("disclosure") or "").strip()
+        altitude = (c.get("altitude") or "").strip()
+        key = disc.casefold()
+        if not disc or altitude not in memory.PICKABLE_ALTITUDES:
+            continue
+        if key == aim or key in seen:
+            continue
+        seen.add(key)
+        out.append({"altitude": altitude, "disclosure": disc})
+    if out:
+        return out
+    alt_label = (alt.get("alt_label") or "").strip()
+    if alt_label and alt_label.casefold() != aim:
+        current = (alt.get("altitude") or "").strip()
+        other = "storyline" if current == "entity" else "entity"
+        return [{"altitude": other, "disclosure": alt_label}]
+    return []
+
+
+def _follow_acts_line(alt: Dict, name: str, unfollow_name: str = "",
+                      candidates: Optional[List[Dict]] = None) -> str:
     """THE ACTS LINE — the whole surviving scope-affordance law, in one place.
 
     Rendered on MANAGEMENT SURFACES ONLY (deep view, Following row). His 07-25
@@ -1848,45 +2036,87 @@ def _follow_acts_line(alt: Dict, name: str, unfollow_name: str = "") -> str:
     — "Widen"/"Broaden" render nowhere and no affordance answers "what happens
     if I tap this?" with a direction. Every scope act NAMES its target.
 
-    Composition (content pass §2.4):
-      broad candidate named            -> "Instead: <name> (<class>)"
-      candidate unnamed, but the settle told us which other rung exists
-                                       -> the worded fallback for that rung
-      nothing settled (narrow-seeded / unmigrated)
-                                       -> NO candidate, and the "Instead:"
-                                          prefix does NOT render. A prefix with
-                                          nothing after it is a broken sentence,
-                                          and a fabricated "the company" would
-                                          name a company we never resolved.
-      narrow rung                      -> renders only when there is something to
-                                          narrow TO (current scope broader than
-                                          the story) — the rung law.
+    Composition (content pass §2.4, as amended by RECONVENE-2):
+      one or more NAMED targets        -> "Instead: <name> (<class>) · <name>"
+      no named target, whatever the
+      thread's altitude                -> NOTHING. No anchor, no prose, no aria
+                                          action, and no "Instead:" label. The
+                                          row renders exactly Unfollow.
     Every rung carries `Switch to <target> — <thread name>` as its accessible
-    name (§3 aria law; the artifact implemented it nowhere)."""
-    altitude = (alt.get("altitude") or "").strip()
-    alt_label = (alt.get("alt_label") or "").strip()
-    settled = altitude in ("entity", "storyline")
+    name (§3 aria law; the artifact implemented it nowhere).
+
+    FIX LOOP 2b — THE WORDED-FALLBACK ARM IS DELETED (product RECONVENE-2,
+    unanimous, ruling (b); QA F-4). It rendered "Instead: the wider story" (or
+    "the company") on a settled thread whose settle never named the other rung —
+    an anchor with an aria promise and NO target identity behind it. Post-fix-
+    loop-1 that promise became a silent no-op, which is bucket 1051 exactly: a
+    control that announces a switch to AT and pointer alike and does nothing.
+
+    It dies rather than gets repaired, and the grounds are worth keeping here
+    because "restore the old behaviour" is the obvious wrong fix:
+      * A RESTORE IS DEFINITIONALLY EMPTY. This state exists only when nothing
+        resolved, so there is no candidate identity to carry. The one nameable
+        target in reach is the thread's own seed storyline title — which is
+        precisely the story-scoped offer amendment (i) bans.
+      * INERT PROSE FAILS THE REGISTER. "the wider story" with no tap states
+        nothing, and the directive is that copy states what is happening and
+        nothing more. Nothing is happening.
+      * A BARE "Instead:" IS A FALSE LABEL — it asserts alternatives that do
+        not exist.
+    What remains is not a stranding: Unfollow is one tap (symmetry law) and the
+    next story's own follow line is the broaden path. This was the last
+    generic-widen ghost — v10 killed the language, v11 the posture; this makes
+    the burial deliberate instead of accidental. When a later settle supplies a
+    named target (the rename / auto-widen class), the Instead: row returns
+    lawfully with that name.
+
+    NL-17 M1 — THE NARROW RUNG IS DELETED, and this is the amendment's whole
+    point of impact. It offered "this story" as a rung on every settled thread,
+    which is precisely the OFFERED CHOICE the principal's 2026-08-07 amendment
+    (i) kills ("too specific and it'll just complicate data for no reason"). It
+    dies with NO REPLACEMENT — the council ruled the story rung out without a
+    substitute, and the acts line simply carries one fewer bit.
+
+    Note what this does NOT touch: `altitude='narrow'` is still a stored value,
+    because the SEED writes it and the seed is the instant-commit law's landing.
+    What is gone is the reader's ability to CHOOSE it — which is the exact
+    lifecycle distinction the council ruled on (a system-owned, auto-widenable
+    seed state is kept; a user-chosen narrow altitude that forks vocabulary
+    forever is banned). The door that minted the banned class is closed one
+    layer down, in `_api_follow_at`.
+
+    FIX LOOP 1 — `candidates` (supplemental ruling 2026-08-08 §R.3). An
+    unconfident settle's named rungs now reach this line, so a thread sitting at
+    seed with two plausible readings offers them instead of nothing:
+
+        Instead: <Name (kind)> · <Storyline name>
+
+    ZERO NEW STRINGS, and that is the ruling's own test of itself: the row is
+    v11 ruling ②'s, the compact qualifier grammar is the principal's 07-18 menu,
+    the bare storyline name is that menu's option 3. Nothing was authored here
+    because nothing needed to be.
+
+    THIS FUNCTION IS MANAGEMENT-ONLY AND ALWAYS WAS — its callers are the deep
+    mount and the Following row (`_follow_slot_html`), never `_follow_control`.
+    That is what keeps the new affordance off today cards, per ruling ②'s own
+    ban, and it is why the ruling could reach for this line rather than build a
+    surface: the carve-out already existed. The law that reconciles it with the
+    silence ruling, verbatim: THE SETTLE NEVER ANNOUNCES; MANAGEMENT SURFACES
+    MAY AFFORD."""
     bits: List[str] = []
-    if alt_label:
-        broad_vis, broad_target = _qualified_html(alt_label), alt_label
-    elif settled:
-        other = "storyline" if altitude == "entity" else "entity"
-        word = (labels.FOLLOW_ALT_FALLBACK_STORYLINE if other == "storyline"
-                else labels.FOLLOW_ALT_FALLBACK_ENTITY)
-        broad_vis, broad_target = _e(word), word
-    else:
-        broad_vis = broad_target = ""
-    if broad_vis:
+    for target in _swap_targets(alt, candidates):
+        disc = target["disclosure"]
+        aria = f"Switch to {disc} — {name}"
         bits.append(
-            f'<a href="#" aria-label='
-            f'{_e_attr(f"Switch to {broad_target} — {name}")} '
-            f'onclick="flSwitch(this); return false;">{broad_vis}</a>')
-    if settled:
-        bits.append(
-            f'<a href="#" aria-label='
-            f'{_e_attr(f"Switch to {labels.FOLLOW_RUNG_THIS_STORY} — {name}")} '
-            f'onclick="flPickNarrow(this); return false;">'
-            f'{_e(labels.FOLLOW_RUNG_THIS_STORY)}</a>')
+            f'<a href="#" data-alt={_e_attr(target["altitude"])} '
+            f'data-disc={_e_attr(disc)} '
+            f'aria-label={_e_attr(aria)} '
+            f'onclick="flSwitch(this); return false;">'
+            f'{_qualified_html(disc)}</a>')
+    # THE "Instead:" LABEL RENDERS ONLY WHEN A NAMED TARGET DOES. `bits` holds
+    # only named targets now, so this reads as the ruling states it: the label
+    # asserts that alternatives exist, and rendering it bare is a false
+    # statement (RECONVENE-2 §R2.3).
     prefix = f'{_e(labels.FOLLOW_INSTEAD_PREFIX)} ' if bits else ""
     bits.append(f'<button class="fl-unfollow" type="button" '
                 f'aria-label='
@@ -1909,7 +2139,8 @@ def _qualified_html(disclosure: str) -> str:
 
 def _follow_slot_html(*, slot_id: str, mount: str, followed: bool,
                       committed_topic: str, story_topic: str, headline: str,
-                      date: str, alt: Dict) -> str:
+                      date: str, alt: Dict,
+                      candidates: Optional[List[Dict]] = None) -> str:
     """THE ONE FOLLOW-LINE COMPONENT, mounted on a MANAGEMENT surface.
 
     Same node, same data-* contract and same client renderers as the card mount
@@ -1948,7 +2179,14 @@ def _follow_slot_html(*, slot_id: str, mount: str, followed: bool,
         f'data-alt-label={_e_attr(alt.get("alt_label") or "")}',
         f'data-disclosure={_e_attr(alt.get("disclosure") or "")}',
     ])
-    acts = _follow_acts_line(alt, name)
+    # FIX LOOP 1: the persisted candidates ride the slot so the CLIENT renders
+    # the same "Instead:" set after a swap that the server rendered at load —
+    # the single-rendering law applied to the new affordance. Stamped ONLY on
+    # management mounts, because only management mounts call this function;
+    # today cards go through _follow_control and never see it (ruling ②).
+    if candidates:
+        attrs.append(f'data-candidates={_e_attr(json.dumps(candidates))}')
+    acts = _follow_acts_line(alt, name, candidates=candidates)
     if mount == "row":
         # the row's own title IS the object, and its accessible name matches
         # what the title renders (§3 aria law exemplar: "Unfollow Volkswagen
@@ -1960,15 +2198,16 @@ def _follow_slot_html(*, slot_id: str, mount: str, followed: bool,
     if disclosure and (alt.get("altitude") or "") != "narrow":
         object_html = _qualified_html(disclosure)
     else:
-        # story-seeded (or unsettled): the thread wears its own name. The scope
-        # fact rides the management ROW's "— this story" qualifier, never the
-        # state line — §1.1 forbids both referents naming the same extension.
+        # story-seeded (or unsettled): the thread wears its own name. The state
+        # line says only what it knows — §1.1 forbids both referents naming the
+        # same extension, and NL-17 M1 buried the row qualifier that used to
+        # carry the scope fact.
         object_html = f'<strong>{_e(labels.FOLLOW_THREAD_SELF)}</strong>'
         # …and the Unfollow's accessible name follows the artifact's exemplar:
         # the deictic the button sits under, plus the named target, so a button
         # list never reads a bare "Unfollow" against an unnamed thread.
         acts = _follow_acts_line(
-            alt, name,
+            alt, name, candidates=candidates,
             unfollow_name=f"{labels.FOLLOW_THREAD_SELF} — {story_topic or name}")
     sentence = (f'<span class="fl-sentence">'
                 f'<span class="fl-dot" aria-hidden="true">'
@@ -2598,7 +2837,7 @@ def _thread_state_card(t: Dict) -> str:
 
 
 def _thread_name_link(tid: int, topic: str, tag: str = "h2",
-                      qualifier: str = "") -> str:
+                      qualifier: str = "", derived: bool = False) -> str:
     """The thread NAME as a Following row's single action (Design's ruling —
     extends the §12.5 fold grammar to the loud updated rows too): a link to the
     thread page (openThread). Accessible name = the topic (distinguishable across
@@ -2606,8 +2845,24 @@ def _thread_name_link(tid: int, topic: str, tag: str = "h2",
     label' labels.THREAD_WHOLE rides as the control's title so the row's single
     action is named from the label table. The name is a real heading so AT can
     navigate the thread list. NL-17-M1b: the altitude qualifier rides INSIDE the
-    link (the accessible name carries the class — Kass's disclosure)."""
-    return (f'<{tag} class="thread-name"><a href="#" '
+    link (the accessible name carries the class — Kass's disclosure).
+
+    NL-17 M1 / F-6 — `derived=True` stamps this heading as FOLLOW-STATE-DERIVED
+    CHROME. That is the gate's finding stated precisely: the cross-mount sweep
+    truthened the row's follow-SLOT and left the row's h2 saying the old name
+    after a rename, because the h2 is not a slot and nothing walked it. It is
+    still derived — the name and its qualifier are both read off the follow — so
+    it gets the identity keys the sweep matches on (data-topic / data-story, the
+    same names and the same types the slots use, so ONE predicate serves both)
+    and a marker attribute the sweep selects on. Stamped only on the LOUD
+    updated rows, which is where a live settle-rename can land while the reader
+    is looking at it; the quiet-fold and lifecycle rows are re-rendered from the
+    server on their next open."""
+    stamp = ""
+    if derived:
+        stamp = (f' data-follow-name="row" data-topic={_e_attr(topic)}'
+                 f' data-story={_e_attr(topic)}')
+    return (f'<{tag} class="thread-name"{stamp}><a href="#" '
             f'onclick="openThread(\'{tid}\', event); return false;" '
             f'title={_e_attr(labels.THREAD_WHOLE)}>{_e(topic)}{qualifier}</a></{tag}>')
 
@@ -2632,7 +2887,8 @@ def _spine_updated_row(t: Dict) -> str:
              f'{_e(labels.UPDATED_STAMP)}</span> · {_e(labels.UPDATED_THIS_EDITION)}'
              + (f' · {_e(date_h)}' if date_h else "") + '</span>')
     name = _thread_name_link(t["id"], t["topic"], tag="h2",
-                             qualifier=_altitude_qualifier_html(t))
+                             qualifier=_altitude_qualifier_html(t),
+                             derived=True)   # F-6: swept chrome
     delta_html = (f'<p class="thread-delta">{_e(d.get("what_happened", ""))}</p>'
                   if d.get("what_happened") else "")
     note = (t.get("note") or "").strip()
@@ -2647,11 +2903,18 @@ def _spine_updated_row(t: Dict) -> str:
 
 
 def _following_row_follow_line(t: Dict) -> str:
-    """A Following row's follow-line mount — the same component, acts-only."""
+    """A Following row's follow-line mount — the same component, acts-only.
+
+    `t` carries its own `settle_candidates` (attached in `_following_rows`,
+    which is where the connection is). Fetching them here instead would mean
+    this function needed a `con` it has never had, and every caller threading
+    one — the row builder already reads the record once per row, so the
+    candidates ride along."""
     return ('<div class="follow-line">' + _follow_slot_html(
         slot_id=f"follow-row-{t['id']}", mount="row", followed=True,
         committed_topic=t["topic"], story_topic=t["topic"], headline="",
-        date="", alt=t) + "</div>")
+        date="", alt=t,
+        candidates=t.get("settle_candidates") or []) + "</div>")
 
 
 def _quiet_fold_html(quiet: List[Dict], zero_updated: bool) -> str:
@@ -3708,13 +3971,20 @@ def _deep_follow_line(con, slot: Optional[Dict], headline: str, date: str,
     marks = [m for m in (slot or {}).get("matched_memory") or [] if m]
     if marks and not followed:
         return ('<div class="follow-line">'
-                + _tracked_marker_html(marks) + "</div>")
+                + _tracked_marker_html(
+                    marks, slot_id=f"follow-deep-{story_anchor}", mount="deep",
+                    story_topic=subject, headline=headline, date=date)
+                + "</div>")
     alt = origin_row or (_follow_altitude_row(con, subject) if followed else {})
     committed = (origin_row.get("topic") if origin_row else subject) or subject
+    # FIX LOOP 1: the deep view is the OTHER management surface ruling ② carved
+    # out, so it affords the same candidates the Following row does. Both
+    # projections that build `alt` carry the row id, which is the join key.
     return ('<div class="follow-line">' + _follow_slot_html(
         slot_id=f"follow-deep-{story_anchor}", mount="deep", followed=followed,
         committed_topic=committed, story_topic=subject, headline=headline,
-        date=date, alt=alt) + "</div>")
+        date=date, alt=alt,
+        candidates=memory.settle_candidates(con, alt.get("id"))) + "</div>")
 
 
 def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
@@ -4203,17 +4473,21 @@ def _nl_labels_js() -> str:
     # lead + its option row (ruling ④), the degrade pair (NL-103 row 3) and the
     # cap refusal (Arm A). Their constants stay in labels.py marked
     # RETIRED-NOT-RENDERED; this table is what the reader can actually reach.
+    #
+    # NL-17 M1 adds two more to that absent list: the qualifier seat and the
+    # rung seat of the story-scope deictic, both buried by the principal's
+    # amendment (i) (their constants are marked retired in labels.py and are
+    # deliberately NOT named here — the retired-constant tooth is a source grep,
+    # and a comment must not be able to satisfy or break it). Removing them from
+    # THIS table is not cosmetic: it is what makes the client structurally unable
+    # to render the phrase, so the burial cannot be undone by a stray branch.
     payload = {"followInactive": labels.FOLLOW_THREAD_INACTIVE,
                "followInactiveAria": labels.FOLLOW_THREAD_ARIA,
                "committedVerb": labels.FOLLOW_COMMITTED_VERB,
                "steadyPrefix": labels.FOLLOW_STEADY_PREFIX,
                "threadSelf": labels.FOLLOW_THREAD_SELF,
-               "narrow": labels.FOLLOW_NARROW,
                "dotOn": labels.FOLLOW_DOT_ON, "dotOff": labels.FOLLOW_DOT_OFF,
                "insteadPrefix": labels.FOLLOW_INSTEAD_PREFIX,
-               "altFallbackEntity": labels.FOLLOW_ALT_FALLBACK_ENTITY,
-               "altFallbackStoryline": labels.FOLLOW_ALT_FALLBACK_STORYLINE,
-               "rungThisStory": labels.FOLLOW_RUNG_THIS_STORY,
                "unfollow": labels.FOLLOW_UNFOLLOW,
                "unfollowedReceipt": labels.FOLLOW_UNFOLLOWED_RECEIPT,
                "unfollowedSelf": labels.FOLLOW_UNFOLLOWED_SELF,
@@ -4744,11 +5018,26 @@ class Handler(BaseHTTPRequestHandler):
         con = db.connect()
         try:
             existing = _resolve_guard_row(con, headline, origin)
+            # NL-17 M1 — WHO DECIDES WHETHER A SETTLE RUNS. It used to be the
+            # client, on `seeded === true`: a brand-new thread settled, and a
+            # thread that already existed never did. That was right while the
+            # only settle was the one at birth, and it is wrong now that case
+            # (a) threads stay AUTO-WIDENABLE — a later story rejoining a thread
+            # that never found an actor is exactly the moment the ruling wants a
+            # fresh attempt, and case (b)'s ONE retry lives in the same question.
+            # So the SERVER answers it, from the record, and the client just
+            # obeys: eligibility depends on the settle history and on a spend
+            # bound, and neither is a thing a browser can be trusted to know.
+            existing_may_settle = bool(
+                existing
+                and (existing.get("altitude") or "") == "narrow"
+                and memory.settle_allowed(con, existing.get("id")))
         finally:
             con.close()
         if existing:
             return self._send_json({
                 "ok": True, "state": "committed", "seeded": False,
+                "settle": existing_may_settle,
                 "topic": existing["topic"],
                 "altitude": existing.get("altitude") or "",
                 "disclosure": existing.get("disclosure") or "",
@@ -4811,9 +5100,16 @@ class Handler(BaseHTTPRequestHandler):
                 con, headline,
                 last_referenced_briefing_id=self._ref_id_for(con, briefing_date))
             kept = len(memory_core.ledger_for_thread(con, prior["id"]))
+            # `settle` mirrors _api_follow_seed's guard-lane answer for the
+            # RESUME landing: a resumed thread settles only if it is still
+            # story-seeded AND the record allows another attempt. A thread that
+            # came back at a scope someone already decided stays untouched —
+            # the reason `seeded: False` existed in the first place.
             return {"ok": True, "outcome": outcome, "seeded": False,
                     "state": "committed", "topic": prior["topic"],
                     "thread_id": prior["id"],
+                    "settle": (_row_col(prior, "altitude") == "narrow"
+                               and memory.settle_allowed(con, prior["id"])),
                     "altitude": _row_col(prior, "altitude"),
                     "disclosure": _row_col(prior, "disclosure"),
                     "alt_label": _row_col(prior, "alt_label"),
@@ -4822,9 +5118,38 @@ class Handler(BaseHTTPRequestHandler):
             con, name=headline, altitude="narrow", source="seed",
             origin_story=origin_story or headline,
             briefing_date=briefing_date)
-        out.update({"state": "committed", "seeded": True, "altitude": "narrow",
-                    "disclosure": "", "alt_label": ""})
+        out.update({"state": "committed", "seeded": True, "settle": True,
+                    "altitude": "narrow", "disclosure": "", "alt_label": ""})
         return out
+
+    def _log_settle(self, thread_id, topic: str, outcome: str, attempt: int,
+                    *, entity_id=None, detail: str = "") -> None:
+        """Append one settle outcome (0025) from a landing that does NOT hold a
+        write transaction of its own — the cap refusal, the resolver raise, the
+        low-confidence finding, the write-refused re-aim. (The confident landing
+        logs inside `_settle_onto`'s transaction instead, because there the
+        outcome and the re-aim must be atomic with each other.)
+
+        FAILING TO LOG NEVER FAILS THE REQUEST, and never fails it SILENTLY
+        either: the reader's follow already stands and is already on screen
+        saying so, so a 500 here would take a working follow away over a
+        forensic write. A pre-0025 database is the expected case on a server the
+        principal has not restarted yet — the sanction rides that restart — so
+        it degrades to a printed line, the same lane every other server-side
+        diagnostic uses.
+        """
+        try:
+            con = db.connect()
+            try:
+                with con:
+                    memory.log_settle_outcome(
+                        con, thread_id, topic, outcome, attempt=attempt,
+                        entity_id=entity_id, detail=detail)
+            finally:
+                con.close()
+        except Exception as exc:  # noqa: BLE001 — never 500 over a forensic write
+            print(f"settle-outcome log failed ({outcome} for {topic!r}): {exc}",
+                  flush=True)
 
     def _api_follow_settle(self, body: Dict) -> None:
         """THE SETTLE — the thread model's second half, and it is INVISIBLE.
@@ -4837,8 +5162,8 @@ class Handler(BaseHTTPRequestHandler):
             announces the name-change once. Never a second row: this MOVES the
             seeded thread (from_topic), so a thread has exactly one identity.
           * unconfident / failed / no thread to settle -> NOTHING renders. The
-            story-scoped follow simply stands, disclosed by the "— this story"
-            row qualifier. THE ASK IS DEAD (his ruling ④); so is the apology.
+            story-scoped follow simply stands, and its own name is the whole
+            disclosure. THE ASK IS DEAD (his ruling ④); so is the apology.
           * over budget -> R-COVERAGE. The follow STANDS; only the broadening
             was refused, so the client renders nothing here either. This is why
             the ruled cap sentence retires from reader copy (content pass §5.1
@@ -4847,6 +5172,28 @@ class Handler(BaseHTTPRequestHandler):
             constant is marked RETIRED-NOT-RENDERED in labels.py, and this
             module may not so much as name it — the sweep marker's claim is
             enforced by a source grep, deliberately.
+
+        NL-17 M1 — WHAT IS NEW HERE, and it is all record, never chrome. Every
+        landing above now APPENDS ITS OUTCOME to follow_settle_events (0025), and
+        the confident-name landing additionally runs the MINT-OR-MATCH DOOR
+        (entities.mint_or_match) so a named actor becomes one durable identity
+        that every thread about it points at. The reader-facing behaviour of the
+        three landings is BYTE-IDENTICAL to what shipped — cases (a) and (b) of
+        the 2026-08-08 product ruling are both silence, and silence is what this
+        route already rendered. The events are what make that silence
+        accountable, and they are what the retry bound and the auto-widen
+        distinction are decided from:
+
+          settled_entity  an actor was named AND minted/matched. memory.entity_id
+                          is set in the SAME transaction as the re-aim.
+          settled_none    the settle RAN and produced no entity — low confidence,
+                          a storyline (a broader story is not an actor), or a
+                          class outside org/place/person. Case (a): terminal,
+                          lawful, and auto-widenable forever.
+          settle_failed   the settle could not run to an answer (raise, dead
+                          lane, dead transport, cap refusal). Case (b): silence,
+                          and exactly ONE re-settle, bounded HERE — a bound the
+                          client is trusted to honour is not a bound.
 
         SUBSCRIPTION lane by default (NL-99 / THE $0-RUN LAW, 2026-07-26) —
         ~2s measured with thinking suppressed, $0 charged."""
@@ -4868,6 +5215,10 @@ class Handler(BaseHTTPRequestHandler):
         con = db.connect()
         try:
             seeded = _resolve_guard_row(con, current, origin)
+            # asked while the connection is open, so the eligibility answer and
+            # the row it is about come from ONE read of the record.
+            may_settle = memory.settle_allowed(con, (seeded or {}).get("id"))
+            attempt = memory.settle_attempts(con, (seeded or {}).get("id")) + 1
         finally:
             con.close()
         if not seeded:
@@ -4883,6 +5234,16 @@ class Handler(BaseHTTPRequestHandler):
                                     "altitude": seeded.get("altitude") or "",
                                     "disclosure": seeded.get("disclosure") or "",
                                     "alt_label": seeded.get("alt_label") or ""})
+        # THE RETRY BOUND (product ruling case (b)), enforced at the door that
+        # can spend. memory.settle_allowed carries the whole rule: a thread whose
+        # last settle FAILED gets exactly one more attempt, while a terminal-none
+        # thread stays widenable indefinitely. This refusal is silent and FREE —
+        # it returns above the cap gate, and no event is appended, because
+        # nothing was attempted and an outcome row for an attempt that never ran
+        # would corrupt the very streak the bound reads.
+        if not may_settle:
+            return self._send_json({"ok": True, "state": "unsettled",
+                                    "settled": False, "retry_exhausted": True})
         # R1 CAP GATE (2026-07-25, PREFLIGHT gate order). Everything above this
         # line is free; everything below can SPEND. resolve_cost_gate is the
         # falsifier's own arithmetic (one estimate, one cap, one implementation
@@ -4892,11 +5253,21 @@ class Handler(BaseHTTPRequestHandler):
         # LONGER COSTS THE READER THEIR FOLLOW — it costs them the broadening.
         stands = {"ok": False, "refusal": "coverage", "state": "refused",
                   "topic": seeded["topic"], "follow_stands": True}
+        tid, ttopic = seeded["id"], seeded["topic"]
         try:
             allowed, est_usd, cap_usd = follow_altitude.resolve_cost_gate(headline)
         except ValueError as exc:        # malformed BUDGET_CAP_USD_PER_RUN
+            self._log_settle(tid, ttopic, "settle_failed", attempt,
+                             detail=f"budget-cap-malformed: {exc}")
             return self._send_json(dict(stands, detail=str(exc)), 409)
         if not allowed:
+            # R-COVERAGE. The reader sees nothing — but the RECORD says the
+            # settle never got to run, which is a failure of the settle and not
+            # a finding of "no entity". Filing it as settled_none would tell the
+            # backfill this thread was examined and found actorless; it was not
+            # examined at all. It is also therefore retry-eligible.
+            self._log_settle(tid, ttopic, "settle_failed", attempt,
+                             detail="coverage")
             return self._send_json(dict(
                 stands,
                 detail=(f"estimated coverage check ${est_usd:.5f} exceeds "
@@ -4914,12 +5285,38 @@ class Handler(BaseHTTPRequestHandler):
                                          # first timeout window, never retry to ~25s
         except Exception as exc:  # noqa: BLE001 — AltitudeError/LaneUnavailable/transport
             # The settle failed. NOTHING renders: the follow the reader made is
-            # untouched and already correct at its own scope.
+            # untouched and already correct at its own scope. Case (b): the
+            # 07-18 failure copy is buried, the silence is the ruling, and this
+            # event is the only place the failure exists.
+            self._log_settle(tid, ttopic, "settle_failed", attempt,
+                             detail=f"{type(exc).__name__}: {exc}")
             return self._send_json({"ok": True, "state": "unsettled",
                                     "settled": False, "reason": str(exc)})
         if res.confidence == "low":
-            # Unconfident. The story-scoped follow stands, silently — his
-            # ruling ④, and Greta's pre-agreed fallback as the ruling.
+            # UNCONFIDENT — case (c), FINAL FORM (supplemental ruling
+            # 2026-08-08, product RECONVENE §R.3; supersedes §5's case (c),
+            # which legislated for a picker M1c had already deleted).
+            #
+            # THE STATE LAYER STAYS SILENT, unchanged and everywhere: nothing is
+            # attached, the thread stays at seed, this response renders nothing,
+            # the today card is untouched. THE SETTLE NEVER ANNOUNCES.
+            #
+            # What is new is that the resolver's NAMED CANDIDATES are no longer
+            # discarded. "Low" in this prompt means it came back holding two
+            # clean options it would not choose between — and the ratified
+            # management-surface "Instead:" row (v11 ruling ②'s own carve-out:
+            # deep view + Following, banned on today cards) is where a standing
+            # affordance lawfully lives. So they persist on the event, and those
+            # two surfaces read them. MANAGEMENT SURFACES MAY AFFORD.
+            #
+            # settled_low, NOT settled_none: a thread that found two plausible
+            # things and could not pick between them is not a thread that found
+            # nothing, and the principal rules on that second count (0025).
+            self._log_settle(
+                tid, ttopic, "settled_low", attempt,
+                detail=memory.encode_settle_candidates(
+                    _settle_candidate_pair(res),
+                    primary_entity=res.primary_entity))
             return self._send_json({"ok": True, "state": "unsettled",
                                     "settled": False})
         name, _cls = follow_altitude.split_qualifier(res.disclosure)
@@ -4932,11 +5329,19 @@ class Handler(BaseHTTPRequestHandler):
         name = name or res.primary_entity or headline
         out = self._with_memory(lambda con: self._settle_onto(
             con, from_topic=seeded["topic"], name=name, res=res,
-            origin_story=raw_topic), verb="follow")
+            origin_story=raw_topic, attempt=attempt), verb="follow")
         if out.get("ok") is False:
             # The re-aim could not be written. The SEEDED follow still stands —
             # so this is not ○ and it is not loud: it is the same silence as any
             # other unlanded settle. Nothing on screen is false.
+            #
+            # Logged from OUT HERE, not inside _settle_onto: the write refusal
+            # comes from _with_memory's opening sync, so the transaction the
+            # outcome would have ridden never opened. Nothing was re-aimed and
+            # nothing was minted, so the honest outcome is a failure — and a
+            # retry-eligible one.
+            self._log_settle(tid, ttopic, "settle_failed", attempt,
+                             detail=f"write-refused: {out.get('error') or ''}")
             return self._send_json({"ok": True, "state": "unsettled",
                                     "settled": False, "error": out.get("error")})
         out.update({"state": "committed", "settled": True,
@@ -4945,7 +5350,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json(out)
 
     def _settle_onto(self, con, *, from_topic: str, name: str, res,
-                     origin_story: str) -> Dict:
+                     origin_story: str, attempt: int = 1) -> Dict:
         """MOVE the seeded thread onto the settled coverage — never a second
         row. Reuses the switch lane (move_follow_altitude) exactly as the
         mockup's seam note specs it: "its landing applied via the existing
@@ -4955,11 +5360,30 @@ class Handler(BaseHTTPRequestHandler):
         forensic log with the reader's name. Rename tombstones from this lane
         stamp actor='org'; a settle-merge leaves the merged-away row's
         dismissed_via NULL, because no person's verb dismissed it.
+
+        NL-17 M1 — THE MINT-OR-MATCH DOOR RUNS HERE, and here is the only place
+        it runs. Three facts have to become true together or not at all: the
+        thread is re-aimed, the entity exists, and the thread points at it. They
+        share this function's connection and therefore its transaction, so a
+        crash between them cannot leave a thread claiming an entity that was
+        never minted (or an entity nothing references).
+
+        WHICH LANDINGS MINT: only `altitude == 'entity'` with a disclosure whose
+        class maps to org/place/person. A STORYLINE settle names a broader story,
+        and a story is not an actor — it re-aims the thread (a real, useful
+        outcome the reader sees as a better name) and mints NOTHING, entity_id
+        stays NULL, outcome `settled_none`. That is not a gap: it is the ruling's
+        own vocabulary, where "no broader concept" means no ENTITY, and it is
+        why the terminal-none bucket in the backfill has to be counted rather
+        than assumed empty.
         """
         row = con.execute(
             "SELECT id FROM memory WHERE lower(topic) = lower(?)"
             " AND status = 'active'", (from_topic,)).fetchone()
         if row is None:
+            # the seed is gone (unfollowed mid-settle). No thread, no outcome:
+            # an event whose thread_id names a row that no longer exists would
+            # make the backfill's counts describe a thread nobody holds.
             return {"ok": True, "outcome": "gone", "topic": from_topic}
         survivor = memory.move_follow_altitude(
             con, row["id"], new_name=name, altitude=res.altitude,
@@ -4967,6 +5391,19 @@ class Handler(BaseHTTPRequestHandler):
             alt_label=res.alt_label, confidence=res.confidence, source="auto",
             log_correction=False, initiator="org")
         tid = survivor if survivor else row["id"]
+        # THE DOOR. `entity_id` is written even when it is None — that write is
+        # the first-class "storyline thread, no broader concept" semantic, not a
+        # no-op, and on a settle-MERGE the survivor may be carrying a stale
+        # entity_id from a life the reader has since re-aimed.
+        with con:
+            eid, detail = _apply_entity_identity(
+                con, tid, altitude=res.altitude, disclosure=res.disclosure,
+                primary_entity=res.primary_entity)
+            memory.log_settle_outcome(
+                con, tid, name,
+                "settled_entity" if eid is not None else "settled_none",
+                attempt=attempt, entity_id=eid,
+                detail="" if eid is not None else detail)
         # NL-139 fix loop 2 (QA R-1): echo the STORED topic. This was the one
         # lane that missed the read-back rule the rest of the perimeter
         # follows — `name` here is MODEL output, so a >TOPIC_MAX_CHARS settle
@@ -4983,15 +5420,48 @@ class Handler(BaseHTTPRequestHandler):
                 "thread_id": tid}
 
     def _api_follow_at(self, body: Dict) -> None:
-        """A reader PICK at a chosen altitude (a low-confidence option, or a
+        """A reader PICK at a chosen altitude (an "Instead:" candidate, or a
         switch from a committed follow). Pre-altituded — the resolver is NOT
         re-consulted (mutation law). A switch (from_topic present + active) MOVES
-        the existing follow; otherwise it creates one."""
+        the existing follow; otherwise it creates one.
+
+        ===================================================================
+        FIX LOOP 1 — THE SWAP DOOR. This route is where the ratified
+        "Instead:" affordance lands, and it was already almost all of what the
+        supplemental ruling asks for: one tap, instant, and $0 ON THE TAP PATH
+        because the candidates were resolved at settle time and nothing here
+        consults a model. What it gained is the ENTITY-IDENTITY half — a swap
+        now runs the same mint-or-match door the system settle runs, so aiming
+        at an actor gives the thread that actor's identity, and aiming at a
+        storyline clears it. Weight REPLACES, never stacks (criterion (b)),
+        because a thread holds at most one entity_id at any instant.
+
+        THE PIN-SCOPE TRIPWIRE, CHECKED AND CLEAR (binding fix-loop item). "A
+        settled thread is never re-aimed" guards the SYSTEM settle route, and
+        it still does — that guard lives in `_api_follow_settle`'s altitude
+        check and in `memory.settle_allowed`, and this route touches NEITHER.
+        It never asks whether a settle is allowed, never calls the resolver,
+        and never appends a settle outcome. The two doors were already distinct
+        endpoints; adding the identity write to this one moved nothing across
+        that line, so the pin did not have to widen and did not.
+        The distinctness is asserted, not assumed:
+        test_the_swap_door_is_distinct_from_the_system_settle_route.
+        """
         name = str(body.get("name") or "").strip()
         altitude = str(body.get("altitude") or "").strip()
         if not name or memory.SEPARATOR in name:
             return self._send_json({"ok": False, "error": "name required"}, 400)
-        if altitude not in memory.STORED_ALTITUDES:
+        # NL-17 M1 — THE PICK DOOR REFUSES 'narrow'. This route is where a
+        # READER-CHOSEN altitude becomes a stored one (source='pick'), and
+        # reader-chosen narrow is exactly the class the principal's amendment (i)
+        # bans: the council's lifecycle distinction keeps the system-owned,
+        # auto-widenable SEED (written by _seed_thread, source='seed') and kills
+        # the deliberate narrow act that forks a thread's vocabulary forever.
+        # Deleting the rung from both renderers removes the OFFER; this removes
+        # the ROUTE, so the banned row cannot be minted by a request that never
+        # came from a rendered control. PICKABLE_ALTITUDES is narrower than
+        # STORED_ALTITUDES on purpose, and the gap between them is the ruling.
+        if altitude not in memory.PICKABLE_ALTITUDES:
             return self._send_json({"ok": False, "error": "bad altitude"}, 400)
         # NL-139 fix loop 1 (QA F-1, same class one endpoint over — this route
         # does NOT read `topic`, so `_topic_arg` never saw it). BOTH values are
@@ -5026,6 +5496,17 @@ class Handler(BaseHTTPRequestHandler):
                         primary_entity=primary_entity, disclosure=disclosure,
                         alt_label=alt_label, source="pick")
                     tid = survivor if survivor else row["id"]
+                    # FIX LOOP 1 — the swap's identity half. Same door the
+                    # system settle uses, so one rule decides what a thread's
+                    # identity IS however it got aimed; and it runs inside this
+                    # verb's transaction, so the re-aim and the identity land
+                    # together or not at all. NO settle outcome is appended:
+                    # nothing settled, a reader chose, and writing one here
+                    # would let a reader's tap move the retry bound.
+                    with con:
+                        _apply_entity_identity(
+                            con, tid, altitude=altitude, disclosure=disclosure,
+                            primary_entity=primary_entity)
                     # NL-139 fix loop 1: echo the STORED name, same reason as
                     # _commit_altitude — the client keys its next call on this.
                     moved = con.execute(
@@ -5033,10 +5514,20 @@ class Handler(BaseHTTPRequestHandler):
                     return {"ok": True, "outcome": "moved",
                             "topic": moved["topic"] if moved else name,
                             "thread_id": tid}
-            return self._commit_altitude(
+            out = self._commit_altitude(
                 con, name=name, altitude=altitude, primary_entity=primary_entity,
                 disclosure=disclosure, alt_label=alt_label, source="pick",
                 origin_story=origin, briefing_date=briefing_date)
+            # the CREATE branch takes the same door — a pick that lands a NEW
+            # thread at an entity rung deserves the same identity a swap gets,
+            # or the same tap would mean two different things depending on
+            # whether a thread happened to exist.
+            if out.get("ok") is not False and out.get("thread_id"):
+                with con:
+                    _apply_entity_identity(
+                        con, out["thread_id"], altitude=altitude,
+                        disclosure=disclosure, primary_entity=primary_entity)
+            return out
 
         # M1c: a refused SWITCH leaves the existing follow standing — the frame's
         # verb says so, and the client leaves the ● state line untouched.

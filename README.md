@@ -209,6 +209,8 @@ scripts/doctor       health check; works pre-install (stdlib-only bootstrap)
 scripts/sonar_spike  the Sonar reliability gate (passed 2026-07-06; re-runnable)
 scripts/battery      the writer-register model battery (dry-run default)
 scripts/moat-battery the NL-75 Phase-2 moat battery, T1/T2/T3 (dry-run default)
+scripts/nl17-backfill NL-17 M1's PROPOSED entity backfill list — READ-ONLY, $0,
+                     zero model calls, and there is no --apply (his bless, M4)
 src/newslens/        paths, db (stdlib-only), config, net, ingest, discovery, ranking, memory, profiles, doctor, cli
 templates/           committed artifacts a new profile is BORN from (profile-sources.yaml)
 sources.yaml         the principal's tiered outlet list + interests (seeded M2) — the DEFAULT profile's

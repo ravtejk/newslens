@@ -54,6 +54,10 @@ class _FollowHandler:
     _api_follow_settle = server.Handler._api_follow_settle
     _seed_thread = server.Handler._seed_thread
     _settle_onto = server.Handler._settle_onto
+    # NL-17 M1: the settle now APPENDS its outcome (0025). The logger is a
+    # handler method, so the double carries it — copied, never stubbed, so
+    # these proofs keep exercising the real append path.
+    _log_settle = server.Handler._log_settle
     _api_follow_at = server.Handler._api_follow_at
     _api_dismiss = server.Handler._api_dismiss
 
