@@ -66,7 +66,14 @@ a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visib
 
 /* Layout: full-bleed views, centered .page reading column (DIRECTION-v5 §4) */
 section.view { display: none; } section.view.active { display: block; }
-.page { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
+/* NL-143 item 3c (his 07-18 item 4, polish gate APPROVED 4b): the reading
+   container steps 72rem -> 84rem. The RECTANGLE LAW IS UNTOUCHED — the ~65%
+   lead ratio he floated the same evening was DECLINED, so .today-grid stays
+   7fr/5fr and this is a container-width change only. Design's charge-3
+   reasoning, carried so nobody re-litigates it: the ratio redistributes width
+   INSIDE the same container and does not shrink the margins he screenshotted;
+   the container is what he actually complained about. */
+.page { max-width: 84rem; margin: 0 auto; padding: 0 2rem; }
 article.story { scroll-margin-top: 0.75rem; }
 
 /* ---- Masthead / the dateline ceremony (DIRECTION-v5 §4) ---- */
@@ -157,13 +164,43 @@ article.story { scroll-margin-top: 0.75rem; }
    dot a card shows is the terra follow mark. Moved = the WORD plus a weight
    step; weight is never the sole channel. ink-soft 7.62:1 — AA with headroom. */
 .memline.memline--moved { color: var(--ink-soft); font-weight: 700; }
-/* Thin strips (#4..N): hairline top rule, headline-link, 2-line-clamped summary,
-   machine smeta (the degraded stamp leads it when the thread moved). Never a box. */
+/* Thin strips (#4..N): hairline top rule, headline-link, 4-line-clamped summary,
+   machine smeta (the degraded stamp leads it when the thread moved). Never a box.
+   NL-143 item 3a: the run-head In-Brief slug rides here too (see .brief-slug).
+   NL-143 item 3b (his 07-18 item 3, polish gate APPROVED 4b): the clamp is
+   2 -> 4 visible lines — he asked for "+1-2" and design took the top of his
+   range because charge 3 widens the container, and wider columns fit more words
+   per line, so 3 would have under-delivered his intent. Display-only: the full
+   text is the SAME element (nothing is hidden from AT), shorter summaries still
+   render unclamped, and the deep view carries everything (superset law).
+   The 32rem measure cap RIDES WITH the widening and is not decoration: at
+   84rem a left-column strip line runs ~88ch without it, which is exactly the
+   unreadable measure the 4-line clamp would then quadruple. */
 .strip { border-top: 1px solid var(--rule); padding: 0.8rem 0 1rem; }
 .strip h3.headline { font-family: var(--font-display); font-weight: 700; font-size: 1.02rem;
   line-height: 1.3; margin: 0 0 0.2rem; }
 .strip .sum { font-size: 0.85rem; line-height: 1.5; color: var(--ink-soft); margin: 0 0 0.35rem;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  max-width: 32rem;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+/* NL-143 item 3a — THE IN-BRIEF SLUG RETURNS (his 07-18 item 2, polish gate
+   APPROVED 4b as "per-run In-Brief slugs"; re-raised 2026-08-07 when he found
+   the approved package had never been built). It reuses the EXISTING small-caps
+   label family (.move-label / .section-h) at its faintest step — no new
+   typographic species, no chip, no container, no added rule: the strip's own
+   hairline is the only rule in play.
+   ORNAMENT, NOT STRUCTURE: it is aria-hidden. The h1/h2/h3 heading tree still
+   carries the tier for assistive tech (v7-M2), so rendering this as a heading
+   would put TWO structural renderings on one semantic tier — phantom structure.
+   Sighted scanning gets the word; the heading tree is untouched. */
+.brief-slug { font-family: var(--font-sans); font-size: 0.68rem; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-faint);
+  margin: 0 0 0.5rem; }
+/* NL-143 item 2a — the quick tier's follow mount. Deliberately NOT a .deck:
+   that container carries a bottom rule and card-scale margins the strip
+   register forbids ("never a box"). One austere line under the smeta, carrying
+   the SAME .deck-follow verb the cards render — same component, same
+   vocabulary, no new UI species. */
+.strip-follow { margin: 0.3rem 0 0; font-size: 0.85rem; }
 .strip .smeta { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
   color: var(--ink-faint); text-transform: uppercase; }
 .lead h2.headline { font-family: var(--font-display); font-weight: 700; font-size: 3.5rem;
@@ -252,11 +289,14 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
 .headline a.headline-link { color: inherit; text-decoration: none; }
 .headline a.headline-link:hover { color: var(--terra-deep); }
 
-/* FIX-3 (2026-07-18): the "In brief" Today region died in v8-M2 (quick-tier
+/* FIX-3 (2026-07-18): the "In brief" Today REGION died in v8-M2 (quick-tier
    items are strips now). Its .in-brief/.brief-label/.snippet/.quick-hit rules
    are DELETED — the prior comment's claim that they dressed the NL-66(b) $0
    deep view was false: that view renders .deep-section-label (server.py), and
-   these four classes had zero emit sites (grep-verified). */
+   these four classes had zero emit sites (grep-verified).
+   STILL TRUE after NL-143: the region and its four classes stay dead. What
+   returned is the LABEL, as .brief-slug on the run-head strip — no wrapper, no
+   container, and no resurrection of these rules. */
 
 /* Still-tracking strip (retro-mock idiom; A8 no-fabrication teeth in the composer) */
 .still-tracking { margin: 1.6rem 0 0; padding-top: 1rem; border-top: 1px solid var(--rule); }
@@ -582,8 +622,23 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
 .deep-footer p:last-child { margin-bottom: 0; }
 
 /* Deep + archive-edition views carry no section line, so they center as a page. */
-#view-edition, section[id^="view-deep-"], section[id^="view-thread-"] { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
+/* NL-143 item 3c: the deep / edition / thread views do NOT use .page — they are
+   their own centred container and they carried the same 72rem cap. They step
+   with it: a Today page that widened while its deep views stayed narrow would
+   read as a layout bug on the very first click-through. */
+#view-edition, section[id^="view-deep-"], section[id^="view-thread-"] { max-width: 84rem; margin: 0 auto; padding: 0 2rem; }
 #view-edition .view-title, #view-edition .today-grid, #view-edition .footer-tag { max-width: none; }
+
+/* ============================ THE ROOT STEP (NL-143 item 3c) ============================
+   Approved with the container at the 07-18 polish gate. A fixed rem container
+   can only ever be a shrinking FRACTION of a very large display — at 2560px,
+   84rem is still about half the glass — so the honest big-display answer is
+   SCALE, not more width: step the root font size and the whole rem-set page
+   grows together while every measure stays constant IN CHARACTERS. Nothing
+   below 1800px changes. Disjoint from the <=900px query, so the mobile column
+   is untouched; everything is rem, so zoom and OS text-scaling still compose. */
+@media (min-width: 1800px) { html { font-size: 17px; } }
+@media (min-width: 2200px) { html { font-size: 18px; } }
 
 /* ============================ MOBILE PASS (~390px) ============================ */
 @media (max-width: 900px) {
@@ -596,6 +651,10 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
     grid-column: auto; grid-row: auto; }
   .today-grid > .grid-lead { border-bottom: 1px solid var(--ink);
     padding-bottom: 1.4rem; margin-bottom: 0.4rem; }
+  /* NL-143 item 3a: one column means the strips stack CONTIGUOUSLY by rank, so
+     the second column leg's slug would read as a stutter mid-run. Only the
+     rank-first slug survives here; the server marks every later one. */
+  .brief-slug--secondary { display: none; }
   .dateline { font-size: 2.6rem; }
   .signature { font-size: 1.1rem; }
   .dispatch-strip { font-size: 0.74rem; }
@@ -902,6 +961,110 @@ function flHold(slot) {
     try { slot.focus({ preventScroll: true }); } catch (e) { slot.focus(); }
   }
 }
+/* ============================================================================
+   NL-143 ITEM 1 — THE CROSS-MOUNT SWEEP (his 2026-08-07 repro, born red).
+
+   THE BUG. Today and EVERY deep view live in ONE document as client-toggled
+   sections, so a followed story has several .follow-slot nodes on the page at
+   the same time. The SERVER gets this right: every mount renders through one
+   predicate (_follow_recognition) at load, so at load they always agree. The
+   CLIENT did not: each renderer morphed only the node that was tapped, and the
+   others kept whatever the last page load had put in them. His repro, exactly:
+     (a) follow on a card -> open the deep view -> the deep mount still says
+         "Follow this thread" for a thread he just followed;
+     (b) unfollow in the deep view -> go back to Today -> the card still says
+         "Following".
+   Nothing was ever wrong in the DATA — the deep-view re-tap hit the seed's XOR
+   guard and got the EXISTING row back, no second follow. The lie was pixels.
+   That is what made it dangerous: a display-only lie is the kind a reader
+   believes, because nothing downstream ever contradicts it.
+
+   THE FIX IS ONE MECHANISM, NOT FOUR. Every state-changing response goes
+   through flCommitAll / flRestAll, which morph the acting node and then sweep
+   EVERY other slot on the same thread, rendering each through the SAME
+   renderers — which already branch on data-mount, so each swept node comes back
+   in ITS OWN form (card verb, deep state line + acts, row acts). Per-verb copies
+   of this would rot apart exactly the way the four mounts just did.
+
+   MATCHING IS ON THE STABLE KEYS, NEVER THE NEW NAME. A confident settle
+   RENAMES the thread: the acting node's data-topic becomes the settled name
+   while every other mount still carries the seeded one, so matching on topic
+   alone would sweep nothing at the precise moment the page most needs it.
+   Identity is therefore data-story (the card's canonical story topic),
+   data-origin (the seed headline) and data-topic (the stored follow name),
+   captured BEFORE the morph. Values are compared case-insensitively because
+   _follow_recognition matches against a lowercased active-topic set.
+
+   AND THE COMPARISON IS TYPED (NL-143 fix loop 1, QA F-2). This used to be a
+   flat SET union — any key of A equal to any key of B meant "same thread" — and
+   the cross-type crossing in that union was not the harmless display glitch it
+   was accepted as. QA's repro: A = story "Chip exports" / headline "US tightens
+   chip exports"; B = a DIFFERENT story titled "US tightens chip exports" about
+   port talks. A.origin met B.story, the sweep rendered "● Following —
+   Semiconductor policy" over a ports story, the server rested it again on
+   reload (recognition has no such key), and worse — B's contaminated deep mount
+   carried A's ACTS, so tapping its "this story" rung re-aimed the reader's real
+   chip follow onto the ports story. A display lie with live acts behind it.
+   So: story meets story, origin meets origin, topic meets topic — plus topic
+   against story BOTH WAYS, which is the post-commit stored-name case (a
+   Following row stamps the thread name as data-story AND data-topic, and a
+   renamed follow's data-topic is that stored name). ONLY the cross-type
+   crossing stops sweeping. Everything the sweep is FOR still matches on a
+   same-type key: same-story mounts share data-story and data-origin exactly,
+   so the settle RENAME still converges (keys are captured pre-morph, and
+   flRenderCommitted rewrites data-topic only — never data-story/data-origin,
+   which is why those two are the stable spine); exact-duplicate stories still
+   sync on story↔story; rows still match on topic; cross-edition mounts of one
+   thread still match on the stored topic. */
+function flIdentity(slot) {
+  var keys = {}, names = ['story', 'origin', 'topic'], i, v;
+  for (i = 0; i < names.length; i++) {
+    v = flDA(slot, names[i]);
+    keys[names[i]] = v ? v.toLowerCase() : '';
+  }
+  return keys;
+}
+function flKeyEq(a, b) { return !!a && a === b; }
+function flSameThread(keys, slot) {
+  var id = flIdentity(slot);
+  return flKeyEq(keys.story, id.story)
+    || flKeyEq(keys.origin, id.origin)
+    || flKeyEq(keys.topic, id.topic)
+    || flKeyEq(keys.topic, id.story)
+    || flKeyEq(keys.story, id.topic);
+}
+/* THE SWEEP ITSELF — the only place that walks the document. */
+function flSyncOthers(slot, keys, fn) {
+  var all = document.querySelectorAll('.follow-slot'), i, o;
+  for (i = 0; i < all.length; i++) {
+    o = all[i];
+    if (o === slot) continue;
+    if (!flSameThread(keys, o)) continue;
+    fn(o);
+  }
+}
+/* COMMIT, EVERYWHERE. The single entry for follow / settle / switch / narrow:
+   whatever moved the thread, every mount of it now says the same thing.
+   `kept` is passed to the ACTING node ONLY, and that is deliberate: the resume
+   clause ("picking up 4 entries") is a RECEIPT of the reader's act, not a
+   property of the thread. Rendering it on three other mounts would announce one
+   act four times and leave it standing on surfaces the reader never touched. */
+function flCommitAll(slot, topic, altitude, disclosure, altLabel, kept) {
+  var keys = flIdentity(slot);
+  flRenderCommitted(slot, topic, altitude, disclosure, altLabel, kept);
+  flSyncOthers(slot, keys, function (o) {
+    flRenderCommitted(o, topic, altitude, disclosure, altLabel);
+  });
+}
+/* UNFOLLOW, EVERYWHERE. Same asymmetry, same reason: the acting surface shows
+   the ~3s receipt (the announcement of what the reader just did) and every
+   other mount goes straight to rest. Four simultaneous receipts would be four
+   claims that four separate unfollows happened. */
+function flRestAll(slot, name) {
+  var keys = flIdentity(slot);
+  flReceipt(slot, name);
+  flSyncOthers(slot, keys, flRenderResting);
+}
 function followTap(btn) {
   var slot = flSlot(btn);
   if (!slot) return;
@@ -924,8 +1087,8 @@ function flFollow(slot) {
     { topic: flDA(slot, 'topic'), origin: origin, briefing_date: flWhen(slot) },
     function (d) {
       if (!d || d.ok === false) return flRefused(slot, d, 'follow');
-      flRenderCommitted(slot, d.topic, d.altitude, d.disclosure, d.alt_label,
-                        d.resumed ? d.kept : null);
+      flCommitAll(slot, d.topic, d.altitude, d.disclosure, d.alt_label,
+                  d.resumed ? d.kept : null);
       // Only a genuinely NEW story-seeded thread settles. A thread that came
       // back from the past fold resumes at the scope it already had — the
       // system never re-aims a scope a reader chose.
@@ -953,7 +1116,10 @@ function flSettle(slot, origin) {
       briefing_date: flWhen(slot) },
     function (d) {
       if (!d || d.ok !== true || d.settled !== true) return;
-      flRenderCommitted(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
+      // THE RENAME CASE the sweep's key union exists for: this response gives
+      // the thread a NEW name, and every other mount is still carrying the
+      // seeded one. flCommitAll captured the identity before this morph.
+      flCommitAll(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
     });
 }
 /* THE CLASS ROUTER — the one place a refusal is dispatched, and it reads the
@@ -1085,7 +1251,14 @@ function flActsLine(slot, name) {
 function flRenderResting(slot) {
   flHold(slot);
   slot.setAttribute('data-state', 'resting');
-  slot.removeAttribute('aria-live');
+  // A card is not a live region at rest — it is one only for the duration of
+  // the act the reader performed on it. The MANAGEMENT mounts are different:
+  // the server renders them aria-live from the start (_follow_slot_html), so
+  // stripping it here would silently downgrade a surface the server built as a
+  // live region. That mattered little while only the tapped node ever changed;
+  // with the NL-143 sweep, resting is now something that happens to a deep
+  // mount because of a tap on a CARD, and the mount has to keep announcing.
+  if (flMount(slot) === 'card') slot.removeAttribute('aria-live');
   slot.removeAttribute('data-altitude');
   slot.removeAttribute('data-alt-label');
   slot.removeAttribute('data-disclosure');
@@ -1167,7 +1340,7 @@ function flSwitch(a) {
     briefing_date: flWhen(slot)
   }, function (d) {
     if (!d || d.ok === false) return flRefused(slot, d, 'switch');
-    flRenderCommitted(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
+    flCommitAll(slot, d.topic, d.altitude, d.disclosure, d.alt_label);
   });
 }
 /* the narrow rung ("this story"): MOVE the committed follow to the story it was
@@ -1182,7 +1355,7 @@ function flPickNarrow(a) {
     briefing_date: flWhen(slot)
   }, function (d) {
     if (!d || d.ok === false) return flRefused(slot, d, 'switch');
-    flRenderCommitted(slot, d.topic, 'narrow', '', '');
+    flCommitAll(slot, d.topic, 'narrow', '', '');
   });
 }
 /* SYMMETRY LAW: one-tap unfollow from the same surface, on ANY entry of a
@@ -1194,7 +1367,7 @@ function flUnfollow(btn) {
   var name = flName(slot);
   api('/api/unfollow', { topic: flDA(slot, 'topic') }, function (d) {
     if (!d || d.ok === false) return flRefused(slot, d, 'unfollow');
-    flReceipt(slot, name);
+    flRestAll(slot, name);
   });
 }
 /* THE UNFOLLOW RECEIPT — announced once, ~3s, then the SAME slot reverts to the

@@ -306,10 +306,21 @@ def test_section_labels_are_real_h2_headings_following():
     assert '<p class="section-h"' not in html
 
 
-def test_in_brief_label_dies_quick_tier_is_a_strip():
-    """v8-M2 (item 1): the visible 'In brief' label DIES — scale and placement
-    are the label, the h3 heading carries the tier for AT. A quick-tier item is
-    now a hairline STRIP in the newspaper grid, no labelled region around it."""
+def test_in_brief_region_dies_quick_tier_is_a_strip():
+    """v8-M2 (item 1): the labelled 'In brief' REGION dies — a quick-tier item
+    is a hairline STRIP in the newspaper grid with no wrapper around it, and the
+    h3 heading carries the tier for AT.
+
+    RE-BASELINED BY NL-143 (2026-08-07). This test also used to assert the LABEL
+    TEXT was gone from Today. That half is RETIRED, not weakened: he charged the
+    label's return on 2026-07-18 (edition-8 review item 2), the polish gate
+    approved it that evening, the package was dropped before it was built, and
+    he raised it a second time on 08-07. The label now renders as an aria-hidden
+    run-head slug (labels.IN_BRIEF in .brief-slug), pinned in
+    tests/test_nl143_follow_surface_truth.py. Everything this test was actually
+    guarding is intact and still asserted below: no labelled region, no wrapper
+    (a wrapper would break the DOM rank order screen readers hear), and the
+    strip still carries its tier in the heading level."""
     from newslens import ranking, generate
 
     con = _con()
@@ -348,7 +359,11 @@ def test_in_brief_label_dies_quick_tier_is_a_strip():
     today = page.split('id="view-today"')[1].split('id="view-following"')[0]
     assert 'class="in-brief"' not in today           # the labelled region is dead
     assert 'class="brief-label"' not in today        # ...and its heading
-    assert labels.IN_BRIEF not in today              # the label text is gone from Today
+    # NL-143: the label text RETURNS, but only as the aria-hidden run-head slug
+    # — never as the region or its heading, which is what the two lines above
+    # have always been the real guard for.
+    assert '<h2 class="brief-slug' not in today
+    assert '<h3 class="brief-slug' not in today
     assert '<article class="strip' in today          # the quick tier is a strip now
     assert 'id="story-3"' in today                   # S4 (index 3) rendered
 

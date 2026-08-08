@@ -848,13 +848,23 @@ def test_d6b_a_classless_settle_failure_renders_nothing(monkeypatch):
 
     BORN-RED against the pre-fix tree: part 1's `flRefused not in body` fails —
     the shipped line was `if (!d || d.ok === false) return flRefused(slot, d,
-    'follow');`."""
-    body = _fn("flSettle")
+    'follow');`.
+
+    RE-BASELINED BY NL-143 (2026-08-07) — the render ENTRY name only. The
+    settle's one render moved from flRenderCommitted to flCommitAll, which
+    renders that same committed line and then sweeps the thread's OTHER mounts
+    (the settle's rename is the exact case the cross-mount sweep exists for).
+    The tooth is unchanged: one positive gate, one visible outcome, no route to
+    the refusal machinery."""
+    # comment-stripped (R4): the settle's own comment now NAMES its render
+    # entry, and a raw substring count would read the prose as a second call.
+    body = _js_code(_fn("flSettle"))
     # 1 — structural: one positive gate, no path to the refusal machinery
     assert "if (!d || d.ok !== true || d.settled !== true) return;" in body
     for renderer in ("flRefused", "flRenderRefusal", "flActRefusal"):
         assert renderer not in body, renderer
-    assert body.count("flRenderCommitted") == 1      # the ONE visible outcome
+    assert body.count("flCommitAll") == 1            # the ONE visible outcome
+    assert "flRenderCommitted" not in body           # …reached via the sweep
     # …and the reader-act legs are untouched by this fix — the line between the
     # two laws is a line, not a retreat
     for leg in ("flFollow", "flSwitch", "flPickNarrow", "flUnfollow"):

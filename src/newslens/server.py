@@ -1362,16 +1362,24 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   deep_return: str = "view-today", con=None,
                   arc_seen: Optional[set] = None, role: str = "story",
                   grid_cls: str = "", grid_row: str = "",
-                  followed_writers: Optional[set] = None) -> str:
+                  followed_writers: Optional[set] = None,
+                  brief_slug: str = "") -> str:
     """One story in the v8 newspaper grid. `role` selects the shape:
     - "lead"  → article.lead: h2 + deck (follow + slim memory stamp) + body +
                 [full picture] + furniture (the dominant left column, spanning).
     - "story" → article.story (medium card, right column): h2 + deck + body + …
     - "strip" → article.strip (the quick-tier GROUT): hairline top rule +
-                headline-link + 2-line-clamped summary + machine smeta. No deck,
-                no body beats, no bottom link — the headline IS the deep-view
-                door (NL-68 item 8); the "In brief" label is dead (scale and
-                placement are the label).
+                headline-link + 4-line-clamped summary + machine smeta + the
+                follow mount (NL-143 item 2a — his directive; the strip was the
+                one tier a reader could not follow). Still no deck, no body
+                beats, no bottom link — the headline IS the deep-view door
+                (NL-68 item 8).
+    `brief_slug` ("first"/"secondary"/"") marks a strip as the head of an
+    In-Brief run and renders the aria-hidden section slug (NL-143 item 3a — his
+    07-18 item 2, approved at that evening's polish gate). v8-M2's claim that
+    the label was dead because "scale and placement are the label" held at
+    lead/card scale and misread at strip scale: a clamped strip reads as
+    truncated coverage until the register is named.
     `grid_cls` is the CSS grid COLUMN placement; `grid_row` (FIX-1) is the
     computed "<start> / <end>" row span, emitted as the --gr custom property so
     the ≥900px grid squares the rectangle while the ≤900px stack (which resets
@@ -1383,13 +1391,27 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     # Heading semantics (v7-M2): ONE h1 per document view — the dateline (Today)
     # / view-title (edition) is the h1, so the lead story demotes to h2. Stories
     # are h2; the strips (quick tier) are h3 — the heading tree carries the tier
-    # for screen readers now that the visible "In brief" label is dead.
+    # for screen readers. NL-143 item 3a returns a VISIBLE "In brief" slug, but
+    # only as aria-hidden ornament — this heading tree remains the sole
+    # structural rendering of the tier, which is why the slug is a <p>.
     wrap_cls, h = {"lead": ("lead", "h2"), "strip": ("strip", "h3")}.get(
         role, ("story", "h2"))
     stamp = _memory_stamp_inner(con, slot, date, degraded=(role == "strip"),
                                 seen=arc_seen)
     row_style = f' style="--gr:{grid_row}"' if grid_row else ""
     parts = [f'<article class="{wrap_cls}{grid_cls}" id="{_e(slug)}"{row_style}>']
+
+    # NL-143 item 3a — THE IN-BRIEF SLUG, at the head of a strip run (see
+    # _brief_slug_heads for which strips get one and why). aria-hidden ORNAMENT:
+    # the h3 heading below already carries the quick tier for assistive tech, so
+    # a second structural rendering of one semantic tier would be phantom
+    # structure. Sighted scanning is the whole job — a clamped strip that ends
+    # mid-thought reads as truncated coverage until something names the register
+    # as deliberate brevity.
+    if brief_slug:
+        second = " brief-slug--secondary" if brief_slug != "first" else ""
+        parts.append(f'<p class="brief-slug{second}" aria-hidden="true">'
+                     f'{_e(labels.IN_BRIEF)}</p>')
 
     # THE WHY-CHOSEN LINE (NL-134 F1 + F3) — above the title, on EVERY story and
     # every tier, where the override callout used to sit: the "why am I seeing
@@ -1414,15 +1436,6 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     parts.append(_headline_html(h, st.get("headline", ""), slot, has_file, tier,
                                 slug, deep_return))
 
-    if role == "strip":
-        # Hairline strip: 2-line-clamped summary (the lede; a headline-only
-        # strip carries none) + machine smeta with the degraded stamp.
-        if st.get("lede"):
-            parts.append(f'<p class="sum">{_e(st["lede"])}</p>')
-        parts.append(_strip_smeta(slot, stamp))
-        parts.append("</article>")
-        return "".join(parts)
-
     marks = list(slot.get("matched_memory") or [])
     # NL-68 item 7 (kill the covered-before DUPE), v8-M2 form: the slim stamp and
     # the tracked-ongoing marker BOTH signal prior coverage. Where the stamp
@@ -1436,9 +1449,44 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     # exists (_has_deep_view is the same predicate the bottom entry link uses,
     # so the verb can never become a dead door the entry link knows is dead).
     card_door = slug if _has_deep_view(has_file, tier) else ""
+    # NL-143 item 2a: computed ABOVE the strip branch now, because the quick tier
+    # mounts the very same control. One computation, three roles — a second
+    # strip-only call would be a second follow rendering, which is the thing the
+    # single-rendering law exists to forbid.
     follow = "" if suppress_marker else _follow_control(
         st, slot, marks, active_topics, date, slug=slug, con=con,
         deep_slug=card_door, deep_return=deep_return)
+
+    if role == "strip":
+        # Hairline strip: 4-line-clamped summary (the lede; a headline-only
+        # strip carries none) + machine smeta with the degraded stamp + the
+        # follow mount.
+        if st.get("lede"):
+            parts.append(f'<p class="sum">{_e(st["lede"])}</p>')
+        parts.append(_strip_smeta(slot, stamp))
+        # NL-143 item 2a — HIS 2026-08-07 DIRECTIVE: the quick tier is
+        # followable. The strip branch used to return here, so an In-Brief item
+        # was the one story tier a reader could not follow at all.
+        # It mounts THE SAME component in its SAME card form (data-mount="card",
+        # the compact deck verb, the identical resting/committed vocabulary) —
+        # no new UI species, and the strip stays austere: no .deck wrapper,
+        # because that container carries a bottom rule and card margins the
+        # strip register forbids.
+        #
+        # AUSTERITY BOUND (caught by test_v8_m2_qa's marker-resurrection pin):
+        # the MARKS path is deliberately not mounted here. When a story matches
+        # a tracked thread, _follow_control renders the "Tracked ongoing story
+        # — <thread>" MARKER in place of a control — right on a card, wrong on a
+        # strip twice: it is a second vocabulary on the tier ruled austere, and
+        # v8-M2 already gave the strip its own memory signal (the degraded stamp
+        # in the smeta). Nothing is withheld from the reader by this: a
+        # marks-carrying story is one he ALREADY follows, so there was never a
+        # follow on offer — which is exactly the card's behaviour too.
+        if follow and not marks:
+            parts.append(f'<p class="strip-follow">{follow}</p>')
+        parts.append("</article>")
+        return "".join(parts)
+
     deck_bits: List[str] = []
     if follow:
         deck_bits.append(follow)
@@ -1676,6 +1724,17 @@ def _follow_recognition(con, topic: str, headline: str,
     return topic, bool(name_followed or origin_row), origin_row
 
 
+def _tracked_marker_html(marks: List[str]) -> str:
+    """THE ONE tracked-ongoing marker rendering (NL-143 fix loop 1, QA F-1).
+
+    It was a literal inside _follow_control while the card was the only surface
+    that could render it. The deep view now needs the same state — and a second
+    literal is exactly how the four follow mounts drifted apart in the first
+    place, which is the bug this whole batch exists to close."""
+    return (f'<span class="tracked-marker">{_e(labels.TRACKED_ONGOING_PREFIX)} '
+            f'{_e(", ".join(marks))}</span>')
+
+
 def _follow_control(st: Dict, slot: Dict, marks: List[str],
                     active_topics: set, date: str, slug: str = "",
                     con=None, deep_slug: str = "",
@@ -1697,8 +1756,7 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
     back to its origin card by the 0021 origin_story column, and its committed
     data-topic is the STORED name so unfollow/switch exact-match the real row."""
     if marks:
-        return (f'<span class="tracked-marker">{_e(labels.TRACKED_ONGOING_PREFIX)} '
-                f'{_e(", ".join(marks))}</span>')
+        return _tracked_marker_html(marks)
     topic, followed, origin_row = _follow_recognition(
         con, slot.get("story_title") or st.get("headline") or "",
         st.get("headline") or "", active_topics)
@@ -2241,6 +2299,45 @@ def _grid_row_spans(grid_stories: Dict[int, Tuple],
     return {i: f"{line[lo]} / {line[hi]}" for i, (lo, hi) in band.items()}
 
 
+def _brief_slug_heads(grid_stories: Dict[int, Tuple],
+                      cols: Dict[int, str]) -> Dict[int, str]:
+    """NL-143 item 3a — which strips head an In-Brief run.
+
+    Returns {index: "first"|"secondary"}: ONE slug per COLUMN LEG, placed on
+    that leg's lowest-ranked strip. "first" is the rank-first leg (the only one
+    that survives the <=900px stack, where the strips become contiguous by rank
+    and a second slug would read as a stutter mid-run).
+
+    WHY PER COLUMN LEG AND NOT PER CONTIGUOUS RUN. The 07-18 design round said
+    "per contiguous strip run" and worked its example on the assumption that a
+    column leg IS a run (07-10: slugs above #4 and #7), auditing the busy-guard
+    at "one two-word slug per run, <=2 per page" — which is what the polish gate
+    approved. But the balance in _grid_columns is greedy shorter-column-first
+    and adds a constant per strip, so once the two columns level out the
+    assignment ALTERNATES a,b,a,b: every strip becomes its own contiguous run,
+    the page grows a slug above each one, and the approved section label
+    silently becomes the per-card label his own charge ruled out. Per column
+    leg reproduces the round's worked example exactly, holds the <=2 the gate
+    approved against, and cannot degrade into per-card labelling for any
+    edition shape.
+
+    PRESENTATION ONLY, and deliberately downstream of the grid: this reads the
+    balance assignment and never feeds it. The rectangle machinery
+    (_grid_columns / _grid_row_spans / the 7fr/5fr law) is not touched, so a
+    slug can shift nothing about where a story lands."""
+    heads: Dict[int, str] = {}
+    legs: List[str] = []
+    for i in sorted(grid_stories):
+        if grid_stories[i][3] != "strip":
+            continue
+        col = cols.get(i, "a")
+        if col in legs:
+            continue
+        legs.append(col)
+        heads[i] = "first" if len(legs) == 1 else "secondary"
+    return heads
+
+
 def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
                           briefs: Optional[Dict[int, Dict]],
                           slug_prefix: str, deep_return: str) -> str:
@@ -2277,7 +2374,9 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
                 still_lines.append(line)
             continue
         # v8-M2 tiers → grid roles: lead (i==0), medium cards (right column),
-        # quick-tier strips (the grout). "In brief" as a labelled region is dead.
+        # quick-tier strips (the grout). The v8-M2 "In brief" labelled REGION
+        # stays dead — nothing wraps the strips — but NL-143 restores the label
+        # itself as a per-leg slug on the run-head strip (_brief_slug_heads).
         role = "lead" if i == 0 else ("strip" if tier == "quick" else "story")
         grid_stories[i] = (st, slot, tier, role)
 
@@ -2285,9 +2384,11 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     # rank/DOM order 1→N (screen readers hear rank); grid-column classes place
     # them — lead left (spanning), cards right, strips balanced across the
     # bottom to square the rectangle. No wrapper column (that would break DOM
-    # rank order); no "In brief" label (scale + placement are the label).
+    # rank order); no "In brief" WRAPPER — NL-143's slug rides INSIDE the
+    # run-head strip precisely so this stays true and the grid math is untouched.
     cols = _grid_columns(grid_stories)
     rows = _grid_row_spans(grid_stories, cols)     # FIX-1: computed row placement
+    slugs = _brief_slug_heads(grid_stories, cols)  # NL-143: the In-Brief slug
     grid_html: List[str] = []
     for i in sorted(grid_stories):
         st, slot, tier, role = grid_stories[i]
@@ -2302,7 +2403,8 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
             slug=f"{slug_prefix}story-{i}", date=row["date"],
             deep_return=deep_return, con=con, arc_seen=arc_seen, role=role,
             grid_cls=grid_cls, grid_row=rows.get(i, ""),
-            followed_writers=followed_writers))
+            followed_writers=followed_writers,
+            brief_slug=slugs.get(i, "")))
 
     still_html = ""
     if still_lines:
@@ -3576,7 +3678,26 @@ def _deep_follow_line(con, slot: Optional[Dict], headline: str, date: str,
     """The deep view's follow mount. Degrades to '' with no connection (the
     fixture/no-db render paths) rather than guessing a state — an unknown follow
     state must never render as "not followed", which would offer a second follow
-    on a thread the reader already has."""
+    on a thread the reader already has.
+
+    MARKS AWARENESS (NL-143 fix loop 1, QA F-1). The same law, one case further
+    in: a story that MATCHES a tracked thread is one the reader already follows,
+    so no follow is on offer here either. _follow_control has always rendered
+    the marker STATE instead of the picker for that story; this mount never took
+    marks, so the card withheld the control while the story's own management
+    home offered "Follow this thread" — and one tap on it minted a SECOND active
+    thread beside the tracked one ("Hormuz shipping watch" beside "Hormuz").
+    The XOR guard cannot catch that: a name mismatch is the NORMAL case for
+    marks, which is what made the two surfaces disagree in the first place.
+
+    The arm is `marks and not followed`, not a blanket `marks`. A story can be
+    marks-carrying AND followed under its own name; the card suppresses its verb
+    either way, but this mount is M1c's MANAGEMENT HOME — where Unfollow lives —
+    and blanking it for a thread the reader actually holds would strand that
+    thread with no acts surface outside the Following row. The bug is the
+    resting PICKER on a tracked story, and `not followed` is exactly the picker
+    branch. (If the gate reads QA's "the same rule _follow_control applies on
+    cards" as unconditional, it is deleting `and not followed` — one line.)"""
     if con is None:
         return ""
     topic = (slot or {}).get("story_title") or headline or ""
@@ -3584,6 +3705,10 @@ def _deep_follow_line(con, slot: Optional[Dict], headline: str, date: str,
         return ""
     subject, followed, origin_row = _follow_recognition(
         con, topic, headline, _active_topics_lower(con))
+    marks = [m for m in (slot or {}).get("matched_memory") or [] if m]
+    if marks and not followed:
+        return ('<div class="follow-line">'
+                + _tracked_marker_html(marks) + "</div>")
     alt = origin_row or (_follow_altitude_row(con, subject) if followed else {})
     committed = (origin_row.get("topic") if origin_row else subject) or subject
     return ('<div class="follow-line">' + _follow_slot_html(
@@ -3904,6 +4029,16 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
     out.append('<div class="deep-title-block">'
                f'<p class="deep-eyebrow">{_e(labels.SOURCES_CONTEXT)}</p>'
                f'<h1 class="deep-title">{_e(headline)}</h1></div>')
+
+    # NL-143 item 2b — MOUNT 3 REACHES THE QUICK TIER. M1c's law is that the
+    # deep view is the thread's MANAGEMENT HOME: it is where Unfollow lives now
+    # that his item 4 took it off cards, and it is why a committed card verb is
+    # a door at all. That law never carried a tier qualifier — the $0 view
+    # simply never mounted the line, so a followed In-Brief item had a door that
+    # opened onto a room with no controls in it. Same component, same call, same
+    # placement as the analyst view (under the title block, above the body); it
+    # degrades to '' with no connection exactly as the analyst mount does.
+    out.append(_deep_follow_line(con, slot, headline, date, story_anchor))
 
     # NL-68 item 3 (superset): open with the story's Today blurb — the SAME text
     # the In-Brief snippet shows (st.lede), so the sources-&-context view is never
