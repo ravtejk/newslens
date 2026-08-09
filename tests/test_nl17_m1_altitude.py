@@ -94,14 +94,20 @@ def _seed_db(rows):
 # seat registration (the seam law)
 # --------------------------------------------------------------------------
 
-def test_seat_registered_haiku_subscription_default():
+def test_seat_registered_subscription_default():
     # NL-99 (THE $0-RUN LAW): the seat comes HOME to the subscription lane. The
     # 2026-07-20 api exception existed because a subscription resolve took
     # 9-46s — and eng-4 proved that was never the lane, it was the transport
     # ignoring cfg.thinking. With thinking suppressed the same seat on the same
-    # lane resolves in 1.85-2.89s, at $0. Model/provider/knobs unchanged.
+    # lane resolved in 1.85-2.89s, at $0.
+    #
+    # NL-17 M3 fix loop 1 (F-2): the MODEL moved Haiku 4.5 -> Sonnet 5 (no-Haiku
+    # law; this seat is the arm chain's first link). The NL-99 mechanism did not
+    # move with it and that is the point of this pin — thinking stays off, the
+    # lane stays subscription, and the re-measured resolve is 2.90-3.72s.
     cfg = llm.SEATS["follow_altitude"]
-    assert cfg.model == "claude-haiku-4-5"
+    assert cfg.model == "claude-sonnet-5"
+    assert "haiku" not in cfg.model
     assert cfg.provider == "anthropic"
     assert cfg.lane == "subscription"           # the exception is retired
     assert cfg.thinking is None and cfg.effort is None   # mechanical, not reasoning
@@ -233,7 +239,7 @@ def test_resolver_parses_entity_pick(monkeypatch):
     assert sink[0]["usd_shadow"] > 0
     assert sink[0]["usd_charged"] == 0.0
     assert sink[0]["lane"] == "subscription"
-    assert sink[0]["model"] == "claude-haiku-4-5"
+    assert sink[0]["model"] == "claude-sonnet-5"      # M3 FL1 F-2 seat flip
 
 
 def test_resolver_one_corrected_retry_records_both_attempts(monkeypatch):

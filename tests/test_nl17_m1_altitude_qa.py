@@ -206,9 +206,9 @@ def test_mid_call_lane_and_model_flap_cannot_fork_transport_or_ledger(monkeypatc
     # NL-99: the resolver's code default is the SUBSCRIPTION lane again. The
     # one-resolution-per-call property is unchanged and is what this test owns —
     # only the lane it resolves TO moved.
-    assert seen_cfgs == [("subscription", "claude-haiku-4-5", "follow_altitude")] * 2
+    assert seen_cfgs == [("subscription", "claude-sonnet-5", "follow_altitude")] * 2
     assert [e["lane"] for e in sink] == ["subscription", "subscription"]
-    assert [e["model"] for e in sink] == ["claude-haiku-4-5"] * 2
+    assert [e["model"] for e in sink] == ["claude-sonnet-5"] * 2   # M3 FL1 F-2
     # Both attempts ledger shadow and charge nothing — including the RETRY,
     # which is where a lane fork would have shown up as real money.
     assert all(e["usd_shadow"] > 0 and e["usd_charged"] == 0.0 for e in sink)
@@ -324,19 +324,27 @@ def test_truncated_attempt_is_billed(monkeypatch):
     assert res.attempts == 2 and len(sink) == 2
 
 
-def test_shadow_arithmetic_is_the_haiku_table_exactly(monkeypatch):
-    """usd_shadow must be pt/1e6*$1.00 + ct/1e6*$5.00 to the cent — the seat
-    table, not an estimate. Subscription (forced via the escape hatch): charged 0.
-    api (the RESOLVER LANE FIX default, here carrying a model arm): charged ==
-    shadow (same table — the model override never re-prices)."""
-    pt, ct = 200_000, 40_000            # -> 0.2 + 0.2 = $0.40 exactly
+def test_shadow_arithmetic_is_the_seat_table_exactly(monkeypatch):
+    """usd_shadow must be pt/1e6*in + ct/1e6*out to the cent — the SEAT table,
+    not an estimate. Subscription (forced via the escape hatch): charged 0.
+    api (here carrying a model arm): charged == shadow (same table — the model
+    override never re-prices, which is the property that makes a battery arm a
+    controlled single-variable change).
+
+    NL-17 M3 FL1 (F-2): the seat's table moved Haiku $1/$5 -> Sonnet $3/$15 with
+    the model flip, so the expected figures move WITH it. Deriving them from the
+    row rather than hard-coding is the point: this pin proves the arithmetic,
+    not the price list."""
+    cfg0 = llm.SEATS["follow_altitude"]
+    pt, ct = 200_000, 40_000
+    expected = (pt / 1e6) * cfg0.usd_per_mtok_in + (ct / 1e6) * cfg0.usd_per_mtok_out
     monkeypatch.setattr(llm, "chat", lambda req: _envelope(_pick(), pt=pt, ct=ct))
     # the $0 path is now the SUBSCRIPTION escape hatch (api is the default).
     monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "subscription")
     sink = []
     res = fa.resolve_altitude(fa.ThreadInput(1, "VW"), cost_sink=sink)
     assert res.lane == "subscription"
-    assert sink[0]["usd_shadow"] == pytest.approx(0.40)
+    assert sink[0]["usd_shadow"] == pytest.approx(expected)
     assert sink[0]["usd_charged"] == 0.0 and res.usd_charged == 0.0
 
     monkeypatch.setenv("NEWSLENS_LANE_FOLLOW_ALTITUDE", "api")
@@ -345,8 +353,8 @@ def test_shadow_arithmetic_is_the_haiku_table_exactly(monkeypatch):
     res2 = fa.resolve_altitude(fa.ThreadInput(1, "VW"), cost_sink=sink2)
     assert res2.lane == "api"
     assert sink2[0]["model"] == "claude-fable-5"     # the arm is recorded...
-    assert sink2[0]["usd_shadow"] == pytest.approx(0.40)   # ...priced at the SEAT
-    assert sink2[0]["usd_charged"] == pytest.approx(0.40)
+    assert sink2[0]["usd_shadow"] == pytest.approx(expected)  # ...priced at the SEAT
+    assert sink2[0]["usd_charged"] == pytest.approx(expected)
 
 
 # --------------------------------------------------------------------------

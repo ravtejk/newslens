@@ -311,6 +311,51 @@ _SONNET_RANK_SUB = dict(
 # callers still PASS a temperature (generate._chat, memory_core's 0.2); the
 # anthropic api provider now omits it for these seats, and the callers' comments
 # are reworked in the same batch to stop claiming a determinism temp 0 buys.
+# NL-17 M3 fix loop 1 (F-2): the follow-altitude RESOLVER leaves Haiku.
+#
+# WHY, and it is a law rather than a tuning preference: the principal's no-Haiku
+# law. QA found this seat is not a dormant remainder — it is the FIRST LINK OF
+# THE ARM CHAIN. The "tap Follow on the Fed" gesture the arming sitting requires
+# routes `server.py -> follow_altitude.resolve_altitude -> effective_seat(
+# "follow_altitude")`, so the one gesture M3 asks him to make was the one that
+# fired a Haiku call.
+#
+# WHAT MOVES, AND WHAT DELIBERATELY DOES NOT:
+#   * model + prices -> Sonnet 5 / the Sonnet table. `follow_altitude.
+#     estimate_usd` prices off `cfg.usd_per_mtok_*`, so the dry-run plan and the
+#     budget cap follow this row with no second edit.
+#   * sampling=False, mirroring the ENG-M0 rows: Sonnet 5 REJECTS `temperature`
+#     with a 400, and `resolve_altitude` passes RESOLVER_TEMPERATURE=0.0 on
+#     every call. The subscription lane never forwards it, so the live path was
+#     safe either way — but the API fall-over would have 400'd on its first real
+#     use, which is precisely the lane you reach when things are already going
+#     wrong. Same trap the rank swap hit; closed here rather than discovered.
+#   * thinking STAYS None and the seat STAYS in _THINKING_OFF_SUB_SEATS. NL-99's
+#     whole finding was that unrequested extended thinking — not the lane — made
+#     this resolve take 9-46s and degrade 4/4 in production. A model swap does
+#     not license re-importing the tax the seat was rescued from: this is a
+#     mechanical single-turn classification, and the caller's parse + validate +
+#     corrected-retry law is the backstop.
+#   * timeout_sub_s is RE-MEASURED on the flipped seat, never inherited (the
+#     ENG-M0 rule). See the seat row for the measurement.
+#   * THE LANE DOES NOT MOVE, and that is a deliberate non-change this loop was
+#     asked to re-examine and declined to make. subscription is HEAD's committed
+#     value (63f4115, NL-99 "resolver comes home", 2026-07-26) which EXPLICITLY
+#     SUPERSEDED the 07-20 api-lane ruling (d431277) after diagnosing that the
+#     ~48s resolve was unrequested extended thinking, not the lane — 52 live
+#     falsifier calls at 1.85-2.89s, $0 charged. DECISIONS 2026-07-26 records the
+#     supersession in those words ("out of law — SUPERSEDED by this later
+#     ruling"). A fix loop scoped to F-1..F-7 does not get to reverse a committed
+#     principal lane ruling as a side effect, and flipping to api would re-arm
+#     metered charge on the one seat a reader waits on. Raised to the gate with
+#     receipts instead. The api lane remains reachable exactly as NL-99 left it:
+#     NEWSLENS_LANE_FOLLOW_ALTITUDE=api, per-instance and never automatic.
+_SONNET_RESOLVER_SUB = dict(
+    provider="anthropic", model="claude-sonnet-5", lane="subscription",
+    usd_per_mtok_in=SONNET_USD_PER_MTOK_IN,
+    usd_per_mtok_out=SONNET_USD_PER_MTOK_OUT,
+    sampling=False,
+)
 _OPUS_EDITOR_SUB = dict(
     provider="anthropic", model="claude-opus-4-8", lane="subscription",
     usd_per_mtok_in=OPUS_USD_PER_MTOK_IN,
@@ -522,7 +567,28 @@ SEATS: Dict[str, SeatConfig] = {
     # healthy Haiku round-trip being ~1.2s. A hung provider on either lane still
     # degrades to the PROVEN this-story commit (exact copy) in a beat, never
     # pinning the reader.
-    "follow_altitude": SeatConfig("follow_altitude", timeout_s=8, timeout_sub_s=20, **_HAIKU_SUB),
+    # NL-17 M3 fix loop 1 (F-2): Haiku 4.5 -> Sonnet 5, subscription (no-Haiku
+    # law; this seat is the arm chain's first link — see _SONNET_RESOLVER_SUB).
+    # TIMEOUTS RE-MEASURED ON THE FLIPPED SEAT, never inherited (ENG-M0's rule,
+    # and the 07-17 field failure it came from). TWO INDEPENDENT n=9 RUNS, both
+    # against founder threads 33-41, title-only, all first-attempt, $0 charged —
+    # and BOTH are quoted, because one run's max is not a wall's evidence
+    # (gate G-3):
+    #   implementer (scratchpad/f2_reprobe.json):  min 2.90 / mean 3.25 / max 3.72s
+    #   verifier    (scratchpad/fl1/reprobe9):     min 2.923 / mean 3.705 / max 5.856s
+    # Same seat, same threads, same day: the TAIL moved 3.72 -> 5.856s between
+    # runs, which is the honest reading of this seat's variance and the reason a
+    # single run should never have set the number. The wall is sized on the
+    # CONSERVATIVE tail. Haiku's baseline was 1.85-2.89s, so Sonnet costs ~1.3x
+    # at the median and ~2x at the tail; the tail is what sizes a wall.
+    # The 20s subscription wall therefore sits at 3.42x the worst observed
+    # ceiling (5.4x on the friendlier run): inside the family rule (>=3x) but
+    # with real margin, not abundant margin. KEPT rather than widened — this is
+    # the one seat where a reader waits out the whole wall before the proven
+    # degrade, so padding it past the evidence would spend that wait on nothing.
+    # REVISIT-IF: any observed resolve past ~7s puts the ceiling inside 3x. The
+    # next seat change re-measures rather than inheriting 3.42x as headroom.
+    "follow_altitude": SeatConfig("follow_altitude", timeout_s=8, timeout_sub_s=20, **_SONNET_RESOLVER_SUB),
     # synthesis has no live call site yet (B6 builds it); it is declared here
     # so the seat table is the whole roster the design named, not a subset.
     "synthesis": SeatConfig("synthesis", timeout_s=120, **_GPT4O_API),

@@ -3,9 +3,15 @@
 WHAT HAS TO BE TRUE ABOUT THIS INSTRUMENT, in order of how much damage getting
 it wrong would do:
 
-  1. IT CANNOT APPLY ANYTHING. His memory, his bless (ENG-M1 cut; product
-     council §5.4). Not "it does not by default" — there is no code path, and no
-     flag, that writes to the record. Pinned structurally AND behaviourally.
+  1. IT CANNOT APPLY ANYTHING HE HAS NOT BLESSED. His memory, his bless (ENG-M1
+     cut; product council §5.4). M1 held this as "no code path, and no flag,
+     writes to the record" — and M3 NARROWED it by ruling, not by drift:
+     DECISIONS [2026-08-08] item 4 blessed the list and routed application to a
+     build item, so `--apply` now exists and writes exactly the blessed items.
+     What is pinned today, structurally AND behaviourally: the classification
+     core still cannot write; the write verbs live in `apply_proposal` alone;
+     the default invocation still opens the record read-only; and an entity item
+     the bless does not name is refused BY NAME rather than carried along.
   2. IT COSTS NOTHING AND CALLS NOTHING. Classification re-reads answers the
      resolver already gave and stored. A model call here would spend his money
      to re-derive facts we hold, and would make the list unreproducible.
@@ -27,6 +33,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import sqlite3
 
 import pytest
@@ -75,26 +82,44 @@ def _mixed(con):
 
 
 # ===========================================================================
-# 1 — IT CANNOT APPLY ANYTHING
+# 1 — IT CANNOT APPLY ANYTHING EXCEPT WHAT HE BLESSED
 # ===========================================================================
 
-def test_the_instrument_has_no_write_path_to_the_record():
-    """BORN RED (the module does not exist pre-diff), and it is the tooth that
-    matters most: this list touches the principal's own memory, and the ruling
-    is that he blesses it before anything moves. Structural, because "we
-    remembered not to" is not a property."""
-    # QA F-12: read COMMENT-STRIPPED source. Un-stripped, the positive
-    # assertion below is satisfiable by the module DOCSTRING alone, and the
-    # load-bearing negatives were safe only by the accident of how the prose
-    # spells things. FL.6's own rule, applied to the pin that stated it.
-    src = _py_code(inspect.getsource(backfill))
+def test_the_classification_core_has_no_write_path_to_the_record():
+    """M1's blanket "no write path anywhere" pin, NARROWED BY RULING — not
+    weakened by drift. DECISIONS [2026-08-08] item 4 blessed the list and routed
+    application to a build item; M3 builds it. The module now HAS a write path,
+    on purpose, so the honest invariant is the one that still protects him: THE
+    CLASSIFICATION CORE CANNOT WRITE. `build_proposal` + `classify_thread` are
+    what every propose-only invocation runs, and they stay structurally
+    incapable of touching the record.
+
+    (Kept structural for M1's reason: "we remembered not to" is not a property.)
+    """
+    # QA F-12: read COMMENT-STRIPPED source (see _py_code).
+    core = _py_code(inspect.getsource(backfill.build_proposal)
+                    + inspect.getsource(backfill.classify_thread)
+                    + inspect.getsource(backfill._print_report))
     for verb in ("INSERTINTOmemory", "UPDATEmemory", "DELETEFROMmemory",
-                 "INSERTINTOentities", "mint_or_match", "set_thread_entity",
-                 "--apply"):
-        assert verb not in src, verb
-    # the ONLY handle it opens is the read-only one: no bare db.connect(
-    assert "db.connect_readonly(" in src
-    assert "db.connect(" not in src.replace("db.connect_readonly(", "")
+                 "INSERTINTOentities", "UPDATEentities", "mint_or_match",
+                 "db.connect("):
+        assert verb not in core, verb
+
+
+def test_every_write_verb_in_the_module_lives_in_apply_proposal():
+    """The other half of the narrowing: the verbs did not scatter. A future diff
+    that writes to the record from anywhere but the one sanctioned function
+    fails here — the property M1's blanket assertion was really buying."""
+    whole = _py_code(inspect.getsource(backfill))
+    apply_src = _py_code(inspect.getsource(backfill.apply_proposal))
+    for verb in ("UPDATEmemorySETentity_id", "mint_or_match"):
+        assert verb in apply_src, f"{verb} missing from apply_proposal"
+        assert whole.count(verb) == apply_src.count(verb), (
+            f"{verb} appears outside apply_proposal")
+    # Record-destroying verbs exist nowhere in the module, apply included.
+    for verb in ("DELETEFROMmemory", "DELETEFROMentities", "DROPTABLE",
+                 "UPDATEmemorySETtopic", "UPDATEmemorySETstatus"):
+        assert verb not in whole, verb
 
 
 def test_the_record_is_opened_read_only_and_a_write_would_fail(con, monkeypatch):
@@ -326,3 +351,200 @@ def test_shared_entities_are_surfaced_because_that_is_the_tables_whole_job(con):
     assert p["distinct_entities_proposed"] == 1
     assert list(p["shared_entities"]) == ["volkswagen"]
     assert len(p["shared_entities"]["volkswagen"]) == 2
+
+
+# ===========================================================================
+# 6 — M3: THE APPLY PATH, AND ITS CEILING
+# ===========================================================================
+# The bless is the authority AND the limit (DECISIONS [2026-08-08] item 4: "the
+# bless covers the LIST"). These pin both halves: the blessed item lands, and
+# everything else is refused BY NAME rather than quietly carried along.
+
+def _blessed_fed(con):
+    """The blessed shape, in a sandbox: an entity thread whose stored
+    disclosure mints `Federal Reserve (org)` through the real door."""
+    _outcome, tid = memory.add_thread_at_altitude(
+        con, "Federal Reserve", altitude="entity",
+        disclosure="Federal Reserve (agency)", primary_entity="Fed",
+        source="auto")
+    return tid
+
+
+def test_the_blessed_list_is_exactly_what_the_checkpoint_blessed():
+    """ANTI-DRIFT, and it is the pin that makes the rest safe: the apply path's
+    authority is a literal in the source, so a silent edit that widens it fails
+    here. Growing this list is a checkpoint, and a checkpoint is a diff."""
+    assert backfill.BLESSED_ENTITY_ITEMS == ((19, "Federal Reserve", "org"),)
+
+
+def test_apply_points_the_blessed_thread_at_a_minted_entity(con, monkeypatch):
+    """BORN RED (apply_proposal does not exist pre-diff). The milestone's own
+    item 1: the blessed pair actually lands on the record."""
+    tid = _blessed_fed(con)
+    monkeypatch.setattr(backfill, "BLESSED_ENTITY_ITEMS",
+                        ((tid, "Federal Reserve", "org"),))
+    r = backfill.apply_proposal(con, backfill.build_proposal(con))
+    assert len(r["applied"]) == 1
+    eid = con.execute("SELECT entity_id FROM memory WHERE id = ?",
+                      (tid,)).fetchone()["entity_id"]
+    assert eid is not None
+    row = con.execute("SELECT canonical_name, kind FROM entities WHERE id = ?",
+                      (eid,)).fetchone()
+    assert (row["canonical_name"], row["kind"]) == ("Federal Reserve", "org")
+
+
+def test_apply_refuses_an_entity_item_the_bless_does_not_name(con, monkeypatch):
+    """THE CEILING. His record moves — he follows things — so a proposal
+    computed at apply time can carry entity items nobody blessed. They are
+    refused by name; 'he blessed the backfill' must never launder them in."""
+    blessed = _blessed_fed(con)
+    _o, stranger = memory.add_thread_at_altitude(
+        con, "Volkswagen", altitude="entity", disclosure="Volkswagen (company)",
+        source="auto")
+    monkeypatch.setattr(backfill, "BLESSED_ENTITY_ITEMS",
+                        ((blessed, "Federal Reserve", "org"),))
+    r = backfill.apply_proposal(con, backfill.build_proposal(con))
+    assert [i["thread_id"] for i in r["applied"]] == [blessed]
+    assert [i["thread_id"] for i in r["unblessed"]] == [stranger]
+    assert con.execute("SELECT entity_id FROM memory WHERE id = ?",
+                       (stranger,)).fetchone()["entity_id"] is None
+
+
+def test_apply_never_writes_a_no_entity_row(con, monkeypatch):
+    """entity_id staying NULL is a TERMINAL STATE, not a gap to be filled
+    (0024's law, and the ruling Kass's falsifier turns on). The apply path has
+    no business touching those rows at all."""
+    _mixed(con)
+    monkeypatch.setattr(backfill, "BLESSED_ENTITY_ITEMS", ())
+    before = [tuple(r) for r in con.execute(
+        "SELECT id, topic, status, altitude, disclosure, entity_id"
+        " FROM memory ORDER BY id")]
+    backfill.apply_proposal(con, backfill.build_proposal(con))
+    after = [tuple(r) for r in con.execute(
+        "SELECT id, topic, status, altitude, disclosure, entity_id"
+        " FROM memory ORDER BY id")]
+    assert after == before
+    assert con.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
+
+
+def test_apply_is_idempotent(con, monkeypatch):
+    """A second apply writes nothing and mints nothing — the same law the
+    memory backfill carries. He may well run it twice."""
+    tid = _blessed_fed(con)
+    monkeypatch.setattr(backfill, "BLESSED_ENTITY_ITEMS",
+                        ((tid, "Federal Reserve", "org"),))
+    backfill.apply_proposal(con, backfill.build_proposal(con))
+    r2 = backfill.apply_proposal(con, backfill.build_proposal(con))
+    assert r2["applied"] == []
+    assert len(r2["already"]) == 1
+    assert con.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 1
+
+
+def test_apply_refuses_to_repoint_a_thread_that_already_points_elsewhere(
+        con, monkeypatch):
+    """An entity's identity does not move because a backfill ran. The alias
+    discipline accretes and never rewrites (0024); the pointer gets the same
+    posture — CONFLICT is reported, never resolved by overwriting."""
+    tid = _blessed_fed(con)
+    con.execute("INSERT INTO entities (canonical_name, kind, aliases)"
+                " VALUES ('Someone Else', 'org', '')")
+    other = con.execute("SELECT id FROM entities WHERE canonical_name ="
+                        " 'Someone Else'").fetchone()["id"]
+    con.execute("UPDATE memory SET entity_id = ? WHERE id = ?", (other, tid))
+    con.commit()
+    monkeypatch.setattr(backfill, "BLESSED_ENTITY_ITEMS",
+                        ((tid, "Federal Reserve", "org"),))
+    r = backfill.apply_proposal(con, backfill.build_proposal(con))
+    assert r["applied"] == []
+    assert len(r["conflicts"]) == 1
+    assert con.execute("SELECT entity_id FROM memory WHERE id = ?",
+                       (tid,)).fetchone()["entity_id"] == other
+
+
+def test_apply_writes_no_settle_event(con, monkeypatch):
+    """A backfill is NOT a settle. 0025's outcomes describe what a settle found;
+    forging 'settled_entity' rows here would corrupt the very history
+    build_proposal reads back for the F-10 sub-bucket split — the instrument
+    would poison its own evidence on the next run."""
+    tid = _blessed_fed(con)
+    monkeypatch.setattr(backfill, "BLESSED_ENTITY_ITEMS",
+                        ((tid, "Federal Reserve", "org"),))
+    before = con.execute(
+        "SELECT COUNT(*) FROM follow_settle_events").fetchone()[0]
+    backfill.apply_proposal(con, backfill.build_proposal(con))
+    after = con.execute(
+        "SELECT COUNT(*) FROM follow_settle_events").fetchone()[0]
+    assert after == before
+
+
+def test_apply_refuses_on_a_record_that_predates_0024(con, monkeypatch):
+    """0024 applies on his NEXT SERVER RESTART, so an apply run before that has
+    no column to point. It refuses loudly and says when to come back — never
+    migrates his record to make itself work (the instrument's founding rule)."""
+    monkeypatch.setattr(backfill, "BLESSED_ENTITY_ITEMS", ())
+    proposal = dict(backfill.build_proposal(con), schema_0024_applied=False)
+    with pytest.raises(SystemExit) as exc:
+        backfill.apply_proposal(con, proposal)
+    assert "0024" in str(exc.value)
+
+
+# ===========================================================================
+# 7 — M3 ADDENDUM: THE BLESS LIST SHOWS THE FOLLOW STATE
+# ===========================================================================
+# Origin (NL-17 M3, 2026-08-09): the single entity item on the M1-blessed list
+# was thread 19 `Federal Reserve`, DISMISSED by the principal the day before the
+# bless. This report printed topic and proposed entity but not status, so the
+# bless was given blind and the resulting pointer is inert — dismissed threads
+# are excluded by `steering.watched_entities`. A blesser cannot weigh what the
+# report does not show.
+
+def test_the_proposal_shows_each_threads_follow_state(con, capsys):
+    """BORN RED. Every line carries its status, so `active` / `dormant` /
+    `dismissed_user` are all visible at the moment of blessing.
+
+    FIX LOOP 1, F-5: this pin used to assert only that `[active]` appeared
+    somewhere in the output, which the ENTITY line alone satisfied — QA's
+    mutation dropping `{state}` from the NO-ENTITY line (36 of his 37 rows)
+    survived 23/23 green. The claim is "every item line", so now it counts."""
+    _mixed(con)
+    proposal = backfill.build_proposal(con)
+    backfill._print_report(proposal)
+    out = capsys.readouterr().out
+    assert "[active]" in out
+    stated = [ln for ln in out.splitlines()
+              if re.match(r"^    \[\s*\d+\] .*\[[^\]]+\]\s+->", ln)]
+    assert len(stated) == len(proposal["items"]), (
+        f"{len(stated)} lines carry a state, {len(proposal['items'])} items")
+
+
+def test_a_no_entity_line_carries_its_state_too(con, capsys):
+    """BORN RED (F-5). The 36-of-37 case named on its own: a no-entity row is
+    still a disposition he is blessing, and its follow state is just as
+    load-bearing for reading the list as an entity row's."""
+    memory.add_thread(con, "Strait of Hormuz")          # unmigrated -> no-entity
+    backfill._print_report(backfill.build_proposal(con))
+    out = capsys.readouterr().out
+    line = [ln for ln in out.splitlines() if "Strait of Hormuz" in ln][0]
+    assert "no-entity" in line
+    assert "[active]" in line, line
+
+
+def test_a_dismissed_thread_is_flagged_loudly_not_merely_labelled(con, capsys):
+    """BORN RED, and it is the tooth this section exists for: `dismissed_user`
+    is not a lifecycle state, it is "he stopped following this". An entity
+    pointer on such a thread steers nothing, so the line must SAY so rather
+    than print a status word a reader has to know the semantics of."""
+    _o, tid = memory.add_thread_at_altitude(
+        con, "Federal Reserve", altitude="entity",
+        disclosure="Federal Reserve (agency)", primary_entity="Fed",
+        source="auto")
+    con.execute("UPDATE memory SET status = 'dismissed_user' WHERE id = ?",
+                (tid,))
+    con.commit()
+    backfill._print_report(backfill.build_proposal(con))
+    out = capsys.readouterr().out
+    assert "DISMISSED" in out
+    assert "steers NOTHING" in out
+    # the entity proposal is still MADE — the report informs the bless, it does
+    # not silently drop an item the classifier legitimately produced
+    assert "Federal Reserve (org)" in out

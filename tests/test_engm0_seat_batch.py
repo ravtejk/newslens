@@ -42,14 +42,22 @@ def test_the_ruled_seat_map_is_what_ships(seat, expected):
     assert (cfg.model, cfg.lane, cfg.thinking, cfg.effort, cfg.sampling) == expected
 
 
-def test_follow_altitude_is_the_untouched_flagged_exception():
-    """The ONE seat the ruling put out of bounds: still Haiku, still no thinking,
-    still the 8s/20s reader-facing walls. A future seat sweep that 'tidies' this
-    row into the Opus family breaks the 8s UI wall it exists to protect."""
+def test_follow_altitude_kept_its_reader_facing_shape_through_the_seat_flips():
+    """ENG-M0 put this seat out of bounds and it stayed Haiku through that batch.
+    NL-17 M3 fix loop 1 (F-2) MOVED THE MODEL — Haiku 4.5 -> Sonnet 5, under the
+    no-Haiku law and QA's finding that this is the arm chain's first link.
+
+    What ENG-M0 was actually protecting did NOT move, and that is what this pin
+    now guards: no thinking, and the 8s/20s reader-facing walls. A reader waits
+    out this seat's wall in the UI before the proven degrade, so a future sweep
+    that 'tidies' the row into the Opus/adaptive-thinking family still breaks the
+    thing this test exists for. sampling flipped to False WITH the model (Sonnet
+    5 rejects `temperature`, which resolve_altitude sends on every call)."""
     cfg = llm.SEATS["follow_altitude"]
-    assert cfg.model == "claude-haiku-4-5"
+    assert cfg.model == "claude-sonnet-5"
+    assert "haiku" not in cfg.model
     assert cfg.thinking is None and cfg.effort is None
-    assert cfg.sampling is True
+    assert cfg.sampling is False
     assert (cfg.timeout_s, cfg.timeout_sub_s) == (8, 20)
 
 

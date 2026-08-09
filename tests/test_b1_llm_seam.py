@@ -237,10 +237,11 @@ def test_seat_map_after_b2_haiku_flip():
         elif name == "follow_altitude":
             # NL-99 (2026-07-26): the 2026-07-20 api exception is RETIRED. The
             # subscription lane was never the slow one — the transport was
-            # ignoring cfg.thinking. Same Haiku model, same knobs, and now the
-            # same lane as every other anthropic seat.
+            # ignoring cfg.thinking. Same knobs, and the same lane as every
+            # other anthropic seat. NL-17 M3 FL1 (F-2): the MODEL moved to
+            # Sonnet 5 under the no-Haiku law; lane/provider/knobs did not.
             assert cfg.provider == "anthropic", name
-            assert cfg.model == "claude-haiku-4-5", name
+            assert cfg.model == "claude-sonnet-5", name
             assert cfg.lane == "subscription", name
         elif name == "writer":
             assert cfg.provider == "anthropic" and cfg.lane == "subscription"

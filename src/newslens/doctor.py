@@ -889,6 +889,32 @@ def check_sources() -> List[Result]:
     for problem in cfg.problems:
         out.append(Result(FAIL, f"sources.yaml: {problem}"))
 
+    # NL-17 M3 — THE YAML-SIDE XOR DOOR, reported here because the doctor is
+    # this system's degrade-loud surface. WARN and never FAIL: his file
+    # legitimately carries a tag whose concept is mid-move, and `steering.derive`
+    # — not this line — decides whether that tag still scores (a moved concept's
+    # tag is suppressed only once its entity is actually weight-bearing). A FAIL
+    # here would brick a lawful state, which is Rook's whole dissent (ENG :119):
+    # degrade-loud, never a dead run, and never a meta-only disclosure either.
+    try:
+        from . import db as _db, vocab_move
+        _con = _db.connect_readonly()
+        try:
+            for hit in vocab_move.yaml_door_collisions(_con, cfg):
+                out.append(Result(
+                    WARN,
+                    f"sources.yaml: `{hit['tag']}` ({hit['level']} tag) names a "
+                    f"followed entity ({hit['entity']}) — one concept, two "
+                    f"vocabularies. Propose the move with "
+                    f"`scripts/nl17-vocabulary-move`; until it is blessed the "
+                    f"ledger decides which one scores."))
+        finally:
+            _con.close()
+    except Exception:                                        # noqa: BLE001
+        # A door that can kill the doctor is not a door. No record yet, no
+        # migration yet, no PyYAML — all of them mean "nothing to say here".
+        pass
+
     if cfg.has_active_sources:
         fetchable = cfg.fetchable_sources
         out.append(

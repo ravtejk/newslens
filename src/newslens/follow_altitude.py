@@ -31,9 +31,15 @@ set (ALTITUDES) is the no-new-vocabulary tripwire — a third rung cannot enter
 without a code change the QA pin flips red on.
 
 SEAM (ADR-0014/0015/0016 law): the resolver's model call goes through the
-`follow_altitude` seat in llm.SEATS (Haiku 4.5; the ONE seat whose code default
-is the SUBSCRIPTION lane, like every other anthropic seat — NL-99 / THE $0-RUN
-LAW, 2026-07-26. The 07-20 api exception was a correct read of a symptom
+`follow_altitude` seat in llm.SEATS (SONNET 5 since NL-17 M3 fix loop 1 — the
+no-Haiku law, plus QA's finding that this seat is the ARM CHAIN'S FIRST LINK:
+the Follow tap that lights entity steering routes through here. Thinking stays
+OFF and the 20s wall stands — re-measured on the flipped seat across TWO n=9
+runs whose tails disagreed (3.72s and 5.856s), so the wall is sized on the worse
+one at 3.42x; the numbers and the revisit-if live on the SEAT ROW in llm.py
+rather than being restated here. The ONE seat
+whose code default is the SUBSCRIPTION lane, like every other anthropic seat —
+NL-99 / THE $0-RUN LAW, 2026-07-26. The 07-20 api exception was a correct read of a symptom
 (a subscription resolve took 9-46s) and a wrong read of the cause: the
 transport was ignoring the seat's declared thinking=None. With thinking
 suppressed the same call on the same lane measures 1.85-2.89s at $0 charged.
@@ -80,7 +86,12 @@ ALTITUDES: Tuple[str, ...] = ("entity", "storyline")
 CONFIDENCES: Tuple[str, ...] = ("high", "medium", "low")
 
 RESOLVER_MAX_TOKENS = 400        # a ~4-field JSON object; headroom, never an essay
-RESOLVER_TEMPERATURE = 0.0       # deterministic classification (Haiku sampling=True)
+# RESOLVER_TEMPERATURE is still SENT by resolve_altitude, and the seat decides
+# what happens to it: the flipped Sonnet 5 row carries sampling=False, so the
+# anthropic api provider OMITS it (Sonnet rejects `temperature` with a 400) and
+# the subscription lane never forwarded it in the first place. Kept at 0.0 so
+# the value is right the moment a sampling seat is ever restored here.
+RESOLVER_TEMPERATURE = 0.0       # deterministic classification (seat-dependent)
 
 # The corrected-retry augmentation (generate.RETRY_CORRECTION_* twin): a rejected
 # draft's retry ECHOES the exact validator ValueError so attempt 2 is steered at
@@ -388,7 +399,9 @@ def _estimate_usd(cfg: "llm.SeatConfig", system: str, thread: ThreadInput) -> fl
     """Per-thread usd_shadow estimate for the dry-run plan. ~3.5 chars/token
     input (generate._est_cost's ratio); the output leg prices the full
     RESOLVER_MAX_TOKENS ceiling (pessimistic — the real object is far shorter).
-    Priced at the SEAT's table (Haiku $1/$5) regardless of lane — the shadow
+    Priced at the SEAT's table (Sonnet 5 $3/$15 since M3 fix loop 1 — the row's
+    own `usd_per_mtok_*`, so this figure followed the flip with no edit here)
+    regardless of lane — the shadow
     figure the budget cap binds on."""
     prompt_chars = len(system) + len(_thread_block(thread))
     return round((prompt_chars / 3.5 / 1e6) * cfg.usd_per_mtok_in

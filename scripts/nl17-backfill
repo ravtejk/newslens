@@ -5,18 +5,27 @@ Thin on purpose (the scripts/doctor + scripts/follow-altitude pattern):
 bootstraps sys.path so the runner works from a fresh checkout, then delegates to
 src/newslens/backfill.py. All logic lives there and is offline-testable.
 
-    scripts/nl17-backfill                # print the proposal
+    scripts/nl17-backfill                # print the proposal (read-only)
     scripts/nl17-backfill --out DIR      # …and write DIR/proposal.json
+    scripts/nl17-backfill --apply        # apply the M1-BLESSED items ONLY
 
-READ-ONLY, $0, ZERO MODEL CALLS, and there is NO --apply. Classification
-re-reads answers the resolver already gave and stored (the 0019 disclosure
-columns); it never re-resolves, so the same record always produces the same
-list. The record is opened read-only, so this cannot write to it even by
+BY DEFAULT: READ-ONLY, $0, ZERO MODEL CALLS. Classification re-reads answers the
+resolver already gave and stored (the 0019 disclosure columns); it never
+re-resolves, so the same record always produces the same list. Without --apply
+the record is opened read-only, so a propose run cannot write to it even by
 mistake.
 
-The proposal is the principal's to read and bless at the M1 checkpoint —
-application is M4. The no-entity COUNT is the evidence the product council
-routed to him for ratifying the case-(a) terminal reading.
+`--apply` (NL-17 M3) writes the M1-BLESSED items and nothing else. DECISIONS
+[2026-08-08] "M1 CHECKPOINT RULED" item 4 blessed the LIST, and the bless is
+both the authority and the ceiling: an entity item not on
+`backfill.BLESSED_ENTITY_ITEMS` is refused BY NAME. It touches
+`memory.entity_id` and the entities table only, never the no-entity buckets.
+(This header previously read "there is NO --apply … application is M4" — the CoS
+resequenced application to M3 with the bless in hand; QA fix loop 1, F-6.)
+
+The proposal is the principal's to read and bless. The no-entity COUNT is the
+evidence the product council routed to him for ratifying the case-(a) terminal
+reading.
 """
 
 import sys

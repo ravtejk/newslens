@@ -60,6 +60,29 @@ BUCKET_ENTITY = "entity"
 BUCKET_NONE = "no-entity"
 BUCKET_UNMAPPABLE = "unmappable-kind"
 
+# THE M1-BLESSED LIST — the apply path's whole authority, and its ceiling.
+#
+# DECISIONS [2026-08-08] "M1 CHECKPOINT RULED" item 4: "the bless covers the
+# LIST (1 entity proposal + no-entity buckets). No apply path exists in code
+# (gate-verified structurally and by mutation), so application is a build item
+# riding M2/M3 with the bless in hand." M3 builds that path (CoS sequencing,
+# 2026-08-08). The module docstring's "application is M4" predates the
+# resequence; the bless it describes is the one enforced here.
+#
+# WHY A PINNED TUPLE AND NOT "apply whatever the proposal says". The proposal is
+# recomputed from a LIVE record at apply time, and the record moves — he follows
+# things. A proposal computed next week may carry entity items nobody blessed,
+# and "he blessed the backfill" would silently launder them in. So the blessed
+# list is named here, item by item, and an entity item that is not on it is
+# REFUSED BY NAME rather than applied: a different list is a different bless,
+# which is a checkpoint, not a flag. Nothing here can grow the list — only the
+# principal's next ruling can, and that edits this tuple in a reviewable diff.
+#
+# (thread_id, canonical_name, kind) — the exact triple the classifier proposes.
+BLESSED_ENTITY_ITEMS = (
+    (19, "Federal Reserve", "org"),
+)
+
 # THE NO-ENTITY BUCKET SPLITS THREE WAYS, and the split is not bookkeeping — it
 # is the difference between evidence and noise for the question the principal is
 # being asked to rule on.
@@ -250,7 +273,146 @@ def build_proposal(con: sqlite3.Connection) -> Dict:
     }
 
 
-def _print_report(p: Dict) -> None:
+def apply_proposal(con: sqlite3.Connection, proposal: Dict) -> Dict:
+    """Apply the M1-BLESSED entity items. Returns a receipt. Writes, on purpose.
+
+    THE ONLY WRITE PATH THIS MODULE HAS EVER HAD, and everything about it is
+    narrow by construction:
+
+      * It touches `memory.entity_id` and mints through the existing
+        `entities.mint_or_match` door — NOTHING ELSE. No topic, no status, no
+        altitude, no disclosure, no delta, no settle event.
+      * It applies ONLY items on BLESSED_ENTITY_ITEMS. An entity-bucket item
+        that is not blessed is refused BY NAME and counted; it is not an error
+        and it is not applied.
+      * The no-entity and unmappable buckets are NEVER written. Their proposal
+        IS "do nothing" — `entity_id` staying NULL is the terminal state, not a
+        gap to be filled, so there is no row for this function to touch.
+      * Idempotent: a thread already pointing at the entity the bless names is
+        counted `already` and re-written by nothing. A thread pointing at a
+        DIFFERENT entity is a CONFLICT — refused, never re-pointed, because
+        silently moving a thread's identity is the one thing an append-only
+        alias discipline exists to prevent.
+      * One transaction. The mint and the pointer commit together or not at all
+        (entities.mint_or_match's own convention: "writes ride the caller's
+        transaction").
+
+    NO SETTLE EVENT IS WRITTEN, and that is a correctness call rather than an
+    omission: 0025's vocabulary describes what a SETTLE found, and this is not a
+    settle — it is a re-read of answers a settle already gave and stored. Writing
+    'settled_entity' rows here would forge history that `build_proposal` itself
+    reads back (the F-10 sub-bucket split keys on those outcomes), so the
+    instrument would corrupt its own evidence on the next run.
+
+    REFUSES OUTRIGHT (raises) when migration 0024 has not been applied: with no
+    `entity_id` column there is nothing to point, and 0024 lands on the
+    principal's next server restart.
+    """
+    if not proposal.get("schema_0024_applied"):
+        raise SystemExit(
+            "backfill --apply: refused — migration 0024 is not on this record "
+            "yet (no memory.entity_id column). It applies on the next server "
+            "restart; re-run --apply after that.")
+
+    blessed = {(t, n, k) for t, n, k in BLESSED_ENTITY_ITEMS}
+    blessed_threads = {t for t, _n, _k in BLESSED_ENTITY_ITEMS}
+    applied: List[Dict] = []
+    already: List[Dict] = []
+    conflicts: List[Dict] = []
+    unblessed: List[Dict] = []
+    refusals: List[Dict] = []
+
+    proposed_entity_threads = set()
+    with con:                     # one transaction for the whole application
+        for it in proposal["items"]:
+            if it["bucket"] != BUCKET_ENTITY:
+                continue          # no-entity / unmappable: nothing to write
+            pe = it["proposed_entity"]
+            triple = (it["thread_id"], pe["canonical_name"], pe["kind"])
+            proposed_entity_threads.add(it["thread_id"])
+            if triple not in blessed:
+                unblessed.append({**it, "triple": triple})
+                continue
+            row = con.execute(
+                "SELECT entity_id, disclosure, primary_entity FROM memory"
+                " WHERE id = ?", (it["thread_id"],)).fetchone()
+            eid, detail = entities.mint_or_match(
+                con, disclosure=row["disclosure"],
+                primary_entity=row["primary_entity"])
+            if eid is None:
+                # The door refused. It is the SAME door the settle uses, so a
+                # refusal here means the stored disclosure cannot honestly mint
+                # an identity — report it, never route around it.
+                refusals.append({**it, "reason": detail})
+                continue
+            current = row["entity_id"]
+            if current is not None and current != eid:
+                conflicts.append({**it, "current_entity_id": current,
+                                  "blessed_entity_id": eid})
+                continue
+            if current == eid:
+                already.append({**it, "entity_id": eid})
+                continue
+            con.execute("UPDATE memory SET entity_id = ? WHERE id = ?",
+                        (eid, it["thread_id"]))
+            applied.append({**it, "entity_id": eid})
+
+    missing = sorted(blessed_threads - proposed_entity_threads)
+    return {
+        "applied": applied, "already": already, "conflicts": conflicts,
+        "unblessed": unblessed, "door_refusals": refusals,
+        # A blessed thread the classifier no longer proposes as an entity: its
+        # stored disclosure changed under the bless. Named, never re-derived.
+        "blessed_but_no_longer_proposed": missing,
+        "blessed_total": len(BLESSED_ENTITY_ITEMS),
+    }
+
+
+def _print_apply_report(r: Dict) -> None:
+    print("  --- APPLIED ---")
+    print(f"  blessed items: {r['blessed_total']}"
+          f"  |  applied {len(r['applied'])}"
+          f"  |  already pointing {len(r['already'])}")
+    for it in r["applied"]:
+        pe = it["proposed_entity"]
+        print(f"    [{it['thread_id']:>3}] {it['topic']!r}  ->  entity "
+              f"{it['entity_id']} {pe['canonical_name']} ({pe['kind']})")
+    for it in r["already"]:
+        print(f"    [{it['thread_id']:>3}] {it['topic']!r}  ->  already "
+              f"entity {it['entity_id']} (idempotent, nothing written)")
+    for it in r["unblessed"]:
+        pe = it["proposed_entity"]
+        print(f"    REFUSED-UNBLESSED [{it['thread_id']:>3}] {it['topic']!r} "
+              f"-> {pe['canonical_name']} ({pe['kind']}): proposed now, but not "
+              f"on the M1-blessed list. A different list is a different bless.")
+    for it in r["conflicts"]:
+        print(f"    CONFLICT [{it['thread_id']:>3}] {it['topic']!r}: points at "
+              f"entity {it['current_entity_id']}, bless names "
+              f"{it['blessed_entity_id']} — NOT re-pointed.")
+    for it in r["door_refusals"]:
+        print(f"    DOOR-REFUSED [{it['thread_id']:>3}] {it['topic']!r}: "
+              f"{it['reason']}")
+    for tid in r["blessed_but_no_longer_proposed"]:
+        print(f"    BLESSED-BUT-GONE [{tid:>3}]: no longer classifies as an "
+              f"entity — its stored disclosure moved under the bless.")
+
+
+def _state_note(item: Dict) -> str:
+    """The thread's follow state, rendered for a blesser.
+
+    LOUD FOR THE ONE THAT BITES: `dismissed_user` is not a lifecycle state, it
+    is "he stopped following this" — and an entity pointer on such a thread is
+    inert by construction (`steering.watched_entities` excludes it). `dormant`
+    is a lifecycle state and still steers, so it is shown but not shouted.
+    """
+    status = (item.get("status") or "").strip() or "unknown"
+    if status == "dismissed_user":
+        return ("[DISMISSED — he stopped following this; an entity pointer "
+                "here steers NOTHING]")
+    return f"[{status}]"
+
+
+def _print_report(p: Dict, applying: bool = False) -> None:
     c = p["counts"]
     print("NewsLens NL-17 M1 — proposed entity backfill (READ-ONLY, PROPOSED)")
     print(f"  threads: {p['threads_total']}"
@@ -282,15 +444,26 @@ def _print_report(p: Dict) -> None:
             print(f"    - {name}: threads {ids}")
     print("  --- proposal ---")
     for it in p["items"]:
+        # THE FOLLOW STATE IS PART OF THE PROPOSAL, and leaving it out cost a
+        # milestone. NL-17 M3 (2026-08-09): the single entity item on the
+        # M1-blessed list was thread 19 `Federal Reserve`, which the principal
+        # had DISMISSED the previous day. This report printed topic and proposed
+        # entity but not status, so the bless was given without that in view —
+        # and the resulting pointer is inert, because `steering.watched_entities`
+        # excludes `dismissed_user` threads. A blesser cannot weigh what the
+        # report does not show.
+        state = _state_note(it)
         if it["bucket"] == BUCKET_ENTITY:
             pe = it["proposed_entity"]
-            print(f"    [{it['thread_id']:>3}] {it['topic']!r}"
+            print(f"    [{it['thread_id']:>3}] {it['topic']!r} {state}"
                   f"  ->  {pe['canonical_name']} ({pe['kind']})")
         else:
-            print(f"    [{it['thread_id']:>3}] {it['topic']!r}"
+            print(f"    [{it['thread_id']:>3}] {it['topic']!r} {state}"
                   f"  ->  {it['bucket']}: {it['reason']}")
-    print("  NOTHING WAS APPLIED and no flag here can apply it — the record was "
-          "opened read-only. His bless at the checkpoint; application is M4.")
+    if not applying:
+        print("  NOTHING WAS APPLIED — the record was opened read-only. "
+              "Applying the M1-BLESSED items is the separate, explicit "
+              "`--apply`.")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -298,11 +471,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="nl17-backfill",
         description="Classify existing threads into entity / no-entity buckets "
                     "and emit the PROPOSED backfill list. Read-only, $0, zero "
-                    "model calls. Nothing is ever applied.")
+                    "model calls by default; --apply writes the M1-BLESSED "
+                    "items and nothing else.")
     p.add_argument("--out", default=None, metavar="DIR",
                    help="write proposal.json here (default: print only — this "
                         "instrument does not write into DATA_DIR by default, "
                         "because a proposal is not record state)")
+    p.add_argument("--apply", action="store_true",
+                   help="APPLY the M1-BLESSED entity items (DECISIONS "
+                        "2026-08-08 item 4): mint-or-match each blessed "
+                        "entity and point its thread at it. Touches "
+                        "memory.entity_id and the entities table ONLY. An "
+                        "entity item that is not on the blessed list is "
+                        "refused by name, never applied. The no-entity "
+                        "buckets are never written — their proposal is to do "
+                        "nothing. Idempotent; refuses on a conflicting "
+                        "pointer rather than re-pointing a thread.")
     args = p.parse_args(argv)
 
     paths.allow_real_paths()
@@ -315,18 +499,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"warning: {line}", file=sys.stderr)
     config.load_env()
 
-    try:
-        con = db.connect_readonly()
-    except sqlite3.OperationalError as exc:
-        print(f"backfill: refused — cannot open the record read-only ({exc}); "
-              f"run `newslens generate` first", file=sys.stderr)
-        return 1
-    try:
-        proposal = build_proposal(con)
-    finally:
-        con.close()
+    # THE HANDLE IS CHOSEN BY THE FLAG, and the default is still the read-only
+    # one. Without --apply this module cannot write even if it wanted to: the
+    # connection itself would refuse (the M1 two-guarantee posture is intact for
+    # every invocation that has not asked, in words, to apply).
+    apply_report = None
+    if args.apply:
+        con = db.connect()
+        try:
+            proposal = build_proposal(con)
+            apply_report = apply_proposal(con, proposal)
+        finally:
+            con.close()
+    else:
+        try:
+            con = db.connect_readonly()
+        except sqlite3.OperationalError as exc:
+            print(f"backfill: refused — cannot open the record read-only "
+                  f"({exc}); run `newslens generate` first", file=sys.stderr)
+            return 1
+        try:
+            proposal = build_proposal(con)
+        finally:
+            con.close()
 
-    _print_report(proposal)
+    _print_report(proposal, applying=args.apply)
+    if apply_report is not None:
+        _print_apply_report(apply_report)
     if args.out:
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)

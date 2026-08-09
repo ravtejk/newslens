@@ -879,16 +879,22 @@ def test_seat_table_pins_the_b3_stack_exactly():
             assert cfg.thinking == "adaptive" and cfg.effort == "high"
             assert cfg.sampling is False
         elif name == "follow_altitude":
-            # NL-99: Haiku like the batch seats, and now on their lane too — the
-            # interactive-seat exception is retired (the transport, not the lane,
-            # was what made a resolve take 9-46s). Same model/price/knobs.
+            # NL-99: on the batch seats' lane — the interactive-seat exception
+            # is retired (the transport, not the lane, made a resolve take
+            # 9-46s). NL-17 M3 FL1 (F-2): model+prices moved Haiku -> Sonnet 5
+            # under the no-Haiku law (this seat is the arm chain's first link);
+            # the LANE and the thinking-off knobs did not move, which is the
+            # NL-99 invariant this row is really pinning.
             assert cfg.lane == "subscription", name
             assert cfg.provider == "anthropic"
-            assert cfg.model == "claude-haiku-4-5"
-            assert cfg.usd_per_mtok_in == 1.00
-            assert cfg.usd_per_mtok_out == 5.00
+            assert cfg.model == "claude-sonnet-5"
+            assert cfg.usd_per_mtok_in == 3.00
+            assert cfg.usd_per_mtok_out == 15.00
             assert cfg.thinking is None and cfg.effort is None
-            assert cfg.sampling is True, name    # Haiku still sends temperature
+            # M3 FL1 (F-2): sampling flipped False WITH the model. Sonnet 5
+            # rejects `temperature`, and resolve_altitude sends it on every
+            # call — so the api fall-over would have 400'd on first real use.
+            assert cfg.sampling is False, name
         elif name in haiku_sub:
             # ENG-M0: rank -> Sonnet 5, editor/script/state -> Opus 4.8, all
             # declaring adaptive thinking and all rejecting temperature.

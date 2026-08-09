@@ -46,8 +46,18 @@ def test_the_resolver_defaults_to_the_subscription_lane():
     cfg = llm.SEATS["follow_altitude"]
     assert cfg.lane == "subscription"
     assert cfg.provider == "anthropic"
-    assert cfg.model == "claude-haiku-4-5"
-    # Unchanged by the flip — the seat always declared these.
+    # NL-17 M3 fix loop 1 (F-2): Haiku 4.5 -> Sonnet 5. The no-Haiku law, and
+    # QA's finding that this seat is the arm chain's FIRST LINK — the Follow tap
+    # that lights entity steering resolves through here.
+    assert cfg.model == "claude-sonnet-5"
+    assert "haiku" not in cfg.model
+    # sampling=False came WITH the model: Sonnet 5 rejects `temperature` with a
+    # 400 and resolve_altitude sends RESOLVER_TEMPERATURE on every call. The
+    # subscription lane never forwarded it, so only the api fall-over would have
+    # broken — the lane you reach when things are already going wrong.
+    assert cfg.sampling is False
+    # UNCHANGED by either flip, and this is the NL-99 invariant: thinking stays
+    # off. A model swap does not license re-importing the 9-46s tax.
     assert cfg.thinking is None and cfg.effort is None
 
 

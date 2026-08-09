@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""NewsLens NL-17 twin-move PROPOSAL launcher.
+
+Thin on purpose (the scripts/doctor + scripts/nl17-backfill pattern): bootstraps
+sys.path, then delegates to src/newslens/vocab_move.py, where all the logic
+lives and is offline-testable.
+
+    scripts/nl17-vocabulary-move                    # print the pilot proposal
+    scripts/nl17-vocabulary-move --tier all         # every enumerated mover
+    scripts/nl17-vocabulary-move --out DIR          # + backup, reverse script
+
+READ-ONLY on sources.yaml and $0. It NEVER edits sources.yaml and NEVER writes a
+vocabulary_moves row — the ledger row IS the switch, so writing one would BE the
+move. The proposal is the principal's to bless item by item.
+"""
+
+import sys
+from pathlib import Path
+
+PROTOTYPE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
+
+from newslens.vocab_move import main  # noqa: E402  (path bootstrap first)
+
+if __name__ == "__main__":
+    sys.exit(main())
