@@ -454,7 +454,9 @@ def test_0018_applies_over_armed_append_only_triggers_and_keeps_them(tmp_path):
                         "0023_briefings_pending.sql",
                         # NL-17 M1: entity identity + the settle-outcome log.
                         "0024_entities.sql",
-                        "0025_follow_settle_events.sql"]
+                        "0025_follow_settle_events.sql",
+                        # NL-17 M2: the vocabulary-move ledger.
+                        "0026_vocabulary_moves.sql"]
     con = db.connect(db_path)
     try:
         row = con.execute("SELECT arc_line FROM thread_state").fetchone()

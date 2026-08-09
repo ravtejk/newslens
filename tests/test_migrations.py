@@ -40,6 +40,7 @@ MIGRATION_0022 = "0022_memory_sync_guard.sql"          # NL-81: the sync resurre
 MIGRATION_0023 = "0023_briefings_pending.sql"          # NL-106: stage-and-promote — a regenerate no longer destroys the readable edition
 MIGRATION_0024 = "0024_entities.sql"                   # NL-17 M1: entity identity — the entities table + memory.entity_id (nullable, NULL = "no broader concept")
 MIGRATION_0025 = "0025_follow_settle_events.sql"       # NL-17 M1: the append-only settle-outcome log (settled_entity / settled_none / settle_failed) + the retry bound
+MIGRATION_0026 = "0026_vocabulary_moves.sql"           # NL-17 M2: the append-only vocabulary-move ledger — the row IS the atomic switch (tag suppressed + entity steer-eligible derived together)
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
@@ -47,7 +48,7 @@ ALL_MIGRATIONS = [
     MIGRATION_0011, MIGRATION_0012, MIGRATION_0013, MIGRATION_0014,
     MIGRATION_0015, MIGRATION_0016, MIGRATION_0017, MIGRATION_0018,
     MIGRATION_0019, MIGRATION_0020, MIGRATION_0021, MIGRATION_0022,
-    MIGRATION_0023, MIGRATION_0024, MIGRATION_0025,
+    MIGRATION_0023, MIGRATION_0024, MIGRATION_0025, MIGRATION_0026,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
@@ -71,6 +72,12 @@ EXPECTED_TABLES = {
     # log of what each settle found, which is what makes cases (a) and (b)'s
     # ruled SILENCE accountable and what the one-retry bound is decided from.
     "entities", "follow_settle_events",
+    # NL-17 M2 (0026): the append-only vocabulary-move ledger. The row IS the
+    # atomic switch — rank derives tag-suppressed AND entity-steer-eligible
+    # from it together, so no half-moved instant is reachable at rank time.
+    # Reversal is a NEW ROW naming the one it undoes; the 0004-pattern
+    # triggers make a mutable "reversed" column impossible by construction.
+    "vocabulary_moves",
 }
 
 

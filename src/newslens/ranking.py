@@ -53,6 +53,7 @@ ranking_runs row with status=failed for the instrumentation trail.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -64,7 +65,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-from . import config, db, llm, memory, paths
+from . import config, db, llm, memory, paths, steering
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 # Active ranking model + prices — B2 (approved Option C): the rank seat flipped
@@ -757,6 +758,21 @@ def decode_keys(payload: object) -> object:
     return payload
 
 
+def render_items_block(items: List[sqlite3.Row]) -> str:
+    """The candidate lines exactly as the ranker sees them, ascending id.
+
+    EXTRACTED FROM build_prompt (NL-17 M2) so the replay harness rebuilds the
+    rank input through the SAME renderer that produced it. A second copy of this
+    loop in replay.py would be a rebuild that proves its own copy faithful and
+    the real prompt not at all — the BUG-1 lesson applied to an instrument.
+    Behaviour is byte-identical to the inline form it replaces."""
+    return "\n".join(
+        f"[id={encode_rank_key(r['id'])}] {r['outlet']} | "
+        + r["title"].replace("[", "(").replace("]", ")")
+        for r in sorted(items, key=lambda r: r["id"])
+    )
+
+
 def build_prompt(
     date_local: str,
     items: List[sqlite3.Row],
@@ -785,11 +801,7 @@ def build_prompt(
     # NL-70: the key is the Crockford base32 render alias of the raw id (see
     # encode_rank_key above), not the decimal id — shorter and check-guarded,
     # while the raw id below stays the canonical thing decode_keys returns.
-    items_block = "\n".join(
-        f"[id={encode_rank_key(r['id'])}] {r['outlet']} | "
-        + r["title"].replace("[", "(").replace("]", ")")
-        for r in sorted(items, key=lambda r: r["id"])
-    )
+    items_block = render_items_block(items)
     tag_lines = [f"- {name} (domain)" for name in cfg.interests_broad]
     tag_lines += [f"- {name} (topic)" for name in cfg.interests_granular]
     memory_block = (
@@ -1450,18 +1462,52 @@ def _call_llm_validated(
 # Deterministic selection, override, corroboration
 # ---------------------------------------------------------------------------
 
-def personal_score(cluster: Dict, followed: bool, memory_steers: bool = False) -> float:
+def personal_score(cluster: Dict, followed: bool, memory_steers: bool = False,
+                   state: Optional["steering.SteeringState"] = None) -> float:
     """A6 (2026-07-05): thread matches contribute to selection ONLY when
     settings.threads_steer_selection is true. With steering off (the default
     of record), matched_memory is recognition-only here — exactly the M4
     zero-influence pattern — while persist() keeps recording references,
-    revivals, and continuity regardless."""
+    revivals, and continuity regardless.
+
+    NL-17 M2 — THE ENTITY ARM, and why it is three lines rather than a rewrite.
+    `state` defaults to None -> steering.INERT, whose two effect sets are empty.
+    An empty `suppressed_tags` makes the filter below true for every tag and an
+    unarmed state makes the entity append unreachable, so this function computes
+    byte-identical values to pre-M2 HEAD whenever steering is dark. That is
+    structure, not a claim — pinned by
+    tests/test_nl17_m2_steering.py::test_dark_scoring_is_byte_identical_to_head.
+
+    THE TWO NEW BRANCHES ARE ONE LAW (engineering R2.1, the weight-atomic
+    correction). A tag is dropped ONLY because a live `vocabulary_moves` row
+    moved that concept into the entity vocabulary, and the SAME row is what put
+    its entity into `weighted_entities` — steering.derive builds both sets in
+    one pass and skips a move whole if either half would be false. No
+    "moved-but-tag-scored" or "tag-off-but-unsteered" instant is reachable here.
+
+    REPLACEMENT, NOT ADDITION. ENTITY_WEIGHT joins the EXISTING max() pool and
+    is appended AT MOST ONCE however many entities the cluster matched
+    (count-once, contribution-level, cap-independent — Rook's form, adopted into
+    product criterion (d)). max() never sums, so entity weight and tag weight
+    cannot compound for one concept, and no score becomes reachable that a plain
+    topic tag could not already produce (the ceiling theorem)."""
+    st = state or steering.INERT
     weights = [
         TOPIC_WEIGHT if t["level"] == "topic" else DOMAIN_WEIGHT
         for t in cluster["matched_tags"]
+        if (t.get("name") or "").casefold() not in st.suppressed_tags
     ]
     if cluster["matched_memory"] and memory_steers:
         weights.append(MEMORY_WEIGHT)
+    if st.armed and any(e in st.weighted_entities
+                        for e in cluster.get("matched_entities") or []):
+        # `matched_entities` is OBSERVATION — every watched entity whose alias
+        # this cluster's items carried, storyline-altitude follows included,
+        # because the receipts must record what was seen. WEIGHT is the
+        # intersection with `weighted_entities`, which only entity-altitude
+        # follows enter. That is criterion (c) made structural: a storyline
+        # thread is visible in the receipts and worth exactly zero here.
+        weights.append(steering.ENTITY_WEIGHT)
     base = max(weights) if weights else 0.0
     if followed:
         base += FOLLOWED_BOOST
@@ -1700,13 +1746,25 @@ def select_slots(
     memory_steers: bool = False,
     con: Optional[sqlite3.Connection] = None,
     prior_edition: Optional[Dict] = None,
+    state: Optional["steering.SteeringState"] = None,
+    entity_hits: Optional[Dict[int, List[int]]] = None,
+    look_sources: Optional[Dict[int, str]] = None,
+    look_notes: Optional[Dict[int, str]] = None,
 ) -> Tuple[List[RankedSlot], Dict]:
+    steer = state or steering.INERT
     scored = []
     for c in clusters:
         cluster_items = [items_by_id[i] for i in c["item_ids"] if i in items_by_id]
         followed = any(r["outlet"] in followed_outlets for r in cluster_items)
-        p = personal_score(c, followed, memory_steers)
-        scored.append((c, cluster_items, followed, p, combined_score(p, c["world_impact"])))
+        p = personal_score(c, followed, memory_steers, steer)
+        comb = combined_score(p, c["world_impact"])
+        # Stamped on the cluster so the replay envelope can persist the scores
+        # the run ACTUALLY used. data's M3 no-stacking audit recomputes these
+        # from the persisted inputs and requires exact equality — an audit that
+        # recomputes without a recorded value to compare against is checking its
+        # own arithmetic, not the run's.
+        c["personal_score"], c["combined_score"] = p, comb
+        scored.append((c, cluster_items, followed, p, comb))
 
     # NL-57 quiet-thread classification (item 3) — needs the ledger + the prior
     # edition; without a DB it degrades to normal selection (test-friendly).
@@ -1719,6 +1777,16 @@ def select_slots(
     # Quiet-ZERO candidates leave Today entirely (Following only — the thread
     # stays visible in Following, it just does not re-surface as a story).
     active = [s for s in scored if quiet.get(id(s[0]), (None,))[0] != "zero"]
+    # Stamped on the cluster for the same reason the scores above are (fix loop
+    # 1, QA F-7): this verdict is reachable ONLY with the run's own ledger and
+    # its own prior edition, and both move. A replay that re-derived it from
+    # today's tables would be replaying today's quiet into yesterday's run — the
+    # exact error `replay._CfgShim` exists to prevent on the tag side. Persisted
+    # in `_replay_envelope` so `replay.flip_replay` can hold the exclusion
+    # identical on both slates instead of counting a flip the live pipeline
+    # removed before selection ever ran.
+    for entry in scored:
+        entry[0]["quiet_zero"] = quiet.get(id(entry[0]), (None,))[0] == "zero"
 
     primaries = sorted(
         (s for s in active if s[3] > 0), key=lambda s: s[4], reverse=True
@@ -1848,11 +1916,301 @@ def select_slots(
         "weights": {
             "topic": TOPIC_WEIGHT, "domain": DOMAIN_WEIGHT, "memory": MEMORY_WEIGHT,
             "followed_boost": FOLLOWED_BOOST, "personal_share": PERSONAL_SHARE,
+            "entity": steering.ENTITY_WEIGHT,
         },
         "model": RANK_MODEL,
         "prompt_file": PROMPT_FILE,
     }
+    meta["entities"] = _entity_meta(steer, scored, chosen, slots,
+                                    entity_hits or {}, look_sources or {},
+                                    look_notes or {})
     return slots, meta
+
+
+def _entity_meta(steer: "steering.SteeringState", scored: List, chosen: List,
+                 slots: List[RankedSlot], entity_hits: Dict[int, List[int]],
+                 look_sources: Dict[int, str],
+                 look_notes: Dict[int, str]) -> Dict:
+    """THE PER-RUN ENTITY RECEIPTS — every followed entity, every run, seen=0
+    included (engineering :110; Onna's "quiet must render", product R2 §R2.2).
+
+    This is NL-18's substrate and the record NL-14 starved without: the
+    seven-run empty streak is structurally impossible once absence is a WRITTEN
+    state carrying a note. It is also the instrument the pre-registered trigger
+    table reads (adr/0023, metrics M1/M3/M5).
+
+    RECEIPTS ARE META, NEVER A DELTA. Nothing here reaches the writer's ledger,
+    the memory tables, or any reader surface — the never-a-delta property that
+    let steering ship selection-side survives untouched.
+
+    `outranked_by` answers the only question a receipt with look=1, selected=0
+    leaves open: what beat it. Computed against the entity's BEST scoring
+    cluster this run, capped at the slot count so one dormant actor cannot grow
+    the row without bound."""
+    ent_best: Dict[int, float] = {}
+    for c, _items, _f, _p, comb in scored:
+        for eid in c.get("matched_entities") or []:
+            if comb > ent_best.get(eid, -1.0):
+                ent_best[eid] = comb
+    selected: Dict[int, Dict] = {}
+    for n, entry in enumerate(chosen, start=1):
+        for eid in entry[0].get("matched_entities") or []:
+            selected.setdefault(eid, {"slot": n, "story": entry[0]["story_title"]})
+    outranked: Dict[int, List[Dict]] = {}
+    for eid, best in ent_best.items():
+        if eid in selected:
+            continue
+        outranked[eid] = [
+            {"story": s.story_title, "combined": s.combined_score}
+            for s in slots if s.combined_score > best
+        ][:MAX_SLOTS]
+    return {
+        "armed": steer.armed,
+        "reserve": steering.ENTITY_LOOK_RESERVE,
+        "watched": len(steer.watched),
+        "receipts": steering.receipts(steer, entity_hits, look_sources,
+                                      selected, outranked, look_notes),
+        "moves": [
+            {"id": m.id, "concept": m.concept, "entity_id": m.entity_id,
+             "blessed_at": m.blessed_at, "blessed_by": m.blessed_by}
+            for m in steer.moves
+        ],
+        "suppressed_tags": sorted(steer.suppressed_tags),
+        # Degrade-loud, count-once, tripwire-disclosed, never a dead run: a
+        # non-empty list here is a real defect the run SURVIVED and reported.
+        "integrity": list(steer.integrity),
+    }
+
+
+def _replay_envelope(prompt: str, items: List[sqlite3.Row],
+                     memory_topics: List[str], dormant: List[str],
+                     cfg: config.SourcesConfig, window_desc: str,
+                     date_local: str, clusters: List[Dict]) -> Dict:
+    """THE REPLAY HARDENER (charter item 8; the probe's named gap).
+
+    The 2026-08-02 engineering probe had to rebuild run 47's prompt by hand to
+    ask whether a different seat would have formed the Fed cluster. It worked,
+    and it worked because someone reconstructed the inputs from memory — which
+    is not a property a program can rely on twice. This envelope makes the
+    reconstruction MECHANICAL and, more importantly, CHECKABLE: the sha is what
+    turns "we rebuilt something plausible" into "we rebuilt those bytes".
+
+    WHAT IS STORED, AND WHY NOT MORE. The ordered item ids, not the rendered
+    lines. `source_items` rows carry the titles, so the rebuild reads them back
+    and re-renders through `render_items_block` — the same renderer the run
+    used — and compares shas. Storing ~550 rendered lines per run would make the
+    envelope roughly 50 kB instead of ~3 kB, and it would still be checked by
+    the same sha, so it would buy durability, not fidelity.
+
+    THE DURABILITY BOUND, STATED SO A GREEN REBUILD IS NEVER OVER-READ.
+    `ingest.upsert_item` UPDATEs `title` in place on every later sighting of a
+    URL (ingest.py:226). A feed that revises a headline inside the candidate
+    window therefore changes bytes this envelope does not hold, and the rebuild
+    for that run will MISMATCH — permanently. That is a real coverage limit of
+    this instrument, not a bug in it: the sha reports the drift LOUDLY instead
+    of replaying a prompt that was never sent, and `items_sha256` is stored
+    separately from `prompt_sha256` precisely so a mismatch localises to the
+    items rather than to "something changed". Replays are consequently a
+    FRESH-RUN instrument, strongest the same day, and the audit records
+    `recomputable: false` rather than guessing (data's M3 counter-metric —
+    missing is FAIL, default-deny).
+
+    `clusters` are the model's OUTPUT and are reconstructible from nothing, so
+    they ARE stored — bounded by MAX_CLUSTERS at ~1 kB each. They carry the
+    scores the run used, which is what lets the flip-replay attribute a
+    selection delta to steering rather than to a re-scored world.
+    """
+    template = ""
+    try:
+        template = (paths.PROMPTS_DIR / PROMPT_FILE).read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return {
+        "prompt_sha256": _sha256(prompt),
+        "items_sha256": _sha256(render_items_block(items)),
+        "template_sha256": _sha256(template),
+        "prompt_file": PROMPT_FILE,
+        "item_ids": [r["id"] for r in sorted(items, key=lambda r: r["id"])],
+        "threads": {"active": list(memory_topics), "dormant": list(dormant or [])},
+        "tags": {"broad": list(cfg.interests_broad),
+                 "granular": list(cfg.interests_granular)},
+        "window_desc": window_desc,
+        "date_local": date_local,
+        "max_clusters": MAX_CLUSTERS,
+        # FOLLOWED_BOOST is outlet-derived, so a re-score cannot reproduce the
+        # run's numbers without knowing which outlets were followed WHEN IT RAN.
+        # Persisted for that reason alone.
+        "followed_outlets": sorted({s.name for s in cfg.followed_analyst_sources}),
+        "clusters": [
+            {k: c.get(k) for k in (
+                "story_title", "summary", "item_ids", "matched_tags",
+                "matched_memory", "matched_dormant", "world_impact",
+                "matched_entities", "look_injected", "look_entity_id",
+                # `quiet_zero` is the NL-57 verdict this run reached with THIS
+                # run's ledger and prior edition (select_slots stamps it). It is
+                # a receipt, not a re-derivable field — see the stamp's comment.
+                "personal_score", "combined_score", "quiet_zero")}
+            for c in clusters
+        ],
+    }
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def apply_looks(
+    clusters: List[Dict],
+    hits: Dict[int, List[int]],
+    state: "steering.SteeringState",
+    items_by_id: Dict[int, sqlite3.Row],
+) -> Tuple[List[Dict], Dict[int, str], Dict[int, str], Dict]:
+    """THE RESERVED LOOK. Returns (clusters, look_sources, look_notes, meta).
+
+    The guarantee, stated exactly: a followed entity at entity altitude whose
+    aliases matched this run's intake gets its items CLUSTERED AND SCORED. Not
+    slotted — "a guaranteed look, never a guaranteed slot" is the promise
+    language the product council adopted verbatim (R2 item 2).
+
+    THREE OUTCOMES, all receipted:
+      * look_source='model'    — the ranker already formed a cluster over the
+                                 entity's items. The guarantee is satisfied at
+                                 ZERO reserve cost, which is the common case and
+                                 the reason a 2-slot reserve is enough.
+      * look_source='injected' — the ranker omitted it and the reserve minted a
+                                 deterministic cluster (`steering.build_look`).
+                                 This is the sanctioned post-model fallback
+                                 (engineering :121), taken because asking the
+                                 ranker to score injected candidates honestly
+                                 was left an OPEN compliance question, not a
+                                 settled one.
+      * look_source=''         — no look. With seen>0 this is Kass's contention
+                                 receipt and it always carries its reason.
+
+    DARK LAW: injection is gated on `state.armed`. Observation is not — the
+    'model' outcome is recorded on every run, dark included, because noticing
+    that the ranker formed a Fed cluster changes nothing about the edition and
+    is exactly the evidence the dark era exists to bank.
+
+    NO CALENDAR CAN REACH THIS FUNCTION. Candidacy comes only from `hits`, and
+    `hits` comes only from alias matches against items in THIS run's intake. An
+    entity with no pool items has no arm by which to obtain a look, on any date.
+    """
+    overlaps = steering.annotate(clusters, hits, state)
+    look_sources: Dict[int, str] = {}
+    look_notes: Dict[int, str] = {}
+    covered = {eid for c in clusters for eid in (c.get("matched_entities") or [])}
+    for eid in covered:
+        look_sources[eid] = "model"
+
+    candidates: List[Dict] = []
+    for w in state.watched:
+        ids = hits.get(w.id) or []
+        if not ids or w.id in covered:
+            continue
+        if not w.steers:
+            # Criterion (c): a storyline-altitude follow is WEIGHTLESS, so an
+            # injected cluster for it would score 0 and could never be selected.
+            # Spending reserve on it would take the look from an entity that can
+            # use it. Receipted with its own reason, never silently skipped.
+            look_notes[w.id] = ("seen but no look — follow sits at storyline "
+                                "altitude, which carries zero entity weight")
+            continue
+        if not state.armed:
+            look_notes[w.id] = ("seen but no look — steering is dark "
+                                "(threads_steer_selection false)")
+            continue
+        candidates.append({"entity_id": w.id, "seen": len(ids),
+                           "newest_item_id": ids[0]})
+
+    granted, denied = steering.allocate_looks(candidates,
+                                              steering.ENTITY_LOOK_RESERVE)
+    injected: List[Dict] = []
+    for cand in granted:
+        w = state.by_id(cand["entity_id"])
+        if w is None:
+            continue
+        ids, _dropped = _cap_cluster_items(hits[w.id],
+                                           {i: items_by_id[i]["outlet"]
+                                            for i in hits[w.id]
+                                            if i in items_by_id})
+        look = steering.build_look(w, ids, items_by_id)
+        injected.append(look)
+        look_sources[w.id] = "injected"
+    for cand in denied:
+        look_notes.setdefault(
+            cand["entity_id"],
+            f"seen but no look — {len(candidates)} entities contended for "
+            f"{steering.ENTITY_LOOK_RESERVE} reserved look(s); allocation is "
+            "pool-signal strength, then freshest item, then entity id")
+
+    model_clusters = list(clusters)
+    n_model = len(model_clusters)
+    clusters = model_clusters + injected
+    displaced: List[Dict] = []
+    if injected and len(clusters) > MAX_CLUSTERS:
+        # `injected` IS THE GATE, and the count is only the second condition.
+        # Fix loop 1 (QA F-3, the NO-GO): this branch used to fire on cluster
+        # COUNT alone, so a run that minted NOTHING still evicted ranker
+        # clusters — at DARK, where the milestone's whole premise is that
+        # nothing changes. A 13-cluster payload is a LAWFUL live input:
+        # `parse_clusters` refuses only > MAX_CLUSTERS * 2 (:989-990), so 13-24
+        # model clusters reach here on any run, and on every one of them the
+        # batch as first built dropped a cluster HEAD would have scored, emitted
+        # "reserved look displaced ... to make room" with `injected == []`, and
+        # — because personal-matched clusters are protected — evicted the
+        # zero-match wi>=8 cluster FIRST, i.e. the override contract's own
+        # material. Displacement is the PRICE OF A LOOK; with no look there is
+        # nothing to charge for, and the pass-through restores HEAD byte
+        # identity at dark AND at armed-with-no-injection.
+        #
+        # RULED AT GATE 2026-08-08 (M2 gate R1, org-decidable under the ratified
+        # promise): CAP-HEADROOM FORM — a look consumes headroom when it exists,
+        # otherwise displaces exactly ONE cluster; the model's own overflow is
+        # never charged to the look. Coincides with as-built for all
+        # n_model <= 12; changes nothing reachable at dark. Implementation lands
+        # with the arming milestone, born-red pinned at n_model >= 13 armed; the
+        # as-built evict-to-12 stands until then (pinned by
+        # test_the_cluster_cap_does_not_move).
+        #
+        # THE CAP DOES NOT MOVE (engineering :110). MAX_CLUSTERS is coupled to
+        # PROMPT_MARGIN_CHARS through NL-133's arithmetic pin — raising it is a
+        # money-guard change, not a tuning knob — so a look that would exceed
+        # the cap DISPLACES instead.
+        #
+        # WHICH cluster leaves, in ascending eviction order: personal-match
+        # clusters last (evicting a followed tag's story to make room for a
+        # followed entity's would manufacture Ruth's starvation from the other
+        # direction), then lowest world_impact (so a wi>=8 zero-match candidate
+        # — the override contract's own material — is the LAST thing evicted),
+        # then model order. Deterministic, and disclosed as a run warning.
+        keep_n = max(0, MAX_CLUSTERS - len(injected))
+        order = sorted(
+            range(n_model),
+            key=lambda i: (
+                bool(model_clusters[i].get("matched_tags")
+                     or model_clusters[i].get("matched_memory")
+                     or model_clusters[i].get("matched_entities")),
+                model_clusters[i].get("world_impact", 0),
+                -i,
+            ),
+        )
+        evict = set(order[:max(0, n_model - keep_n)])
+        displaced = [model_clusters[i] for i in sorted(evict)]
+        clusters = [c for i, c in enumerate(model_clusters)
+                    if i not in evict] + injected
+    meta = {
+        "overlaps": overlaps,
+        "injected": [{"entity_id": c["look_entity_id"],
+                      "story": c["story_title"], "items": len(c["item_ids"])}
+                     for c in injected],
+        "contended": len(candidates),
+        "denied": [c["entity_id"] for c in denied],
+        "displaced": [{"story": c.get("story_title", ""),
+                       "world_impact": c.get("world_impact", 0)}
+                      for c in displaced],
+    }
+    return clusters, look_sources, look_notes, meta
 
 
 # ---------------------------------------------------------------------------
@@ -2326,11 +2684,26 @@ def _run_rank_body(
 
     items_by_id = {r["id"]: r for r in items}
     followed_outlets = {s.name for s in cfg.followed_analyst_sources}
+    # NL-17 M2 — steering, derived ONCE per run and threaded from here.
+    # `armed` is the whole dark law: cfg.threads_steer_selection is False by
+    # default and has never been true on a live run, so on every live path today
+    # `steer` is INERT-shaped and every branch it gates is unreachable.
+    steer = steering.for_run(con, armed=cfg.threads_steer_selection,
+                             tag_levels=tag_levels)
+    entity_hits = steering.match_items(
+        ((r["id"], r["title"]) for r in items), steer.watched)
+    clusters, look_sources, look_notes, look_meta = apply_looks(
+        clusters, entity_hits, steer, items_by_id)
     slots, meta = select_slots(
         clusters, items_by_id, followed_outlets,
         memory_steers=cfg.threads_steer_selection,
         con=con, prior_edition=_prior_edition(con, date),
+        state=steer, entity_hits=entity_hits,
+        look_sources=look_sources, look_notes=look_notes,
     )
+    meta["entities"].update(look_meta)
+    meta["replay"] = _replay_envelope(
+        prompt, items, memory_topics, dormant, cfg, window_desc, date, clusters)
     meta["threads_steer_selection"] = cfg.threads_steer_selection
     meta["window"] = window
     meta["history_days"] = history
@@ -2431,6 +2804,32 @@ def _run_rank_body(
         report.warnings.append(
             f"quiet thread: {q['story']!r} not surfaced on Today ({q['note']}) — "
             "no new development; it stays visible under Following (NL-57)")
+    # NL-17 M2 steering disclosures. DEGRADE-LOUD, TRIPWIRE-DISCLOSED, NEVER A
+    # DEAD RUN: every one of these is a defect the run survived and reported,
+    # and each also persists in ranking_runs.meta.entities so the day-N read
+    # sees frequency, not just today's console.
+    ents = meta.get("entities") or {}
+    for bad in ents.get("integrity") or []:
+        report.warnings.append(
+            f"steering integrity ({bad['kind']}): concept {bad['concept']!r} "
+            f"[move {bad['move_id']}] — {bad['reason']}")
+    for inj in ents.get("injected") or []:
+        report.warnings.append(
+            f"reserved look: minted a cluster for entity {inj['entity_id']} "
+            f"({inj['items']} item(s), {inj['story']!r}) — the ranker omitted "
+            "it; a look is guaranteed, a slot never is")
+    for d in ents.get("displaced") or []:
+        report.warnings.append(
+            f"reserved look displaced a ranker cluster: {d['story']!r} "
+            f"(world_impact {d['world_impact']}) left the {MAX_CLUSTERS}-cluster "
+            "cap to make room — the cap does not move (NL-133 coupling)")
+    denied = ents.get("denied") or []
+    if denied:
+        report.warnings.append(
+            f"reserved looks contended: {ents.get('contended')} entities with "
+            f"pool items, {steering.ENTITY_LOOK_RESERVE} reserved look(s); "
+            f"entity id(s) {denied} recorded seen>0 look=0 (allocation: "
+            "pool-signal strength, freshest item, entity id)")
     if qt.get("still_tracking"):
         report.warnings.append(
             "quiet thread: still-tracking snippet(s) for "

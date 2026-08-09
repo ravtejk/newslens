@@ -59,7 +59,7 @@ def test_migrate_applies_then_reports_already_up_to_date(tmp_paths, capsys):
     out_first = capsys.readouterr().out
     assert rc == 0
     assert (
-        "applied 25 migration(s): 0001_initial_schema.sql, "
+        "applied 26 migration(s): 0001_initial_schema.sql, "
         "0002_briefings_date_format.sql, 0003_ranking_runs.sql, "
         "0004_ranking_runs_append_only.sql, 0005_memory_topic_unique.sql, "
         "0006_memory_lifecycle_v2.sql, 0007_consumption_events.sql, "
@@ -71,7 +71,8 @@ def test_migrate_applies_then_reports_already_up_to_date(tmp_paths, capsys):
         "0018_thread_state_arc_line.sql, 0019_memory_follow_altitude.sql, "
         "0020_follow_altitude_events.sql, 0021_memory_follow_origin.sql, "
         "0022_memory_sync_guard.sql, 0023_briefings_pending.sql, "
-        "0024_entities.sql, 0025_follow_settle_events.sql"
+        "0024_entities.sql, 0025_follow_settle_events.sql, "
+        "0026_vocabulary_moves.sql"
     ) in out_first
     assert str(paths.DB_PATH) in out_first
 

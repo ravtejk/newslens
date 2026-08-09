@@ -767,6 +767,53 @@ def _active_topics_lower(con: sqlite3.Connection) -> set:
         "SELECT topic FROM memory WHERE status = 'active'")}
 
 
+def _held_topics_lower(con: sqlite3.Connection) -> set:
+    """Threads the reader STILL HOLDS — every memory row that is not an explicit
+    unfollow. NL-145 (M1 gate ruling R2) reads follow state through this, and it
+    is deliberately NOT `_active_topics_lower`.
+
+    THE DEFECT (F-6's reload half). The tracked-ongoing marker is DERIVED FROM
+    FOLLOW STATE: it renders because the story matched a thread the reader
+    follows. NL-143 made the live page honest — a remote unfollow sweeps the
+    marker into a resting CTA — but a RELOAD re-renders it from the stored
+    slot's `matched_memory`, which is an EDITION RECORD and knows nothing about
+    an unfollow that happened afterwards. So the marker came back from the dead
+    and, worse, came back INSTEAD of the follow control (his 2026-08-07
+    directive ③: a story must never be left with no follow control).
+
+    WHY `status != 'dismissed_user'` AND NOT `status = 'active'`. Dormancy is a
+    LIFECYCLE state, not an unfollow — the reader still holds a dormant thread
+    and it is still listed under Following. Filtering on 'active' would kill the
+    marker for a thread he never let go of and offer him "Follow this thread"
+    for something he already follows, which is precisely the double-mint bug
+    `_deep_follow_line`'s own header records ("one tap minted a SECOND active
+    thread beside the tracked one"). Only `dismiss_thread` writes
+    `dismissed_user` (memory.py:1733), and a hard-deleted row does not come back
+    from this query at all, so both real unfollow paths are covered.
+    """
+    return {r["topic"].lower() for r in con.execute(
+        "SELECT topic FROM memory WHERE status != 'dismissed_user'")}
+
+
+def _live_marks(slot: Dict, held_topics: Optional[set]) -> List[str]:
+    """The slot's tracked-thread marks, filtered to threads still held.
+
+    THE ONE FILTER, called at both marker-class sites (the Today card and the
+    deep view's follow mount) — the same reason `_tracked_marker_html` is one
+    function: a second copy of this predicate is how two surfaces drift apart,
+    which is the class NL-143 and this rider both exist to close.
+
+    `held_topics=None` means "no follow state available" (a fixture render with
+    no connection) and returns the marks unchanged: the stored edition record is
+    then the only truth there is, and inventing a follow state from nothing would
+    be worse than reporting what the edition said.
+    """
+    marks = [m for m in (slot.get("matched_memory") or []) if m]
+    if held_topics is None:
+        return marks
+    return [m for m in marks if m.lower() in held_topics]
+
+
 def _archive_rows(con: sqlite3.Connection) -> List[Dict]:
     out = []
     for r in con.execute(
@@ -1386,7 +1433,8 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
                   arc_seen: Optional[set] = None, role: str = "story",
                   grid_cls: str = "", grid_row: str = "",
                   followed_writers: Optional[set] = None,
-                  brief_slug: str = "") -> str:
+                  brief_slug: str = "",
+                  held_topics: Optional[set] = None) -> str:
     """One story in the v8 newspaper grid. `role` selects the shape:
     - "lead"  → article.lead: h2 + deck (follow + slim memory stamp) + body +
                 [full picture] + furniture (the dominant left column, spanning).
@@ -1459,7 +1507,14 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     parts.append(_headline_html(h, st.get("headline", ""), slot, has_file, tier,
                                 slug, deep_return))
 
-    marks = list(slot.get("matched_memory") or [])
+    # NL-145 (M1 gate R2), marker-class site 1 of 2: `matched_memory` is the
+    # EDITION's record of what the ranker matched — a fact about that morning,
+    # never a live claim about what the reader follows now. The marker makes a
+    # live claim, so it reads through the filter; every OTHER consumer of
+    # matched_memory on this page (the archive keywords, the why-chosen line,
+    # the timeline, the arc line, the deep view's "Tracked threads:") is
+    # reporting the edition and is deliberately left alone.
+    marks = _live_marks(slot, held_topics)
     # NL-68 item 7 (kill the covered-before DUPE), v8-M2 form: the slim stamp and
     # the tracked-ongoing marker BOTH signal prior coverage. Where the stamp
     # shows (the thread moved this edition, with history), the redundant marker
@@ -2589,6 +2644,11 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     slots = _slots_for(row)
     tiers = (entry or {}).get("tiers") or []
     active = _active_topics_lower(con)
+    # NL-145: resolved ONCE per edition beside `active`, same reason. The two
+    # sets answer different questions and both are needed: `active` decides
+    # RECOGNITION (is this story's own title a live follow), `held` decides
+    # whether a stored MARK still describes something the reader follows.
+    held = _held_topics_lower(con)
     # NL-134 F3: resolved ONCE per edition, not once per story — the why-chosen
     # line needs outlet names to credit a followed writer, and the slot only
     # carries a bool.
@@ -2643,7 +2703,7 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
             deep_return=deep_return, con=con, arc_seen=arc_seen, role=role,
             grid_cls=grid_cls, grid_row=rows.get(i, ""),
             followed_writers=followed_writers,
-            brief_slug=slugs.get(i, "")))
+            brief_slug=slugs.get(i, ""), held_topics=held))
 
     still_html = ""
     if still_lines:
@@ -3968,7 +4028,13 @@ def _deep_follow_line(con, slot: Optional[Dict], headline: str, date: str,
         return ""
     subject, followed, origin_row = _follow_recognition(
         con, topic, headline, _active_topics_lower(con))
-    marks = [m for m in (slot or {}).get("matched_memory") or [] if m]
+    # NL-145 (M1 gate R2), marker-class site 2 of 2 — the deep view's management
+    # mount. Same filter, same reason as the card: an unfollowed thread's mark
+    # must not keep this surface in the `tracked` state, because that state is
+    # where Unfollow lives and it withholds the resting control the reader now
+    # needs. `_held_topics_lower` is read here rather than passed in — this
+    # function already takes `con` and already issues the recognition read.
+    marks = _live_marks(slot or {}, _held_topics_lower(con))
     if marks and not followed:
         return ('<div class="follow-line">'
                 + _tracked_marker_html(

@@ -617,7 +617,7 @@ def test_migrations_0011_0014_apply_in_order_on_a_real_shaped_db(tmp_path):
     assert [f[:4] for f in applied] == ["0011", "0012", "0013", "0014",
                                         "0015", "0016", "0017", "0018",
                                         "0019", "0020", "0021", "0022",
-                                        "0023", "0024", "0025"]
+                                        "0023", "0024", "0025", "0026"]
 
     con = db.connect(db_path)
     try:
