@@ -223,6 +223,11 @@ WINDOW_LINE = (
     "Generated {timestamp}. Covers items fetched {start} → {end}. NewsLens "
     "sees only its configured sources within this window."
 )
+# NL-148 clause 3 (the skip disclosure, "Fetch failed for prioritized story
+# <title>.") HAS NO CONSTANT HERE ON PURPOSE. It discloses clause 2's skips,
+# clause 2 stopped at a design decision (see analysis.py's NL-148 header), and
+# a frozen reader-facing sentence that nothing can ever render is worse than an
+# absent one — it reads as a shipped guarantee. It lands with clause 2.
 VARIANT_B_STAMP = (
     'Voice: B — includes the narrator\'s own analytical judgments, always '
     'labeled "My read."'
@@ -649,6 +654,82 @@ def _est_cost(prompt: str, max_tokens: int, step: str = "narrative") -> float:
     return (len(prompt) / 3.5 / 1e6) * cfg.usd_per_mtok_in + (
         max_tokens / 1e6
     ) * cfg.usd_per_mtok_out
+
+
+# ---------------------------------------------------------------------------
+# THE LANE-AWARE CAP (principal's ruling 2026-08-12, DECISIONS item 2)
+# ---------------------------------------------------------------------------
+#
+# His words: "raise the budget cap, this is all running over subscription
+# anyway. My generation shouldn't fail because of it." His run had died at the
+# script stage on $2.5513 of SHADOW spend against a $2.50 cap while the amount
+# actually billed to him was $0.00 — every seat on the run was a subscription
+# seat, where `usd_charged` is 0 by construction (llm.cost_fields: charged ==
+# shadow on the api lane, 0.0 on the subscription lane).
+#
+# The cap therefore splits in two, and only in two:
+#
+#   CHARGED dollars   -> the HARD cap, byte-for-byte the behaviour that ships
+#                        today. On an all-api run charged == shadow and the
+#                        estimate is charged, so this arm is the OLD predicate
+#                        exactly; BUDGET_CAP_USD_PER_RUN keeps meaning what it
+#                        has always meant for real money.
+#   SHADOW-only spend -> a WARN. The step proceeds. Nothing was billed, so
+#                        nothing may kill the run.
+#
+# NL-80 (the no-output-ceiling class) is why the warn is not a silent pass: the
+# warn CARRIES THE RUNNING TOTALS (shadow, charged, cap) into report.warnings ->
+# the generation-log entry, so a subscription run whose shadow figure runs away
+# is louder on the record than it was when it merely died. The other half of
+# that guard — the analysis stage's derating ladder and the finite cap itself —
+# is DELIBERATELY UNTOUCHED (DECISIONS 2026-08-12 item 2 names the unattended-
+# derating law as the thing that stays guarding): a shadow-heavy run still
+# derates its analysis material, it just no longer dies.
+#
+# Trust-quiet: this lands in warnings/receipts only. Nothing about a budget
+# verdict reaches the edition body.
+
+# The three run-killing/step-blocking cap gates below all speak through this one
+# verdict so they cannot fork (the "named ONCE" idiom this module already uses
+# for MATERIAL_BUDGET_CHARS et al).
+CAP_KILL, CAP_WARN, CAP_CLEAR = "kill", "warn", "clear"
+
+
+def _cap_verdict(step: str, est: float, spent: float, charged: float,
+                 cap: float) -> str:
+    """CAP_KILL / CAP_WARN / CAP_CLEAR for one about-to-be-made call.
+
+    `spent` is the run's SHADOW total (Onna's law — the cap ladder has always
+    accumulated shadow so the subscription lane degrades like the api lane);
+    `charged` is the run's real money. `est` is shadow-denominated, so the
+    charged projection adds it ONLY when this step's seat actually bills — the
+    same (seat, fallback) resolution call_llm's gate, transport and durable
+    ledger ride, never a fresh one, so a mid-run binary flap cannot make the
+    budget gate and the ledger disagree about which lane paid.
+
+    KILL when real money would cross the cap; WARN when only the shadow figure
+    would; CLEAR otherwise. Nothing here spends, logs, or mutates."""
+    cfg, _reason = _resolve_step_seat(step)
+    est_charged = est if cfg.lane == "api" else 0.0
+    if charged + est_charged > cap:
+        return CAP_KILL
+    if spent + est > cap:
+        return CAP_WARN
+    return CAP_CLEAR
+
+
+def _cap_warn_line(step: str, est: float, spent: float, charged: float,
+                   cap: float) -> str:
+    """The warn's text. It states the totals ON PURPOSE (NL-80): a reader of the
+    generation log must be able to see runaway shadow spend even though it no
+    longer stops anything."""
+    return (
+        f"budget: {step} continued past the ${cap:.2f} cap on SHADOW spend only "
+        f"— ${spent:.4f} shadow + ${est:.4f} estimated, ${charged:.4f} actually "
+        f"charged. Subscription-lane spend is not billed per call and must not "
+        f"kill a run (principal 2026-08-12); the cap still HARD-STOPS charged "
+        f"dollars. Totals are recorded here so runaway shadow stays visible."
+    )
 
 
 def _step_cost(usage: Dict) -> float:
@@ -3290,6 +3371,18 @@ def _emit_progress(progress: Optional[Callable[[str, Optional[str]], None]],
         pass
 
 
+def _analysis_pause_class() -> type:
+    """`analysis.SystemicFetchFailure`, resolved lazily.
+
+    A function rather than a module-level import because the dependency runs
+    ONE way — generate imports analysis, never the reverse — and every other
+    use of analysis in this module is a local import inside the run body for
+    that same reason. Naming the class in an `except` clause at module scope
+    would be the one line that inverts it."""
+    from . import analysis
+    return analysis.SystemicFetchFailure
+
+
 def run_generate(
     date: Optional[str] = None,
     con: Optional[sqlite3.Connection] = None,
@@ -3348,7 +3441,7 @@ def run_generate(
             return _run_generate_body(
                 con, date, src_env, key, report, refresh, no_threads, progress
             )
-        except GenerateError as exc:
+        except (GenerateError, _analysis_pause_class()) as exc:
             # BUG-6/32 family (NL-63 M2 obs): a run that aborts mid-pipeline
             # still spent real money — narrative, the editor,
             # and BOTH script attempts on a degenerate-stub abort all bill before
@@ -3357,13 +3450,29 @@ def run_generate(
             # call_llm's raw per-attempt cost record; the analysis stage runs
             # in its own module, so its spend is folded from report.analysis_usd
             # (and any pre-abort memory spend from report.memory_usd).
+            #
+            # NL-148 clause 4 joins this arm rather than propagating unlogged:
+            # the pause is a run that ended without an edition, and "the one
+            # failure the record never saw" is the asymmetry the keyless-refusal
+            # note above exists to forbid.
             ledger = fold_late_steps(report)
-            log_generation({"date": date, "variant": variant, "sample": sample,
-                            "status": "failed", "error": str(exc)[:500],
-                            "steps": ledger,
-                            "total_usd": round(
-                                sum(s.get("usd") or 0 for s in ledger), 6),
-                            "warnings": report.warnings})
+            entry = {"date": date, "variant": variant, "sample": sample,
+                     "status": "failed", "error": str(exc)[:500],
+                     "steps": ledger,
+                     "total_usd": round(
+                         sum(s.get("usd") or 0 for s in ledger), 6),
+                     "warnings": report.warnings}
+            # THE SEAM NL-146 INHERITS (and the reason `status` does NOT move):
+            # every existing consumer reads status=='failed', so the pause keeps
+            # that word and adds a marker beside it. A scheduled run reads THIS
+            # bit to tell "retryable — nothing fetched, back off and try again"
+            # from "this run is broken", which is the fork its ladder (auto-retry
+            # w/ backoff -> yesterday's edition + quiet note) turns on. NL-146
+            # builds the ladder; this milestone only makes the fork legible.
+            if isinstance(exc, _analysis_pause_class()):
+                entry["paused"] = "fetch"
+                entry["retryable"] = True
+            log_generation(entry)
             raise
     finally:
         # B3-D6: guaranteed teardown of the run-scoped writer-family resolutions
@@ -3471,6 +3580,14 @@ def _run_generate_body(
 
     cap = config.budget_cap_usd_per_run(src_env)
     spent = 0.0
+    # The run's REAL money, accumulated beside the shadow figure so the cap gates
+    # can tell "$2.55 of subscription-lane shadow" from "$2.55 billed" (principal
+    # 2026-08-12 — see _cap_verdict). Every `spent +=` below has a `charged +=`
+    # twin sourced from the SAME durable ledger row, so the two figures can never
+    # be derived from different resolutions of the same step. Read only by the
+    # three cap gates, which all sit above the post-persist memory pass — that
+    # pass's own charged spend rides report.memory_usd and is not re-summed here.
+    charged = 0.0
 
     # FIX-1 (B3, ruled into this milestone): stage-boundary lane preflight.
     # A misconfigured lane — an unregistered provider/lane, or a subscription
@@ -3554,6 +3671,10 @@ def _run_generate_body(
 
     briefs_by_slot: Dict[int, Optional[Dict]] = {}
     analyst_slot3_tier: Optional[str] = None
+    # NL-148 clause 4: the stage's systemic-failure verdict, read AFTER the
+    # try/except below so the pause is raised OUTSIDE the degrade handler.
+    # Empty dict = the stage never reported one (it died, or never ran).
+    a_rep: Dict = {}
     if refresh and not no_threads:
         _emit_progress(progress, "analysis", "analyst", env=src_env)
         try:
@@ -3568,6 +3689,9 @@ def _run_generate_body(
             # test reports; never worse than today.
             spent += a_rep.get("total_usd_shadow",
                                a_rep.get("total_usd") or 0.0) or 0.0
+            # ...and the CHARGED twin (2026-08-12 cap ruling): `total_usd` is the
+            # stage's real money, $0 on the subscription lane, == shadow on api.
+            charged += a_rep.get("total_usd") or 0.0
             report.analysis_usd = a_rep.get("total_usd") or 0.0
             report.analysis_shadow_usd = a_rep.get("total_usd_shadow") or 0.0
             for w in a_rep.get("warnings", []):
@@ -3579,6 +3703,33 @@ def _run_generate_body(
             report.warnings.append(
                 f"analysis stage unavailable this run ({type(exc).__name__}: "
                 f"{exc}) — writer degrades to feed-excerpt material, disclosed")
+
+    # NL-148 CLAUSE 4 — THE PAUSE. Deliberately OUTSIDE the try above, and
+    # that placement is the enforcement, not a preference: the handler one
+    # line up is a stage-wide `except Exception` that degrades to feed-excerpt
+    # material and carries on. Raising inside its reach — even into a
+    # dedicated arm — would leave the contract one refactor away from
+    # inverting, and the inverted form is the one thing this clause forbids:
+    # publishing a thinned edition built on no retrieval while telling the
+    # reader it worked. Out here, no handler between this line and the caller
+    # can turn the pause back into an edition.
+    #
+    # Taken at the RUN level because the ruling says "pause GENERATION". The
+    # stage measures; this owns the pipeline and stops it — before a single
+    # writer token is spent, and long before `persist_generation`, so nothing
+    # is published, the reader keeps the edition they already had, and the
+    # retry re-enters a run with no completed stories to re-bill.
+    #
+    # WHAT THE STAGE'S VERDICT MEANS, restated here because this is where the
+    # run acts on it (FIX-1, gate Ruling A 2026-08-12): "at least one slot
+    # actually TRIED to fetch, nothing came back anywhere, and no valid brief
+    # exists". It is NOT "every slot tried" — a tier-excluded slot never tries,
+    # on a healthy day or a dead one, and reading its silence as a veto let one
+    # such slot shield a whole-network outage from the pause. See the verdict
+    # block in analysis.py for the any/all split and the P-A receipt.
+    if a_rep.get("fetch_systemic_failure"):
+        raise analysis_mod.SystemicFetchFailure(
+            analysis_mod.FETCH_PAUSE_MESSAGE)
     # NL-107 — RUN-INTERNAL by design: unbounded, newest-wins. This is the run
     # reading its own analysis stage, minutes before its own promote stamps
     # generated_at, so the reader's read (analysis.coherent_valid_brief) would
@@ -3627,11 +3778,15 @@ def _run_generate_body(
     _emit_progress(progress, "narrative", "writer", env=src_env)
     n_prompt = build_narrative_prompt(date, report.variant, inputs)
     est = _est_cost(n_prompt, NARRATIVE_MAX_TOKENS)
-    if spent + est > cap:
+    _v = _cap_verdict("narrative", est, spent, charged, cap)
+    if _v == CAP_KILL:
         raise GenerateError(
             f"estimated narrative cost ${est:.4f} exceeds the remaining budget "
             f"cap (${cap:.2f}) — aborting before the call"
         )
+    if _v == CAP_WARN:
+        report.warnings.append(
+            _cap_warn_line("narrative", est, spent, charged, cap))
     draft_holder: List[Dict] = []
 
     def _shape_check(content: str) -> None:
@@ -3662,6 +3817,7 @@ def _run_generate_body(
     # cost/cap test moves; the flip only matters once editor/script go
     # subscription (below), where charged is 0 but the run must still be capped.
     spent += step_n["usd_shadow"] or 0
+    charged += step_n["usd_charged"] or 0     # the money half (2026-08-12 cap)
 
     # --- Editor pass (M6 mandate 2): cut/tighten/concretize ONLY — the
     # editor may never add facts; the edited payload is what gets fully
@@ -3705,10 +3861,21 @@ def _run_generate_body(
             draft_json=json.dumps(draft_payload, ensure_ascii=False),
         )
         est_e = _est_cost(e_prompt, EDITOR_MAX_TOKENS, "editor")
-        if spent + est_e > cap:
+        # SCOPE NOTE, disclosed rather than silent (fix-loop item 7): this gate's
+        # GenerateError is caught below and DEGRADES the run to the unedited
+        # draft — it is not literally one of the two run-killing gates the
+        # ruling names. It rides the same verdict anyway, because the thing the
+        # principal objected to is his generation being damaged by money nobody
+        # was charged, and shipping an unedited edition is that damage in its
+        # quieter form. A CHARGED breach still degrades exactly as today.
+        _v = _cap_verdict("editor", est_e, spent, charged, cap)
+        if _v == CAP_KILL:
             raise GenerateError(
                 f"editor pass estimate ${est_e:.4f} would exceed the run cap"
             )
+        if _v == CAP_WARN:
+            report.warnings.append(
+                _cap_warn_line("editor", est_e, spent, charged, cap))
         edited_holder: List[Dict] = []
 
         def _editor_shape(content: str) -> None:
@@ -3739,6 +3906,7 @@ def _run_generate_body(
                   **_step_ledger("editor", usage_e)}
         report.steps.append(step_e)
         spent += step_e["usd_shadow"] or 0   # editor: subscription-lane seat — cap on shadow
+        charged += step_e["usd_charged"] or 0          # ...and the money half
         before = sum(wc(" ".join(v for v in s.values() if isinstance(v, str)))
                      for s in draft_payload["stories"] if isinstance(s, dict))
         after = sum(wc(" ".join(v for v in s.values() if isinstance(v, str)))
@@ -3944,12 +4112,18 @@ def _run_generate_body(
     _emit_progress(progress, "script", "script", env=src_env)
     s_prompt = build_script_prompt(date, report.variant, narrative, inputs)
     est_s = _est_cost(s_prompt, SCRIPT_MAX_TOKENS, "script")
-    if spent + est_s > cap:
+    # THIS is the gate that killed his 2026-08-12 run at $2.5513 shadow / $0.00
+    # charged. On the subscription lane it now warns and the run continues.
+    _v = _cap_verdict("script", est_s, spent, charged, cap)
+    if _v == CAP_KILL:
         raise GenerateError(
             f"estimated script cost ${est_s:.4f} would exceed the run budget "
-            f"cap (${cap:.2f}, ${spent:.4f} already spent) — narrative was NOT "
-            "persisted; raise the cap or re-run"
+            f"cap (${cap:.2f}, ${charged:.4f} charged of ${spent:.4f} shadow) — "
+            "narrative was NOT persisted; raise the cap or re-run"
         )
+    if _v == CAP_WARN:
+        report.warnings.append(
+            _cap_warn_line("script", est_s, spent, charged, cap))
     script_holder: List[str] = []
     script_warnings: List[str] = []
 
@@ -4009,6 +4183,7 @@ def _run_generate_body(
               "completion_tokens": usage_s.get("completion_tokens"),
               **_step_ledger("script", usage_s)}
     spent += step_s["usd_shadow"] or 0.0   # script: subscription-lane seat — cap on shadow
+    charged += step_s["usd_charged"] or 0.0        # ...and the money half
 
     # P3.1 items 1+2 — the spoken editorial bar, enforcement-grade: ONE
     # retry with the exact violations injected; then ship the better

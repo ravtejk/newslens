@@ -482,6 +482,19 @@ def test_a_fresh_regenerate_consuming_its_own_staging_stays_silent(
 
     monkeypatch.setattr(ingest_mod, "run_ingest", fake_ingest)
     monkeypatch.setattr(ranking, "run_rank", fake_rank)
+    # NL-148 clause 4: the pipeline now REFUSES to generate when NOTHING
+    # fetches at all. This test drives a full offline regenerate to assert a
+    # DISCLOSURE property (that a run's own staging draws no warning) and
+    # never meant "the network is down" to be part of its contract — so its
+    # retrieval is stubbed to succeed, the state it assumed implicitly before
+    # the clause existed.
+    _fetched = analysis.FetchRecord(
+        url="https://ok.example/a", source_name="OK", tier="full",
+        outcome=analysis.OK, title="A fetched article",
+        text="The president travels to the summit midweek for talks. " * 40)
+    _fetched.chars = len(_fetched.text)
+    monkeypatch.setattr(analysis, "fetch_cluster_articles",
+                        lambda items, **kw: [_fetched] if items else [])
     fake_model.narrative = stories_payload(live_slots)
     fake_model.script = compliant_script(live_slots)
 

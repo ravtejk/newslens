@@ -531,9 +531,19 @@ def test_nl95_edition_cap_decrements_by_the_analysis_stages_shadow(
     only that wiring can flip.
 
     The teeth: an analysis stage that charged $0 but burned $0.90 of SHADOW
-    must leave the writer no headroom under a $0.90 cap, so the narrative step
-    aborts BEFORE its call. Bound to charged, the writer would sail on and the
-    edition would overspend its cap by a whole analysis stage."""
+    must leave the writer no headroom under a $0.90 cap.
+
+    NL-148 FIX LOOP 1 — THE TEETH MOVED, AND THEY GOT SHARPER. The principal's
+    2026-08-12 ruling demoted the shadow-only kill to a warn (his run died on
+    phantom money), so "the narrative step aborts" is no longer how a run
+    without headroom behaves on the subscription lane. The enforcement this pin
+    exists for — the analysis stage's SHADOW reaching the edition's `spent` —
+    is untouched and still load-bearing (it is what the derating ladder and the
+    warn both read), so the pin now reads the FIGURE instead of the exception:
+    the budget warn must quote $0.9000 of shadow. Bound to charged, `spent`
+    would be $0.0000, the ~$0.40 narrative estimate would fit inside the $0.90
+    cap, and NO WARN WOULD FIRE AT ALL — a stricter red than the old one, which
+    only knew that some GenerateError arrived."""
     from newslens import analysis as analysis_mod
     from newslens import ingest as ingest_mod
 
@@ -562,7 +572,10 @@ def test_nl95_edition_cap_decrements_by_the_analysis_stages_shadow(
     db.migrate()
     con = db.connect()
     try:
-        with pytest.raises(generate.GenerateError) as exc:
+        # the narrative call itself has no fake behind it, so the run still
+        # ends in a GenerateError — but from the CALL, not from the cap. What
+        # the pin reads is the warn the cap gate left on the record first.
+        with pytest.raises(generate.GenerateError):
             generate.run_generate(
                 date="2026-07-25", con=con,
                 env={"OPENAI_API_KEY": "sk-qa-fake",
@@ -570,9 +583,16 @@ def test_nl95_edition_cap_decrements_by_the_analysis_stages_shadow(
                 refresh=True)
     finally:
         con.close()
-    assert "narrative" in str(exc.value) and "budget" in str(exc.value), (
-        "the run did not abort at the narrative cap gate — the analysis "
-        f"stage's shadow spend never reached `spent`. Got: {exc.value}")
+    entry = json.loads(
+        (paths.DATA_DIR / "generation_log.jsonl")
+        .read_text(encoding="utf-8").strip().splitlines()[-1])
+    warns = [w for w in entry["warnings"]
+             if w.startswith("budget: narrative continued past")]
+    assert warns, (
+        "the narrative cap gate saw headroom it should not have had — the "
+        f"analysis stage's shadow spend never reached `spent`. Got: {entry['warnings']}")
+    assert "$0.9000 shadow" in warns[0], warns[0]
+    assert "$0.0000 actually charged" in warns[0], warns[0]
 
 
 def test_nl95_failed_run_fold_never_fabricates_charged_dollars(monkeypatch,

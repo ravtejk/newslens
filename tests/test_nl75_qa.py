@@ -1180,7 +1180,7 @@ def test_deep_view_timeline_strikes_superseded_rows(migrated_con):
 # ===========================================================================
 
 def test_cap_gate_sees_the_enriched_prompt_and_aborts_loudly(
-        migrated_con, fake_model):
+        migrated_con, fake_model, monkeypatch):
     """The claim under test: the rung-(a) blocks flow through _est_cost and
     the cap arithmetic. Two arms, same edition, cap $0.08: WITHOUT ledger
     enrichment the narrative call proceeds; WITH a bloated thread ledger the
@@ -1194,6 +1194,13 @@ def test_cap_gate_sees_the_enriched_prompt_and_aborts_loudly(
     # 0.08: generous cap for the control run, then cap = control_est + $0.02
     # so only the ~$0.057 enrichment delta (5 x 8k chars at Opus $5/MTok-in)
     # crosses it. Same claim proven: the gate sees the enriched prompt.
+    #
+    # NL-148 FIX LOOP 1 RE-PIN (the principal's 2026-08-12 cap ruling): the LOUD
+    # abort is now a CHARGED-dollar abort — a shadow-only breach on the
+    # subscription lane warns and the run continues. This test's claim is about
+    # what the ESTIMATOR sees, not about which lane pays, so the writer is
+    # pinned to api and every assertion below stands unchanged.
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     env = {"OPENAI_API_KEY": "sk-qa-fake", "BUDGET_CAP_USD_PER_RUN": "9"}
     con = migrated_con
     slots = [_slot(1, mem=("Strait of Hormuz",)), _slot(2), _slot(3)]

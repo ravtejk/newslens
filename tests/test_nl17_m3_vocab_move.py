@@ -10,7 +10,10 @@ WHAT HAS TO BE TRUE, in order of how much damage getting it wrong would do:
      atomic switch, so a proposal that ledgered itself would BE the move.
   3. IT NEVER FORCES A KIND. `China-Taiwan` has no honest seat in the closed
      org/place/person vocabulary; naming that is the whole reason the kind
-     vocabulary is closed.
+     vocabulary is closed. RESOLVED 2026-08-12 and the resolution was "don't":
+     he DROPPED it from the movers, so it stays a tag at full weight and the
+     closed vocabulary did not grow a relation/pair seat. The pin below now
+     guards the answer rather than the open question.
   4. THE YAML DOOR DEGRADES LOUD, NEVER DEAD. A collision is reported, never
      raised — his file legitimately carries a tag whose concept is mid-move,
      and the ledger decides whether it scores.
@@ -130,30 +133,60 @@ def test_the_proposal_writes_no_vocabulary_moves_row(con, tmp_path):
 # 2 — THE CLASSIFICATION IS THE COUNCIL'S, AND IT NEVER FORCES A FIT
 # =========================================================================
 
-def test_the_enumeration_is_the_councils_five_move_three_stay():
+def test_the_enumeration_is_the_councils_four_move_four_stay_after_the_drop():
     """ANTI-DRIFT: widening this list is a council act, so a silent edit fails
-    here (the same posture as the backfill's blessed-list pin)."""
+    here (the same posture as the backfill's blessed-list pin).
+
+    REWRITTEN, NOT VALUE-SWAPPED, 2026-08-12. The old name asserted a
+    five-move-three-stay enumeration, which his China-Taiwan drop made false —
+    a pin whose NAME states a falsehood is worse than no pin, so the name
+    moves with the fact."""
     movers = [c for c, d, _k, _t in vocab_move.TWINS if d == vocab_move.MOVE]
     stays = [c for c, d, _k, _t in vocab_move.TWINS if d == vocab_move.STAY]
-    assert movers == ["Federal Reserve", "ECB", "OPEC+", "Strait of Hormuz",
-                      "China-Taiwan"]
-    assert stays == ["Credit Default Risk", "Recession Risk", "Stagflation"]
+    assert movers == ["Federal Reserve", "ECB", "OPEC+", "Strait of Hormuz"]
+    assert stays == ["China-Taiwan", "Credit Default Risk", "Recession Risk",
+                     "Stagflation"]
     pilot = [c for c, _d, _k, t in vocab_move.TWINS if t == vocab_move.TIER_PILOT]
     assert pilot == ["Federal Reserve", "ECB", "OPEC+"]
+    # Slate item 6's "2" amended by the same ruling: the window is Hormuz alone.
+    window = [c for c, _d, _k, t in vocab_move.TWINS if t == vocab_move.TIER_WINDOW]
+    assert window == ["Strait of Hormuz"]
 
 
-def test_china_taiwan_is_reported_kindless_never_forced(con):
-    """A relation between two actors is not an actor. The closed kind vocabulary
-    exists to make that refusable, and the same refusal the settle door makes
-    must show up here rather than being smoothed into 'org'."""
+def test_china_taiwan_stays_a_tag_and_no_kind_was_minted_for_it(con):
+    """HIS RULING 2026-08-12, pinned as behaviour: the kindless relation is
+    DROPPED from the movers rather than fitted with a new kind.
+
+    REWRITTEN, NOT VALUE-SWAPPED. The old pin
+    (`..._is_reported_kindless_never_forced`) guarded the OPEN question — that
+    the module reports the missing kind instead of forcing one. The question is
+    closed now, and the thing worth guarding is the answer: it stays a tag, and
+    the closed kind vocabulary did NOT grow a relation/pair seat to hold it.
+
+    BORN RED: pre-diff this failed at the first assert (disposition was MOVE).
+    """
     rows = {r["concept"]: r for r in
             vocab_move.classify(_Cfg(granular=["China-Taiwan"]))}
     ct = rows["China-Taiwan"]
+    assert ct["disposition"] == vocab_move.STAY
     assert ct["kind"] == ""
-    assert "no honest kind" in ct["note"]
+    assert ct["tier"] == ""
+    # No kind was minted: the closed vocabulary still refuses a relation.
+    assert "relation" not in {k.casefold() for k in entities.KINDS}
+    assert "pair" not in {k.casefold() for k in entities.KINDS}
+    # It is never proposed for removal from his file, at any tier — so the tag
+    # survives and keeps its weight (steering's suppressed_tags reads APPLIED
+    # ledger rows only, and there will never be one for this concept).
     prop = vocab_move.build(_Cfg(granular=["China-Taiwan"]), YAML,
                             "sources.yaml", tier="all")
-    assert [r["concept"] for r in prop["blocked"]] == ["China-Taiwan"]
+    assert prop["mover_names"] == []
+    assert prop["blocked"] == []
+    assert prop["diff"] == ""
+    # His file comes back byte-identical: nothing about this concept is
+    # proposed for removal, so the tag line (wherever it sits in HIS real
+    # file — this fixture carries the other twins) is never touched.
+    assert prop["proposed_yaml"] == YAML
+    assert prop["lines_removed"] == 0
 
 
 def test_a_concept_already_gone_from_his_file_is_not_proposed_again(con):

@@ -771,6 +771,112 @@ DEGRADE_TITLE_SUFFIX = " — " + DEGRADE_NO_SECTION
 DEGRADE_RECORD_STATUS = ("this edition carried no section naming this story")
 
 
+# ---------------------------------------------------------------------------
+# NL-148 — THE FETCH-FAILURE CONTRACT (principal's ruling 2026-08-09)
+# ---------------------------------------------------------------------------
+#
+# The ruling, and where each clause lives:
+#
+#   (1) full-text fetch fails for a prioritized story -> try that story's OTHER
+#       cluster sources, inside the existing sourcing boundaries, no open-web
+#       hunting. ALREADY TRUE AND CARRIED, not built here: `fetch_cluster_
+#       articles` walks EVERY item `_cluster_items_for_slot` returns, which is
+#       the whole cluster (`slot["item_ids"]`), and the four boundaries in this
+#       module's header gate every one of them. Pinned as a carried invariant,
+#       born green and labeled — see tests/test_nl148_fetch_failure.py.
+#   (2) no cluster source yields text -> skip the story and PROMOTE the next
+#       prioritized story into its place. **NOT BUILT — STOPPED AND RETURNED
+#       TO THE PRINCIPAL AS A DESIGN DECISION.** Two findings, both measured,
+#       neither resolvable by an implementer's pick:
+#
+#       (a) THERE IS NO "NO MATERIAL" STATE TO SKIP ON. `build_source_map`
+#           mints a C# excerpt key for every cluster item that was not
+#           fetched, so a prioritized story whose full-text fetch fails
+#           completely still carries its feed excerpts and still builds a
+#           brief — the `degraded` path below, labeled in the artifact and in
+#           the reader's meta line. Skipping it means REMOVING a story that
+#           today gets honest, disclosed, degraded treatment. The existing
+#           `skipped-thin` branch is NOT that state: it needs the source map
+#           to be empty of S/C/R keys, which an empty cluster produces and a
+#           failed fetch never does.
+#       (b) THE PROMOTE COLLIDES WITH THIS TABLE'S IDENTITY MODEL.
+#           `analysis_briefs` is keyed (date, slot) with NO story identity
+#           (see the NL-107 note below, which is that gap wearing a different
+#           hat). Promoting a story "into its place" renumbers slots, and the
+#           moment slot N names a different story, `latest_valid_brief(date,
+#           N)` — the run's own reading — returns another story's analysis.
+#           That is mis-attributed analysis, the cardinal breach class, and it
+#           also breaks the ruled resume default, whose whole content is that
+#           slot N means the same thing on the retry as it did on the run.
+#
+#       Skip-without-promote would strictly thin editions; skip-with-promote
+#       needs an identity decision that costs a schema field. Both are his.
+#   (3) every such skip disclosed at the BOTTOM of the briefing. NOT BUILT:
+#       clause 3 discloses clause 2's skips, and there are none until clause 2
+#       is ruled. A disclosure line wired to an unreachable trigger would be
+#       furniture that can never render.
+#   (4) systemic failure (nothing fetches at all) -> PAUSE generation at that
+#       spot with a retry. BUILT: `SystemicFetchFailure` + the ruled sentence
+#       in `FETCH_PAUSE_MESSAGE`, raised from `run_analysis` and rendered by
+#       the Today failure panel's EXISTING retry button.
+# The ruled sentence, VERBATIM (principal 2026-08-09). It is his words, not a
+# paraphrase, and it is not reworded to suit any downstream grammar.
+#
+# WHERE IT RENDERS, MEASURED NOT ASSUMED: the Today failure panel prints
+# `GEN_JOB.snapshot()["error"]` unfiltered (server.py, the state=='error' arm),
+# so this reaches the reader verbatim beside the existing "Try again" button —
+# which is the interactive surface clause 4 names.
+#
+# WHERE IT DOES NOT, DISCLOSED: the FOUNDING page (a stranger's first screen,
+# before any edition exists) runs every run-sentence through
+# `commissioning.unfit_for_readers`, an ALLOWLIST whose safe form is
+# "<phase> failed: <plain words>" with <phase> drawn from
+# generate.PROGRESS_LABELS. This sentence is a comma clause, not that form, so
+# the predicate answers True and the founding panel OMITS it, falling back to
+# its own generic text. Measured, not reasoned:
+#     commissioning.unfit_for_readers(FETCH_PAUSE_MESSAGE) -> True
+# That is a real gap on one surface and it is carried as a disclosed one
+# rather than closed by either of the two moves available: rewording HIS
+# sentence to fit a grammar, or widening a build-blocking safety seam (C1) as
+# an unrequested rider mid-milestone. It is a checkpoint item.
+FETCH_PAUSE_MESSAGE = "Fetch failed, please try again in a few minutes"
+
+
+class SystemicFetchFailure(RuntimeError):
+    """Clause 4: nothing fetched at all, so the edition cannot be built.
+
+    A PAUSE, not a crash, and the distinction is the whole point: it is raised
+    only when EVERY prioritized slot came back with no material, so there is no
+    half-edition to publish. It deliberately escapes `run_generate`'s stage-wide
+    degrade handler — degrading to feed excerpts here would publish an edition
+    built on nothing while telling the reader everything was fine, which is the
+    silent-thinning the contract exists to forbid.
+
+    WHICH SLOTS HAVE A VOTE (FIX-1, gate Ruling A 2026-08-12): the verdict asks
+    whether FETCHING is broken, so a slot that never opened a socket — every
+    source tier-excluded by the 2026-07-06 boundaries — has no opinion and casts
+    none. It cannot veto the pause (it used to, which let one excluded slot
+    shield a whole-network outage), and it cannot cause one either: the pause
+    needs at least one slot to have ACTUALLY TRIED and come back empty, so a
+    policy-only day where nothing was ever attempted still never pauses.
+
+    THE RULED DEFAULT HOLDS BY CONSTRUCTION — and it is NARROWER than "the retry
+    is free" (QA F4, 2026-08-12; the overclaim is corrected here, the behaviour
+    is not). What the principal ruled is that ALREADY-COMPLETED STORIES never
+    re-run and never re-bill. This verdict cannot be true while any prioritized
+    story produced a valid brief, so at the moment of the pause NO completed
+    story exists, and the retry therefore re-runs only incomplete work — the
+    guarantee holds with nothing to preserve.
+
+    WHAT IT DOES NOT PROMISE: that the paused run spent nothing. With a
+    reachable model, slots that lost every fetch can still be synthesized and
+    then REJECTED at cost (QA measured $0.74 of billed-but-rejected briefs on
+    one such pause), and a retry pays for those attempts again — they were never
+    completed work. Pinned as this invariant rather than asserted in prose; see
+    tests/test_nl148_fetch_failure.py.
+    """
+
+
 class BriefRejected(ValueError):
     """Hard-reject class: the brief is discarded for BOTH consumers."""
 
@@ -879,6 +985,11 @@ class StoryAnalysis:
     # "skipped-budget, reader fell back to A2" in the generation_log — the two
     # used to be indistinguishable because only the second existed.
     slot3_verdict_under_floor: bool = False
+    # NL-148: the story this slot was handed, carried so the run's own record
+    # can name it. `analysis_briefs` is keyed (date, slot) with NO story
+    # identity, and a report that re-derived the name from a slot number would
+    # name whichever story holds that slot at read time.
+    story_title: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -2606,6 +2717,18 @@ def latest_valid_brief(con: sqlite3.Connection, date: str,
     return json.loads(row["brief_json"]) if row else None
 
 
+def any_valid_brief(con: sqlite3.Connection, date: str) -> bool:
+    """Did THIS date produce any valid analysis brief at all?
+
+    The resume-cost invariant behind clause 4 (`SystemicFetchFailure`): the
+    pause is only honest as a free retry if nothing billable completed before
+    it, and this is the predicate that says so. Run-scoped and unbounded, the
+    same reading `latest_valid_brief` uses and for the same reason."""
+    return con.execute(
+        "SELECT 1 FROM analysis_briefs WHERE date = ? AND status = 'valid'"
+        " LIMIT 1", (date,)).fetchone() is not None
+
+
 # ---------------------------------------------------------------------------
 # NL-107 — which briefs belong to the edition of record. TWO REGIMES.
 # ---------------------------------------------------------------------------
@@ -2783,7 +2906,11 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     `second_pass` (NL-118 item 7) opts into the gap_report synthesis over the
     same corpus. None = read the config flag, which is False."""
     from . import paths
-    sa = StoryAnalysis(slot=slot_no, tier=tier, outcome="failed")
+    sa = StoryAnalysis(slot=slot_no, tier=tier, outcome="failed",
+                       # NL-148: read once, here, from the slot this call was
+                       # handed — the only place the story's identity and its
+                       # slot number are known to belong together.
+                       story_title=slot.get("story_title", ""))
     chat = chat or call_analysis_model
     sonar = sonar or _sonar_verify
 
@@ -2951,6 +3078,17 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         sa.detail = ("no retrievable material (fetch + Sonar + excerpts all "
                      "empty) — no brief; model-memory briefs are the cardinal "
                      "breach")
+        # NL-148 — WHY CLAUSE 2 IS NOT WIRED HERE, and it is not a choice.
+        # This branch is NOT the fetch-failure skip and cannot be made into
+        # one: `build_source_map` mints a C# excerpt key for every cluster item
+        # that was not fetched, so a slot holding ANY cluster item always
+        # carries C-keys and this predicate is False no matter how completely
+        # fetching failed. Measured on the shipped function, not reasoned:
+        #   build_source_map([2 ERROR records], [2 items], [], []) -> ['C1','C2']
+        #   not any(k[0] in "SCR" for k in sources)               -> False
+        # What actually reaches here is a slot with no cluster items at all —
+        # an empty cluster, not a failed fetch. Hanging the contract's skip
+        # off this branch would have been enforcement over a dead path.
         return sa
 
     # `template` was read above the sonar decision (LADDER PRICING) and is
@@ -3367,12 +3505,85 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
                 "bound_usd": (None if sa.bound_usd is None
                               else round(sa.bound_usd, 6)),
                 "fetch_ok": sa.fetch_ok, "fetch_attempted": sa.fetch_attempted,
+                # NL-148: the story's own name beside its fetch counters, so
+                # the run's record can say WHICH prioritized story lost its
+                # full text without re-deriving a name from a slot number.
+                "story_title": sa.story_title,
                 "sonar": sa.sonar_status})
             report["warnings"].extend(sa.warnings)
+            if sa.fetch_attempted and not sa.fetch_ok:
+                report["warnings"].append(
+                    f"fetch: no cluster source yielded full text for slot "
+                    f"{sa.slot} ({sa.story_title!r}) — {sa.fetch_attempted} "
+                    "attempted, 0 extracted")
             if any(w.startswith("derating:") for w in sa.warnings):
                 report["derating"] = True
         report["total_usd"] = round(charged_total, 6)          # REAL money
         report["total_usd_shadow"] = round(spent - already_spent, 6)  # the cap figure
+        # NL-148 CLAUSE 4 — THE SYSTEMIC-FAILURE VERDICT. This stage REPORTS
+        # it; `generate` acts on it. The split is deliberate and it is not a
+        # style choice: the ruling says "pause GENERATION", which is an
+        # orchestration decision over the whole pipeline, and this function is
+        # also a directly-callable stage API that a dozen tests and the CLI
+        # drive on their own. A stage that raised here would be deciding the
+        # fate of a run it does not own.
+        #
+        # "Nothing fetches at all", read literally and measured on the fetch
+        # layer itself. FOUR CONJUNCTS, each closing a state that is NOT this:
+        #   * `per_story` non-empty — a day with no depth stories at all is
+        #     'no-depth-stories', an editorial fact, not a fetch failure;
+        #   * ANY prioritized slot ATTEMPTED at least one fetch. This is what
+        #     keeps a POLICY-ONLY day out: if every slot's sources sit outside
+        #     the analyst's fetch tiers, nothing opened a socket, and a run that
+        #     never opened a socket has not discovered that the network is down
+        #     (the principal's 2026-07-06 boundaries working, never a failure to
+        #     fetch);
+        #   * EVERY prioritized slot got zero extractions — nothing came back
+        #     anywhere;
+        #   * no valid brief exists for the date. If any prioritized story
+        #     still produced a full-picture brief — Sonar carried it, or a
+        #     re-run's earlier work stands — then an edition CAN be built and
+        #     pausing would throw away work the reader could have had.
+        #
+        # THE any/all SPLIT IS FIX-1 (gate Ruling A, 2026-08-12), and it is a
+        # correction, not a re-legislation. The shape used to be
+        # `all(attempted and not ok)`, which reads a tier-excluded slot's
+        # non-attempt as a VETO — and an excluded slot attempts nothing on every
+        # day, healthy or dead. Measured (gate probe P-A, re-derived on the
+        # final tree): slot 1 attempted-and-all-failed, slot 2 wholly excluded,
+        # model down, zero valid briefs — genuinely nothing fetched anywhere —
+        # and the verdict came back False. That made outage detection a function
+        # of EDITORIAL CONFIGURATION. His sentence's subject is fetching, not
+        # slot composition: a slot that never opened a socket carries zero
+        # information about fetch health, so it may not vote either way. `any()`
+        # asks "did we actually try?"; `all(not ok)` asks "did anything come
+        # back?". Pinned both ways —
+        # test_clause4_one_tier_excluded_slot_cannot_shield_a_network_outage
+        # (mixed day must pause) and
+        # test_clause4_tier_excluded_sources_are_policy_not_a_fetch_failure
+        # (all-excluded day must not).
+        #
+        # The last conjunct is what makes the RULED DEFAULT hold by construction
+        # rather than by a resume mechanic: "already-completed stories never
+        # re-run and never re-bill" is safe because the verdict cannot be true
+        # while a completed story exists — at the pause there is no completed
+        # work for a retry to re-bill.
+        # CORRECTED (QA F4, 2026-08-12): that is NOT "the retry is free". A
+        # model that is up can still synthesize and REJECT briefs for slots
+        # whose fetches all failed, at real cost ($0.74 measured on one such
+        # pause), and the retry re-runs those attempts — incomplete work, which
+        # the ruling never protected. See SystemicFetchFailure's docstring.
+        #
+        # HOW OFTEN THIS IS TRUE IN PRACTICE, measured on the principal's own
+        # data/generation_log.jsonl rather than guessed: across the 19 recorded
+        # analysis stages, ZERO would have tripped it, and 56 of 57 prioritized
+        # slots (98.2%) got at least one full text. It is an outage signal, not
+        # a normal day.
+        report["fetch_systemic_failure"] = bool(
+            report["per_story"]
+            and any(s["fetch_attempted"] for s in report["per_story"])
+            and all(not s["fetch_ok"] for s in report["per_story"])
+            and not any_valid_brief(con, date))
         if not report["per_story"]:
             report["status"] = "no-depth-stories"
         else:

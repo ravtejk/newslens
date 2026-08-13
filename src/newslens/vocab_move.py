@@ -21,23 +21,40 @@ the YAML still says. A proposal that ledgered itself would be an application.
 THE CLASSIFICATION (ENG council :99, and it is HIS to bless item by item):
 
   entity-shaped, MOVE tag -> entity
-    OPEC+ · Federal Reserve · ECB · Strait of Hormuz · China-Taiwan
+    OPEC+ · Federal Reserve · ECB · Strait of Hormuz
   condition-shaped, STAY tags
     Credit Default Risk · Recession Risk · Stagflation
       — these are not actors. They are conditions the world can be in, their
         threads sit at storyline altitude carrying zero entity weight, and
         tag+storyline coexistence is today's lawful state of record. Moving
         them would take their weight away and give it to nothing.
+  relation-shaped, STAY tag
+    China-Taiwan
+      — dropped from the movers by his ruling 2026-08-12; see NAMED HONESTLY.
 
   SEQUENCING (ENG R2 :143, accepted shape): pilot-3 (Fed · ECB · OPEC+) first,
   then the rest inside a BOUNDED <=7-day window after the pilot gate. Past that
-  bound Rook's objection re-arms and the rest goes one-shot.
+  bound Rook's objection re-arms and the rest goes one-shot. After the
+  2026-08-12 drop the window carries ONE mover, Strait of Hormuz.
 
-  NAMED HONESTLY: `China-Taiwan` is enumerated entity-shaped by the council but
-  has NO honest kind in the closed org/place/person vocabulary — it is a
-  relation between two actors, not an actor. This module REPORTS that rather
-  than forcing a fit, which is the same refusal `entities.kind_for_class` makes
-  at the settle door. His bless resolves it; a fabricated kind would not.
+  NAMED HONESTLY — RESOLVED 2026-08-12, AND THE RESOLUTION WAS "DON'T".
+  `China-Taiwan` was enumerated entity-shaped by the council but has NO honest
+  kind in the closed org/place/person vocabulary: it is a relation between two
+  actors, not an actor. This module reported that rather than forcing a fit —
+  the same refusal `entities.kind_for_class` makes at the settle door — and
+  the report went to him as the open question it was.
+
+  HIS RULING: DROP IT FROM THE MOVERS. It stays a tag/storyline concept and
+  keeps its full tag weight; a relation/pair kind was NOT minted to hold it.
+  The alternative — widening the closed kind vocabulary for one concept — buys
+  a schema for a case that loses nothing by staying where it is.
+
+  WHY THE DROP COSTS NOTHING, structurally rather than by inspection:
+  `steering.suppressed_tags` is built ONLY from APPLIED `vocabulary_moves`
+  rows (steering.py, Ruth's blocking condition), so an unmoved twin keeps its
+  tag weight by construction — there is no code path that can drop a tag
+  nobody moved. And nothing was ever moved here: no ledger row, no entity row,
+  so the drop unwinds nothing. It is a row edit and a record, not a migration.
 """
 
 from __future__ import annotations
@@ -64,8 +81,11 @@ TWINS = (
     ("ECB",                 MOVE, "org",   TIER_PILOT),
     ("OPEC+",               MOVE, "org",   TIER_PILOT),
     ("Strait of Hormuz",    MOVE, "place", TIER_WINDOW),
-    # No honest kind — see the module header. Proposed for his ruling, NOT filed.
-    ("China-Taiwan",        MOVE, "",      TIER_WINDOW),
+    # DROPPED FROM THE MOVERS 2026-08-12, his ruling — see the module header.
+    # STAY with no kind and no tier: it keeps its tag at full weight, and no
+    # relation/pair kind was minted to hold it. It was never moved, so no
+    # entity row exists and there is nothing to unwind.
+    ("China-Taiwan",        STAY, "",      ""),
     ("Credit Default Risk", STAY, "",      ""),
     ("Recession Risk",      STAY, "",      ""),
     ("Stagflation",         STAY, "",      ""),

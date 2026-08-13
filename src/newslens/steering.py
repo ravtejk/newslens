@@ -42,8 +42,14 @@ only safe direction; degrading quietly is not an option at all.
 RUTH'S BLOCKING CONDITION, STRUCTURALLY (product R2, "where we still disagree",
 item 1): the tag-drop scopes to LIVE-MOVED concepts only. `suppressed_tags` is
 built exclusively from applied `vocabulary_moves` rows, so an UNMOVED twin —
-Hormuz and China-Taiwan during the sequenced 3-then-5 window — keeps its tag
-weight by construction. There is no code here that can drop a tag nobody moved.
+Hormuz, the window's ONE remaining mover, during the sequenced window — keeps
+its tag weight by construction. There is no code here that can drop a tag
+nobody moved.
+
+That same construction is what made the 2026-08-12 China-Taiwan drop free: it
+was enumerated for the window, never moved, and a concept that stays a tag
+keeps its weight here without any code knowing the difference. A relation/pair
+kind was NOT minted for it (vocab_move.py, NAMED HONESTLY).
 
 -----------------------------------------------------------------------------
 REPLACEMENT, NOT ADDITION (the ceiling theorem). `ENTITY_WEIGHT` enters

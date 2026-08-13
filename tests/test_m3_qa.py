@@ -531,7 +531,16 @@ def test_cap_exhausted_by_analysis_aborts_the_writer_disclosed(
 
     ENG-M0 RE-PIN: the analysis spend is DERIVED from the cap (cap - $0.05)
     instead of frozen at 1.45, for the same reason as the sibling test above —
-    a frozen number stops being "exhaustion" the moment the cap rises."""
+    a frozen number stops being "exhaustion" the moment the cap rises.
+
+    NL-148 FIX LOOP 1 RE-PIN (the principal's 2026-08-12 cap ruling): the abort
+    is now a CHARGED-dollar abort. `canned_report(total_usd=...)` is charged
+    money, so the exhaustion this test constructs is real — but on the
+    subscription default the WRITER's own estimate adds $0 charged, so no
+    charged dollar crosses the cap and the ruling says the run continues (with
+    the shadow warn). Pinning the writer to the api lane keeps this test
+    measuring what it has always measured: the cap stopping real money."""
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     db.migrate()
     con = db.connect()
     try:

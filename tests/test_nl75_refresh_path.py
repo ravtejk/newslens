@@ -23,8 +23,28 @@ from datetime import datetime, timezone
 
 import pytest
 
-from newslens import db, generate, memory_core, paths, ranking
+from newslens import analysis, db, generate, memory_core, paths, ranking
 from newslens import ingest as ingest_mod
+
+
+def _retrieval_works(monkeypatch):
+    """NL-148 clause 4: the pipeline now REFUSES to generate when NOTHING
+    fetches at all — a run whose every prioritized story lost its retrieval
+    pauses rather than publish an edition built on no material.
+
+    This test exercises the writer / memory / watch-items path and never
+    intended "the network is down" to be part of its contract; offline, the
+    analyst's fetch layer reports exactly that. Retrieval is therefore stubbed
+    to SUCCEED, which is the state the test was already assuming implicitly
+    before the clause existed."""
+    rec = analysis.FetchRecord(
+        url="https://ok.example/a", source_name="OK", tier="full",
+        outcome=analysis.OK, title="A fetched article",
+        text="The president travels to the summit midweek for talks. " * 40)
+    rec.chars = len(rec.text)
+    monkeypatch.setattr(analysis, "fetch_cluster_articles",
+                        lambda items, **kw: [rec] if items else [])
+
 
 EDITION = "2026-07-16"
 PRIOR = "2026-07-10"
@@ -287,6 +307,7 @@ def test_refresh_path_own_connection_cli_shape(fake_model, monkeypatch):
 
     monkeypatch.setattr(ingest_mod, "run_ingest", _fake_ingest)
     monkeypatch.setattr(ranking, "run_rank", fake_rank)
+    _retrieval_works(monkeypatch)          # NL-148 clause 4 — see the helper
     fake_model.narrative = _payload(slots)
     fake_model.script = _script(slots)
 

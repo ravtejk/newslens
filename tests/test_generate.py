@@ -1425,6 +1425,15 @@ def test_keyless_openai_generate_completes_end_to_end_after_the_state_flip(
 
 
 def test_narrative_budget_abort_before_any_call(migrated_con, fake_model, monkeypatch):
+    # NL-148 fix loop 1 (the principal's 2026-08-12 cap ruling): the hard cap
+    # now binds on CHARGED dollars only, so this test's contract — "the cap
+    # aborts before any call" — is a statement about a BILLING lane. Every seat
+    # is subscription-default since NL-99, where the run is $0-charged and the
+    # ruling says a run must not die; the api lane is where the abort still
+    # lives, so the test pins the lane it is actually about. The subscription
+    # twin (same setup, warn instead of kill) is
+    # tests/test_nl148_fixloop1.py::test_cap_a_shadow_heavy_subscription_run_completes_with_a_warn
+    monkeypatch.setenv("NEWSLENS_LANE_WRITER", "api")
     slots = [slot(1)]
     seed_briefing(migrated_con, A_DAY, slots)
     monkeypatch.setattr(generate, "_est_cost", lambda p, m: 999.0)
@@ -1437,6 +1446,12 @@ def test_narrative_budget_abort_before_any_call(migrated_con, fake_model, monkey
 
 
 def test_script_budget_abort_leaves_row_untouched(migrated_con, fake_model, monkeypatch):
+    # NL-148 fix loop 1: pinned to the CHARGED lane — see the note on
+    # test_narrative_budget_abort_before_any_call. This is the exact gate that
+    # killed the principal's 2026-08-12 run at $2.5513 SHADOW / $0.00 charged;
+    # on the subscription lane it now warns and the run continues (twin pin in
+    # tests/test_nl148_fixloop1.py). On the api lane it still kills, unchanged.
+    monkeypatch.setenv("NEWSLENS_LANE_SCRIPT", "api")
     slots = [slot(1)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)
@@ -2186,7 +2201,15 @@ def test_editor_budget_abort_routes_through_the_degrade_path(
     migrated_con, fake_model, monkeypatch
 ):
     """The editor's own cap-abort no longer kills the run — it degrades with
-    the estimate named, and the pipeline continues to script + persist."""
+    the estimate named, and the pipeline continues to script + persist.
+
+    NL-148 fix loop 1: pinned to the CHARGED lane. The 2026-08-12 ruling makes
+    a shadow-only breach a warn everywhere the cap blocks work, this gate
+    included (it degrades the edition to the unedited draft, which is the same
+    damage in a quieter form) — so the degrade the test asserts is now the
+    behaviour of the BILLING lane. Subscription twin in
+    tests/test_nl148_fixloop1.py."""
+    monkeypatch.setenv("NEWSLENS_LANE_EDITOR", "api")
     slots = [slot(1)]
     seed_briefing(migrated_con, A_DAY, slots)
     fake_model.narrative = stories_payload(slots)

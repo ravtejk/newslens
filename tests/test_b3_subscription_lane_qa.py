@@ -891,15 +891,27 @@ def test_default_lane_generate_run_ships_with_charged_zero_editor_script(
     assert "--append-system-prompt" not in calls[1]["argv"]  # script is prose
 
 
-def test_mid_run_cap_exhaustion_on_shadow_kills_the_run_before_the_script(
+def test_mid_run_cap_exhaustion_on_shadow_now_warns_and_the_run_ships(
         migrated_con, monkeypatch, tmp_path):
-    """Onna's law at generate scale: the SAME run, but the editor's reported
-    usage prices its SHADOW at ~$1.00 (charged still $0.00). The script's
-    pre-call budget guard must trip on cap - spent(shadow) and kill the run
-    (the same GenerateError class as before B3), the failed run's logged
-    money record must show charged == narrative pennies, and the record
-    briefing must be untouched. If `spent` accumulated charged, the run
-    would complete — the revert bite."""
+    """Onna's law at generate scale, RE-RULED (principal 2026-08-12).
+
+    THE SAME RUN as before, and the same arithmetic: the editor's reported usage
+    prices its SHADOW at ~$1.00 while charging $0.00 — a subscription seat.
+    Until this fix loop the script's pre-call guard tripped on
+    `cap - spent(shadow)` and KILLED the run. That is what happened to the
+    principal for real, and his ruling: "raise the budget cap, this is all
+    running over subscription anyway. My generation shouldn't fail because of
+    it."
+
+    SO THE VERDICT FLIPS AND NOTHING ELSE DOES. What this test was always really
+    about — the money record's honesty on a MIXED run — is untouched and still
+    asserted: the editor row charges $0.00 and carries the true shadow figure
+    beside it. And the cap ladder still FEELS that shadow; it now says so in a
+    warning instead of by killing the run, so `spent` binding to charged again
+    would still be caught here (the warn would never fire).
+
+    The kill did not disappear, it moved to where real money is: see
+    tests/test_nl148_fixloop1.py::test_cap_a_charged_lane_breach_still_kills…"""
     slots, narrative = _generate_harness(monkeypatch, migrated_con,
                                          editor_inp=1_000_000)
     stub = make_scripted_stub(
@@ -907,22 +919,43 @@ def test_mid_run_cap_exhaustion_on_shadow_kills_the_run_before_the_script(
         [{"result": json.dumps(narrative), "inp": 1_000_000, "out": 200},
          {"result": compliant_script(slots), "inp": 1200, "out": 400}])
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(stub))
-    # B4 arithmetic (conscious re-pin): the cap must clear the narrative
-    # pre-check (~$0.40 at the 16k Opus ceiling) and still be exhausted by
-    # the editor's $1.001 SHADOW before the script's ~$0.015+ estimate:
+    # B4 arithmetic (unchanged): the cap clears the narrative pre-check (~$0.40
+    # at the 16k Opus ceiling) and is then exhausted by the editor's $1.001
+    # SHADOW before the script's ~$0.015+ estimate:
     # 1.02 - 0.0095 (narrative shadow) - 1.001 (editor shadow) = 0.0095
-    # remaining < script est -> the script guard trips on SHADOW, exactly
-    # the pre-B4 tooth at B4 prices.
-    with pytest.raises(generate.GenerateError) as exc:
-        run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="1.02"))
-    assert "budget" in str(exc.value)
-    # only editor spawned; the script guard fired BEFORE spawn #2
-    assert len(stub_calls(tmp_path / "shim")) == 1
-    # the failed run's logged ledger: charged stayed pennies; shadow shows the truth
+    # remaining < script est. Pre-ruling that killed the run; now it warns.
+    rep = run(migrated_con, env=dict(ENV, BUDGET_CAP_USD_PER_RUN="1.02"))
+
+    # THE RUN SHIPPED: the script spawned (spawn #2) and the edition persisted
+    assert len(stub_calls(tmp_path / "shim")) == 2
+    row = migrated_con.execute(
+        "SELECT narrative_text FROM briefings WHERE date = ?", (A_DAY,)
+    ).fetchone()
+    assert row["narrative_text"] and row["narrative_text"] != "Published."
+
+    # ...and the cap ladder DID feel the shadow — the assertion that goes red
+    # if `spent` ever binds to charged again
+    budget_warns = [w for w in rep.warnings
+                    if w.startswith("budget: script continued past")]
+    assert budget_warns, rep.warnings
+    # DERIVED, never frozen (this file's convention): the warn's two figures
+    # must be the mixed run's real shape — shadow past the $1.02 cap, charged
+    # still the narrative's api pennies (the editor's dollar was phantom).
+    import re as _re
+    shadow = float(_re.search(r"\$([0-9.]+) shadow", budget_warns[0]).group(1))
+    charged = float(
+        _re.search(r"\$([0-9.]+) actually charged", budget_warns[0]).group(1))
+    assert shadow > 1.02 > charged
+    assert charged < 0.01, budget_warns[0]
+
+    # the logged ledger: charged stayed pennies; shadow shows the truth
     log_lines = (paths.DATA_DIR / "generation_log.jsonl").read_text().splitlines()
     entry = json.loads(log_lines[-1])
-    assert entry["status"] == "failed"
-    editor_rows = [s for s in entry["steps"] if s.get("step") == "editor"]
+    assert entry["status"] == "ok"
+    # the DURABLE step row (a completed run logs report.steps, where the editor
+    # is `editor_pass`; the failed-run fold this test used to read logs the raw
+    # attempt ledger, where it is `editor`)
+    editor_rows = [s for s in entry["steps"] if s.get("step") == "editor_pass"]
     assert editor_rows and editor_rows[0]["usd"] == 0.0
     # ENG-M0: DERIVED — the editor seat is Opus 4.8 ($5/$25), not Haiku ($1/$5).
     # The stub reports 1,000,000 in / 200 out, so this tracks the seat's rates.
@@ -931,11 +964,6 @@ def test_mid_run_cap_exhaustion_on_shadow_kills_the_run_before_the_script(
         1_000_000 / 1e6 * _e.usd_per_mtok_in + 200 / 1e6 * _e.usd_per_mtok_out,
         abs=0.01)
     assert entry["total_usd"] < 0.01                      # real money: pennies
-    # the record was never touched (death before persist)
-    row = migrated_con.execute(
-        "SELECT narrative_text FROM briefings WHERE date = ?", (A_DAY,)
-    ).fetchone()
-    assert row["narrative_text"] == "Published."
 
 
 # ===========================================================================

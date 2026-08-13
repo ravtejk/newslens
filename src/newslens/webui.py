@@ -86,8 +86,29 @@ article.story { scroll-margin-top: 0.75rem; }
   color: var(--ink-faint); cursor: pointer; flex-shrink: 0; }
 .settings-corner:hover { border-color: var(--ink-soft); color: var(--ink); }
 .settings-corner svg { display: block; stroke: currentColor; }
+/* NL-149 (his word + two screenshots, 2026-08-12): the dateline's DESCENDERS
+   (the 'y' of Friday, the comma) crossed the section line's rule on every state
+   where nothing follows the date — no-edition, generating, failed. Cause is
+   geometry, not layout: `line-height: 1.02` makes the LINE BOX shorter than the
+   display face's own ascent+descent, so the ink overhangs the element box top
+   and bottom and the next block starts under the glyphs.
+   MEASURED, not estimated — read out of the shipped font file rather than eyeballed:
+   Charter Bold (the first --font-display family, and the weight this rule sets)
+   is unitsPerEm 2048, hhea ascender 2007 / descender -492, so ascent+descent =
+   1.2202em against a 1.02em line box. Overhang per side = (1.2202 - 1.02) / 2 =
+   0.1001em = 0.4004rem = 6.41px at 4rem/16px root. (OS/2 winAscent+winDescent
+   gives the slightly smaller 5.72px; the larger figure is the one to clear.)
+   The clearance is a bottom MARGIN on the dateline itself — ONE rule, so it
+   applies in every state including the ones _masthead(None, …) renders — and
+   0.5rem = 8px clears the measured 6.41px with ~1.6px to spare.
+   THE NORMAL EDITION STATE DOES NOT MOVE: there the next sibling is
+   `.dispatch-strip` (margin-top 0.8rem), and adjacent-sibling margins COLLAPSE
+   to the larger of the two — 0.8rem, exactly what ships today. Deliberately
+   NOT padding on .masthead (that would add to every state, including the one
+   already correct) and NOT a state-specific selector (the fix belongs to the
+   dateline's geometry, not to a panel). */
 .dateline { font-family: var(--font-display); font-weight: 700; font-size: 4rem;
-  line-height: 1.02; letter-spacing: -0.015em; margin: 0; }
+  line-height: 1.02; letter-spacing: -0.015em; margin: 0 0 0.5rem; }
 .dateline .dl-num { color: var(--terra); }
 .dateline .dl-year { font-size: 1.4rem; font-weight: 400; color: var(--ink-faint); letter-spacing: 0; }
 .signature { font-family: var(--font-display); font-size: 1.3rem; line-height: 1.45;

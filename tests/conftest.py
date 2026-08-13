@@ -13,12 +13,16 @@ Design rules for this suite:
 
 from __future__ import annotations
 
+import builtins
+import errno
+import hashlib
 import http.server
 import json
 import os
 import socket
 import sys
 import threading
+import traceback
 from pathlib import Path
 
 import pytest
@@ -272,6 +276,233 @@ def _real_state_snapshot():
     return snap
 
 
+# ===========================================================================
+# THE IN-SUITE WRITE LEDGER — tripwire ATTRIBUTION (NL-148 QA §B.3 proposal 1)
+# ===========================================================================
+#
+# WHY THIS EXISTS. The tripwire above brackets the real files per test BY STAT.
+# Stat detects CHANGE; it cannot detect AUTHORSHIP. On 2026-08-12 the principal
+# unfollowed and re-followed a topic through his own live `newslens serve` while
+# a suite run was in flight; the change landed inside one GET-only test's
+# bracket and the tripwire reported "REAL state touched during this test
+# (sandbox pinhole)". The suite had written nothing — QA proved it twice over
+# (exact-seed replay against a byte-identical sentinel: zero writes; a 789-event
+# audit: all 525 sources.yaml writes sandboxed) — but the message named the
+# suite, and an org spent a day on a pinhole that did not exist.
+#
+# So the tripwire now consults a LEDGER of writes the suite actually made, and
+# says which of the two things happened.
+#
+# COVERAGE BOUND, stated so a "no in-suite write recorded" line is never
+# over-read as proof of innocence:
+#   * COVERED — `open(..., 'w'/'a'/'x'/'+')`, `os.replace`, `os.rename`,
+#     `os.remove`, `os.unlink`, called through the `builtins`/`os` attributes.
+#   * NOT COVERED — sqlite3's writes (they go through the C library, never
+#     `builtins.open`), `os.open`/low-level fd writes, a module that bound
+#     `from os import replace` before this wrap installed, and any child
+#     process (a child's writes are its own; the env seams are what sandbox
+#     those). A change to `newslens.db` with an empty ledger is therefore
+#     UNATTRIBUTED, not proven external — the message says exactly that.
+#
+# COST: the hot path is one `isinstance` + one set-disjointness test on the
+# mode string for every `open()`; reads leave before any path work. Watched-path
+# resolution and the stack capture run only on a hit, and a hit should be a
+# once-a-year event.
+
+_WRITE_LEDGER = []          # append-only; entries are dicts, see _record_write
+
+# Every real-state location the tripwire watches, as a prefix tuple. A write is
+# "in-suite" for our purposes only if it lands on one of these.
+_LEDGER_WATCH_PREFIXES = tuple(sorted({
+    str(_REAL_DATA_DIR),
+    str(_REAL_PROFILES_DIR),
+    *(str(p) for p in _REAL_STATE_FILES),
+}))
+
+_TRUE_WRITE_CHARS = frozenset("wax+")
+
+
+def _watched_write_target(target):
+    """The watched real path `target` names, else None. Pure string work — no
+    stat, no resolve (a symlink pointing INTO real state is not resolved here;
+    the tripwire's own stat still catches the change, it is only attribution
+    that would degrade to 'unattributed')."""
+    if isinstance(target, int):          # an already-open fd: not a path
+        return None
+    try:
+        p = os.fspath(target)
+    except TypeError:
+        return None
+    if isinstance(p, bytes):
+        try:
+            p = p.decode()
+        except UnicodeDecodeError:
+            return None
+    if not p.startswith(os.sep):
+        p = os.path.join(os.getcwd(), p)
+    p = os.path.normpath(p)
+    for prefix in _LEDGER_WATCH_PREFIXES:
+        if p == prefix or p.startswith(prefix + os.sep):
+            return p
+    return None
+
+
+def _record_write(path: str, op: str) -> None:
+    """One ledger entry. The STACK is the point: a real future pinhole should
+    fail with the writer's own frames in hand, which is strictly more than the
+    stat diff this replaces ever gave anyone."""
+    _WRITE_LEDGER.append({
+        "path": path,
+        "op": op,
+        "thread": threading.current_thread().name,
+        # carries the phase (setup/call/teardown) — a teardown- or gap-phase
+        # write is the straggler signature the F7 geometry would produce.
+        "test": os.environ.get("PYTEST_CURRENT_TEST", "<outside any test>"),
+        "stack": traceback.format_stack(limit=14)[:-1],
+    })
+
+
+_REAL_OPEN = builtins.open
+_REAL_OS_REPLACE = os.replace
+_REAL_OS_RENAME = os.rename
+_REAL_OS_REMOVE = os.remove
+_REAL_OS_UNLINK = os.unlink
+
+
+def _ledger_open(file, mode="r", *args, **kwargs):
+    if isinstance(mode, str) and not _TRUE_WRITE_CHARS.isdisjoint(mode):
+        hit = _watched_write_target(file)
+        if hit is not None:
+            _record_write(hit, f"open(mode={mode!r})")
+    return _REAL_OPEN(file, mode, *args, **kwargs)
+
+
+def _ledger_replace(src, dst, *args, **kwargs):
+    hit = _watched_write_target(dst)
+    if hit is not None:
+        _record_write(hit, "os.replace")
+    return _REAL_OS_REPLACE(src, dst, *args, **kwargs)
+
+
+def _ledger_rename(src, dst, *args, **kwargs):
+    hit = _watched_write_target(dst)
+    if hit is not None:
+        _record_write(hit, "os.rename")
+    return _REAL_OS_RENAME(src, dst, *args, **kwargs)
+
+
+def _ledger_remove(path, *args, **kwargs):
+    hit = _watched_write_target(path)
+    if hit is not None:
+        _record_write(hit, "os.remove")
+    return _REAL_OS_REMOVE(path, *args, **kwargs)
+
+
+def _ledger_unlink(path, *args, **kwargs):
+    hit = _watched_write_target(path)
+    if hit is not None:
+        _record_write(hit, "os.unlink")
+    return _REAL_OS_UNLINK(path, *args, **kwargs)
+
+
+builtins.open = _ledger_open
+os.replace = _ledger_replace
+os.rename = _ledger_rename
+os.remove = _ledger_remove
+os.unlink = _ledger_unlink
+
+
+# --- content shas, so a diff report carries WHAT changed, not just THAT ------
+#
+# Taken ONCE at session start, and deliberately NOT inside _real_state_snapshot:
+# that function runs twice per test across the whole suite and is pinned
+# stat-only (test_nl132b_profile_hardening: it may not even call `open`).
+#
+# TWO DELIBERATE OMISSIONS:
+#   * `.env` is never hashed — the suite does not read the principal's secret
+#     file, not even to digest it. Stat-only, as before.
+#   * anything over the size cap (the 16MB newslens.db today) is not hashed
+#     either; a per-session 16MB read to improve one failure message is not a
+#     trade worth making. Both report their size instead, and say so.
+_SHA_SIZE_CAP_BYTES = 4 * 1024 * 1024
+_NEVER_HASHED = {str(paths._GUARDED["ENV_FILE"])}
+
+
+def _content_sha(path) -> str:
+    """sha256 of a watched file, or a stated reason it was not hashed."""
+    p = str(path)
+    if p in _NEVER_HASHED:
+        return "not hashed (the principal's .env is never read by this suite)"
+    try:
+        size = os.stat(p).st_size
+    except FileNotFoundError:
+        return "absent"
+    except OSError as exc:
+        return f"unstat-able: {type(exc).__name__}"
+    if size > _SHA_SIZE_CAP_BYTES:
+        return f"not hashed ({size} bytes, over the {_SHA_SIZE_CAP_BYTES} cap)"
+    h = hashlib.sha256()
+    try:
+        with _REAL_OPEN(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError as exc:
+        return f"unreadable: {type(exc).__name__}"
+    return h.hexdigest()
+
+
+_SESSION_START_SHAS = {str(f): _content_sha(f) for f in _REAL_STATE_FILES}
+
+
+def _tripwire_message(diff: dict, writes: list) -> str:
+    """The tripwire's failure text, ATTRIBUTED. Pure — no I/O beyond hashing the
+    files the diff already named — so it can be pinned by test rather than by
+    reading it and nodding."""
+    if writes:
+        verdict = (
+            f"CHANGED BY THIS SUITE — {len(writes)} in-suite write(s) recorded "
+            "on watched real paths. This is a genuine sandbox pinhole: the "
+            "writer's own frames are below."
+        )
+    else:
+        verdict = (
+            "CHANGED DURING THIS TEST, NOT BY IT — no in-suite write was "
+            "recorded on any watched real path (ledger covers open-for-write, "
+            "os.replace, os.rename, os.remove, os.unlink). An EXTERNAL WRITER "
+            "is the likely author: a live `newslens serve` sitting on this "
+            "machine edits sources.yaml / memory.md / data/ while the suite "
+            "runs, and its write lands inside whichever test happens to hold "
+            "the bracket (incident #4, 2026-08-12 — re-classified from "
+            "'pinhole' to exactly this). LIMIT: sqlite3 writes go through the C "
+            "library and are outside the ledger, so a newslens.db change with "
+            "an empty ledger is UNATTRIBUTED, not proven external."
+        )
+    lines = [
+        "REAL state touched during this test (ENGINEERING.md 'no real-state "
+        "writes').",
+        f"ATTRIBUTION: {verdict}",
+        "",
+        "WHAT MOVED (stat):",
+    ]
+    for key in sorted(diff):
+        lines.append(f"  {key}")
+        lines.append(f"    before: {diff[key]['before']}")
+        lines.append(f"    after:  {diff[key]['after']}")
+        if key in _SESSION_START_SHAS:
+            lines.append(f"    sha at session start: {_SESSION_START_SHAS[key]}")
+            lines.append(f"    sha now:              {_content_sha(key)}")
+    if writes:
+        lines.append("")
+        lines.append("IN-SUITE WRITES RECORDED DURING THIS TEST:")
+        for w in writes:
+            lines.append(f"  {w['op']} -> {w['path']}")
+            lines.append(f"    thread: {w['thread']}")
+            lines.append(f"    test:   {w['test']}")
+            for frame in w["stack"][-6:]:
+                lines.append("    " + frame.rstrip().replace("\n", "\n    "))
+    return "\n".join(lines)
+
+
 @pytest.fixture(autouse=True)
 def real_state_tripwire():
     """AUTOUSE, defined first so it wraps every other fixture's teardown.
@@ -284,8 +515,13 @@ def real_state_tripwire():
     mechanism instead of a hope — any test whose run (including its
     children) creates, deletes, or rewrites real state fails BY NAME,
     read-only stat/listdir being the only inspection it performs.
+    NL-148 fix loop 1: the failure is now ATTRIBUTED. The snapshot pair still
+    only detects CHANGE; the write ledger above says whether this suite is the
+    one that made it, so "an external writer edited your sources.yaml mid-run"
+    can no longer be reported as a sandbox pinhole (incident #4, 2026-08-12).
     """
     before = _real_state_snapshot()
+    ledger_mark = len(_WRITE_LEDGER)
     yield
     after = _real_state_snapshot()
     if after != before:
@@ -295,10 +531,79 @@ def real_state_tripwire():
             if before.get(k) != after.get(k)
         }
         pytest.fail(
-            "REAL state touched during this test (ENGINEERING.md 'no "
-            f"real-state writes' — sandbox pinhole): {diff}",
+            _tripwire_message(diff, _WRITE_LEDGER[ledger_mark:]),
             pytrace=False,
         )
+
+# ===========================================================================
+# THE SESSION FLOORS (NL-148 QA §B.3 proposal 2 — the straggler geometry, shut)
+# ===========================================================================
+#
+# QA's LEG-2 audit proved the suite never ARMS the straggler geometry today:
+# 248/248 `allow_real_paths` sanctions were MainThread and call-phase, so every
+# one sat inside the per-test `_REAL_PATHS_ALLOWED = False` save/restore and no
+# post-unwind resolution could ever find the flag open. But "no test does this
+# in this order" is a property of the current suite, not of the machine — the
+# geometry is one new fixture away, and `_REAL_PATHS_ALLOWED` is process-global
+# while `ThreadingHTTPServer(daemon_threads=True)` request threads can outlive
+# the test that started them (socketserver._Threads never tracks a daemon
+# thread, so server_close joins nothing).
+#
+# Two floors close it structurally, in every phase, sanctioned or not.
+
+# ---- FLOOR 1: the path seams always point SOMEWHERE UNREACHABLE ------------
+#
+# `paths.__getattr__` resolves the NEWSLENS_* override AHEAD of the sanction
+# arm ("redirection outranks sanction", the v7-M1 fix). Per-test sandboxing
+# sets those vars and monkeypatch restores them to whatever the process had —
+# which used to be UNSET, i.e. back to the arm that can resolve the founder's
+# real files. Pointing the process-level value at a path that does not exist
+# means the restored state is a loud ENOENT instead: outside a test's window
+# (collection, gaps, teardown races, a straggler request thread) the real
+# sources.yaml / memory.md / data dir are not merely refused, they are
+# UNREACHABLE — nothing can name them.
+#
+# Set at MODULE IMPORT, not in a pytest_configure hook, on purpose: this file
+# re-exports tools.pytest_shuffle's `pytest_configure` (see the import above),
+# and defining another one here would SHADOW it and silently disarm the shuffle
+# plugin. Module import of the initial conftest is the same session scope.
+_SESSION_FLOOR_ROOT = Path(
+    os.environ.get("TMPDIR", "/tmp")) / f"newslens-suite-floor-{os.getpid()}"
+# Deliberately NEVER created. Every value below is a path under a directory
+# that does not exist, so a read raises ENOENT and a write raises ENOENT — no
+# silent success, and nothing real is touched either way.
+_SESSION_ENV_FLOOR = {
+    "NEWSLENS_DATA_DIR": str(_SESSION_FLOOR_ROOT / "data"),
+    "NEWSLENS_DB_PATH": str(_SESSION_FLOOR_ROOT / "data" / "newslens.db"),
+    "NEWSLENS_SOURCES_FILE": str(_SESSION_FLOOR_ROOT / "sources.yaml"),
+    "NEWSLENS_ENV_FILE": str(_SESSION_FLOOR_ROOT / ".env"),
+    "NEWSLENS_MEMORY_FILE": str(_SESSION_FLOOR_ROOT / "memory.md"),
+}
+os.environ.update(_SESSION_ENV_FLOOR)
+
+# ---- FLOOR 2: in-suite HTTP request threads are JOINED, never orphaned -----
+#
+# `http.server.ThreadingHTTPServer` sets `daemon_threads = True`; socketserver's
+# `_Threads.append` drops daemon threads on the floor, so `server_close()` joins
+# nothing and a handler can still be running after its test's fixtures have
+# unwound. Flipping the class attribute (rather than editing the nine hand-rolled
+# `ui` fixtures that copy the same four lines, and rather than adding a tenth
+# helper they would have to adopt) makes `server_close()` block until every
+# request thread has finished — for the fixtures that exist today AND for the
+# next one somebody pastes.
+#
+# Safe here because every in-suite server is loopback, HTTP/1.0 (the stdlib
+# default — no keep-alive, so a handler thread ends with its one response), and
+# every fixture already calls `shutdown()` + `server_close()`. `block_on_close`
+# is left at its stdlib default of True; with non-daemon threads that is what
+# makes `_Threads` track and join them.
+#
+# DEVIATION, disclosed: QA's proposal says "the shared ui-server helper joins
+# request threads". There is no shared helper — the idiom is copy-pasted across
+# eight test files plus conftest's FakeAPI. This floor reaches all of them and
+# every future copy, which is strictly more coverage than editing the eight.
+http.server.ThreadingHTTPServer.daemon_threads = False
+
 
 # Every env var the milestone-1 code reads, plus proxy vars that could
 # redirect urllib away from our local fake server.
@@ -487,9 +792,20 @@ def loopback_only_network(monkeypatch):
     allowed to loopback (the fake server) and refused everywhere else —
     so even a future sandboxing mistake cannot reach a real endpoint or
     spend money. The opt-in `no_network` fixture layers on top to record
-    and refuse EVERYTHING, including loopback."""
+    and refuse EVERYTHING, including loopback.
+
+    NL-148 QA finding F6: `connect_ex` is a SECOND way out of this process.
+    `socket.connect_ex` is not implemented in terms of `connect` — it is its own
+    method returning an errno instead of raising — so guarding `connect` alone
+    left the offline-by-construction claim with an API seam. Nothing exploits it
+    today (`readerserve.port_is_free` is the only caller and it is a deliberate
+    loopback skip-if-bound handshake), but the guard's promise is structural, so
+    it covers both. A refused `connect_ex` returns ECONNREFUSED rather than
+    raising — that IS the method's contract, and returning an error is the
+    refusal."""
     real_getaddrinfo = socket.getaddrinfo
     real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
 
     def guarded_getaddrinfo(host, *args, **kwargs):
         if str(host) in ("127.0.0.1", "localhost", "::1"):
@@ -499,19 +815,28 @@ def loopback_only_network(monkeypatch):
             "(loopback_only_network structural guard)"
         )
 
-    def guarded_connect(self, address):
+    def _is_loopback(address):
         if not isinstance(address, tuple):  # AF_UNIX etc. — local by nature
-            return real_connect(self, address)
+            return True
         host = str(address[0])
-        if host.startswith("127.") or host in ("::1", "localhost"):
+        return host.startswith("127.") or host in ("::1", "localhost")
+
+    def guarded_connect(self, address):
+        if _is_loopback(address):
             return real_connect(self, address)
         raise OSError(
             f"QA suite is offline-only: connect to {address!r} refused "
             "(loopback_only_network structural guard)"
         )
 
+    def guarded_connect_ex(self, address):
+        if _is_loopback(address):
+            return real_connect_ex(self, address)
+        return errno.ECONNREFUSED
+
     monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
 
 
 def make_rss(items, channel_title="QA feed"):
@@ -551,7 +876,11 @@ def no_network(monkeypatch):
     assert the recording list is EMPTY — which distinguishes "never attempted
     a call" from "attempted one and the doctor swallowed the failure"
     (the latter would still show up here, plus as a 'could not reach' line).
-    """
+
+    F6: `connect_ex` is recorded and refused here too — same seam, same reason
+    as loopback_only_network above. A probe that slipped out through connect_ex
+    would otherwise leave this fixture's list empty and its "never attempted a
+    call" assertion would read as proof of something it never checked."""
     attempts = []
 
     def blocked_getaddrinfo(host, *args, **kwargs):
@@ -562,8 +891,13 @@ def no_network(monkeypatch):
         attempts.append(("connect", str(address)))
         raise OSError("network blocked by QA no_network guard")
 
+    def blocked_connect_ex(self, address):
+        attempts.append(("connect_ex", str(address)))
+        return errno.ECONNREFUSED
+
     monkeypatch.setattr(socket, "getaddrinfo", blocked_getaddrinfo)
     monkeypatch.setattr(socket.socket, "connect", blocked_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked_connect_ex)
     return attempts
 
 

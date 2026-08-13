@@ -800,10 +800,18 @@ def test_the_raw_sql_census_of_analysis_briefs_reads(tmp_path):
     the table, by file and function. Adding a reader anywhere in the package
     fails it, and the completeness claim stops living in report prose."""
     assert _raw_sql_sites() == {
-        # the writer, and the two run-internal readers
+        # the writer, and the run-internal readers
         ("analysis.py", "persist_brief"): 1,
         ("analysis.py", "analyst_slot3_tier"): 1,
         ("analysis.py", "latest_valid_brief"): 1,
+        # NL-148 clause 4: the run asking whether ANY story survived, so the
+        # systemic-fetch pause cannot fire over completed, billable work.
+        # RUN-INTERNAL for the same reason `latest_valid_brief` is — the
+        # analysis stage reading its own minutes-old rows, before any promote
+        # exists to be coherent WITH — so it takes the unbounded newest-wins
+        # regime and not the rival-excluding one. This census is what made
+        # that classification an explicit act instead of an accident.
+        ("analysis.py", "any_valid_brief"): 1,
         # the outside-the-run pair: one statement per regime
         ("analysis.py", "coherent_valid_brief"): 2,
         ("analysis.py", "coherent_valid_brief_id"): 2,
