@@ -73,6 +73,21 @@ def _css_code(block: str = "") -> str:
     return re.sub(r"/\*.*?\*/", " ", block or webui.CSS, flags=re.S)
 
 
+def _rule_at(css: str, anchor: str):
+    """(selector prelude, declaration body) of the rule containing `anchor`.
+
+    Added by NL-149 fix loop 1 for QA F-6. A pin that slices from a selector
+    SUBSTRING to the next `}` can read a rule's declarations but can never see
+    the rest of its selector list, so a selector that has no business in the
+    rule joins it invisibly. Walking back to the rule's start makes the whole
+    prelude assertable. `css` must be comment-stripped (`_css_code`), since a
+    comment may legitimately contain braces."""
+    i = css.index(anchor)
+    open_brace = css.index("{", i)
+    start = max(css.rfind("}", 0, i), css.rfind("{", 0, i)) + 1
+    return css[start:open_brace].strip(), css[open_brace + 1:css.index("}", open_brace)]
+
+
 def _today_view(page: str) -> str:
     return page.split('id="view-today"')[1].split('id="view-following"')[0]
 
@@ -489,9 +504,33 @@ def test_3f_the_container_steps_to_84rem_on_every_view():
     css = _css_code()
     page_rule = css.split(".page {")[1].split("}")[0]
     assert "max-width: 84rem" in page_rule
-    deep_rule = css.split('section[id^="view-deep-"], '
-                          'section[id^="view-thread-"] {')[1].split("}")[0]
+    # NL-149 (2026-08-13) WIDENED THIS SELECTOR LIST rather than adding a second
+    # container declaration: the generation-reports view is a destination like
+    # the others, and this pin's whole point is that destination containers step
+    # TOGETHER — a second rule carrying its own copy of the width is exactly the
+    # drift it guards against. So the pin must let a NEW DESTINATION join the
+    # list without breaking, while still refusing anything that is not one.
+    #
+    # NL-149 FIX LOOP 1 (QA F-6): the first widening bought that at the cost of
+    # a guard. Anchoring the slice on a selector SUBSTRING rather than on the
+    # rule's opening brace let an unrelated selector join the list and silently
+    # inherit the 84rem container — QA's mutation N3 (`.settings-row` added to
+    # the list) PASSED, where the old `…view-thread-"] {` anchor would have
+    # raised IndexError and failed. Restored by reading the rule's PRELUDE and
+    # TYPING every selector in it, which is stricter than either earlier form: a
+    # new destination is free to join, a non-destination is not.
+    prelude, deep_rule = _rule_at(css, 'section[id^="view-deep-"]')
     assert "max-width: 84rem" in deep_rule
+    selectors = [s.strip() for s in prelude.split(",")]
+    assert 'section[id^="view-thread-"]' in selectors
+    assert "#view-runlog" in selectors
+    assert "#view-edition" in selectors
+    for sel in selectors:
+        assert re.fullmatch(r'#view-[a-z0-9-]+|section\[id\^="view-[a-z0-9-]+"\]',
+                            sel), (
+            f"{sel!r} is not a destination view, yet it has joined the "
+            "destination container rule and now inherits the 84rem container. "
+            f"Prelude as served: {prelude!r}")
     # no CONTAINER is left behind at the old width. Anchored on the property,
     # not the bare number: 0.72rem is a legitimate type size on this page, and
     # a bare "72rem" substring match hits it.

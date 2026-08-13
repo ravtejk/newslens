@@ -244,11 +244,16 @@ def test_api_status_starts_idle(ui):
     # the Commissioning's vigil renders, so the stage map lives server-side in
     # one place instead of being re-implemented in JavaScript. At rest it is the
     # shipped "Starting…", and the app's own client ignores the key entirely.
+    # NL-149 item 1 (2026-08-13): and ONE more — `steps`, the finished-step log
+    # the generating panel appends from. Empty at rest, and the exact-equality
+    # form is kept deliberately: a key appearing on this endpoint without a
+    # review is how a UI contract drifts.
     assert json.loads(body) == {
         "state": "idle", "error": "",
         "started_at": None, "stage": None, "stage_model": None,
         "stage_elapsed_s": None, "total_elapsed_s": None,
         "reader_stage": labels.COMMISSION_STAGE_STARTING,
+        "steps": [],
     }
 
 

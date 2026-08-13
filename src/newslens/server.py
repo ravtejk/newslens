@@ -67,6 +67,18 @@ class _GenJob:
         self.stage: Optional[str] = None
         self.stage_model: Optional[str] = None
         self.stage_started_at: Optional[str] = None
+        # NL-149 item 1 (his charter, 2026-08-12): the steps that have FINISHED,
+        # in the order they finished, each keeping the time it took. The panel
+        # adds a line instead of replacing one, so a ~40-minute run reads as a
+        # log of what happened rather than a single sentence that keeps changing.
+        #
+        # APPEND-ONLY IS THE LOAD-BEARING PROPERTY, and it lives HERE rather than
+        # in the client: this list only ever grows, and an entry is never
+        # rewritten once its elapsed is stamped. That is what makes "a line that
+        # appeared never disappears and never changes" true across a page
+        # reload, a slow poll, and a stage shorter than the 2.5s poll interval —
+        # none of which a client that diffed labels could survive.
+        self.steps: List[Dict[str, object]] = []
 
     def start(self) -> bool:
         with self.lock:
@@ -78,6 +90,10 @@ class _GenJob:
             self.stage = None
             self.stage_model = None
             self.stage_started_at = None
+            # A NEW RUN STARTS A NEW LOG. The previous run's finished steps are
+            # not this run's; they live on in generation_log.jsonl, which is
+            # where the settings report reads them from (item 2).
+            self.steps = []
         threading.Thread(target=self._run, daemon=True).start()
         return True
 
@@ -90,6 +106,9 @@ class _GenJob:
         # a couple of assignments under a short-held lock).
         now = datetime.now(timezone.utc).isoformat()
         with self.lock:
+            # NL-149 item 1: a new boundary means the previous stage FINISHED —
+            # close it into the log before opening the next one.
+            self._close_stage_locked(now)
             self.stage = label
             self.stage_model = model
             self.stage_started_at = now
@@ -101,7 +120,7 @@ class _GenJob:
             generate.run_generate(progress=self._progress)
             with self.lock:
                 self.state = "done"
-                self._clear_stage_locked()
+                self._clear_stage_locked(completed=True)
         except Exception as exc:  # surfaced verbatim in the FOUNDER's panel
             # C1 fix loop 1 (QA-6): the founding page now renders this sentence
             # only when it matches a reader-safe form (commissioning.
@@ -130,8 +149,47 @@ class _GenJob:
                                   "terminal for the traceback")
                     self._clear_stage_locked()
 
-    def _clear_stage_locked(self) -> None:
+    def _close_stage_locked(self, now_iso: Optional[str] = None) -> None:
+        """Caller holds self.lock. Move the open stage into the finished log with
+        the time it took. No open stage (the first boundary of a run, or a second
+        close) is a no-op, which is what keeps this idempotent.
+
+        FLOORED to 0.1s by the SAME rule as generate._wall_seconds_since (see
+        that docstring for why floor and not round — NL-149 QA F-2). These are
+        two independent measurements of the same stage: this one from the
+        server's own boundary stamps, the other from generate's. Once both
+        stamps carry sub-second precision the two agree to microseconds, and a
+        shared rounding rule is what stops that agreement from being thrown away
+        at the last step — the finding was the live panel and the saved report
+        disagreeing about the same step. The floor runs on exact microseconds,
+        not on `total_seconds() * 10`, which is a float."""
+        if not self.stage:
+            return
+        started = self.stage_started_at
+        elapsed = None
+        if started:
+            try:
+                end = (datetime.fromisoformat(now_iso) if now_iso
+                       else datetime.now(timezone.utc))
+                elapsed = max(0.0, ((end - datetime.fromisoformat(started))
+                                    // timedelta(seconds=0.1)) / 10)
+            except Exception:  # never let a clock read break a running job
+                elapsed = None
+        self.steps.append({"label": self.stage, "model": self.stage_model,
+                           "elapsed_s": elapsed})
+
+    def _clear_stage_locked(self, completed: bool = False) -> None:
         # Caller holds self.lock. Terminal states carry no live stage.
+        #
+        # NL-149 item 1: `completed` says whether the stage that was open got to
+        # FINISH. On the done path it did, so it earns its line in the log. On
+        # the error paths it did not — a stage that raised mid-way is not a
+        # completed step, and writing it as one would put a duration on screen
+        # for work that never landed. (The failed run still keeps its full
+        # timeline in generation_log.jsonl, where the settings report reads it —
+        # that record is generate.py's, written on both arms.)
+        if completed:
+            self._close_stage_locked()
         self.stage = None
         self.stage_model = None
         self.stage_started_at = None
@@ -156,6 +214,11 @@ class _GenJob:
                 "stage_model": self.stage_model,
                 "stage_elapsed_s": _elapsed(self.stage_started_at),
                 "total_elapsed_s": _elapsed(self.started_at),
+                # NL-149 item 1: COPIES, not the list itself — a caller (the
+                # status endpoint, a render) must not be able to reach into the
+                # job's state, and json.dumps of a live list read on another
+                # thread is exactly the tear the lock exists to prevent.
+                "steps": [dict(s) for s in self.steps],
             }
 
 
@@ -272,13 +335,21 @@ def _briefing_row(con: sqlite3.Connection, date: Optional[str] = None):
 
 
 def _log_entry_for(date: str) -> Optional[Dict]:
-    """Last generation_log entry for a date wins (regenerations append)."""
+    """Last generation_log entry for a date wins (regenerations append).
+
+    Reads with `errors="replace"` — see the TORN-APPEND note above
+    `_run_log_entries`. This is the OLDER of the file's two page-path readers
+    and the one that fires on the founder's profile (an edition row always
+    exists there), so a torn tail here has been answering `GET /` and
+    `GET /archive` with HTTP 500 since long before NL-149. Fixed with the
+    reader NL-149 added because one site is not closure (NL-149 QA F-1)."""
     log = paths.DATA_DIR / "generation_log.jsonl"
     if not log.exists():
         return None
     found = None
     try:
-        for line in log.read_text(encoding="utf-8").splitlines():
+        for line in log.read_text(encoding="utf-8",
+                                  errors="replace").splitlines():
             if not line.strip():
                 continue
             try:
@@ -287,9 +358,72 @@ def _log_entry_for(date: str) -> Optional[Dict]:
                 continue
             if e.get("date") == date and not e.get("sample"):
                 found = e
-    except OSError:
+    except (OSError, ValueError):
         return None
     return found
+
+
+# NL-149 item 2 — the generation report's source.
+#
+# THE CHOICE, STATED: the report is a VIEW over data/generation_log.jsonl, not a
+# new artifact class. That log is already the per-run record of steps, models and
+# money, already append-only, already written on BOTH the ok and the failed arm,
+# and already survives the process — everything his charter asks a saved report
+# to be. Minting a second file would have created two records of one run that
+# can disagree, and a schema change (the DB) would have been a checkpoint. What
+# NL-149 added is a field inside the entry that was already being written
+# (`stage_timeline`), which is additive jsonl enrichment: every existing reader
+# — _log_entry_for, diagnose, the UI's story source — sees the keys it always saw.
+_RUNLOG_MAX_ROWS = 30
+
+
+def _run_log_entries(limit: int = _RUNLOG_MAX_ROWS) -> Tuple[List[Dict], int]:
+    """(newest-first RUN entries, total run count) from generation_log.jsonl.
+
+    Two kinds of line live in that file: RUN entries (one per generate attempt,
+    written by generate.log_generation) and per-STAGE instrumentation entries
+    (the analysis stage writes one, keyed `stage`). Only runs are reports, so
+    the stage lines are filtered out by the presence of that key rather than by
+    guessing at the run shape — 23 of the founder's 49 lines are stage lines,
+    and rendering them as runs would double every day's count.
+
+    Unreadable file -> ([], 0); an unparseable line is skipped, never guessed at.
+
+    TORN APPEND (NL-149 QA F-1, HIGH). This file has TWO appenders —
+    generate.log_generation (ensure_ascii=True) and analysis.py's stage line
+    (ensure_ascii=False, and the founder's copy already carries 560 non-ASCII
+    bytes from it) — and an append is not atomic. A kill, a full disk or a power
+    loss between flush chunks leaves a partial multibyte tail, and
+    UnicodeDecodeError subclasses ValueError, NOT OSError, so the old
+    `except OSError` never saw it. Since this read sits in the UNCONDITIONAL
+    part of build_page, that decode error left do_GET answering HTTP 500 on
+    every HTML door.
+
+    `errors="replace"` is the load-bearing half, and returning ([], 0) on the
+    wider except is NOT a substitute: one bad byte in a 660KB append-only file
+    would silently erase the founder's entire generation record from the report,
+    which is a worse lie than the crash. Replace keeps every intact line and
+    costs exactly the torn one — which then dies at json.loads, where a torn
+    line already died. The widened except stays as belt-and-braces for the read
+    itself."""
+    log = paths.DATA_DIR / "generation_log.jsonl"
+    runs: List[Dict] = []
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return [], 0
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("stage") is not None:
+            continue
+        runs.append(e)
+    runs.reverse()                      # newest first — the log appends
+    return runs[:max(0, limit)], len(runs)
 
 
 _MOVE_RE = re.compile(r"^\*\*(?P<label>[^*]+):\*\*\s*(?P<text>.*)$", re.S)
@@ -379,7 +513,16 @@ def _slots_for(row) -> List[Dict]:
 
 
 def _fmt_local(iso_utc: Optional[str], with_date: bool = False) -> str:
-    """Display-local per the addendum; storage stays UTC."""
+    """Display-local per the addendum; storage stays UTC.
+
+    UNTRUSTED INPUT (NL-149 QA F-4). Every caller feeds this a value read back
+    from a record the app does not own the schema of — generation_log.jsonl
+    lines, a `generated_at` column, a source's `retrieved_at`. A non-string
+    stamp (a hand-edited log, an epoch from a future writer) raised
+    AttributeError straight out of _render_run and out of build_page with it,
+    which is HTTP 500 on the reports page. The guard now covers the type as
+    well as the value, and the fallback is unchanged in kind: an unparseable
+    stamp renders AS ITSELF rather than as an invented time."""
     if not iso_utc:
         return "unknown"
     try:
@@ -392,8 +535,8 @@ def _fmt_local(iso_utc: Optional[str], with_date: bool = False) -> str:
         if with_date:
             return f"{local.strftime('%a, %b')} {local.day}, {t}"
         return t
-    except ValueError:
-        return iso_utc
+    except (AttributeError, TypeError, ValueError):
+        return str(iso_utc)
 
 
 def _human_date(date_str: str) -> str:
@@ -2351,6 +2494,42 @@ def _back_link(label: str, onclick: str) -> str:
             f'onclick="{onclick}">{_e(label)}</a>')
 
 
+def _fmt_elapsed(seconds) -> str:
+    """M:SS for a duration — the SAME shape webui.genFmt produces client-side and
+    _wav_duration produces for episode length, so a step's seeded line and the
+    line the client appends for the next step are typographically identical.
+    Anything unreadable as a number renders as an em dash: an unknown duration
+    says so rather than claiming 0:00.
+
+    OverflowError is in the tuple deliberately (NL-149 QA F-4): `Infinity` is a
+    token json.loads ACCEPTS and json.dumps EMITS for a float inf, so it
+    round-trips through generation_log.jsonl by construction the day any writer
+    records one — and `int(float("inf"))` raises OverflowError, an
+    ArithmeticError, which the value/type pair never covered. This helper is on
+    the page-build path, so that was HTTP 500 rather than a bad cell."""
+    try:
+        s = int(max(0.0, float(seconds)))
+    except (TypeError, ValueError, OverflowError):
+        return "—"
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def _gen_log_line(step: Dict) -> str:
+    """One FINISHED step as one line of the generating log (NL-149 item 1).
+
+    Kept in server.py rather than composed in the client because the seeded
+    lines (a reload mid-run) and the appended lines (the poll) must be the same
+    markup — two renderers for one line is how the reloaded half of a log starts
+    looking different from the live half. The client mirrors this shape; the
+    pin (test) renders both and compares."""
+    label = _e(str(step.get("label") or ""))
+    model = step.get("model")
+    model_html = (f'<span class="gen-log-model"> · {_e(str(model))}</span>'
+                  if model else "")
+    return (f'<li><span class="gen-log-step">{label}</span>{model_html}'
+            f'<span class="gen-log-time">{_e(_fmt_elapsed(step.get("elapsed_s")))}</span></li>')
+
+
 def _failure_outcome(con: sqlite3.Connection, row=None) -> str:
     """Which of the three post-failure positions the reader is in.
 
@@ -2395,6 +2574,25 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         _model_suffix = f" · {_e(_stage_model)}" if _stage_model else ""
         _total0 = gen_state.get("total_elapsed_s") or 0
         _stage0 = gen_state.get("stage_elapsed_s") or 0
+        # NL-149 item 1: the finished steps, server-rendered so the log SURVIVES
+        # A RELOAD. The client appends to this same <ol> as later steps finish;
+        # data-count is the cursor it appends from, so a reload mid-run picks up
+        # exactly where the previous DOM left off instead of starting empty or
+        # double-printing.
+        #
+        # data-run IS THE CURSOR'S IDENTITY (NL-149 QA F-3). A cursor alone says
+        # HOW MANY lines are drawn, never WHICH RUN drew them, and append-only
+        # then delivers something worse than a vanished line across a run
+        # boundary: a line that is still on screen and is now false. The path is
+        # not exotic — pollGeneration's `.catch` retries every 4s and
+        # deliberately does NOT reload (a blip must not throw the page away), so
+        # a tab left open through a restart reconnects to whatever run is in
+        # flight, computes `have = 4` against `steps: []`, draws nothing, and
+        # leaves run A's four lines under run B's clock while B's first four
+        # boundaries are never drawn. `started_at` is already on the snapshot,
+        # so the identity costs no new key and no route change.
+        _done_steps = gen_state.get("steps") or []
+        _log_html = "".join(_gen_log_line(s) for s in _done_steps)
         # NL-103 row 18: the stage tour ("Fetching your sources, ranking,
         # writing, editing, and recording the episode.") DIED — the live status
         # line below states the stage it is actually in, so enumerating the
@@ -2406,6 +2604,7 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
   <h2>Generating today’s edition…</h2>
   <p>A full edition takes a while — the live status below shows exactly where
      it is; the page refreshes itself when it’s ready.</p>
+  <ol class="gen-log" id="gen-log" data-count="{len(_done_steps)}" data-run="{_e(gen_state.get("started_at") or "")}">{_log_html}</ol>
   <p class="gen-live" id="gen-live" data-total="{_total0}" data-stage-el="{_stage0}">
     <span class="gen-live-stage" id="gen-live-stage">{_e(_stage_label)}</span><span class="gen-live-model" id="gen-live-model">{_model_suffix}</span>
     <span class="gen-live-clock" id="gen-live-clock"></span>
@@ -3635,7 +3834,103 @@ def _collect_thread_pages(con: sqlite3.Connection) -> str:
     return "".join(_render_thread_page(con, r) for r in rows)
 
 
-def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict]) -> str:
+def _run_outcome(entry: Dict) -> str:
+    """The word for how a recorded run ended.
+
+    ORDER MATTERS: NL-148 clause 4's systemic pause rides as `paused` BESIDE
+    `status: "failed"` (that entry deliberately kept the old word so no existing
+    consumer moved), so the pause marker is read FIRST — a paused run reported
+    as a plain failure would send the reader hunting for a bug in a run that
+    stopped on purpose."""
+    if entry.get("paused"):
+        return labels.RUNLOG_PAUSED
+    if entry.get("status") == "ok":
+        return labels.RUNLOG_SAMPLE if entry.get("sample") else labels.RUNLOG_PUBLISHED
+    return labels.RUNLOG_FAILED
+
+
+def _render_run(entry: Dict) -> str:
+    """One recorded run as one report block (NL-149 item 2).
+
+    The step lines come from `stage_timeline` ONLY — the reader-world stage words
+    with the time each took. They are deliberately NOT backfilled from the money
+    ledger (`steps`), which counts LLM CALLS under internal names
+    (`narrative_A`, `script_retry`) and cannot say what a stage took. A run
+    recorded before NL-149 has no timeline and says so, in place, rather than
+    borrowing a number from the one end-of-run timestamp it does carry."""
+    when = _fmt_local(entry.get("ts"), with_date=True)
+    outcome = _run_outcome(entry)
+    bits = []
+    date = entry.get("date")
+    if date:
+        bits.append(_e(str(date)))
+    total_el = entry.get("elapsed_s")
+    if isinstance(total_el, (int, float)) and total_el > 0:
+        bits.append(f"{_e(labels.RUNLOG_TOTAL)} {_fmt_elapsed(total_el)}")
+    usd = entry.get("total_usd")
+    if isinstance(usd, (int, float)):
+        # "$0" and not "$0.0000" for an exactly-free run — generate.py's own
+        # audio warning already writes zero that way, and four decimals of
+        # nothing reads like a rounding artifact rather than the fact it is.
+        # THE WORD "charged" IS LOAD-BEARING: on the subscription lane a real
+        # run genuinely costs $0 charged while its shadow price is dollars, and
+        # the shadow figure is deliberately NOT summed here — the log carries no
+        # run-level shadow total, and deriving one on a money surface would be
+        # inventing a figure the record never wrote.
+        money = f"${usd:.4f}" if usd else "$0"
+        bits.append(f"{money} {_e(labels.RUNLOG_CHARGED)}")
+    timeline = entry.get("stage_timeline")
+    if isinstance(timeline, list) and timeline:
+        detail = ('<ol class="gen-log">'
+                  + "".join(_gen_log_line(s) for s in timeline if isinstance(s, dict))
+                  + "</ol>")
+    elif entry.get("status") == "ok" or entry.get("steps"):
+        detail = f'<p class="empty-note">{_e(labels.RUNLOG_NO_TIMING)}</p>'
+    else:
+        detail = f'<p class="empty-note">{_e(labels.RUNLOG_STEPS_UNRECORDED)}</p>'
+    error = entry.get("error")
+    err_html = (f'<p class="runlog-error">{_e(str(error))}</p>'
+                if error and outcome != labels.RUNLOG_PUBLISHED else "")
+    return (f'<div class="runlog-run">'
+            f'<h2 class="runlog-head"><span class="runlog-when">{_e(when)}</span>'
+            f'<span class="runlog-outcome">{_e(outcome)}</span></h2>'
+            f'<p class="runlog-meta">{" · ".join(bits)}</p>'
+            f'{err_html}{detail}</div>')
+
+
+def _render_run_log(recorded: Optional[Tuple[List[Dict], int]] = None) -> str:
+    """The Generation reports view — a sibling .view, reached from Settings.
+
+    A full destination rather than a panel section because the slide panel is
+    23rem wide and a step table inside it would need a layout of its own; this
+    composes the SAME components every other destination uses (deep-back,
+    deep-title-block, the .gen-log line grammar item 1 introduced) and mints no
+    new design direction.
+
+    `recorded` lets build_page hand in the read it already did for the Settings
+    row's count — one parse of the log per page, not two. Passing nothing reads
+    it, so the view is still callable on its own."""
+    runs, total = recorded if recorded is not None else _run_log_entries()
+    out = ['<section id="view-runlog" class="view">',
+           _back_link(labels.BACK_TO_TODAY, "closeRunLog(event); return false;"),
+           '<div class="deep-title-block">'
+           f'<p class="deep-eyebrow">{_e(labels.RUNLOG_EYEBROW)}</p>'
+           f'<h1 class="deep-title">{_e(labels.RUNLOG_TITLE)}</h1></div>']
+    if not runs:
+        out.append(f'<p class="empty-note">{_e(labels.RUNLOG_EMPTY)}</p>')
+    else:
+        if total > len(runs):
+            out.append(
+                f'<p class="runlog-note">{_e(labels.RUNLOG_TRUNCATED_PREFIX)} '
+                f'{len(runs)} {_e(labels.RUNLOG_TRUNCATED_MIDDLE)} {total} '
+                f'{_e(labels.RUNLOG_TRUNCATED_SUFFIX)}</p>')
+        out.extend(_render_run(e) for e in runs)
+    out.append("</section>")
+    return "".join(out)
+
+
+def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict],
+                     recorded: Optional[Tuple[List[Dict], int]] = None) -> str:
     cfg = config.load_sources()
     enabled = len(cfg.fetchable_sources) + len(cfg.reference_only_sources)
     # M7 gate finding 7: display the CONFIGURED engine, not the constant.
@@ -3648,6 +3943,13 @@ def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict]) -> str
     # rides in-string.
     gen_val = ("Generated " + _fmt_local(row["generated_at"])) if row is not None \
         else "No edition yet"
+    # NL-149 item 2: the row's value is the COUNT the log actually holds — the
+    # reader learns whether there is anything to open before opening it, and an
+    # empty record says so in the same words the view does.
+    _n_runs = (recorded if recorded is not None else _run_log_entries())[1]
+    runs_val = (labels.RUNLOG_EMPTY if _n_runs == 0
+                else labels.RUNLOG_RUNS_ONE if _n_runs == 1
+                else labels.RUNLOG_RUNS_MANY.format(n=_n_runs))
     # Sources / Voice / Budget rows show VALUES only — their editors aren't
     # built in M7, and a dead "Edit" button that looks operable would be an
     # accessibility miss by the addendum's own standard. Values are honest;
@@ -3661,6 +3963,13 @@ def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict]) -> str
     <p class="settings-row-value">{_e(gen_val)}</p>
   </div>
   <button class="settings-row-action primary" onclick="generateAgain(); closeSettings();">Generate again</button>
+</div>
+<div class="settings-row">
+  <div class="settings-row-main">
+    <p class="settings-row-label">{_e(labels.RUNLOG_TITLE)}</p>
+    <p class="settings-row-value">{_e(runs_val)}</p>
+  </div>
+  <button class="settings-row-action" onclick="openRunLog(event)">{_e(labels.RUNLOG_OPEN)}</button>
 </div>
 <div class="settings-row">
   <div class="settings-row-main">
@@ -4614,16 +4923,22 @@ def build_page(con: sqlite3.Connection, date: Optional[str] = None) -> Tuple[str
         briefs, deep_sections = _collect_deep_views(
             con, row, entry, "", labels.BACK_TO_TODAY, "view-today")
 
+    # NL-149 item 2: ONE read of generation_log.jsonl per page — the Settings
+    # row's count and the reports view are two views of the same read. (His log
+    # is 660KB / 3.6ms today; it is append-only and will not stay that size.)
+    _recorded = _run_log_entries()
+
     page = webui.PAGE.format(
         css=webui.CSS,
         staleness_banner=_staleness_banner_html(),
         today_html=_render_today(con, row, entry, gen_state, briefs=briefs),
         following_html=_render_following(con),
         archive_html=_render_archive(con),
-        settings_html=_render_settings(con, row, entry),
+        settings_html=_render_settings(con, row, entry, recorded=_recorded),
         popups_html=webui.POPUPS,
         deep_views_html="".join(deep_sections),
         thread_pages_html=_collect_thread_pages(con),
+        runlog_html=_render_run_log(_recorded),
         nl_labels_js=_nl_labels_js(),
         js=webui.JS,
     )

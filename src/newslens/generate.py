@@ -43,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -321,6 +321,21 @@ class GenReport:
     # OK path bills from report.steps (the display breakdown); this ledger is
     # what a FAILED-abort entry folds so its money record is never a null.
     attempt_ledger: List[Dict] = field(default_factory=list)
+    # NL-149 item 2 — THE STAGE TIMELINE (the persisted half of his charter).
+    # One entry per phase boundary the run actually passed through:
+    #   {"label": <PROGRESS_LABELS word>, "model": <seat model or None>,
+    #    "started_at": <iso Z>, "elapsed_s": <float, set when the stage closes>}
+    # DISTINCT FROM `steps` ON PURPOSE, and not folded into it: `steps` is the
+    # MONEY ledger, one row per LLM call (narrative attempt 1, editor attempt 2,
+    # script_retry, script_adapt, state_rewrites, tts_*) — several rows for one
+    # stage, and no row at all for ingest/rank/persist. The timeline is one row
+    # per STAGE, which is the thing the reader watches and the thing his charter
+    # asks the report to keep. Enriching `steps` with durations would have had to
+    # answer "which of the editor's two attempts owns the stage's minutes"; there
+    # is no honest answer, so the two ledgers stay side by side.
+    stage_timeline: List[Dict] = field(default_factory=list)
+    run_started_at: str = ""        # iso Z, stamped when the timeline opens
+    run_elapsed_s: float = 0.0      # whole-run wall seconds, set at close
 
 
 def wc(text: str) -> int:
@@ -3371,6 +3386,124 @@ def _emit_progress(progress: Optional[Callable[[str, Optional[str]], None]],
         pass
 
 
+# NL-149 QA F-2: the grid the two timing surfaces floor onto. Kept as a
+# timedelta so the floor is exact integer arithmetic on microseconds.
+# server._GenJob._close_stage_locked carries the same constant by value and the
+# same rule — tests/test_nl149_fixloop1.py pins that they agree.
+_TENTH = timedelta(seconds=0.1)
+
+
+def _utc_stamp() -> str:
+    """A stage/run start stamp, MILLISECOND-precise (NL-149 QA F-2).
+
+    It used to format "%Y-%m-%dT%H:%M:%SZ" — throwing the sub-second part of
+    every start away, so `_wall_seconds_since` then measured from an instant up
+    to a second EARLIER than the stage began. Measured over 12 samples of 0.05s
+    of real work: mean +0.550s, always positive. The run total absorbs that
+    once; an N-stage run absorbs it N times, so the saved report could say a run
+    took less than its own steps add up to — on the one surface whose whole job
+    is that arithmetic. Still ends with "Z", and `fromisoformat` parses the
+    fractional form unchanged."""
+    return (datetime.now(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z")
+
+
+def _wall_seconds_since(iso: str) -> float:
+    """Wall seconds from an iso Z stamp to now, FLOORED to 0.1s, never negative.
+
+    Wall clock and not `time.monotonic` deliberately: the live surface
+    (server._GenJob) already computes its elapsed this way from the same kind of
+    stamp, and one timing concept across the two halves of NL-149 is worth more
+    than immunity to a mid-run clock adjustment on a personal machine. The floor
+    at 0 is what a backwards clock costs us: an understated stage, never a
+    negative duration on screen.
+
+    FLOOR, NOT ROUND (NL-149 QA F-2, and the half a millisecond stamp does not
+    close). The stage windows are contiguous, non-overlapping and nested inside
+    the run window, so `sum(steps) <= total` is arithmetic, not preference.
+    Sub-second stamps alone do not deliver it: with round(), each stage can
+    round UP by 0.05s while the total rounds down by 0.05s. Simulated over 2,000
+    runs per cell, that residual is 30.3% of ten-stage/two-minute runs (99.9%
+    when the stages are ~0.06s) — a tenth of the old error, still a record that
+    contradicts itself. Flooring is structural rather than merely smaller,
+    because floor(a) + floor(b) <= floor(a + b) on a fixed grid: the parts can
+    never add to more than the whole, at any stage count or duration (measured
+    0.0% across every cell). It also matches how the number is READ —
+    server._fmt_elapsed and webui.genFmt both truncate to the second — and it
+    keeps this helper's stated direction: understate a stage, never overstate
+    one. server._GenJob._close_stage_locked floors by the same rule, so the live
+    panel and the saved report cannot disagree about the same step.
+
+    The floor runs on the timedelta's EXACT microseconds rather than on
+    `total_seconds() * 10`: that product is a float and 2.675 * 10 is
+    26.749999999999996, so a float floor would silently drop a tenth on
+    arbitrary durations — the one arithmetic error this fix exists to remove."""
+    try:
+        delta = (datetime.now(timezone.utc)
+                 - datetime.fromisoformat(iso.replace("Z", "+00:00")))
+        return max(0.0, (delta // _TENTH) / 10)
+    except Exception:  # noqa: BLE001 — a clock read never breaks a generation
+        return 0.0
+
+
+def timeline_recorder(report: GenReport,
+                      inner: Optional[Callable[[str, Optional[str]], None]]
+                      ) -> Callable[[str, Optional[str]], None]:
+    """Wrap the caller's progress callback so every phase boundary is RECORDED
+    as well as announced (NL-149 item 2).
+
+    WHY A WRAPPER AND NOT A REPORT ARGUMENT ON `_emit_progress`: the nine emit
+    sites would each have had to remember to pass it, and a site that forgot
+    would go silently un-timed — the unasserted-no-op class ENGINEERING.md's
+    wiring rule exists for. Wrapping once, in run_generate, means the timeline
+    covers exactly the boundaries the progress channel covers, by construction,
+    for every caller: the web job, the CLI printer, AND `progress=None` (which
+    is why the wrapper is installed unconditionally — a terminal `newslens
+    generate` must land in the settings report like any other run).
+
+    NON-INTERFERENCE IS PRESERVED IN BOTH DIRECTIONS. The recording is inside
+    its own swallow, so a broken clock cannot stop the caller's callback from
+    firing; and the caller's callback is called AFTER the record, so a raising
+    callback (the pinned `boom` case) cannot stop the recording. The whole
+    wrapper still runs inside `_emit_progress`'s own `except Exception`, so
+    neither half can reach the generation."""
+    def _record(label: str, model: Optional[str]) -> None:
+        try:
+            close_open_stage(report)
+            report.stage_timeline.append({
+                "label": label, "model": model,
+                "started_at": _utc_stamp(), "elapsed_s": None,
+            })
+        except Exception:  # noqa: BLE001 — never touches the generation
+            pass
+        if inner is not None:
+            inner(label, model)
+    return _record
+
+
+def close_open_stage(report: GenReport) -> None:
+    """Stamp the elapsed of the stage currently open, if any. A stage's duration
+    is measured boundary-to-boundary — the same span the live clock counts as
+    'on this step' — so the LAST stage's duration runs to the close call at the
+    end of the run and therefore includes the post-`state` tail (artifact write,
+    watch register). That is stated rather than hidden: it is the honest reading
+    of 'time on the last step' when the last step has no successor."""
+    if not report.stage_timeline:
+        return
+    last = report.stage_timeline[-1]
+    if last.get("elapsed_s") is None:
+        last["elapsed_s"] = _wall_seconds_since(last.get("started_at") or "")
+
+
+def close_stage_timeline(report: GenReport) -> None:
+    """End-of-run: close the open stage and stamp the whole-run elapsed. Called
+    on BOTH log arms (ok and failed/paused) — a run that ends without an edition
+    is exactly the run whose timeline the reader wants."""
+    close_open_stage(report)
+    if report.run_started_at:
+        report.run_elapsed_s = _wall_seconds_since(report.run_started_at)
+
+
 def _analysis_pause_class() -> type:
     """`analysis.SystemicFetchFailure`, resolved lazily.
 
@@ -3432,6 +3565,14 @@ def run_generate(
             "briefing of record untouched"
         )
 
+    # NL-149 item 2: the run's own clock starts HERE — before the first phase
+    # boundary — so the persisted total covers the whole run and not just the
+    # part after the first emit. Installed unconditionally (see
+    # timeline_recorder): a CLI run passes a printer, the web job passes its
+    # stamper, a scripted run passes None, and all three land in the report.
+    report.run_started_at = _utc_stamp()
+    progress = timeline_recorder(report, progress)
+
     own_con = con is None
     if own_con:
         db.migrate()
@@ -3456,11 +3597,19 @@ def run_generate(
             # failure the record never saw" is the asymmetry the keyless-refusal
             # note above exists to forbid.
             ledger = fold_late_steps(report)
+            close_stage_timeline(report)
             entry = {"date": date, "variant": variant, "sample": sample,
                      "status": "failed", "error": str(exc)[:500],
                      "steps": ledger,
                      "total_usd": round(
                          sum(s.get("usd") or 0 for s in ledger), 6),
+                     # NL-149 item 2: a failed run keeps its timeline. The
+                     # settings report renders failures too — a run that died in
+                     # the editor after 22 minutes is the single most useful row
+                     # the log can hand the reader, and NL-146's unattended runs
+                     # will produce them unwatched.
+                     "stage_timeline": report.stage_timeline,
+                     "elapsed_s": report.run_elapsed_s,
                      "warnings": report.warnings}
             # THE SEAM NL-146 INHERITS (and the reason `status` does NOT move):
             # every existing consumer reads status=='failed', so the pause keeps
@@ -4398,6 +4547,7 @@ def _run_generate_body(
         write_artifact(date, report.variant, report.sample, narrative, script,
                        no_threads=no_threads)
     )
+    close_stage_timeline(report)          # NL-149 item 2 (see the failed arm)
     log_generation({
         "date": date, "variant": report.variant, "sample": report.sample,
         "no_threads": no_threads,
@@ -4425,5 +4575,7 @@ def _run_generate_body(
         "continuity": report.continuity_status,
         "steps": report.steps,
         "total_usd": round(sum(s.get("usd") or 0 for s in report.steps), 6),
+        "stage_timeline": report.stage_timeline,   # NL-149 item 2
+        "elapsed_s": report.run_elapsed_s,
     })
     return report

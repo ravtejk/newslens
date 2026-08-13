@@ -417,6 +417,21 @@ h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-w
 .gen-live .gen-live-stage { color: var(--ink); }
 .gen-live .gen-live-model { color: var(--ink-faint); }
 .gen-live .gen-live-clock { display: block; color: var(--ink-faint); font-size: 0.76rem; margin-top: 0.3rem; }
+/* NL-149 item 1 — the generating LOG: one line per finished step, added below
+   the last one, each keeping the time that step took. The live line (.gen-live
+   above) stays underneath as the newest, still-running entry, so the panel reads
+   top-down as a log ending in "now". Same mono furniture register as .gen-live —
+   this is machine grade, never edition body — and no chrome: the time column is
+   held by tabular numerals and a right-aligned span, not by a table or a rule.
+   Reduced margin on .gen-live when a log precedes it so the two read as one
+   block rather than two stacked panels. */
+.gen-log { list-style: none; margin: 0 0 0.35rem; padding: 0; max-width: 34rem;
+  font-family: var(--font-mono); font-size: 0.82rem; color: var(--ink-faint); }
+.gen-log li { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.15rem 0; }
+.gen-log .gen-log-step { color: var(--ink-soft); }
+.gen-log .gen-log-model { color: var(--ink-faint); }
+.gen-log .gen-log-time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.gen-log + .gen-live { margin-top: 0; }
 .error-text { font-size: 0.85rem; color: var(--danger); margin: 0 0 1rem; }
 .cta-quiet { display: inline-block; background: var(--ink); color: var(--bg); font-size: 0.85rem;
   border: none; padding: 0.6rem 1.1rem; border-radius: var(--radius); cursor: pointer; }
@@ -711,8 +726,32 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
    their own centred container and they carried the same 72rem cap. They step
    with it: a Today page that widened while its deep views stayed narrow would
    read as a layout bug on the very first click-through. */
-#view-edition, section[id^="view-deep-"], section[id^="view-thread-"] { max-width: 84rem; margin: 0 auto; padding: 0 2rem; }
+#view-edition, section[id^="view-deep-"], section[id^="view-thread-"],
+#view-runlog { max-width: 84rem; margin: 0 auto; padding: 0 2rem; }
 #view-edition .view-title, #view-edition .today-grid, #view-edition .footer-tag { max-width: none; }
+
+/* NL-149 item 2 — the generation reports. NO NEW DIRECTION: the head/title block
+   are the deep view's, the step lines are item 1's .gen-log grammar reused
+   verbatim (one line shape for "a step and what it took", live and after the
+   fact), and the only rules here are the run block's own spacing and the
+   outcome word. Machine register throughout — this is the audit trail, and it
+   will be read cold, days later, about runs nobody watched (NL-146). */
+.runlog-note { font-family: var(--font-mono); font-size: 0.76rem; color: var(--ink-faint);
+  max-width: 44rem; margin: 0 0 1.6rem; }
+.runlog-run { max-width: 44rem; margin: 0 0 1.8rem; padding: 0 0 1.4rem;
+  border-bottom: 1px solid var(--rule); }
+.runlog-head { display: flex; align-items: baseline; gap: 0.75rem;
+  font-family: var(--font-sans); font-size: 0.78rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft);
+  margin: 0 0 0.35rem; }
+/* The outcome is a WORD, never a colored dot or a badge — the same rule the
+   memline follows. Weight and position carry it; color is never the channel. */
+.runlog-head .runlog-outcome { margin-left: auto; color: var(--ink); }
+.runlog-meta { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-faint);
+  margin: 0 0 0.6rem; }
+.runlog-error { font-size: 0.8rem; color: var(--ink-soft); margin: 0 0 0.6rem;
+  max-width: 44rem; }
+.runlog-run .gen-log { margin: 0; }
 
 /* ============================ THE ROOT STEP (NL-143 item 3c) ============================
    Approved with the container at the 07-18 polish gate. A fixed rem container
@@ -728,7 +767,8 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
 /* ============================ MOBILE PASS (~390px) ============================ */
 @media (max-width: 900px) {
   .page { padding: 0 1.15rem; }
-  #view-edition, section[id^="view-deep-"], section[id^="view-thread-"] { padding: 0 1.15rem; }
+  #view-edition, section[id^="view-deep-"], section[id^="view-thread-"],
+  #view-runlog { padding: 0 1.15rem; }
   /* Item 1 is DESKTOP; below 900px the single column stays, DOM = rank order.
      Reset the grid placement so every slot stacks 1→N in one column. */
   .today-grid { grid-template-columns: 1fr; gap: 0; }
@@ -763,7 +803,8 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
 # The full page shell (v7 — DIRECTION-v5 §4: no chrome). The masthead ceremony,
 # section line, and edition bar are rendered INTO each view by server.py (the
 # dateline is per-edition, not shared chrome). Placeholders: {css} {staleness_banner}
-# {today_html} {following_html} {archive_html} {settings_html} {popups_html} {deep_views_html} {js}
+# {today_html} {following_html} {archive_html} {settings_html} {popups_html}
+# {deep_views_html} {thread_pages_html} {runlog_html} {js}
 PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -781,6 +822,10 @@ PAGE = """<!DOCTYPE html>
 <section id="view-archive" class="view">{archive_html}</section>
 {deep_views_html}
 {thread_pages_html}
+<!-- NL-149 item 2: the generation reports, a sibling .view opened from
+     Settings. Server-rendered with the page so the audit trail is there the
+     moment it is asked for (and readable with the generate machinery idle). -->
+{runlog_html}
 <!-- NL-11: archive editions inject here as sibling .view sections so opening
      one never replaces Today; empty until an archive row is opened. -->
 <div id="edition-mount"></div>
@@ -1800,6 +1845,32 @@ function closeSettings() {
   var panel = document.getElementById('slide-panel');
   panel.classList.remove('open'); panel.setAttribute('aria-hidden', 'true');
 }
+/* NL-149 item 2: Settings -> Generation reports. The panel CLOSES on the way in
+   (a slide panel over a full-page destination is two open surfaces arguing), and
+   the reader lands back where they were, not on Today — the same return-id
+   courtesy openDeepView pays. The visible back label is the app's home because
+   that is the one destination guaranteed to exist. */
+var lastRunLogReturn = 'view-today';
+function openRunLog(e) {
+  if (e) e.preventDefault();
+  var av = document.querySelector('.view.active');
+  lastRunLogReturn = (av && av.id) ? av.id : 'view-today';
+  closeSettings();
+  document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+  var target = document.getElementById('view-runlog');
+  if (target) target.classList.add('active');
+  window.scrollTo(0, 0);
+  return false;
+}
+function closeRunLog(e) {
+  if (e) e.preventDefault();
+  document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+  var back = document.getElementById(lastRunLogReturn)
+             || document.getElementById('view-today');
+  if (back) back.classList.add('active');
+  window.scrollTo(0, 0);
+  return false;
+}
 function toggleDark(el) {
   var on = el.getAttribute('aria-checked') === 'true';
   el.setAttribute('aria-checked', String(!on));
@@ -2151,9 +2222,68 @@ function genClockSync(totalS, stageS) {
   if (!genClock.timer) { genClock.timer = setInterval(genClockTick, 1000); }
   genClockTick();
 }
+/* NL-149 item 1: the finished-step log. ADD, never replace — genLogSync only
+   ever appends the entries past the cursor it already rendered, so a line that
+   has appeared is never rewritten, re-ordered or removed by a later poll. The
+   cursor rides on the element (data-count) rather than in a JS variable so the
+   server-seeded lines from a mid-run reload are counted the same way the
+   appended ones are, and one poll after a reload cannot double-print them.
+   Mirrors server._gen_log_line — same tags, same classes, same M:SS. */
+function genLogLine(step) {
+  var li = document.createElement('li');
+  var lab = document.createElement('span');
+  lab.className = 'gen-log-step';
+  lab.textContent = step.label || '';
+  li.appendChild(lab);
+  if (step.model) {
+    var md = document.createElement('span');
+    md.className = 'gen-log-model';
+    md.textContent = ' · ' + step.model;
+    li.appendChild(md);
+  }
+  var t = document.createElement('span');
+  t.className = 'gen-log-time';
+  t.textContent = (typeof step.elapsed_s === 'number') ? genFmt(step.elapsed_s) : '—';
+  li.appendChild(t);
+  return li;
+}
+/* THE CURSOR'S IDENTITY (NL-149 QA F-3). data-count says how MANY lines are
+   drawn; data-run says WHICH RUN drew them. Without the second, a client that
+   outlives a run boundary — and the .catch below retries every 4s and
+   deliberately never reloads, so a tab left open through a restart is exactly
+   that client — computes `have = 4` against run B's `steps: []`, appends
+   nothing, and leaves run A's lines under run B's live clock while B's first
+   four boundaries are never drawn. Append-only stays the law WITHIN a run; a
+   new identity is a new log, which is the rule _GenJob.start() already applies
+   server-side. */
+function genLogSync(steps, runId) {
+  var log = document.getElementById('gen-log');
+  if (!log || !steps) { return; }
+  if (runId && log.getAttribute('data-run') !== runId) {
+    log.textContent = '';
+    log.setAttribute('data-count', '0');
+    log.setAttribute('data-run', runId);
+  }
+  var have = parseInt(log.getAttribute('data-count'), 10) || 0;
+  for (var i = have; i < steps.length; i++) { log.appendChild(genLogLine(steps[i])); }
+  if (steps.length > have) { log.setAttribute('data-count', String(steps.length)); }
+}
+/* NL-149 QA F-3, the stale-tab half: THE CLOCK STOPS WHEN CONTACT DOES.
+   genClockTick interpolates locally between polls, so a tab whose server has
+   gone away kept counting — minutes of invented elapsed for a run it cannot
+   see and that may already be over. Clearing the interval in the .catch freezes
+   the last CONFIRMED reading; the next successful poll re-syncs from the
+   server's own elapsed and restarts the tick. The retry stays indefinite on
+   purpose: reloading against a server that is still down would replace a
+   self-healing tab with a browser error page, and with data-run above, a tab
+   that reconnects into a different run now redraws instead of lying. */
+function genClockHold() {
+  if (genClock.timer) { clearInterval(genClock.timer); genClock.timer = null; }
+}
 function pollGeneration() {
   fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
     if (d.state === 'running') {
+      genLogSync(d.steps, d.started_at);
       var st = document.getElementById('gen-live-stage');
       if (st && d.stage) { st.textContent = d.stage; }
       var md = document.getElementById('gen-live-model');
@@ -2161,7 +2291,7 @@ function pollGeneration() {
       genClockSync(d.total_elapsed_s, d.stage_elapsed_s);
       setTimeout(pollGeneration, 2500);
     } else { location.reload(); }
-  }).catch(function () { setTimeout(pollGeneration, 4000); });
+  }).catch(function () { genClockHold(); setTimeout(pollGeneration, 4000); });
 }
 if (document.getElementById('gen-running')) {
   var gl = document.getElementById('gen-live');

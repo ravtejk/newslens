@@ -146,8 +146,13 @@ def test_emit_progress_none_is_noop_and_swallows(monkeypatch):
 
 # --- (b) GEN_JOB carries the live stage; (d) enriched snapshot shape ---------
 
+# NL-149 item 1 AMENDS THIS SET (2026-08-13): `steps` — the finished-step log
+# the generating panel appends to — is part of the snapshot contract now, so the
+# exact-shape assertion below carries it. The set is exact on purpose (a silent
+# new key is a UI contract nobody reviewed), which is why adding the feature had
+# to come here and say so rather than pass unnoticed.
 _SNAPSHOT_KEYS = {"state", "error", "started_at", "stage", "stage_model",
-                  "stage_elapsed_s", "total_elapsed_s"}
+                  "stage_elapsed_s", "total_elapsed_s", "steps"}
 
 
 def test_genjob_snapshot_shape_and_live_stage():
@@ -158,6 +163,7 @@ def test_genjob_snapshot_shape_and_live_stage():
     assert set(idle) == _SNAPSHOT_KEYS
     assert idle["state"] == "idle" and idle["error"] == ""
     assert idle["stage"] is None and idle["total_elapsed_s"] is None
+    assert idle["steps"] == []
 
     # Simulate a running job (start() would spawn a real thread — set directly).
     with job.lock:
@@ -176,20 +182,29 @@ def test_genjob_snapshot_shape_and_live_stage():
     assert run1["stage_model"] == "claude-opus"
     assert run1["stage_elapsed_s"] is not None and run1["stage_elapsed_s"] >= 0.0
 
-    # A later boundary REPLACES the stage (model may be None for a non-LLM phase).
+    # A later boundary REPLACES the live stage (model may be None for a non-LLM
+    # phase) — and, NL-149 item 1, RETIRES the previous one into the finished
+    # log instead of dropping it.
     job._progress("Making the audio", None)
     run2 = job.snapshot()
     assert run2["stage"] == "Making the audio"
     assert run2["stage_model"] is None
+    assert [s["label"] for s in run2["steps"]] == ["Writing the briefing"]
+    assert run2["steps"][0]["model"] == "claude-opus"
+    assert run2["steps"][0]["elapsed_s"] >= 0.0
 
-    # A terminal state clears the live stage (done path).
+    # A terminal state clears the live stage (done path). `completed=True` is
+    # the done path's own call: the stage that was open FINISHED, so it earns
+    # its line (server._GenJob._run passes it; the error paths do not).
     with job.lock:
         job.state = "done"
-        job._clear_stage_locked()
+        job._clear_stage_locked(completed=True)
     done = job.snapshot()
     assert done["state"] == "done"
     assert done["stage"] is None and done["stage_model"] is None
     assert done["stage_elapsed_s"] is None
+    assert [s["label"] for s in done["steps"]] == [
+        "Writing the briefing", "Making the audio"]
 
 
 # --- (c) CLI prints stage transitions ---------------------------------------

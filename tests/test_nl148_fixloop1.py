@@ -503,6 +503,40 @@ def test_in_suite_http_request_threads_are_joined_by_server_close():
 # §3b — NL-149: the masthead date's descenders (his word + two screenshots)
 # ===========================================================================
 
+_CHARTER_BOLD_ASCENT_PLUS_DESCENT = (2007 + 492) / 2048        # = 1.2202em
+
+
+def _dateline_cascade():
+    """Every `.dateline` declaration block in the SERVED CSS, paired with the
+    @media condition it sits inside (None = unconditional), in source order.
+
+    AUTHORED BY QA (NL-149 pass, F-7) and landed here by NL-149 fix loop 1,
+    because this is where the blind pin lives. A real brace walk over the
+    artifact the browser gets, not a regex over the first match — that
+    difference IS the finding. Comments are stripped first (they legitimately
+    contain braces), and only rules whose selector list carries `.dateline`
+    ITSELF are collected: `.dateline .dl-year` styles a child and cannot move
+    the dateline's own line box."""
+    import re as _re
+    from newslens import webui
+
+    css = _re.sub(r"/\*.*?\*/", "", webui.CSS, flags=_re.S)
+    out, stack, start, i = [], [], 0, 0
+    while i < len(css):
+        if css[i] == "{":
+            stack.append(css[start:i].strip())
+            start = i + 1
+        elif css[i] == "}":
+            prelude = stack.pop() if stack else ""
+            if any(s.strip() == ".dateline" for s in prelude.split(",")):
+                media = next((p for p in reversed(stack)
+                              if p.startswith("@media")), None)
+                out.append((media, css[start:i]))
+            start = i + 1
+        i += 1
+    return out
+
+
 def test_the_dateline_reserves_room_for_its_own_descenders():
     """BORN RED — the spacing he asked for, checked as GEOMETRY not as a string.
 
@@ -516,28 +550,59 @@ def test_the_dateline_reserves_room_for_its_own_descenders():
     (1.2202 - line-height) / 2 em.
 
     This reads the SERVED CSS — the artifact the browser gets — parses the
-    three numbers out of the same rule, and asserts the bottom margin actually
+    numbers out of the rules themselves, and asserts the bottom margin actually
     clears the computed overhang. A comment cannot satisfy it and neither can a
-    margin that is merely non-zero."""
+    margin that is merely non-zero.
+
+    HARDENED BY NL-149 FIX LOOP 1 — QA F-7, whose cascade walk this is. The
+    original resolved the rule with `re.search`, which takes the FIRST match,
+    and the served CSS carries `.dateline` TWICE: the base rule (webui.py:110)
+    and a mobile override inside `@media (max-width: 900px)` (webui.py:783). So
+    this pin had never looked at the phone. It passed because the mobile rule
+    overrides font-size ALONE — 2.6rem against an inherited line-height 1.02 and
+    an inherited 0.5rem margin, giving 0.2603rem of overhang against 0.5rem of
+    reserve — which made the desktop rule the worst case BY LUCK rather than by
+    construction. A mobile `margin` or `line-height` override would have sailed
+    through while putting the descenders back on the rule at 390px: the exact
+    defect he reported, on the exact surface he reads it on. This now resolves
+    the CASCADE per breakpoint and asserts the geometry in every context the
+    stylesheet defines, so a rule cannot hide behind another rule's position in
+    the file.
+
+    Proven to bite (QA mutation, re-taken this loop): adding
+    `margin: 0 0 0.1rem;` to the mobile rule, or growing it to 5rem, leaves the
+    old first-match form GREEN and turns this one RED."""
     import re as _re
-    from newslens import webui
 
-    rule = _re.search(r"\.dateline \{(.*?)\}", webui.CSS, _re.S).group(1)
-    fs = float(_re.search(r"font-size:\s*([\d.]+)rem", rule).group(1))
-    lh = float(_re.search(r"line-height:\s*([\d.]+)", rule).group(1))
-    m_bottom = _re.search(r"margin:\s*0 0 ([\d.]+)rem", rule)
-    assert m_bottom, (
-        "the dateline reserves NOTHING below itself — its descenders land on "
-        f"whatever follows the masthead. Rule as served: .dateline {{{rule}}}")
-    mb = float(m_bottom.group(1))
-
-    charter_bold_ascent_plus_descent = (2007 + 492) / 2048     # = 1.2202em
-    overhang_rem = (charter_bold_ascent_plus_descent - lh) / 2 * fs
-    assert overhang_rem > 0, (
-        "the line box now contains the ink — this rule's premise moved")
-    assert mb >= overhang_rem, (
-        f"the dateline reserves {mb}rem below itself but its own descenders "
-        f"overhang by {overhang_rem:.4f}rem — they will cross the rule again")
+    rules = _dateline_cascade()
+    assert len(rules) >= 2, (
+        "the two-rule premise moved — re-derive this pin against the served CSS")
+    contexts = [None] + sorted({m for m, _ in rules if m})
+    checked = 0
+    for ctx in contexts:
+        eff = {}
+        for media, body in rules:
+            if media is None or media == ctx:
+                eff.update(dict(_re.findall(r"([a-z-]+)\s*:\s*([^;]+)", body)))
+        fs = _re.search(r"([\d.]+)rem", eff.get("font-size", ""))
+        lh = _re.search(r"([\d.]+)", eff.get("line-height", ""))
+        m_bottom = _re.search(r"0 0 ([\d.]+)rem", eff.get("margin", ""))
+        assert fs and lh, f"{ctx}: .dateline has no resolvable type geometry"
+        assert m_bottom, (
+            f"{ctx or 'base'}: the dateline reserves NOTHING below itself — its "
+            f"descenders land on whatever follows the masthead. Effective: {eff}")
+        mb = float(m_bottom.group(1))
+        overhang_rem = ((_CHARTER_BOLD_ASCENT_PLUS_DESCENT - float(lh.group(1)))
+                        / 2 * float(fs.group(1)))
+        assert overhang_rem > 0, (
+            f"{ctx or 'base'}: the line box now contains the ink — this rule's "
+            "premise moved")
+        assert mb >= overhang_rem, (
+            f"{ctx or 'base'}: the dateline reserves {mb}rem below itself but "
+            f"its own descenders overhang by {overhang_rem:.4f}rem — they will "
+            f"cross the rule again. Effective: {eff}")
+        checked += 1
+    assert checked >= 2, "only one breakpoint was resolved; the cascade walk broke"
 
 
 def test_the_bare_masthead_puts_nothing_between_the_date_and_the_rule():

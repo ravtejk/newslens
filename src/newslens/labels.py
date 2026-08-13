@@ -353,6 +353,41 @@ ARCHIVE_VIEW_BRIEFING = "View briefing"
 # color-alone non-visually; the a11y tree must not carry a bare numeral.
 ARCHIVE_TODAY_NO_EDITION = "today — no edition yet"
 
+# --- Generation reports (NL-149 item 2, his charter 2026-08-12) ---------------
+# The audit surface: every recorded run, what each step took, on which model,
+# and what the run cost. Machine register throughout — this is the log a reader
+# opens to answer "what happened", never edition prose. Written for READ-LATER
+# (NL-146 will run generations unattended), so every row states its own outcome
+# rather than relying on the reader having watched it happen.
+RUNLOG_TITLE = "Generation reports"
+RUNLOG_EYEBROW = "Settings"
+RUNLOG_OPEN = "Open"
+RUNLOG_EMPTY = "No runs recorded yet."
+# The three outcomes a recorded run can have. PUBLISHED/FAILED are the log's own
+# `status`; PAUSED is NL-148 clause 4's `paused` marker, which rides BESIDE
+# status="failed" — so it is read first, and a paused run is never reported as a
+# plain failure.
+RUNLOG_PUBLISHED = "Published"
+RUNLOG_FAILED = "Failed"
+RUNLOG_PAUSED = "Paused"
+RUNLOG_SAMPLE = "Sample"          # a run that never touched the edition of record
+# The money word. The figure is the CHARGED total the log records; on the
+# subscription lane that is a true $0 and the word is what keeps it from reading
+# as "this run was free of everything".
+RUNLOG_CHARGED = "charged"
+RUNLOG_TOTAL = "Total"
+# Runs recorded before NL-149 landed carry no per-step timing. They say so —
+# the alternative (deriving a duration from the one end-of-run timestamp those
+# entries carry) would put a number on screen that is not the step's time.
+RUNLOG_NO_TIMING = "Per-step times weren’t recorded for this run."
+RUNLOG_STEPS_UNRECORDED = "No steps recorded."
+# "Showing the 30 most recent of 74 runs." — a count is never implied by silence.
+RUNLOG_TRUNCATED_PREFIX = "Showing the"
+RUNLOG_TRUNCATED_MIDDLE = "most recent of"
+RUNLOG_TRUNCATED_SUFFIX = "runs."
+RUNLOG_RUNS_ONE = "1 run recorded"
+RUNLOG_RUNS_MANY = "{n} runs recorded"
+
 # =============================================================================
 # THE COMMISSIONING — Stage-0 C1, the founding page a stranger's first run opens
 # =============================================================================
