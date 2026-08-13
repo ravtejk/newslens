@@ -162,39 +162,62 @@ def test_the_recorded_sonar_title_breach_is_closed_by_the_clamp():
         % (clamped, bound))
 
 
-def test_the_sonar_host_branch_is_closed_by_the_drop():
-    """(a), the branch the title clamp does NOT cover and the derivation
-    found: the URL's PATH never renders, but its HOST does — twice per R line
-    plus once per sibling line — and when the Sonar keys hold a host of their
-    own they form a SECOND maximal sibling list at 16 chars of prompt per char
-    of host. 330 breaches.
+def test_the_sonar_host_is_inside_the_label_budget_and_dropped_past_the_dns_max():
+    """(a), the branch the title clamp does NOT cover — RE-DERIVED IN NL-142
+    FIX LOOP 2, because the answer changed.
 
-    The clamp is the DNS maximum hostname length (253 octets, RFC 1035/1123):
-    a derived external ceiling that no real host can exceed, so the refusal
-    only ever fires on a URL whose host is not a hostname.
+    WHAT THIS PIN USED TO SAY. The URL's PATH never renders, but its HOST does
+    — twice per R line plus once per sibling line — so Sonar keys holding a
+    maximal host of their own formed a SECOND maximal sibling list at 16 chars
+    of prompt per char of host, and a 330-char host breached the bound by 623.
+    That was true, and it was the reason SONAR_HOST_MAX_CHARS was DERIVED
+    against the bound.
 
-    NEW-SURFACE pin (labelled — fix loop 1, QA F-4): at 38141a3 the absent
-    `SONAR_TITLE_MAX_CHARS` / `clamp_sonar_results` raise before the breach
-    assertion runs, so this is symbol-red, not behaviour-red."""
+    WHAT THE MACHINE DOES NOW. The same 16-chars-per-char cost is what let a
+    Sonar result on the CLUSTER'S OWN host carry the bound past its ceiling
+    through a door nobody had enumerated (gate F-G0: 81,972 vs 78,621). The
+    close put R-key LABELS inside `MAP_LABEL_BUDGET_CHARS`, and the budget
+    does not care how long the host it truncates was — so the vendor host has
+    NO ceiling against this bound any more, in either direction. Raising it
+    buys the prompt nothing; the 330-char breach does not reproduce and MUST
+    NOT be re-asserted.
+
+    THE CLAMP STAYS, ON ITS OTHER LEG. NL-139 gave two reasons and only one of
+    them was arithmetic: 253 is the DNS maximum hostname length (RFC
+    1035/1123), so a URL whose host exceeds it is not a hostname, and admitting
+    it would mint an R key carrying a FABRICATED OUTLET IDENTITY — one that
+    `_outlet_id`, `outlet_index` and the reader-facing "retrieved-single (%s)"
+    provenance string would all then quote. That leg is untouched by F-G0 and
+    is what this constant now rests on. A future re-derivation that finds no
+    bound-ceiling here must not read that as licence to raise it.
+
+    BEHAVIOUR-RED at the pre-fix tree, measured: the render is sensitive to
+    the vendor host there (74,556 / 75,148 / 78,012 / 137,964 at hosts
+    37 / 74 / 253 / 4,000), so the insensitivity assert fails on the first
+    pair."""
+    flat = []
+    for host in (37, 74, analysis.SONAR_HOST_MAX_CHARS,
+                 analysis.SONAR_HOST_MAX_CHARS + 77, 4_000):
+        prompt, bound = _worst_prompt_chars(
+            ranking.MAX_CLUSTER_ITEMS,
+            sonar_title=analysis.SONAR_TITLE_MAX_CHARS, sonar_host=host,
+            topic=memory.TOPIC_MAX_CHARS)
+        flat.append((host, prompt))
+    assert len({p for _h, p in flat}) == 1, (
+        "the analyst prompt is sensitive to the vendor host again (%r) — a "
+        "render door stopped applying the label budget to R keys, which is "
+        "gate finding F-G0" % (flat,))
+    assert flat[0][1] <= bound, (
+        "the vendor-host branch renders %d chars against a %d-char bound"
+        % (flat[0][1], bound))
+
+    # The other leg, unchanged: a host that is not a hostname is refused.
     over = analysis.SONAR_HOST_MAX_CHARS + 77          # 330 at today's value
-    breaching, bound = _worst_prompt_chars(
-        ranking.MAX_CLUSTER_ITEMS, sonar_title=analysis.SONAR_TITLE_MAX_CHARS,
-        sonar_host=over, topic=memory.TOPIC_MAX_CHARS)
-    assert breaching > bound, (
-        "a %d-char vendor host no longer breaches (%d vs %d) — re-derive"
-        % (over, breaching, bound))
-
     bad = [{"url": "https://%s.example/x" % ("h" * over), "title": "t",
             "snippet": "s"}]
     kept, _, dropped = analysis.clamp_sonar_results(bad)
     assert (kept, dropped) == ([], 1), (
         "a result whose host is not a hostname was admitted: %r" % (kept,))
-
-    at_clamp, bound = _worst_prompt_chars(
-        ranking.MAX_CLUSTER_ITEMS, sonar_title=analysis.SONAR_TITLE_MAX_CHARS,
-        sonar_host=analysis.SONAR_HOST_MAX_CHARS,
-        topic=memory.TOPIC_MAX_CHARS)
-    assert at_clamp <= bound
 
 
 def test_the_memory_topic_breach_is_closed_by_the_clamp():
@@ -516,56 +539,75 @@ def test_a_normal_thread_name_is_untouched_at_every_door(migrated_con):
 
 
 def test_the_documented_at_the_clamps_ceilings_are_the_real_ones():
-    """FIX LOOP 1 (QA F-5). The clamp comments in analysis.py and memory.py
-    quote a CEILING and a HEADROOM for each clamp. The first version quoted the
-    observed-maxima regime — measured with the OTHER fields at their pre-clamp
-    maxima — while presenting it as the shipped one, so the stated topic
-    headroom read 32 when the real figure at the clamps is 20. No pin was
-    wrong and every clamp sat inside both regimes' ceilings, but a future
-    re-derivation trusting those comments would have over-budgeted.
+    """FIX LOOP 1 (QA F-5), RE-BASED IN NL-142 FIX LOOP 2. The clamp comments
+    in analysis.py and memory.py quote a CEILING and a HEADROOM for each clamp.
+    This pin makes those numbers executable: it walks each CONSTANT until the
+    worst case breaches and asserts the headroom the comments claim. If a
+    margin, a cap or a render door moves, this fails and the comments get
+    re-derived instead of quietly going stale.
 
-    This pin makes the DOCUMENTED numbers executable: it searches for each
-    clamp's first breach in the shipped regime and asserts the headroom the
-    comments claim. If a margin or a cap moves, this fails and the comments
-    get re-derived instead of quietly going stale.
+    WHICH REGIME, and why it moved. "At the clamps" means every clamped field
+    at its clamp — and when this pin was written the INGEST fields had no
+    clamps, so it held them at their observed maxima and read 76 / 38 / 20.
+    NL-142 clamped them, and the NL-142 gate then found that the vendor host
+    reaches the same map line as an R-key label (F-G0). Both changes move this
+    regime, so the walk now runs on NL-142's worst case — imported rather than
+    restated, because "neither derivation moves underneath the other" is
+    exactly the assumption F-G0 refuted. The measured headrooms fall to 13 and
+    3: the vendor clamps are FOUR TIMES closer to their ceilings than this
+    pin's own first version reported, which is the honest reading and the one
+    a future re-derivation must budget against.
 
-    NEW-SURFACE pin (labelled): symbol-red at 38141a3 like the rest of this
-    file — it cannot run without the clamp constants it measures.
+    The HOST row is retired rather than re-measured — see
+    `test_the_sonar_host_is_inside_the_label_budget_and_dropped_past_the_dns_max`:
+    the label budget covers R labels now, so no vendor host breaches this bound
+    at any length, and asserting a ceiling that does not exist would be
+    fabricating one.
+
+    BEHAVIOUR-RED at the pre-fix tree: the worst case breaches AT the shipped
+    values there (the F-G0 state), so every walk returns the constant itself
+    and the measured headroom reads -1.
     """
-    def first_breach(kind):
-        # The base holds every OTHER clamped field AT its clamp, and the
-        # host at ITS clamp specifically — that is the BINDING sibling-list
-        # branch (Sonar keys on a maximal host of their own measure 78,012
-        # against the same-host branch's 77,780). Measuring a ceiling on the
-        # cheaper branch is how the first version of these numbers drifted:
-        # it reads 306 for the title instead of the true 277.
-        base = dict(sonar_title=analysis.SONAR_TITLE_MAX_CHARS,
-                    sonar_host=analysis.SONAR_HOST_MAX_CHARS,
-                    topic=memory.TOPIC_MAX_CHARS)
-        start = {"title": analysis.SONAR_TITLE_MAX_CHARS,
-                 "host": analysis.SONAR_HOST_MAX_CHARS,
-                 "topic": memory.TOPIC_MAX_CHARS}[kind]
-        key = {"title": "sonar_title", "host": "sonar_host",
-               "topic": "topic"}[kind]
-        for v in range(start, start + 400):
-            kw = dict(base)
-            kw[key] = v
-            prompt, bound = _worst_prompt_chars(ranking.MAX_CLUSTER_ITEMS, **kw)
-            if prompt > bound:
-                return v
+    from test_nl142_ingest_bounds import REACHABLE_HOST, _worst
+
+    def first_breach(module, field, span=600):
+        """Walk the CONSTANT at NL-142's saturating worst case: ingest fields
+        past their clamps, the cluster at its cap, the Sonar keys on the
+        cluster's own host (the binding sibling branch)."""
+        old = getattr(module, field)
+        try:
+            for v in range(old, old + span):
+                setattr(module, field, v)
+                worst, bound = _worst(title=100_000, host=REACHABLE_HOST,
+                                      outlet=100_000)
+                if worst > bound:
+                    return v
+        finally:
+            setattr(module, field, old)
         return None
 
-    # (clamp constant, documented headroom above it) — the comments' claims.
+    # (module, constant, documented headroom above it) — the comments' claims.
     documented = [
-        ("title", analysis.SONAR_TITLE_MAX_CHARS, 76),
-        ("host", analysis.SONAR_HOST_MAX_CHARS, 38),
-        ("topic", memory.TOPIC_MAX_CHARS, 20),
+        (analysis, "SONAR_TITLE_MAX_CHARS", 13),
+        (memory, "TOPIC_MAX_CHARS", 3),
     ]
-    for kind, clamp, headroom in documented:
-        breach = first_breach(kind)
-        assert breach is not None, f"{kind}: no breach found — re-derive"
+    for module, field, headroom in documented:
+        clamp = getattr(module, field)
+        breach = first_breach(module, field)
+        assert breach is not None, (
+            "%s: no breach found — the bound stopped depending on this clamp, "
+            "so RE-DERIVE it rather than leaving it in place" % field)
         assert breach - 1 - clamp == headroom, (
             "%s clamp %d: documented headroom %d, measured %d (ceiling %d, "
             "first breach %d). Re-derive the comment in place — the shipped "
-            "regime moved." % (kind, clamp, headroom, breach - 1 - clamp,
+            "regime moved." % (field, clamp, headroom, breach - 1 - clamp,
                                breach - 1, breach))
+
+    # The host has no ceiling to document any more, and that is a claim too.
+    # The span deliberately covers 292 — the first breach this comment used to
+    # document — so the retirement is refuted at the exact value it replaces,
+    # rather than by a scan long enough to be a proof by exhaustion. The
+    # unbounded half of the claim is the flatness assert in
+    # `test_the_sonar_host_is_inside_the_label_budget_and_dropped_past_the_dns_max`.
+    assert first_breach(analysis, "SONAR_HOST_MAX_CHARS", span=40) is None, (
+        "the vendor host reaches the bound again — F-G0's door re-opened")

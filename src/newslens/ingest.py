@@ -61,6 +61,16 @@ from . import config, db, net
 FEED_TIMEOUT_S = 20          # WaPo's feeds measured 8-10s in the M2 sweep; headroom
 MAX_ITEMS_PER_FEED = 20      # per feed per run — bounds a run at 20 × enabled feeds (64-fetchable template after NL-142b's CNN disable ≈ 1280)
 MAX_EXCERPT_CHARS = 1500
+# NL-142 (gate R-E-5): the bare literal 500 was at TWO addresses — here and
+# `discovery._store_results`, the other writer into source_items.title.
+# It is a STORAGE guard and nothing more: it was never derived against
+# `analysis.PROMPT_MARGIN_CHARS`, and at 500 the worst source map renders
+# 93,228 chars against a 78,621-char bound. The bound is closed at the RENDER
+# door instead (analysis.MAP_TITLE_MAX_CHARS) — which is also the only place
+# that can cover the 15,007 rows already written and the S-key title, which
+# never passes through here at all. Named, not changed: the value is right for
+# what it actually does, and moving it would rewrite reader-facing headlines.
+STORED_TITLE_MAX_CHARS = 500
 USER_AGENT = net.USER_AGENT  # ONE fetch identity, shared with the doctor (net.py)
 
 # NL-142 item 3 — THE STALENESS TOOTH (slate-land gate charter R-E).
@@ -185,7 +195,7 @@ def parse_entries(raw: bytes) -> Tuple[List[ParsedItem], int]:
         items.append(
             ParsedItem(
                 url=url,
-                title=title[:500],
+                title=title[:STORED_TITLE_MAX_CHARS],
                 published_at=_entry_published_iso(entry),
                 excerpt=excerpt,
             )

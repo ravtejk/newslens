@@ -10,7 +10,7 @@ The organising fact of item 2 is that `_run_log_entries()` is called from
 `build_page()` — so from NL-149 onward, EVERY page of the app (Today, Following,
 Archive, Settings) parses data/generation_log.jsonl before it can render. That
 file is append-only, is written by TWO appenders (generate.log_generation with
-ensure_ascii=True, analysis.py:3769 with ensure_ascii=False — the founder's file
+ensure_ascii=True, analysis._append_log with ensure_ascii=False — the founder's file
 already carries 560 non-ASCII bytes from the second), and its appends are not
 atomic. A reader on that path has to be at least as robust as the file is
 fragile. Neither of the two readers now on it is, and the failure is not a
@@ -102,8 +102,9 @@ def _running_job(*boundaries):
 def test_a_torn_append_does_not_take_the_whole_app_down():
     """BORN RED — F-1.
 
-    generation_log.jsonl has two appenders and no atomicity. analysis.py:3769
-    writes its stage lines with `ensure_ascii=False`, so real multibyte UTF-8
+    generation_log.jsonl has two appenders and no atomicity.
+    `analysis._append_log` writes its stage lines with `ensure_ascii=False`,
+    so real multibyte UTF-8
     is genuinely in that file today (560 non-ASCII bytes in the founder's copy,
     every one of them an em dash inside a `sonar` field). A process kill, a full
     disk, or a power loss between two writev chunks leaves a trailing partial

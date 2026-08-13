@@ -60,14 +60,23 @@ SEPARATOR = " — "          # topic/note split in file lines (em-dash, spaced)
 # loop 1):
 #   * OBSERVED-MAXIMA regime (other fields at their pre-clamp observed maxima):
 #     ceiling 112, first breach 113.
-#   * AT-THE-CLAMPS regime (the SHIPPED one — vendor titles at their 200
-#     clamp): ceiling 100, first breach 101.
+#   * AT-THE-CLAMPS regime (the SHIPPED one): ceiling 83, first breach 84.
+#     RE-BASED IN NL-142 FIX LOOP 2 — it read 100/101 when "the clamps" meant
+#     the vendor clamps only. NL-142 clamped the ingest-owned title and outlet
+#     too, and the NL-142 gate (F-G0) then found the vendor host renders as an
+#     R-key label on the same map line, so the shipped worst case is now
+#     NL-142's: 78,516 chars against a 78,621 bound. A topic costs 30 chars of
+#     prompt per char (CONTEXT_CAP memory_context lines plus one P-key title
+#     each), so 105 chars of slack is THREE topic characters.
 #
 # 80 is the value: 25% above 64, the all-time maximum topic length across the
-# founder's memory table, and 20 chars inside the SHIPPED ceiling — not the 32
-# the stale-regime reading suggested — so the invariant is not a knife-edge
-# (NL-133's own construction rule: floor from observed data, ceiling from the
-# bound, land inside both).
+# founder's memory table, and 3 chars inside the SHIPPED ceiling — it was
+# quoted as 20, and before fix loop 1 as 32. The invariant is now genuinely
+# close to a knife-edge, which is a fact about the margin rather than about
+# this clamp (NL-133's own construction rule: floor from observed data,
+# ceiling from the bound, land inside both — still satisfied, barely). Pinned
+# executable at tests/test_nl139_byte_clamps.py::
+# test_the_documented_at_the_clamps_ceilings_are_the_real_ones.
 #
 # TRUNCATED, and LOUDLY — this is the opposite call from the vendor clamps in
 # analysis.py. A thread name is the reader's own words, rendered back to him in

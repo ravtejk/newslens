@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-from . import config, paths
+from . import config, ingest, paths
 
 PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions"
 DISCOVERY_TIMEOUT_S = 30
@@ -414,7 +414,12 @@ def _store_results(
                 " (source_type, outlet, url, title, published_at, fetched_at,"
                 "  raw_excerpt, wire_syndication_flag)"
                 " VALUES ('sonar', ?, ?, ?, ?, ?, NULL, 0)",
-                (outlet, url, title[:500], result.get("date"), now_iso),
+                # NL-142: one storage rule, two writers (see ingest's
+                # constant). `outlet` here is a REMOTE host, not a
+                # sources.yaml name — the correction analysis.py's residue
+                # comment now carries.
+                (outlet, url, title[:ingest.STORED_TITLE_MAX_CHARS],
+                 result.get("date"), now_iso),
             )
             stored += 1
     return stored, dropped

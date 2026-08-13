@@ -582,9 +582,12 @@ MATERIAL_BUDGET_CHARS = 24_000
 # structural end of the quadratic-source-map class"). The quadratic's INPUT is
 # now bounded upstream: `ranking.MAX_CLUSTER_ITEMS` caps items per cluster and
 # `validate_payload` de-duplicates matched_memory (the P-key route into the
-# same sibling list). With those two, the worst prompt this code can build
-# measures 77,164 chars against a 78,621-char bound — a real ceiling, not a
-# dominating guess. It is conditional on FIELD lengths, not on cluster shape:
+# same sibling list). With those two, the worst prompt this code could build
+# measured 77,164 chars against a 78,621-char bound — a real ceiling, not a
+# dominating guess. (That 77,164 is NL-133-ERA. NL-139 raised two of its
+# inputs from observations to clamps and the same construction measures
+# 77,780 today; the ladder is re-measured in ranking.py's MAX_CLUSTER_ITEMS
+# block, which was stale on the same numbers until NL-142 corrected it.) It is conditional on FIELD lengths, not on cluster shape:
 # fields far past their all-time maxima could still breach, and that residue
 # had THREE owners, none of them the ranker — ingest (feed titles, all-time
 # max 183), `_sonar_verify` (vendor titles/snippets/urls: count-clamped to 8,
@@ -595,20 +598,126 @@ MATERIAL_BUDGET_CHARS = 24_000
 # TWO OF THE THREE. `_sonar_verify` now truncates vendor titles at
 # SONAR_TITLE_MAX_CHARS and refuses a result whose URL host exceeds
 # SONAR_HOST_MAX_CHARS (below); `memory.TOPIC_MAX_CHARS` clamps topic inserts.
-# THE ONE REMAINING OWNER IS INGEST — feed titles and feed article URL hosts,
-# both remote-authored, neither clamped, 48 of each in the worst map. (The
-# map's third length input, the outlet NAME, is `source.name` straight from
-# the principal's own sources.yaml — config he writes, not a vendor field, so
-# it is not in this residue class at all.)
 #
-# POST-CLAMP WORST CASE, measured through the real constructors at
-# MAX_CLUSTER_ITEMS=48 with every clamped field AT its clamp and ingest at its
-# all-time maxima: 78,012 chars against the same 78,621 bound — 609 slack,
-# worst over BOTH sibling-list branches (Sonar keys sharing the cluster's host
-# vs. holding a maximal host of their own; the second branch is the binding
-# one and is why the host clamp exists). Derivation in
-# research/2026-08-02--nl138-build.md; the arithmetic lives in
-# tests/test_nl139_byte_clamps.py, derived from these constants.
+# NL-142 2026-08-13 (NL-138/139 gate R-E-5) CLOSES THE THIRD — and CORRECTS
+# this comment's own enumeration of it. Re-measured against the current tree
+# (15,007 source_items, up from the 11,198 NL-133 swept), the ingest residue
+# had FOUR rendered length inputs, not two, and one of them was named nowhere:
+#
+#   (i)   the FEED title — NOT unclamped, as this comment said. It is clamped
+#         at ingest.STORED_TITLE_MAX_CHARS (500), a storage number never
+#         derived against this bound: at 500 the worst map renders 93,228
+#         chars against the 78,621 bound. A clamp 305 chars past the ceiling
+#         is a storage guard wearing a bound's clothes.
+#   (ii)  the S-key title, which is NOT the feed title at all. It is
+#         `extract_article_text`'s reading of the FETCHED PAGE's <title>
+#         (see `fetch_article` -> `rec.title` -> build_source_map's S# key),
+#         bounded by nothing but MAX_ARTICLE_BYTES = 2,000,000. This is the
+#         largest hole of the four and no record named it.
+#   (iii) the article URL HOST, which renders as the outlet identity.
+#   (iv)  the outlet NAME. This comment said it "is not in this residue class
+#         at all" because it is `source.name` from the principal's own
+#         sources.yaml. That is true of the RSS door ONLY: `discovery.
+#         _store_results` writes `urlparse(url).netloc` — a remote-authored
+#         host — into the same column (discovery.py, the sonar door), so a
+#         source_items row CAN carry a vendor string in `outlet`.
+#
+# All four are closed at the RENDER door rather than at ingest, by
+# MAP_TITLE_MAX_CHARS and MAP_LABEL_BUDGET_CHARS (below). The bound is a
+# property of the prompt this module builds, so clamping where the prompt is
+# built makes it structural over EVERY input — including the 15,007 rows
+# already in the founder DB, which a write-door clamp could not reach without
+# a migration (and the NL-142 charter makes a migration a stop).
+#
+# AND A FIFTH DOOR ONTO THE SAME LINE, found by the NL-142 SHIP GATE (F-G0,
+# fix loop 2) after the first landing claimed these four closed. Owner (iii),
+# the article-URL host, does not only reach the prompt as an S/C key's outlet
+# identity: a Sonar result whose URL sits on the CLUSTER'S OWN host mints an
+# R key (`build_source_map`, "outlet": _outlet_of(url)) that joins the same
+# sibling list — and R labels were outside this budget, bounded only by
+# NL-139's SONAR_HOST_MAX_CHARS = 253. Measured through the real
+# `clamp_sonar_results`, 8 kept / 0 dropped: 81,972 chars against the 78,621
+# bound, over by 3,351. One shared result breaches by 334; the onset is a
+# 44-char shared host, which is an ordinary long subdomain. The close is the
+# scope of the budget, not a new clamp: both render guards now read "SCR"
+# (`render_source_map`, `_material_header`). See "POST-CLAMP WORST CASE"
+# below for what that does to every number in this block.
+#
+# COVERAGE BOUND, stated so a green run is never over-read (QA F-2, fix loop
+# 1). "Closed at the render door" means closed for THIS prompt — the two
+# renderers `brief_bound_chars` integrates over, and no others. The
+# ingest-owned title and outlet reach a MODEL through FIVE renderers:
+#
+#   BOUNDED by NL-142 — the analyst prompt:
+#     1. `render_source_map`  — the citable-key list (title clamp on S/C
+#        keys, label budget on S/C/R: every key kind whose outlet string is
+#        remote-authored, widened in fix loop 2 for F-G0).
+#     2. `_material_header`   — the same clamps on the same key, so one
+#        key can no longer carry two outlet strings in one prompt (fix loop
+#        1, QA F-1), on the same "SCR" scope (fix loop 2).
+#   NOT BOUNDED — outside this charter, which is PROMPT_MARGIN_CHARS-scoped:
+#     3. `render_writer_view`'s SOURCES block (this module, the `parts.append`
+#        at the end of that function, called from generate.py:1194) — clamped
+#        title (it reads the map dict), but RAW outlet and the WHOLE url.
+#     4. generate.py:1198 and :1209 — the writer prompt's cluster-item and
+#        source-item lines: the raw ingest.STORED_TITLE_MAX_CHARS title and
+#        the raw outlet, read straight off source_items.
+#     5. `ranking.render_items_block` (ranking.py:787-790) — the ranker
+#        prompt, the same two raw fields.
+#
+# 3-5 are the WRITER and RANKER prompts. Neither has a `brief_bound_chars`
+# analog — that function is ANALYSIS-scoped by its own docstring — so there
+# is no bound there for these fields to be inside or outside of, and their
+# state is NOT a defect in what NL-142 landed. It is a scope line: a green
+# NL-142 suite says these fields cannot blow the ANALYST prompt; it does not
+# say they can no longer reach a model unclamped. Whether the writer and
+# ranker prompts get bounds of their own is a charter question and is
+# returned to the gate, not answered here — a fix loop that minted a second
+# prompt bound would be legislating mid-flight.
+#
+# POST-CLAMP WORST CASE, RE-DERIVED IN FIX LOOP 2 (the F-G0 close moved it;
+# the first landing's 78,012 / 609 slack was measured on a worst-case model
+# that could not see the sharing branch). Measured through the real
+# constructors at MAX_CLUSTER_ITEMS=48 with every clamped field AT its clamp:
+# 78,516 chars against the same 78,621 bound — 105 slack. The binding shape
+# is now the SHARING branch (the 8 Sonar keys on the cluster's own host, one
+# 56-key sibling list), which is worth ~3,384 chars of sibling text more than
+# two separate lists; the old binding branch (Sonar keys on a maximal host of
+# their own) collapsed from 78,012 to 74,556 once their labels entered the
+# budget. Worst over both key branches too (S 78,516 / C 78,420).
+#   * 9,792-case sweep, host and outlet moved INDEPENDENTLY across
+#     0..2,000 x the sharing count 0..8 x both key branches: 0 breaches,
+#     max 78,516, material block 24,000 on the nose.
+#   * The same sweep at the pre-fix tree: breaching from a 44-char shared
+#     host up, worst 81,972.
+# Derivation in research/2026-08-02--nl138-build.md, 2026-08-13--nl142-build
+# .md and 2026-08-13--nl142-fixloop2.md; the arithmetic lives in
+# tests/test_nl139_byte_clamps.py and tests/test_nl142_ingest_bounds.py,
+# derived from these constants.
+#
+# THE MARGIN IS EXHAUSTED, AND THAT IS THIS BATCH'S HONEST FINDING — MORE SO
+# after fix loop 2, not less. Every rendered ingest field costs 48 chars of
+# prompt per char (one render per key line, at the cap) and the label budget
+# now costs 56 (48 cluster lines + 8 R lines). 105 slack therefore buys TWO
+# characters on MAP_TITLE_MAX_CHARS or ONE on MAP_LABEL_BUDGET_CHARS —
+# measured, not divided: ceilings 191 and 75, first breaches 192 and 76
+# (tests/test_nl142_ingest_bounds.py walks both per run). NL-133's own
+# clamp-design rule — floor from observed data, ceiling from the bound, land
+# strictly inside both — is satisfiable for these clamps only barely. The
+# earlier "609 slack buys twelve characters" reading of this paragraph is
+# withdrawn: it priced a worst case 3,456 chars cheaper than the machine's.
+# Raising this margin to buy more does not work either: at
+# +911 chars the bound passes cap+2 and `test_nl133_cluster_item_cap.py::
+# test_raising_the_cap_without_the_margin_breaks_this_test_first` goes red,
+# whose own message prescribes re-deriving MAX_CLUSTER_ITEMS. (+911, not the
+# +910 this comment first shipped — QA F-3, fix loop 1. Measured: at +910 the
+# bound is 79,531 against a cap+2 prompt of 79,532 and the pin still BINDS;
+# +911 makes them equal and the pin goes red. The number is now pinned at
+# `test_nl142_qa_findings.py::test_the_margin_delta_that_unbinds_the_cap_pin
+# _is_911`, so a future re-derivation of the cap or the material budget
+# cannot let this prose drift the way ranking.py's did.) Widening any of
+# these clamps is therefore a COUPLED decision over margin + cap, not a
+# one-line edit — measured, not asserted; see the build record.
 #
 # Raising this constant is bound-safe but NOT money-free —
 # bound_usd rises with it, so more slots skip under exhaustion (the coupling
@@ -637,28 +746,46 @@ PROMPT_MARGIN_CHARS = 40_000
 # 1; the first version of this comment quoted only the first as if operative):
 #   * OBSERVED-MAXIMA regime (every OTHER field at its pre-clamp observed max —
 #     how the NL-133 gate measured): ceiling 365. At 366 the bound breaks by 7
-#     chars, the gate's recorded breach, reproduced in the pin.
-#   * AT-THE-CLAMPS regime (the SHIPPED one — the other clamped fields at their
-#     clamps): ceiling 276, first breach 277. Real headroom above this constant
-#     is 76 chars, not 165.
+#     chars, the gate's recorded breach, reproduced in the pin. Unmoved by
+#     NL-142: that regime is NL-133's own harness, whose ladder reproduces
+#     char-for-char at both trees (48 -> 77,780 / 49 -> 78,651 / 50 -> 79,532).
+#   * AT-THE-CLAMPS regime (the SHIPPED one): ceiling 213, first breach 214,
+#     headroom 13. RE-BASED IN NL-142 FIX LOOP 2 — it read 276/277/76 when
+#     "the other clamped fields" meant the vendor and memory clamps only.
+#     NL-142 clamped the INGEST fields too, and the NL-142 gate then found the
+#     vendor host renders as an R-key label on the same line (F-G0), so the
+#     shipped worst case is now NL-142's: ingest at ITS clamps, the Sonar keys
+#     on the cluster's own host. The clamp is FOUR TIMES closer to its ceiling
+#     than this comment used to say. Pinned at test_nl139_byte_clamps.py::
+#     test_the_documented_at_the_clamps_ceilings_are_the_real_ones.
 SONAR_TITLE_MAX_CHARS = 200
 # HOST — the result is DROPPED, and the drop is disclosed in the status line.
-# The URL's PATH never renders into the prompt; its HOST does, twice on every
-# R line plus once on every sibling line, and when the Sonar keys hold a host
-# of their own they form a second maximal sibling list: 16 chars of prompt per
-# char of host. 253 is the DNS maximum length of a hostname (RFC 1035/1123
-# octet limit) — a derived external ceiling, not a taste call, and one no REAL
-# host can exceed. So this clamp only ever fires on a URL whose host is not a
-# hostname at all.
-# CEILINGS, IN BOTH REGIMES (QA F-5): observed-maxima regime — ceiling 329,
-# first breach 330. AT-THE-CLAMPS regime (the shipped one) — ceiling 291, first
-# breach 292. Headroom above this constant is 38 chars, the TIGHTEST of the
-# three: the host clamp is the only one whose value comes from outside this
-# derivation, so it is the first to re-check if the margin ever moves.
+# 253 is the DNS maximum length of a hostname (RFC 1035/1123 octet limit) — a
+# derived external ceiling, not a taste call, and one no REAL host can exceed.
+# So this clamp only ever fires on a URL whose host is not a hostname at all.
 # DROPPED rather than truncated because truncating a URL does not shorten it,
 # it CHANGES it: a half-URL is a citation to somewhere else, and the map key
-# it builds would carry a fabricated outlet identity. Refusing one of eight
-# vendor results and saying so is the honest move.
+# it builds would carry a fabricated outlet identity — one that `_outlet_id`,
+# `outlet_index` and the reader-facing "retrieved-single (%s)" provenance
+# string would then all quote. Refusing one of eight vendor results and saying
+# so is the honest move.
+#
+# THE BOUND NO LONGER DEPENDS ON THIS CONSTANT (NL-142 fix loop 2, gate F-G0).
+# It used to: the URL's PATH never renders, but its HOST did, twice on every R
+# line plus once on every sibling line, at 16 chars of prompt per char of host
+# — and this comment documented ceilings for it (observed-maxima 329/330,
+# at-the-clamps 291/292, headroom 38). That same 16-per-char cost is what let
+# a Sonar result ON THE CLUSTER'S OWN HOST carry the prompt to 81,972 against
+# a 78,621 bound through a door no enumeration had named. The close puts R-key
+# LABELS inside MAP_LABEL_BUDGET_CHARS, and a budget does not care how long
+# the string it truncates was, so there is now NO host length that breaches
+# this bound: the ceilings above are RETIRED, not re-measured, and the pin
+# asserts their absence (test_nl139_byte_clamps.py::test_the_sonar_host_is_
+# inside_the_label_budget_and_dropped_past_the_dns_max) so nobody re-derives
+# one from a stale comment. The DNS argument in the paragraph above is what
+# this value rests on now — and it is not licence to raise it: a longer value
+# admits a host that is not a hostname, which is the identity defect, not a
+# byte-count one.
 SONAR_HOST_MAX_CHARS = 253
 # SNIPPET — TRUNCATED at the material budget, and stated plainly: THE PROMPT
 # BOUND NEVER DEPENDED ON THIS. Snippets reach the prompt only as `text`, and
@@ -675,6 +802,110 @@ SONAR_SNIPPET_MAX_CHARS = MATERIAL_BUDGET_CHARS
 # case integrates over it exactly like the length clamps do, so it belongs in
 # the same block and the pins read it from here.
 SONAR_MAX_RESULTS = 8
+
+# --- NL-142 ingest byte-bounds (NL-138/139 gate R-E-5) ----------------------
+# The INGEST-owned fields, clamped where they are RENDERED (build_source_map /
+# render_source_map) rather than where they are stored. Three reasons, in
+# order of weight:
+#   1. STRUCTURAL OVER HISTORY. A write-door clamp bounds tomorrow's rows; the
+#      bound has to hold over the 15,007 rows already written. Clamping at the
+#      render door needs no migration to cover them.
+#   2. ONE DOOR, NOT N. `source_items.title` has two writers today
+#      (ingest.parse_entries, discovery._store_results) and the S-key title has
+#      a third path that never touches source_items at all (the fetched page's
+#      <title>). All three render through here.
+#   3. NOTHING IS FABRICATED BY A SHORTER LABEL. What these clamp is
+#      model-facing map furniture — the citable-key list's title and outlet
+#      strings — not a URL and not the reader's stored headline. NL-139 made
+#      this exact argument for SONAR_TITLE_MAX_CHARS; the URL half of its
+#      argument (a truncated URL is a DIFFERENT URL, so DROP) does not apply,
+#      because the URL never renders into this prompt at all. Only its host
+#      does, as an outlet LABEL.
+#
+# SCOPE — AND THE SCOPE LINE THAT WAS WRONG. This block first shipped saying:
+# "S and C keys — the ingest-owned ones. R keys keep NL-139's clamps and P keys
+# are ours. Each residue owner clamps its own fields, so neither derivation
+# moves underneath the other." The last clause is exactly what the NL-142 gate
+# refuted (F-G0). The TITLE clamp is still S/C-scoped — R titles carry
+# SONAR_TITLE_MAX_CHARS, P titles are ours. The LABEL BUDGET is not: an R key's
+# outlet is a remote-authored URL host that renders on the same line as the
+# cluster's, and can BE the cluster's, so it is inside this budget as of fix
+# loop 2 ("SCR" at both render doors). P keys stay outside — their outlet is
+# our own constant string. One consequence, stated because a later reader will
+# look for it: NL-139's host derivation now sits UNDER this one, which is why
+# the ceilings in the SONAR_HOST_MAX_CHARS block above are retired.
+#
+# TITLE — TRUNCATED, silently, same channel argument as SONAR_TITLE_MAX_CHARS.
+# FLOOR: 183, the all-time maximum over 15,007 ingested items (p99.9 = 151;
+# 22 items in the corpus exceed 150 and 1 exceeds 180). CEILING: 191, first
+# breach 192, headroom 2 — RE-MEASURED IN FIX LOOP 2 at the true worst case
+# (it read "CEILING: 195" against the worst case that could not see the
+# sharing branch). 189 lands strictly inside both, and there are two
+# characters above it, not six. Walked per run by
+# tests/test_nl142_ingest_bounds.py::
+# test_the_documented_ceiling_and_headroom_of_each_clamp_are_the_real_ones.
+#
+# STORAGE SIDE-EFFECT, INTENTIONAL AND NAMED (QA F-6, fix loop 1). Unlike the
+# label budget, this clamp is applied INTO the map dict (`build_source_map`),
+# not at the render call — and `persist_brief` writes that same dict. So
+# `analysis_retrieval.title` now holds at most 189 chars where it used to
+# hold up to ingest.STORED_TITLE_MAX_CHARS (500). That is a storage change,
+# it was undisclosed in the first landing, and it is kept rather than undone:
+# the dict IS the model's view, and a hand-trace that stored a longer title
+# than the analyst was shown would be a record of a prompt we never built.
+# NO MIGRATION: the clamp is write-time and existing rows are untouched —
+# over 1,618 persisted rows the longest title is 159 and over 15,359
+# source_items it is 183, so not one existing or foreseeable row is
+# shortened. Pinned at `test_nl142_qa_findings.py::
+# test_the_render_clamp_also_shortens_the_persisted_hand_trace_title`, so the
+# hand-trace record's bound is a stated property rather than a side effect of
+# where the clamp was placed. The reader's stored headline
+# (`source_items.title`) is NOT touched by any of this.
+MAP_TITLE_MAX_CHARS = 189
+# OUTLET + OUTLET-IDENTITY — a JOINT budget, max-min fair, not two clamps.
+# Both render on the same line (`[C1] <outlet> — <title> (...; outlet <id>)`),
+# so the bound only ever integrates over their SUM: a 60-char source name
+# beside an 8-char host costs exactly what a 34-char name beside a 34-char
+# host costs. Two separate clamps would refuse the first shape for no reason
+# the arithmetic can name. Shares come from `_water_fill`, the module's
+# existing max-min allocator (NL-118 P0) — short field takes what it needs,
+# surplus flows to the long one.
+# FLOOR: 68 = 41 (longest outlet name in the founder DB, his own sources.yaml)
+# + 27 (longest article URL host, over the same 15,007 rows). The floor is now
+# also an R-KEY floor: an R key's demand is twice its host, and the longest
+# host over 1,618 persisted retrieval rows is 34 — 68 of this 74 budget, the
+# tightest real demand of any key kind, and still inside. Not one real row of
+# any kind is shortened by this clamp.
+# CEILING: 75, first breach 76, headroom 1 — RE-MEASURED IN FIX LOOP 2 at the
+# true worst case (it read "CEILING: 80" against the worst case that could not
+# see the sharing branch). The marginal cost is 56 chars of prompt per char of
+# budget now: 48 cluster lines plus the 8 R lines this budget just took on.
+# WHICH HOST, named because the two conventions differ by 4 and the floor is
+# quoted in the wider one (fix loop 1): 27 is the RAW netloc. What this budget
+# actually integrates over is `_outlet_id` -> `_outlet_of`, which lowercases
+# and strips a leading "www." — that string maxes at 23 over 15,359 rows, so
+# the operative S/C floor is 64 and the worst REAL S/C row demands 53 of the
+# 74. The floor stays quoted at the conservative 68 — which fix loop 2 turned
+# out to be the RIGHT number for a different reason: the R-key demand above is
+# 68 exactly. Re-deriving the floor downward would buy headroom, and buying
+# headroom here is the coupled margin+cap call this batch returned to the gate
+# rather than a fix-loop edit.
+# The GROUPING identity is deliberately NOT clamped — `_outlet_id` and
+# `outlet_index` keep the full host, so two long hosts sharing a prefix can
+# never collide into one outlet and deflate the corroboration count the model
+# reads off "DISTINCT OUTLETS IN THIS MAP". Only the printed label shortens.
+MAP_LABEL_BUDGET_CHARS = 74
+# STORAGE, not the bound (R-E-3). `analysis_retrieval.url` persists the vendor
+# URL whole, PATH included, and the path never renders into any prompt — so
+# this clamp cannot change what the model sees, by construction: persist_brief
+# runs after render_source_map on an already-built map. Observed maximum 223
+# chars over 1,569 persisted rows. An over-long URL is stored TRUNCATED WITH
+# ITS LENGTH NAMED rather than dropped or silently cut: a bare truncated URL
+# would be a citation to somewhere else (NL-139's rule), while a string that
+# says "[truncated, N chars]" is unmistakably not a link, and the hand-trace
+# it serves keeps the host and path prefix that make the row identifiable.
+RETRIEVAL_URL_MAX_CHARS = 512
+_RETRIEVAL_URL_MARK = " …[truncated, %d chars]"
 # ---------------------------------------------------------------------------
 # LENGTH REGIME 2026-07-30, Spec-4(c) STEP 0 (NL-118 content leg, batch B):
 # RE-BASED medium 400 -> 450 and full 700 -> 750, in the same change that puts
@@ -1016,7 +1247,12 @@ def build_source_map(fetch_records: List[FetchRecord],
     for r in fetch_records:
         if r.outcome == OK and r.text:
             sources[f"S{n}"] = {"kind": "cluster-full-text", "outlet": r.source_name,
-                                "title": r.title or "(untitled)", "url": r.url,
+                                # NL-142: this title is the FETCHED PAGE's
+                                # <title> (extract_article_text), not the feed
+                                # title — remote HTML bounded only by
+                                # MAX_ARTICLE_BYTES until this clamp.
+                                "title": clamp_map_title(r.title) or "(untitled)",
+                                "url": r.url,
                                 "retrieved_at": now, "text": r.text,
                                 "published_at": published_by_url.get(
                                     (r.url or "").strip(), "")}
@@ -1027,7 +1263,10 @@ def build_source_map(fetch_records: List[FetchRecord],
         if it.get("url") in fetched_urls:
             continue  # full text supersedes its own excerpt
         sources[f"C{n}"] = {"kind": "cluster-excerpt", "outlet": it.get("outlet", ""),
-                            "title": it.get("title", ""), "url": it.get("url", ""),
+                            # NL-142: the feed title, from either source_items
+                            # writer (ingest.parse_entries / discovery).
+                            "title": clamp_map_title(it.get("title", "")),
+                            "url": it.get("url", ""),
                             "retrieved_at": it.get("fetched_at", ""),
                             "published_at": it.get("published_at") or "",
                             "text": it.get("raw_excerpt") or ""}
@@ -1081,6 +1320,30 @@ def _outlet_of(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def clamp_map_title(title: object) -> str:
+    """NL-142 (gate R-E-5): the ingest-owned title clamp, at the render door.
+
+    Public for the same reason `clamp_sonar_results` is: the arithmetic pin
+    drives it directly with a hostile string, and the clamp is the thing being
+    proven. Applied to S and C keys only — R keys carry NL-139's vendor clamp
+    and each residue owner clamps its own fields."""
+    return (title or "")[:MAP_TITLE_MAX_CHARS]
+
+
+def clamp_map_labels(outlet: str, outlet_id: str) -> Tuple[str, str]:
+    """The joint outlet-label budget (NL-142). Returns the two strings as they
+    RENDER — max-min fair shares of MAP_LABEL_BUDGET_CHARS, so a long name
+    beside a short host is never refused for a reason the bound cannot name.
+
+    Reuses `_water_fill` rather than restating the allocation: one allocator,
+    two callers (material shares and these labels)."""
+    outlet, outlet_id = outlet or "", outlet_id or ""
+    if len(outlet) + len(outlet_id) <= MAP_LABEL_BUDGET_CHARS:
+        return outlet, outlet_id
+    shares = _water_fill([len(outlet), len(outlet_id)], MAP_LABEL_BUDGET_CHARS)
+    return outlet[:shares[0]], outlet_id[:shares[1]]
+
+
 def _outlet_id(s: Dict) -> str:
     """One identity per OUTLET across key kinds (NL-118 item 4). The same
     newsroom reaches the map as a feed name on S/C keys ("NPR") and as a host
@@ -1121,10 +1384,53 @@ def render_source_map(sources: Dict[str, Dict]) -> str:
         if dateline:
             bits.append(f"published {dateline}")
         sibs = [k for k in by_outlet.get(oid, []) if k != key]
-        bits.append(f"outlet {oid}"
+        # NL-142: the ingest-owned keys' two labels share one budget. `oid`
+        # above is the UNCLAMPED identity and stays that way — `by_outlet` and
+        # the DISTINCT-OUTLETS total are computed from it, so shortening the
+        # printed label can never merge two outlets or deflate a corroboration
+        # count. Only these two strings shorten.
+        #
+        # SCOPE IS "SCR", NOT "SC" (fix loop 2, gate F-G0 — the finding that
+        # BLOCKED this batch). An R key's `outlet` IS its URL host
+        # (`_outlet_of`, build_source_map), bounded by NL-139 at
+        # SONAR_HOST_MAX_CHARS = 253 rather than by this budget — and the
+        # R-mint dedupes on the exact URL, so a Sonar result on the CLUSTER'S
+        # OWN host mints an R key that joins the cluster's sibling list and
+        # renders 2 x 253 label chars on every one of the 8 R lines. Measured
+        # end-to-end through the real `clamp_sonar_results` at the pre-fix
+        # tree: 81,972 chars against the 78,621 bound, over by 3,351; ONE
+        # shared result at 253 breaches by 334; the onset is a 44-char shared
+        # host. The budget therefore has to cover every key kind whose label
+        # is remote-authored. P keys stay raw: their outlet is our own
+        # constant string.
+        #
+        # WHAT DOES NOT MOVE: the map DICT. `compute_provenance` reads
+        # `sources[c]["outlet"]` for S/C corroboration counting AND prints an
+        # R key's dict outlet into the reader-facing "retrieved-single (%s)"
+        # tier string — so a dict-level clamp would deflate a trust tier on
+        # one door and shorten a host the READER sees on the other. Both
+        # clamps stay at render doors; `tests/test_nl142_gate_pin.py` holds
+        # that line.
+        #
+        # THE OTHER DIRECTION, disclosed here because the build record cited
+        # these lines for it and they said only the reassuring half (QA F-4,
+        # fix loop 1): two DISTINCT outlets sharing a 74-char prefix would
+        # print the SAME label on two lines. Grouping is unaffected — the
+        # identity above is whole — so the DISTINCT-OUTLETS total the model
+        # reads stays correct, and the failure direction is conservative: the
+        # two keys are NOT marked SAME OUTLET, so the model counts two, which
+        # is the truth. Unreachable on the founder's corpus, which is the
+        # honest bound (measured over 15,359 rows: worst outlet+identity
+        # demand 53 chars against a 74 budget; 57 by the un-stripped-netloc
+        # convention the FLOOR above is quoted in). NOT unreachable in
+        # general — two FQDNs may share a 74-char prefix, since a DNS label
+        # runs to 63 and an FQDN to 253.
+        outlet_label, oid_label = (
+            clamp_map_labels(s["outlet"], oid) if key[0] in "SCR" else (s["outlet"], oid))
+        bits.append(f"outlet {oid_label}"
                     + (f" — SAME OUTLET as {', '.join(sibs)}" if sibs
                        else " — 1 key"))
-        lines.append(f"[{key}] {s['outlet']} — {s['title']} ({'; '.join(bits)})")
+        lines.append(f"[{key}] {outlet_label} — {s['title']} ({'; '.join(bits)})")
     if not lines:
         return "(none)"
     outlets = {o for o in by_outlet if o}
@@ -1198,9 +1504,36 @@ def _dateline_of(s: Dict) -> str:
 
 
 def _material_header(key: str, s: Dict) -> str:
+    # NL-142 fix loop 1 (QA F-1): the SAME label clamp `render_source_map`
+    # applies, applied here. This header and the map line render one key's
+    # outlet into ONE analyst prompt, and the map is introduced to the model
+    # as the closed citation vocabulary — a header naming a different outlet
+    # for the same key is a coherence defect, measured at 37 chars in the map
+    # line against 2,000 in the header. F-1b is the behavioural half: an
+    # unclamped header is charged to MATERIAL_BUDGET_CHARS and
+    # `render_material`'s pop-loop sheds keys to pay for it, so a hostile
+    # outlet used to deliver HALF the material at the same byte count (22
+    # keys vs 44 at the clamps). The batch's identity claim was therefore a
+    # LENGTH identity only; with this it holds for the content too.
+    #
+    # WHY HERE AND NOT IN `build_source_map`: `compute_provenance` builds its
+    # corroboration set out of the raw `sources[c]["outlet"]` values, so a
+    # dict-level clamp could merge two outlets and DEFLATE a corroboration
+    # count — the exact failure `_outlet_id` stays unclamped to avoid,
+    # arriving through the other door. Both clamps live at render doors and
+    # neither touches an identity.
+    #
+    # SCOPE "SCR" (fix loop 2, gate F-G0): the same widening as
+    # `render_source_map`'s guard, kept in step with it deliberately — the two
+    # doors render the same key's outlet into the same prompt, and a key kind
+    # added to one and not the other re-opens QA's F-1 exactly. R keys carry a
+    # remote-authored host as their outlet; only P keys (our own constant) are
+    # outside the budget now.
     dateline = _dateline_of(s)
     stamp = f" (published {dateline})" if dateline else ""
-    return f"--- [{key}] {s['outlet']} — {s['title']}{stamp} ---\n"
+    outlet = (clamp_map_labels(s["outlet"], _outlet_id(s))[0]
+              if key[0] in "SCR" else s["outlet"])
+    return f"--- [{key}] {outlet} — {s['title']}{stamp} ---\n"
 
 
 def render_material(sources: Dict[str, Dict],
@@ -2620,6 +2953,29 @@ def _sonar_verify(key: str, story_title: str, claims: List[str]) -> Tuple[List[D
     results = payload.get("search_results") or []
     # NL-139: count clamp + byte clamp, in that order (see clamp_sonar_results).
     kept, truncated, dropped = clamp_sonar_results(results)
+    # NL-142 rider R-E-3: a result with NO URL was counted here and then
+    # silently skipped by `build_source_map` ("if not url: continue"), so
+    # `ok — N results` over-reported, and — the part that is not cosmetic —
+    # the slot-3 demotion gate reads that same count (`len(sonar_results) < 2`
+    # in analyse_slot), so an empty-URL result could hold a slot at medium on
+    # material the model never received. Dropped here, at the one place that
+    # owns the count and the status line. The MAP is byte-identical either way,
+    # which is what makes this safe to do at the count rather than at the map.
+    #
+    # THE READER-VISIBLE HALF, as a CONSCIOUS FLIP rather than a side effect
+    # (QA F-5, fix loop 1): this changes a TIER in the founder's edition, not
+    # just a status string. A slot 3 whose two Sonar results included one
+    # URL-less result used to be written as a MEDIUM brief and is now
+    # DEMOTED TO QUICK. That is the correct direction — `build_source_map`
+    # always skipped the URL-less result (`if not url: continue`), so the
+    # material behind the medium tier was never there — but it is a change the
+    # reader sees, and it is taken deliberately. Pinned END-TO-END, both arms,
+    # through this function rather than an injected seam:
+    # `test_nl142_qa_findings.py::
+    # test_the_empty_url_drop_flips_slot_three_from_medium_to_quick`.
+    no_url = [r for r in kept if not (r.get("url") or "").strip()]
+    if no_url:
+        kept = [r for r in kept if (r.get("url") or "").strip()]
     # Honest degradation rides the channel this function already has — the
     # status string, persisted on the brief header (`sa.sonar_status`) and
     # rendered in the run report. A DROPPED result is named because a
@@ -2631,6 +2987,8 @@ def _sonar_verify(key: str, story_title: str, claims: List[str]) -> Tuple[List[D
     if dropped:
         note += (f", {dropped} dropped — URL host over "
                  f"{SONAR_HOST_MAX_CHARS} chars")
+    if no_url:
+        note += f", {len(no_url)} dropped — no URL (never citable)"
     if truncated:
         note += f", {truncated} title(s) truncated at {SONAR_TITLE_MAX_CHARS}"
     return kept, cost, f"ok — {len(kept)} results{note}"
@@ -2679,9 +3037,28 @@ def persist_brief(con: sqlite3.Connection, date: str, slot: int, tier: str,
                 " title, url, retrieved_at, text)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (brief_id, key, s.get("kind", ""), s.get("outlet", ""),
-                 s.get("title", ""), s.get("url", ""),
+                 s.get("title", ""), clamp_stored_url(s.get("url", "")),
                  s.get("retrieved_at", ""), s.get("text", "")))
     return brief_id
+
+
+def clamp_stored_url(url: object) -> str:
+    """NL-142 rider R-E-3, STORAGE ONLY. Bounds what `analysis_retrieval.url`
+    holds; cannot change what any prompt renders, because the URL's path never
+    reaches a prompt (render_source_map shows the HOST as an outlet label,
+    `_material_header` shows outlet + title, neither shows the URL) and because
+    persist_brief runs on a map that has already been rendered.
+
+    An over-long URL is TRUNCATED WITH ITS TRUE LENGTH NAMED, not dropped and
+    not silently cut. A silently cut URL would be a citation to somewhere else
+    — the reason NL-139 drops over-long Sonar hosts instead of truncating them
+    — but the marker makes the stored string unmistakably not a link while the
+    hand-trace keeps the host and path prefix that identify the row."""
+    text = str(url or "")
+    if len(text) <= RETRIEVAL_URL_MAX_CHARS:
+        return text
+    mark = _RETRIEVAL_URL_MARK % len(text)
+    return text[:RETRIEVAL_URL_MAX_CHARS - len(mark)] + mark
 
 
 def analyst_slot3_tier(con: sqlite3.Connection, date: str) -> Optional[str]:

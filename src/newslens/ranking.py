@@ -235,15 +235,39 @@ MAX_CLUSTERS = 12
 #     cluster records swept read-only across `briefings` + `briefings_history`;
 #     the next-largest is 26). 48 never truncates a shape this product has ever
 #     produced.
-#   * CEILING — 49 is the largest cap whose WORST renderable prompt still fits
+#   * CEILING — 48 is the largest cap whose WORST renderable prompt still fits
 #     `brief_bound_chars` (analysis.py). Measured through the real constructors
-#     at all-time field maxima (title 183 / outlet 41 / host 27 / memory topic
-#     64, every key on ONE host, plus the 8 Sonar keys `_sonar_verify` allows on
-#     that same host and CONTEXT_CAP=15 prior-briefing keys): cap 48 -> 77,164
-#     chars vs the 78,621 bound (slack 1,457); cap 49 -> +586; cap 50 BREACHES
-#     by 295. 48 is one step inside the ceiling so the invariant is not a
-#     knife-edge.
-#   * The window [45, 49] is NARROW — ~9% over today's real maximum. That is a
+#     (every key on ONE host, plus the 8 Sonar keys `_sonar_verify` allows on
+#     that same host and CONTEXT_CAP=15 prior-briefing keys).
+#     RE-MEASURED 2026-08-13 (NL-142), AND THIS PARAGRAPH WAS STALE. It read
+#     "49 is the largest ... cap 48 -> 77,164 (slack 1,457); cap 49 -> +586;
+#     cap 50 BREACHES by 295", which were NL-133's numbers at NL-133's field
+#     maxima. NL-139 then raised two of those inputs from observations to
+#     CLAMPS (Sonar title 183 -> 200, memory topic 64 -> 80) and the pin —
+#     which reads the constants, so it never went red — moved underneath the
+#     prose. The current ladder, off the same pin's own harness at 61fef71 and
+#     unchanged by NL-142: cap 48 -> 77,780 vs the 78,621 bound (slack 841);
+#     cap 49 -> 78,651, WHICH ALREADY BREACHES by 30; cap 50 -> 79,532.
+#     The real headroom is ONE item, not two: 48 is AT the ceiling, not one
+#     step inside it. Nothing here changes behaviour — the cap and the pin were
+#     always right — but the margin this cap is chosen against is tighter than
+#     the record said, which is the same finding NL-142 reports for the ingest
+#     clamps (analysis.py, "THE MARGIN IS EXHAUSTED").
+#     AND THE LADDER ABOVE IS ITS HARNESS'S, NOT THE MACHINE'S (NL-142 fix
+#     loop 2, gate F-G0). That harness puts the Sonar keys on a 27-char shared
+#     host, where nothing clamps; the TRUE worst case puts every clamped field
+#     at its clamp with the Sonar keys sharing a host the vendor door still
+#     admits. Measured through the real constructors after the F-G0 close:
+#       cap 46 -> 76,780 (slack 1,841) · cap 47 -> 77,643 (slack 978)
+#       cap 48 -> 78,516 (slack   105) · cap 49 -> 79,399 (BREACH by 778)
+#     Same verdict, one third of the room: 48 is AT the ceiling, and the true
+#     slack behind it is 105 chars rather than 841. BEFORE the close, the same
+#     ladder breached at EVERY rung — 48 -> 81,972, over by 3,351 — so the
+#     "48 is at the ceiling" line was true of a machine that did not exist
+#     until fix loop 2 landed. Both ladders are pinned: NL-133's in its own
+#     file, the true one in tests/test_nl142_ingest_bounds.py.
+#   * The window [45, 48] is NARROW — ~9% over today's real maximum (it read
+#     [45, 49] before the 2026-08-13 re-measurement above). That is a
 #     property of the 40,000 allowance, not of this cap, and it is on the
 #     record: raising MAX_CLUSTER_ITEMS REQUIRES raising PROMPT_MARGIN_CHARS
 #     (a money-guard constant — bound_usd rises with it). The arithmetic pin in
