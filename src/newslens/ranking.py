@@ -68,9 +68,11 @@ from typing import Dict, List, Optional, Tuple
 from . import config, db, llm, memory, paths, steering
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-# Active ranking model + prices — B2 (approved Option C): the rank seat flipped
-# to claude-haiku-4-5 on the Claude API lane. The seam's SEATS["rank"] row is
-# now the SINGLE SOURCE OF TRUTH for model + price; these module names DERIVE
+# Active ranking model + prices — B2 (approved Option C) moved the rank seat off
+# gpt-4o onto the Claude lane; it has moved again since (ENG-M0: Sonnet 5,
+# subscription), which is exactly why no model id is written here. The seam's
+# SEATS["rank"] row is the SINGLE SOURCE OF TRUTH for model + price; these
+# module names DERIVE
 # from it so the legacy `usd` ledger key, the pre-call estimate, and the
 # persisted token_cost label all track the seat automatically (dispatch B2:
 # "shadow math must use per-seat prices, not a global constant"). REVERT =
@@ -860,8 +862,9 @@ def _effective_rank() -> Tuple["llm.SeatConfig", Optional[str]]:
 
 
 def _post_chat(key: str, prompt: str) -> Dict:
-    # Transport delegates to the provider seam (llm.py). B2: the rank seat is now
-    # claude-haiku-4-5 on the Claude API lane (llm.SEATS["rank"]), timeout 90s,
+    # Transport delegates to the provider seam (llm.py). B2 moved this seat onto
+    # the Claude lane; read the current model/lane off llm.SEATS["rank"] (this
+    # comment named claude-haiku-4-5 until NL-147). timeout 90s,
     # temperature 0 (exact-copy discipline for ids/tag names — M4 live finding),
     # json_mode on. The anthropic provider synthesises the OpenAI-shaped `.raw`
     # (choices/usage), so call_llm_validated's parse/retry law is UNTOUCHED, and
@@ -1215,8 +1218,8 @@ def repair_duplicate_ids(payload: object) -> Tuple[object, Dict]:
 # rot: the rank seat is Sonnet 5, and the Claude 4.6+ family REJECTS temperature
 # with a 400, so `sampling=False` on the seat makes the anthropic api provider
 # OMIT the parameter entirely. `temperature=0` is still passed by _post_chat
-# below — it is part of the LaneRequest contract and the openai/Haiku rollback
-# targets still honor it — but for the shipped seat it reaches no wire.
+# below — it is part of the LaneRequest contract and a sampling=True rollback
+# target would honor it — but for the shipped seat it reaches no wire.
 #
 # WHAT ACTUALLY BUYS THE TRANSCRIPTION DISCIPLINE NOW, in the order it bites:
 #   1. the PROMPT's rule text — the bracketed [id=KEY] render, the sparse-id law,
@@ -1394,8 +1397,8 @@ def _call_llm_validated(
             detail = _http_error_detail(exc)
             if exc.code in (401, 403):
                 # B2: provider-conditional off the in-scope rank_cfg so an
-                # anthropic (Haiku) seat's key failure names the RIGHT console;
-                # the openai arm is unchanged (the rollback path).
+                # anthropic seat's key failure names the RIGHT console; the
+                # openai arm is unchanged (the rollback path).
                 if rank_cfg.provider == "anthropic":
                     raise RankingError(
                         f"Anthropic rejected the key (HTTP {exc.code}"
@@ -2550,8 +2553,8 @@ def run_rank(
             "editor."
         )
     key = (src_env.get("OPENAI_API_KEY") or "").strip()
-    # A″ (2026-07-17): rank is anthropic (Haiku on subscription, api the fall-over)
-    # since B2 — the OpenAI key is the INERT offline-test seam value the seam
+    # A″ (2026-07-17): rank is anthropic (subscription by default, api the
+    # fall-over) since B2 — the OpenAI key is the INERT offline-test seam value the seam
     # passes through and the anthropic providers ignore. Require it ONLY if the
     # rank seat ever resolves to openai (it never does today; the anthropic seat's
     # own gate — check_lane in the seam — handles availability). A keyless-OpenAI

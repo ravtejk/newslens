@@ -931,8 +931,6 @@ def serve_main(argv: Optional[List[str]] = None) -> int:
     """Serve one persona's world on its own port. The founder's 8484 is never
     touched: this is a second instance, not a switch inside his."""
     _ensure_runtime()
-    import socket
-
     persona, rc = _resolve(list(sys.argv[1:] if argv is None else argv), "serve")
     if persona is None:
         return rc
@@ -948,15 +946,39 @@ def serve_main(argv: Optional[List[str]] = None) -> int:
         print(f"persona: refusing port {FOUNDER_PORT} — that is the founder's "
               "own instance", file=sys.stderr)
         return 2
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        if probe.connect_ex(("127.0.0.1", persona.port)) == 0:
-            print(f"persona: port {persona.port} is already serving — "
-                  f"{persona.slug} may already be running at "
-                  f"http://127.0.0.1:{persona.port}/", file=sys.stderr)
-            return 2
-    finally:
-        probe.close()
+    # NL-141: this probe used to be a RAW `connect_ex` with no timeout — the
+    # untimed sibling of the one NL-132-B fixed in `readerserve.probe_port`, and
+    # the same class of hang. MEASURED on this machine (NL-132-B fix loop 1): an
+    # unbounded `connect_ex` against a port that is BOUND BUT NOT LISTENING does
+    # not come back "refused"; it sits in SYN retransmit for **25,921 ms** and
+    # returns ETIMEDOUT, against 252 ms for the bounded probe. ACUTE rather than
+    # merely slow: unlike `pick_port`, this door asks about ONE fixed port, so
+    # there is no other port to fall to — the operator's `scripts/persona-serve`
+    # simply hangs for half a minute with nothing on stdout, and a bound-not-
+    # listening 8485 is exactly what a crashed prior instance leaves behind.
+    #
+    # The fix is REUSE, not a second `settimeout`: `readerserve.port_has_listener`
+    # is the shipped bounded implementation of precisely this question (its
+    # PROBE_TIMEOUT and its OSError arm are what a hand-rolled copy here would
+    # have had to re-derive — and re-deriving it is how the two spellings drifted
+    # apart in the first place). Imported LAZILY because `readerserve` imports
+    # THIS module at its top (`RESERVED_PORTS = (personas.FOUNDER_PORT,)`), and
+    # because this module is stdlib-only at import time by rule (see the module
+    # docstring) so a pre-install doctor can still enumerate personas.
+    #
+    # THE QUESTION DELIBERATELY DOES NOT CHANGE. `port_has_listener` is the
+    # connect arm alone — "is something SERVING here?" — which is the exact
+    # predicate this door already used and the exact one its message claims.
+    # `readerserve.port_is_free` would additionally refuse a bound-not-listening
+    # or TIME_WAIT port, which is arguably the better door; that is a behavior
+    # change, so it is raised in the build record rather than smuggled in behind
+    # a timeout fix.
+    from . import readerserve
+    if readerserve.port_has_listener(persona.port):
+        print(f"persona: port {persona.port} is already serving — "
+              f"{persona.slug} may already be running at "
+              f"http://127.0.0.1:{persona.port}/", file=sys.stderr)
+        return 2
 
     # THE $0 CONTRACT ON THE SERVE DOOR (QA-1, HIGH). Not decoration: this
     # process is about to host a web UI whose empty-state page carries a

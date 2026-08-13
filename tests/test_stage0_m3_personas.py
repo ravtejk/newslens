@@ -39,6 +39,7 @@ is reached, and every child process is pointed at a fixture `.env`.
 """
 from __future__ import annotations
 
+import errno
 import json
 import socket
 
@@ -370,6 +371,134 @@ def test_serve_refuses_a_port_that_is_already_serving(real_route, capsys):
         rc = personas.serve_main(["rates-desk"])
     finally:
         sock.close()
+    assert rc == 2
+    assert "already serving" in capsys.readouterr().err
+
+
+# ===========================================================================
+# NL-141 — the serve door's port probe is BOUNDED (the untimed connect_ex
+# sibling of the one NL-132-B fixed in readerserve)
+# ===========================================================================
+
+def _disarm_serve(monkeypatch):
+    """The shipped entrypoint, stubbed. ENGINEERING.md: a probe serve runs with
+    the generate trigger unable to fire. These two tests drive `serve_main` past
+    its port question, and past it is `cli.main(... serve ...)` — a real web
+    server on the persona's port, with a one-click generate button on its empty
+    state. Nothing here wants that; the stub is what makes the timing assertion
+    below safe to run at HEAD, where the door hangs for ~26 s first."""
+    from newslens import cli
+    seen = {}
+
+    def fake_main(argv):
+        seen["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(cli, "main", fake_main)
+    return seen
+
+
+def test_the_serve_doors_port_probe_comes_back_bounded(real_route, monkeypatch):
+    """BORN RED (NL-141). The door used to ask its port question with a RAW
+    `socket.connect_ex` and no `settimeout` anywhere in personas.py.
+
+    A port that is BOUND but never listening is the case that makes that fatal,
+    and it is not exotic — it is what a crashed prior instance leaves behind. It
+    is invisible to `connect_ex` (nothing answers) and it does not refuse either:
+    measured on this machine at NL-132-B fix loop 1, an untimed `connect_ex`
+    against such a port sits in SYN retransmit for **25,921 ms** and then returns
+    ETIMEDOUT, against 252 ms for the bounded probe.
+
+    ACUTE here in a way it was not in `pick_port`, which is why NL-141 called this
+    the sibling worth fixing rather than the same bug twice: `pick_port` walks a
+    110-port span and can move on, but this door asks about ONE fixed port. There
+    is nowhere for it to go. The operator runs `scripts/persona-serve rates-desk`
+    and gets half a minute of silence.
+
+    The bound is 3 s against a 0.25 s PROBE_TIMEOUT — a hang detector with a
+    hundredfold margin, not a benchmark (the NL-132-B sibling pin's sizing).
+
+    PLATFORM-DEPENDENT BY NATURE (QA F-3): whether a bound-not-listening port
+    hangs or refuses is the OS's call, and only the hanging case can witness
+    this bug. The premise below therefore splits the two explicitly and SKIPS
+    where the hang cannot be staged, rather than passing on a refusal and
+    reporting a bound it never proved."""
+    import time
+
+    personas.provision(personas.load("rates-desk"))
+    from newslens import readerserve
+
+    held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        held.bind(("127.0.0.1", 8485))            # BOUND, and never listen()
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(readerserve.PROBE_TIMEOUT)
+        try:
+            answered = probe.connect_ex(("127.0.0.1", 8485))
+        finally:
+            probe.close()
+        # PREMISE, split by failure mode (QA F-3, fix loop 1). `answered != 0`
+        # was too weak: ECONNREFUSED satisfies it just as well as the SYN-
+        # retransmit timeout this test exists to stage. On a platform that
+        # refuses a bound-not-listening port immediately, the old premise passed
+        # while the hang was never staged — the test would be born green and
+        # stay green with the fix reverted. Measured here: a genuine timeout
+        # returns EAGAIN (35), a refusal returns ECONNREFUSED (61).
+        if answered == errno.ECONNREFUSED:
+            pytest.skip(
+                "this platform REFUSES a bound-not-listening port instead of "
+                "hanging on it, so the 26 s hang cannot be staged here and the "
+                "elapsed-time bound below would prove nothing. The bug and its "
+                "fix are real; this machine cannot witness them.")
+        assert answered in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINPROGRESS), (
+            f"premise failed: connect_ex returned {answered} "
+            f"({errno.errorcode.get(answered, '?')}) against a bound-not-"
+            "listening port. Expected a timeout-class result — anything else "
+            "means this test is no longer staging the hang it exists for")
+
+        seen = _disarm_serve(monkeypatch)
+        started = time.perf_counter()
+        rc = personas.serve_main(["rates-desk"])
+        elapsed = time.perf_counter() - started
+    finally:
+        held.close()
+
+    assert rc == 0
+    assert seen["argv"] == ["--profile", "rates-desk", "serve", "--port", "8485"]
+    assert elapsed < 3.0, (
+        f"the serve door took {elapsed:.1f}s to answer 'is this port serving?' "
+        "on ONE bound-not-listening port — its liveness probe has lost its "
+        "timeout, and this door has no second port to fall to")
+
+
+def test_the_serve_door_asks_the_shipped_bounded_probe_not_its_own_socket(
+        real_route, monkeypatch, capsys):
+    """WIRING PIN (NL-141): the timeout is inherited, not re-derived.
+
+    The fix is REUSE — `readerserve.port_has_listener`, which owns PROBE_TIMEOUT
+    and the OSError arm — rather than a second `settimeout` spelled out here. A
+    hand-rolled copy is how the two spellings drifted apart in the first place,
+    so the pin is that the call actually ROUTES through the shipped helper: patch
+    it, and the door's answer must change.
+
+    `cli.main` is stubbed for the HEAD run, where this route does not exist: an
+    unpatched raw probe finds 8485 empty, returns 'not serving', and walks
+    straight into starting a real server."""
+    personas.provision(personas.load("rates-desk"))
+    from newslens import readerserve
+    _disarm_serve(monkeypatch)
+    asked = []
+
+    def fake_probe(port, host=readerserve.LOOPBACK):
+        asked.append((port, host))
+        return True                                # "something is serving"
+
+    monkeypatch.setattr(readerserve, "port_has_listener", fake_probe)
+    rc = personas.serve_main(["rates-desk"])
+
+    assert asked == [(8485, readerserve.LOOPBACK)], (
+        "the serve door did not ask readerserve.port_has_listener — it is "
+        "answering its own port question again, with its own socket")
     assert rc == 2
     assert "already serving" in capsys.readouterr().err
 

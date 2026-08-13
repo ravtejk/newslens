@@ -288,13 +288,57 @@ def check_openai_key(env: Dict[str, str]) -> List[Result]:
         ]
 
 
+# ---------------------------------------------------------------------------
+# Derived prose — the seat map is READ, never retyped
+#
+# NL-147, and the reason these three one-line helpers exist at all: this file
+# carried FOUR separate hand-written sentences naming rank/editor/script as
+# "Haiku 4.5" seats, and every one of them was still saying it two seat batches
+# after ENG-M0 (2026-08-02/06) moved those seats to Sonnet 5 / Opus 4.8 — because
+# each was a sentence somebody had to remember to edit. `cost_estimate` had
+# already been through this exact failure and been fixed the same way (FIX-4, B4,
+# NEW-1: "the figures DERIVE from llm.SEATS so this prose can never drift from
+# the seat table again"); the roster sentences were simply missed at the time.
+# Anything below that names a model reads it off `llm.SEATS` at call time.
+# ---------------------------------------------------------------------------
+
+def _seat_map_phrase() -> str:
+    """The whole live roster, grouped by model. Cheap derivation of the sentence
+    that kept going stale."""
+    by_model: Dict[str, List[str]] = {}
+    for name, cfg in llm.SEATS.items():
+        by_model.setdefault(cfg.model, []).append(name)
+    return "; ".join(f"{model} — {'/'.join(sorted(seats))}"
+                     for model, seats in sorted(by_model.items()))
+
+
+def _models_for(names: List[str], env: Dict[str, str]) -> str:
+    """The distinct models the NAMED seats resolve to under this env."""
+    return ", ".join(sorted({llm.resolve_seat(n, env).model for n in names}))
+
+
+def _probe_model() -> str:
+    """The model the OPTIONAL live auth probe below would name: the cheapest
+    subscription-lane seat's, by output rate. The probe sends a 1-token 'ok', so
+    any live model proves login — deriving it means the recommended command can
+    never name a model the product has retired (it said claude-haiku-4-5 until
+    NL-147, after the no-Haiku law had removed every Haiku seat)."""
+    subs = [c for c in llm.SEATS.values() if c.lane == "subscription"]
+    if not subs:                              # all-api seat map: any live model
+        return sorted(c.model for c in llm.SEATS.values())[0]
+    return min(subs, key=lambda c: (c.usd_per_mtok_out, c.model)).model
+
+
 def check_anthropic_key(env: Dict[str, str]) -> List[Result]:
     """The Claude API lane credential (B2). Required precisely when — under the
-    current seat map + lane env — some seat resolves to the anthropic provider
-    (rank/editor/script run Haiku 4.5 by default). A keyless install is reported
-    honestly (those seats cannot run) rather than making a live call without a
-    key; when a key is present, a harmless read-only GET /v1/models validates it.
-    The value is never echoed anywhere."""
+    current seat map + lane env — some seat resolves to the anthropic provider.
+    A keyless install is reported honestly (those seats cannot run) rather than
+    making a live call without a key; when a key is present, a harmless read-only
+    GET /v1/models validates it. The value is never echoed anywhere.
+
+    The models are DERIVED (see `_models_for`) — this docstring used to assert
+    "rank/editor/script run Haiku 4.5 by default" and outlived that by two seat
+    batches."""
     anthropic_seats = sorted(
         name for name in llm.SEATS
         if llm.resolve_seat(name, env).provider == "anthropic"
@@ -313,8 +357,9 @@ def check_anthropic_key(env: Dict[str, str]) -> List[Result]:
         return [Result(
             FAIL,
             f"ANTHROPIC_API_KEY not set — the {seats_txt} seat(s) now run on the "
-            "Claude API lane (Haiku 4.5) and cannot run without it; get one at "
-            "console.anthropic.com/settings/keys, set a monthly cap, add to .env",
+            f"Claude API lane ({_models_for(anthropic_seats, env)}) and cannot "
+            "run without it; get one at console.anthropic.com/settings/keys, "
+            "set a monthly cap, add to .env",
         )]
     req = urllib.request.Request(
         ANTHROPIC_MODELS_URL,
@@ -1131,7 +1176,7 @@ def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
             WARN,
             "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1 requested a LIVE probe — this "
             "would spend subscription quota. The recommended shape: one "
-            "`claude -p --output-format json --model claude-haiku-4-5` with a "
+            f"`claude -p --output-format json --model {_probe_model()}` with a "
             "1-token prompt ('ok') on stdin, is_error=false => authed. NOT "
             "fired here — the live smoke is the principal's to run manually "
             "(SETUP.md), so the default doctor never spends. Unset the flag.",
@@ -1150,13 +1195,16 @@ def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
 
 def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     """The provider-seam lane map: one line per seat showing the resolved
-    provider/model/lane + per-seat price, plus fallback state. Current stack
-    (post item C, 2026-07-17): the anthropic content seats all DEFAULT to the
-    SUBSCRIPTION lane — rank/editor/script/state Haiku, the writer Opus, the
-    analyst Sonnet — with the api lane as each one's registered fall-over;
-    synthesis is the lone gpt-4o/api seat. A seat resolved (via NEWSLENS_LANE /
-    NEWSLENS_LANE_<SEAT>) to a lane with no registered provider is flagged
-    FAIL here — the same fail-loud condition the run itself hits."""
+    provider/model/lane + per-seat price, plus fallback state. Standing shape
+    (item C, 2026-07-17): the anthropic seats DEFAULT to the SUBSCRIPTION lane
+    with the api lane as each one's registered fall-over. A seat resolved (via
+    NEWSLENS_LANE / NEWSLENS_LANE_<SEAT>) to a lane with no registered provider
+    is flagged FAIL here — the same fail-loud condition the run itself hits.
+
+    The per-seat lines below have ALWAYS been derived from `llm.SEATS`; it was
+    the summary sentence that went stale (it named rank/editor/script/state as
+    Haiku seats through two seat batches), so the summary is derived now too —
+    see `_seat_map_phrase`."""
     out: List[Result] = []
     for name in llm.SEATS:
         cfg = llm.resolve_seat(name, env)
@@ -1187,10 +1235,9 @@ def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     out.append(Result(
         INFO,
         "registered lanes: openai/api, anthropic/api, anthropic/subscription "
-        "(the claude -p lane, B3) — the anthropic content seats (rank/editor/"
-        "script/state Haiku, writer Opus, analyst Sonnet) DEFAULT to subscription "
-        "with api as their fall-over (item C, 2026-07-17 — field-proven edition "
-        "7); synthesis is the lone gpt-4o/api seat",
+        f"(the claude -p lane, B3) — the seat map is [{_seat_map_phrase()}], and "
+        "the anthropic seats DEFAULT to subscription with api as their fall-over "
+        "(item C, 2026-07-17 — field-proven edition 7)",
     ))
     return out
 

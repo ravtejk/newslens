@@ -23,6 +23,23 @@ Binary resolution is NEWSLENS_CLAUDE_BIN -> PATH -> ~/.local/bin/claude; a
 missing binary is LaneUnavailable at the gate. See _subscription_provider,
 resolve_claude_bin, and check_lane's subscription arm.
 
+THE SEAT MAP TODAY — READ IT OFF `SEATS`, NEVER OFF THIS DOCSTRING. The B1/B2/B3
+paragraphs above are a CHANGELOG (what each increment did, kept as the record of
+how the seam grew); they are not a description of the current roster, and every
+one of them has been superseded at the model level by ENG-M0 (2026-08-02/06) and
+NL-17 M3 fix loop 1 (2026-08-09). Restating the roster in prose is precisely how
+it went stale — so this paragraph states only the LAW that binds it:
+
+  * NO SEAT MAY NAME A HAIKU MODEL (the principal's no-Haiku law, 2026-08-09).
+    NL-147 removed the last of them: the live seats first (ENG-M0 and M3), then
+    the unarmed `_HAIKU_API`/`_HAIKU_SUB` rollback rows and their price
+    constants. `test_nl147_no_haiku.py` is the tooth; it reads `SEATS` and the
+    module's own seat-row dicts, so a re-introduction fails rather than drifts.
+  * Lane law is unchanged and orthogonal: subscription is the default for every
+    anthropic seat, api is the registered fall-over, and a fall-over moves the
+    LANE only — `effective_seat` does `replace(cfg, lane="api")` and never
+    substitutes a model, which is why a lane event cannot change what runs.
+
 B1 SCOPE — PURE REFACTOR (acceptance bar: existing suite green, unchanged):
   * B1 registered only the "openai" provider; every seat resolved to gpt-4o
     on the "api" lane — the current stack, expressed as config (the SEATS
@@ -93,12 +110,14 @@ ANTHROPIC_VERSION = "2023-06-01"
 GPT4O_USD_PER_MTOK_IN = 2.50
 GPT4O_USD_PER_MTOK_OUT = 10.00
 
-# Claude Haiku 4.5 pricing (USD per MTok) — the QA-pinned rows for the seats B2
-# flips to the Claude API lane (rank/editor/script). Shadow math for those
-# seats now reads THESE per-seat prices from the seat table, never a global
-# GPT-4o constant (dispatch B2: "per-seat prices, not a global constant").
-HAIKU_USD_PER_MTOK_IN = 1.00
-HAIKU_USD_PER_MTOK_OUT = 5.00
+# NL-147: HAIKU_USD_PER_MTOK_IN/OUT (1.00 / 5.00) were deleted here with the two
+# Haiku seat rows they priced (see the block above the seat rows). They had no
+# other consumer — grep-verified — so keeping them would have left a dangling
+# price for a model no seat may use. The PRICE FACT itself is not lost and was
+# never this module's to hold: `battery._ARM_PRICES["claude-haiku-4-5"]` is the
+# model->rate map that prices historical ledger rows and battery arms, and it
+# KEEPS its Haiku row (ledger data about what was already spent is a record, not
+# a seat target — the no-Haiku law governs what may RUN).
 
 # Claude Opus 4.8 pricing (USD per MTok) — B4: the writer seat flips to Opus on
 # the Claude API lane. Thinking tokens BILL AS OUTPUT (adaptive thinking on the
@@ -138,11 +157,15 @@ class SeatConfig:
     thinking: Optional[str] = None   # None | "adaptive"                (B2)
     effort: Optional[str] = None     # None | low|medium|high|xhigh|max  (B2)
     # B4: whether the model accepts sampling params (temperature/top_p/top_k).
-    # The Claude 4.6+ family — Opus 4.8 (writer) and Sonnet 5 (analyst) — REJECTS
-    # them with a 400; Haiku 4.5 and GPT-4o still accept them. False => the
-    # anthropic api provider OMITS temperature (never a 400 on the flipped
-    # seats); the Haiku/openai seats keep sampling=True so their request bytes
-    # are byte-unchanged from B2/B1 (the pinned body tests do not move).
+    # The Claude 4.6+ family — Opus 4.8 and Sonnet 5 — REJECTS them with a 400;
+    # GPT-4o still accepts them. False => the anthropic api provider OMITS
+    # temperature (never a 400 on those seats).
+    # WHO IS TRUE TODAY, since this default is what a new row inherits: after
+    # ENG-M0 and NL-17 M3, EVERY anthropic row sets sampling=False, so `synthesis`
+    # (gpt-4o) is the only seat left running the True default — and its request
+    # bytes are byte-unchanged from B2/B1 (the pinned body tests do not move).
+    # The B2-era phrasing here named "the Haiku/openai seats"; the Haiku half of
+    # that pair no longer exists (NL-147, the no-Haiku law).
     sampling: bool = True
     # 2026-07-17 (field-charged): the `claude -p` subscription lane pays process
     # startup + agentic-harness overhead on top of generation, so the API-lane-
@@ -156,39 +179,58 @@ class SeatConfig:
 
 
 # The seat table — code constants (the one-constant-seam precedent, one row
-# per seat). Timeouts match today's per-call-site values (rank & analyst 90s,
-# the writer family 120s, state 60s) — B2 changes model/provider/lane/price,
-# NOT timeouts (Haiku is faster than GPT-4o, so the existing headroom holds).
+# per seat).
+# B2-ERA NOTE, kept as the record of that increment's reasoning and NOT a
+# description of the shipped walls: B2 changed model/provider/lane/price and NOT
+# timeouts, on the ground that Haiku was faster than GPT-4o so the existing
+# headroom held (rank & analyst 90s, the writer family 120s, state 60s). Every
+# one of those numbers has since been re-measured twice — the 2026-07-26
+# thinking-seam re-tune and the 2026-08-06 ENG-M0 re-measure, both derived in the
+# timeout blocks below. Read the walls off `SEATS`, not off this paragraph.
 _GPT4O_API = dict(
     provider="openai", model="gpt-4o", lane="api",
     usd_per_mtok_in=GPT4O_USD_PER_MTOK_IN,
     usd_per_mtok_out=GPT4O_USD_PER_MTOK_OUT,
 )
 
-# B2 (approved Option C): the three cheapest/most-validated seats flipped to the
-# Claude lane on Haiku 4.5. thinking/effort stay None — these are mechanical
-# single-turn completions (rank clustering, editorial tightening, TTS-script
-# adaptation), not reasoning work, so no thinking param is sent (dispatch B2).
-# _HAIKU_API is retained as the REGISTERED ALTERNATIVE (the api fall-over lane
-# a seat reaches via NEWSLENS_LANE_<SEAT>=api or NEWSLENS_LANE_FALLBACK=api) and
-# the rollback target (flip a row back to **_HAIKU_API, or **_GPT4O_API).
-_HAIKU_API = dict(
-    provider="anthropic", model="claude-haiku-4-5", lane="api",
-    usd_per_mtok_in=HAIKU_USD_PER_MTOK_IN,
-    usd_per_mtok_out=HAIKU_USD_PER_MTOK_OUT,
-)
-
-# B3 (subscription-lane mandate, DECISIONS 2026-07-16): the anthropic-provider
-# seats DEFAULT to the `claude -p` subscription lane — subscription is ALWAYS
-# the priority, the API lane is the registered fall-over (NEWSLENS_LANE_<SEAT>=
-# api, or the principal-armed NEWSLENS_LANE_FALLBACK=api). Same model + prices
-# as _HAIKU_API (shadow is API-priced regardless of lane); only the transport
-# and usd_charged change (usd_charged == 0.0 on the subscription lane).
-_HAIKU_SUB = dict(
-    provider="anthropic", model="claude-haiku-4-5", lane="subscription",
-    usd_per_mtok_in=HAIKU_USD_PER_MTOK_IN,
-    usd_per_mtok_out=HAIKU_USD_PER_MTOK_OUT,
-)
+# B3 (subscription-lane mandate, DECISIONS 2026-07-16), the standing rule for
+# every anthropic-provider row below: the seats DEFAULT to the `claude -p`
+# SUBSCRIPTION lane — subscription is ALWAYS the priority, the api lane is the
+# registered fall-over (NEWSLENS_LANE_<SEAT>=api, or the principal-armed
+# NEWSLENS_LANE_FALLBACK=api). A lane flip changes the transport and usd_charged
+# (0.0 on subscription) and NOTHING else: shadow is API-priced on either lane, so
+# the cost dashboard never forks (Onna's law, the price-constant block above).
+#
+# ------------------------------------------------------------------------------
+# NL-147: THE TWO HAIKU ROWS THAT USED TO LIVE HERE ARE DELETED (the no-Haiku law,
+# principal 2026-08-09: no Haiku for any part of the product).
+#
+# WHAT THEY WERE, kept as a receipt because the deletion is the point: B2's
+# `_HAIKU_API` / `_HAIKU_SUB` put rank/editor/script on claude-haiku-4-5, and the
+# comment above them named `**_HAIKU_API` as the ROLLBACK TARGET a future
+# maintainer should flip a row back to. ENG-M0 (2026-08-02/06) moved every one of
+# those seats off Haiku — rank -> Sonnet 5, editor/script/state -> Opus 4.8 — and
+# NL-17 M3 fix loop 1 took the last live seat (follow_altitude -> Sonnet 5), which
+# left the two dicts referenced by NOTHING but that comment.
+#
+# WHY THEY STILL MATTERED ENOUGH TO DELETE, stated precisely so the census is not
+# over-read: they were NOT a reachable fall-over. `effective_seat` falls a seat by
+# `replace(cfg, lane="api")` — it moves the LANE on the seat's own row and never
+# substitutes a model — so no armed fallback, no NEWSLENS_LANE_<SEAT>=api and no
+# NEWSLENS_LANE_FALLBACK=api could ever have landed a call on Haiku once the seat
+# rows moved. The live hazard was the PROSE: a standing instruction to a future
+# maintainer to flip a row back to a model the principal has since outlawed. That
+# is a trap with a fuse, not dead weight, and prose is exactly how the last two
+# Haiku slips got in (llm.py's own record, the rank seat).
+#
+# THE ROLLBACK STORY THAT REPLACES IT, true of the tree as it stands: a seat's
+# rollback target is ITS OWN ROW with `lane="api"` — same model, same prices, the
+# api transport — which is what `effective_seat` already produces and what the
+# api-lane tests pin. A MODEL rollback has no registered alternative by design;
+# it is a seat ruling, and it goes through the principal like the rest of them.
+# `**_GPT4O_API` remains the one registered non-anthropic target (synthesis's row,
+# and the state seat's documented revert — see its row).
+# ------------------------------------------------------------------------------
 
 # B4 (Option C): the writer seat is Opus 4.8. 2026-07-17 (field batch, item C):
 # the principal RULED it onto the `claude -p` SUBSCRIPTION lane and it is now
@@ -495,6 +537,12 @@ _OPUS_STATE_SUB = dict(
 #   writer   900 UNTOUCHED — the writer did not move in this batch.
 #   follow_altitude 20 UNTOUCHED — the flagged exception, still Haiku, still
 #            thinking-off, still the 8s reader-facing UI wall. DO NOT TOUCH.
+#            SUPERSEDED AT THE MODEL, 2026-08-09 (NL-17 M3 fix loop 1): this seat
+#            left Haiku for Sonnet 5 under the no-Haiku law. The line above is
+#            ENG-M0's record and stays as written; what survived the flip is what
+#            it was actually protecting — thinking-off, and the reader-facing
+#            walls — and M3 RE-MEASURED the 20s subscription wall on the flipped
+#            seat rather than inheriting it (see the seat row).
 #
 # state keeps a deliberately fat 15.5x: it is a 5.8s call, the absolute wall is
 # still only 90s, and what it writes is the DURABLE thread memory every later
@@ -522,8 +570,12 @@ SEATS: Dict[str, SeatConfig] = {
     "script":    SeatConfig("script",    timeout_s=120, timeout_sub_s=240, **_OPUS_SCRIPT_SUB),
     # NL-17-M1 increment A (the altitude slice): the follow-altitude resolver
     # seat. A cheap mechanical single-turn classification (given a followed
-    # thread, pick entity|storyline + the primary entity + a disclosure line) —
-    # the same MODEL class as rank/editor/script (Haiku 4.5).
+    # thread, pick entity|storyline + the primary entity + a disclosure line).
+    # MODEL: Sonnet 5, subscription — the same model class as `rank`. (This line
+    # read "the same MODEL class as rank/editor/script (Haiku 4.5)" until NL-147;
+    # it was written at M1 and outlived three seat flips. rank is Sonnet 5 and
+    # editor/script are Opus 4.8, so the sentence had stopped being true of all
+    # three seats it named as well as of this one.)
     #
     # THE HISTORY, kept because it was a correct read of a symptom and a WRONG
     # read of the cause (2026-07-20, DECISIONS "RESOLVER LANE FIX"): the feature
@@ -563,10 +615,18 @@ SEATS: Dict[str, SeatConfig] = {
     # RESOLVED BY THE GATE 2026-07-26: eng-4 C2 specified 20; the dispatch's 45
     # was conservatism, not evidence (52 live falsifier calls, no tail past ~3s),
     # and this is the one seat where a reader waits out the full wall before the
-    # proven degrade — 20 caps that pin. api (sanctioned-exception only): timeout_s=8, a
-    # healthy Haiku round-trip being ~1.2s. A hung provider on either lane still
-    # degrades to the PROVEN this-story commit (exact copy) in a beat, never
-    # pinning the reader.
+    # proven degrade — 20 caps that pin. api (sanctioned-exception only):
+    # timeout_s=8, sized in 2026-07 against a healthy HAIKU api round-trip of
+    # ~1.2s. A hung provider on either lane still degrades to the PROVEN
+    # this-story commit (exact copy) in a beat, never pinning the reader.
+    # DISCLOSED, NL-147, and left as it stands rather than quietly adjusted: the
+    # 8s API wall is the one number on this row that was NOT re-measured when the
+    # seat flipped to Sonnet 5 — M3's two n=9 runs below are both SUBSCRIPTION.
+    # It is a sanctioned-exception lane nobody reaches without setting
+    # NEWSLENS_LANE_FOLLOW_ALTITUDE=api by hand, and the degrade path makes a trip
+    # cheap rather than fatal, so this is a stale premise and not a live break —
+    # but "re-measured, never inherited" is not true of it, and measuring it costs
+    # metered api calls this batch is not authorised to make. Raised to the gate.
     # NL-17 M3 fix loop 1 (F-2): Haiku 4.5 -> Sonnet 5, subscription (no-Haiku
     # law; this seat is the arm chain's first link — see _SONNET_RESOLVER_SUB).
     # TIMEOUTS RE-MEASURED ON THE FLIPPED SEAT, never inherited (ENG-M0's rule,
@@ -699,8 +759,9 @@ class LaneRequest:
     # marked cache_control:{type:"ephemeral"} so a reuse within the 5-minute TTL
     # (the analyst's static brief instructions across an edition's slots; a
     # writer/analyst corrected retry; a same-day idempotent re-run) is served at
-    # ~0.1x. None (the Haiku/openai seats never set it) => the request bytes are
-    # byte-unchanged. The subscription lane has NO cache_control surface, so its
+    # ~0.1x. None (any call whose caller passes no stable prefix — the mechanical
+    # json seats never do) => the request bytes are byte-unchanged from B2/B1.
+    # The subscription lane has NO cache_control surface, so its
     # provider folds this prefix inline (never dropped); documented per dispatch.
     system: Optional[str] = None
 
@@ -1082,7 +1143,8 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
     callers pass the openai offline-test seam url, which does not apply here.
     Headers: x-api-key (the lane's own credential) + anthropic-version +
     content-type. max_tokens is REQUIRED by the Messages API. thinking/effort
-    are sent only when the seat sets them (the Haiku seats leave both None).
+    are sent only when the seat sets them (the mechanical seats leave both None —
+    today `follow_altitude`, and `synthesis` on the openai side).
 
     NL-93: the LONG-call class (writer/analyst — see _should_stream) POSTs with
     "stream": true and the SSE event deltas are accumulated by _accumulate_sse
@@ -1100,16 +1162,18 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
         "max_tokens": req.max_tokens,          # REQUIRED by the Messages API
         "messages": [{"role": "user", "content": req.prompt}],
     }
-    # B4: the Claude 4.6+ family (Opus 4.8 writer, Sonnet 5 analyst) REJECTS
-    # temperature with a 400 — omit it when the seat says so. The Haiku/openai
-    # seats keep sampling=True, so `temperature` stays where it was (right after
-    # `messages`), and their pinned request bytes do not move.
+    # B4: the Claude 4.6+ family (Opus 4.8, Sonnet 5) REJECTS temperature with a
+    # 400 — omit it when the seat says so. A sampling=True seat keeps
+    # `temperature` where it was (right after `messages`) so its pinned request
+    # bytes do not move; after NL-147 that is the openai side only (`synthesis`),
+    # every anthropic row having set sampling=False.
     if cfg.sampling:
         body["temperature"] = req.temperature
     # B4 prompt caching + json nudge. `system` is a list when a cacheable prefix
     # is present (cache_control:{ephemeral} on the big stable block, the json
     # nudge appended after it as its own volatile-free block); a plain STRING for
-    # a Haiku json_mode seat with no prefix (byte-unchanged from B2). Render
+    # a json_mode seat with no prefix (`rank`'s shape — byte-unchanged from B2,
+    # where that seat happened to be Haiku). Render
     # order is tools -> system -> messages, so the cache breakpoint on the system
     # block covers everything up to the volatile user `prompt`.
     if req.system:
@@ -1120,9 +1184,9 @@ def _anthropic_provider(req: LaneRequest) -> LaneResponse:
         body["system"] = blocks
     elif req.json_mode:
         body["system"] = _ANTHROPIC_JSON_SYSTEM
-    if cfg.thinking:                            # None on the Haiku seats -> omitted
+    if cfg.thinking:                            # None on the mechanical seats -> omitted
         body["thinking"] = {"type": cfg.thinking}
-    if cfg.effort:                             # None on the Haiku seats -> omitted
+    if cfg.effort:                             # None on the mechanical seats -> omitted
         body["output_config"] = {"effort": cfg.effort}
     # NL-93: stream the LONG-call class (writer/analyst; see _should_stream) so a
     # minutes-long generation never idle-dies (RemoteDisconnected). `stream` is
@@ -1462,7 +1526,7 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
             f"{source}"
         )
     args = [bin_path, *_SUBSCRIPTION_BASE_FLAGS, "--model", cfg.model]
-    if cfg.effort:                              # None on the Haiku seats -> omitted
+    if cfg.effort:                              # None on the mechanical seats -> omitted
         args += ["--effort", cfg.effort]
     if req.json_mode:                           # the same JSON nudge the api lane uses
         args += ["--append-system-prompt", _ANTHROPIC_JSON_SYSTEM]
@@ -1561,10 +1625,14 @@ def _select_provider(cfg: SeatConfig) -> Provider:
     provider = _PROVIDERS.get(_provider_key(cfg))
     if provider is None:
         # Name the seat's ACTUAL SEATS default (provider/model on the api lane) as
-        # the fix — not a stale "gpt-4o default" (rank/editor/script are Haiku on
-        # the Claude api lane now). The api lane (openai + anthropic) is
-        # implemented; the only unregistered lane is the claude -p subscription
-        # lane (B3).
+        # the fix — not a stale hard-coded "gpt-4o default", which is what this
+        # message used to say and which stopped being true the moment any seat
+        # left openai. The default is READ from the table for exactly that
+        # reason: naming a model in this string is how it goes stale — the
+        # parenthetical here named rank/editor/script as Haiku until NL-147, two
+        # seat batches after they stopped being. The api lane (openai +
+        # anthropic) is implemented; the only unregistered lane is the claude -p
+        # subscription lane (B3).
         default = SEATS[cfg.seat]
         raise LaneUnavailable(
             f"seat '{cfg.seat}' resolves to provider='{cfg.provider}' "

@@ -376,10 +376,13 @@ WRITER_UA = "NewsLens/0.1 (personal news briefing prototype; writer)"
 # resets it in a finally — so _chat rides the SAME seat the gate checked and the
 # ledger attributes, while KEEPING ITS EXACT SIGNATURE (the ADR-0014 §2 law,
 # pinned by test_signatures_preserved: _chat is the suite's monkeypatch target).
-# B2 uses this to transport editor/script on the Claude API Haiku seats and
-# narrative on gpt-4o — closing the B1 "B4 residual" (a frozen writer transport
-# under a per-step ledger) without a signature change. None => the writer seat
-# (direct callers / the signature test keep the historical gpt-4o writer path).
+# B2 introduced this to transport editor/script on a different seat from
+# narrative — closing the B1 "B4 residual" (a frozen writer transport under a
+# per-step ledger) without a signature change. WHICH models those are is not
+# stated here on purpose: it has changed three times since B2 (the B2-era text
+# named Haiku and gpt-4o and was still saying so at NL-147), and `llm.SEATS` is
+# the only honest answer. None => the writer seat (direct callers / the signature
+# test keep the historical writer path).
 # Request-scoped, single-threaded pipeline, always reset in call_llm's finally.
 _ACTIVE_SEAT_CFG: "Optional[llm.SeatConfig]" = None
 
@@ -417,7 +420,7 @@ def _resolve_step_seat(step: str) -> "tuple":
 # re-run); everything from it on (reader tags, threads, prior briefing, stories)
 # is the per-edition material. Split there so the law rides a cache_control
 # system block. The marker is unique to the narrative templates — editor_pass /
-# script_adapt do not carry it, so their (Haiku) prompts never split.
+# script_adapt do not carry it, so their prompts never split.
 _NARRATIVE_CACHE_SENTINEL = "\n=== THE READER'S TAGS"
 
 
@@ -455,7 +458,7 @@ def _chat(key: str, prompt: str, max_tokens: int, temperature: float,
     # 4.8 seats carrying sampling=False, and the Claude 4.6+ family rejects
     # temperature with a 400, so the anthropic api provider OMITS it. The
     # parameter stays in the signature deliberately — it is the suite's
-    # monkeypatch surface and the openai/Haiku rollback targets still honor it —
+    # monkeypatch surface and a sampling=True rollback target would honor it —
     # but nothing here should be read as "these steps are temperature-controlled"
     # any more. Whatever determinism these seats have now comes from their
     # prompts and their validators, not from a sampling knob.
@@ -542,8 +545,9 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
     global _ACTIVE_SEAT_CFG
     _prev_seat_cfg = _ACTIVE_SEAT_CFG
     # B2: point _chat's transport at the SAME seat the gate preflighted and the
-    # ledger attributes — editor/script ride the Claude API Haiku seat, narrative
-    # stays gpt-4o. Because check_lane already passed for seat_cfg, the transport
+    # ledger attributes — whichever seat each step maps to (llm.SEATS is the map;
+    # this comment named the B2-era Haiku/gpt-4o pair until NL-147). Because
+    # check_lane already passed for seat_cfg, the transport
     # can never hit an unavailable lane inside the loop (the FIX-2 GenerateError-
     # wrapped-LaneUnavailable carve-out is structurally impossible — a raw
     # LaneUnavailable dies at the gate above, before the seat is armed).
@@ -557,9 +561,10 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
                 if cost_sink is not None:
                     # B2: lane/shadow keys from the SAME resolution the gate/
                     # transport used. legacy `usd` == usd_charged, sourced
-                    # per-seat from the seam (editor/script are Haiku now), so the
-                    # entry never forks the model that ran from the price the
-                    # ledger records. B3-D2: the fall label rides too.
+                    # per-seat from the seam rather than from a global writer
+                    # constant, so the entry never forks the model that ran from
+                    # the price the ledger records. B3-D2: the fall label rides
+                    # too.
                     fields = llm.cost_fields(seat_cfg, usage,
                                              fallback_reason=_fb_reason)
                     entry = {
@@ -584,8 +589,8 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
                 detail = ranking._http_error_detail(exc)
                 if exc.code in (401, 403):
                     # B2: provider-conditional off the in-scope seat_cfg so an
-                    # anthropic (Haiku) editor/script seat names the RIGHT
-                    # console; the openai arm is unchanged (the rollback path).
+                    # anthropic editor/script seat names the RIGHT console; the
+                    # openai arm is unchanged (the rollback path).
                     if seat_cfg.provider == "anthropic":
                         raise GenerateError(
                             f"Anthropic rejected the key (HTTP {exc.code}"
@@ -656,15 +661,18 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
 
 def _step_seat_cfg(step: str) -> "llm.SeatConfig":
     """The resolved seat for a generate step (llm.seat_for_step maps
-    narrative*->writer, editor*->editor, script*->script). B2: editor/script are
-    the Claude API Haiku seats; the narrative/writer family stays gpt-4o."""
+    narrative*->writer, editor*->editor, script*->script). The model/lane/price
+    behind each of those seats is `llm.SEATS`' to say, never this docstring's —
+    it asserted "editor/script are the Claude API Haiku seats; the
+    narrative/writer family stays gpt-4o" until NL-147, by which point all three
+    clauses were false."""
     return llm.resolve_seat(llm.seat_for_step(step))
 
 
 def _est_cost(prompt: str, max_tokens: int, step: str = "narrative") -> float:
-    # B2: the pre-call budget estimate uses the STEP'S seat prices (Haiku for
-    # editor/script), not a global writer constant — so the ladder's headroom
-    # math tracks the seat that will actually be charged.
+    # B2: the pre-call budget estimate uses the STEP'S seat prices, not a global
+    # writer constant — so the ladder's headroom math tracks the seat that will
+    # actually be charged.
     cfg = _step_seat_cfg(step)
     return (len(prompt) / 3.5 / 1e6) * cfg.usd_per_mtok_in + (
         max_tokens / 1e6
@@ -761,9 +769,10 @@ def _step_cost(usage: Dict) -> float:
 def _step_ledger(step: str, usage: Dict) -> Dict:
     """The per-step DURABLE-ledger fields for report.steps (-> persist_generation
     -> briefings.token_cost + the generation log) — model/lane/usd plus the
-    shadow keys, sourced from the STEP'S seat (B2: editor/script Haiku, narrative
-    gpt-4o). Replaces the WRITER_MODEL + WRITER-rate _step_cost that forked the
-    ledger the moment editor/script left gpt-4o. B3-D6: reads the SAME run-scoped
+    shadow keys, sourced from the STEP'S seat (B2, whatever those seats are on
+    the day — see llm.SEATS). Replaces the WRITER_MODEL + WRITER-rate _step_cost
+    that forked the ledger the moment editor/script left gpt-4o. B3-D6: reads the
+    SAME run-scoped
     resolution call_llm's gate/transport/cost_sink used (via _resolve_step_seat),
     NEVER a fresh effective_seat — so a `claude` binary that vanished mid-run
     can't persist a lane the transport didn't ride, or raise LaneUnavailable at
