@@ -71,7 +71,10 @@ that stands, superseded on SPEND only), both via
 every draft (cut/concretize only, never adds facts, fully re-validated,
 disclosed in the run log) before validation. Spec:
 `workspace/debates/2026-07-02--newslens--engineering.md` (§A–F); scope change:
-**v1 is on-demand only** — no scheduled generation (DECISIONS.md 2026-07-03).
+**v1 was on-demand only** — no scheduled generation (DECISIONS.md 2026-07-03).
+That call was revisited by the principal's 2026-08-09 flow word; **NL-146 shipped
+scheduled generation** (macOS launchd, opt-in, installed by his hands — SETUP.md
+§5). On-demand `generate` is unchanged.
 
 ## Quickstart
 
@@ -121,8 +124,9 @@ and every missing item comes with its fix.
 | `scripts/moat-battery {plan\|t1\|t2\|t3\|pack} [--run]` | The NL-75 **Phase-2 moat battery**: `t1` prose-first vs sectioned retro-pairs, `t2` the expression-ablation 2×2 (ledger-context on/off × form), `t3` the Concept B input pack ($0 — never makes an LLM call), `pack` the shuffled blind pack + sealed key, `plan` the whole-session cost disclosure. ONE writer model, held fixed — this is not a model A/B (that's `scripts/battery`), so there is deliberately no `--arms`. Read-only on the record; artifacts under `data/battery/<session>/phase2/`. **Dry-run by default**; the cap binds CHARGED dollars **per invocation**, so `plan`'s session total is the number to check against a spend authorisation. A 2×2 on an edition with no ledger content is BLOCKED as degenerate rather than spent. |
 
 Coming later (deliberately not stubbed): `read`/`listen`
-(M7 — these log the consumption events the day-30 falsifier is computed from;
-v1 is on-demand only, so M7 is manual trigger + instrumentation, no cron).
+(M7 — these log the consumption events the day-30 falsifier is computed from).
+M7's own scope was manual trigger + instrumentation; scheduling arrived later and
+separately as NL-146.
 
 ## Environment variables & scopes
 
@@ -137,7 +141,7 @@ rule). You fill `.env` yourself; agents only ever touch `.env.example`.
 | Claude CLI (`claude`) | Yes (subscription lane) | The subscription lane's transport: `rank`/`editor`/`script` default to `claude -p` against your logged-in CLI. Resolution: `NEWSLENS_CLAUDE_BIN` → `PATH` → `~/.local/bin/claude` (the doctor reports which resolved and the version). Grant it by installing the CLI and running `claude` once to log in — NewsLens never handles your credentials; the subprocess strips `ANTHROPIC_API_KEY`, disables all tools + CLAUDE.md/skills/plugins/hooks/MCP, and runs in an empty scratch dir. A missing/unauthed CLI FAILs the run naming the fix (never a silent API call). |
 | `PERPLEXITY_API_KEY` | **No — discovery is paused** | Tier-2 discovery is PAUSED by ruling (2026-07-25; 0.41% lifetime citation contribution), so no discovery call is made and the doctor reports the pause instead of asking for the key. **One caller is still live and still metered when this key is set:** analysis VERIFICATION, one Sonar call per depth-tier story on `analyze`/`generate` (~$0.003/edition measured 2026-07-25). Comment the key out of `.env` and every Sonar path in the product is cold. Pay-as-you-go; a prepaid credit cap in their dashboard is the primary spend limit. |
 | `BUDGET_CAP_USD_PER_RUN` | Default 0.25 (M9 ruling 2026-07-06; was 0.50) | In-app hard stop per generate run (ENGINEERING.md cost guardrail). Degradation ladder: cheapest inputs first, content protected longest; routine derating at 0.25 escalates to the principal, never absorbed. |
-| `GENERATE_HOUR_LOCAL` | Dormant | Nothing reads it in v1 (on-demand only, DECISIONS.md 2026-07-03). Kept optional in case scheduling ever returns; a set-but-invalid value still fails the doctor (typo'd .env is a config error). |
+| `GENERATE_HOUR_LOCAL` | Optional, default 6 | The local hour (0-23) a SCHEDULED run fires at. Dormant 2026-07-03 -> 2026-08-13; NL-146 woke it — `newslens schedule plist` bakes this hour into the launchd agent (SETUP.md §5), and the doctor warns when an installed agent's hour and this value disagree. On-demand `generate` ignores it. A set-but-invalid value still fails the doctor (a typo'd .env is a config error). |
 | `GNEWS_API_KEY` | No — leave blank | Fallback discovery vendor, deliberately ungranted unless the Sonar reliability spike fails. |
 | `NEWSLENS_REAL_DATA` | No — safety override, not a credential | The real-paths guard's explicit opt-in (incident 2026-07-14: an ad-hoc probe script clobbered the real `generation_log.jsonl` through `paths.DATA_DIR`). `DATA_DIR`/`DB_PATH` refuse to resolve outside the real entrypoints (`newslens …`, `scripts/doctor`); set `NEWSLENS_REAL_DATA=1` only for a deliberate one-off ad-hoc use — the setting is transcript-greppable by design. (The guard's former "under pytest" arm is gone — children spawned by tests inherit `PYTEST_CURRENT_TEST`, which silently sanctioned the QA suite's doctor child against the real `data/`; v7-M1 pinhole, 2026-07-14.) LIMIT: a script hardcoding the `data/...` path string bypasses the guard; the "no real-state writes during probing" rule (ENGINEERING.md, 2026-07-07) remains law. |
 | `NEWSLENS_DATA_DIR` / `NEWSLENS_DB_PATH` | No — sandbox redirection, not a credential | Resolve `paths.DATA_DIR`/`paths.DB_PATH` to the given location instead of the checkout's real `data/` — redirection outranks sanction, so no real-data opt-in is involved. This is the only sandbox that crosses a process boundary: the QA suite exports per-test values so every child it spawns (doctor, CLI) lands in the test sandbox (v7-M1 pinhole fix, 2026-07-14). `NEWSLENS_DB_PATH` defaults to `<NEWSLENS_DATA_DIR>/newslens.db` when only the dir is set. **Seam completed 2026-07-16** (after a sandboxed probe rewrote the real `memory.md` through the un-seamed `MEMORY_FILE` path — second pinhole-class instance): `NEWSLENS_SOURCES_FILE` / `NEWSLENS_ENV_FILE` / `NEWSLENS_MEMORY_FILE` redirect the principal-owned files the same way; all five paths sit behind one guard. |

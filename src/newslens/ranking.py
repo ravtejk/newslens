@@ -63,7 +63,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import config, db, llm, memory, paths, steering
 
@@ -382,8 +382,13 @@ class RankReport:
 # Inputs
 # ---------------------------------------------------------------------------
 
-def local_today() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+def local_today(now: Optional[Callable[[], datetime]] = None) -> str:
+    """The org's ONE definition of "today". The optional clock exists so a
+    caller that already carries an injectable clock (`schedule.run_scheduled`,
+    NL-146 fix loop 1 / QA F-8) can pin its day through this function instead of
+    re-deriving the expression beside it — a second spelling of "today" is how a
+    scheduler and a renderer end up disagreeing about which day it is."""
+    return (now or datetime.now)().strftime("%Y-%m-%d")
 
 
 def candidate_window(

@@ -15,7 +15,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from newslens import db, labels, server, webui
+from newslens import db, generate, labels, server, webui
 
 
 DATE = "2026-07-10"          # the fixture's "latest edition"
@@ -39,10 +39,41 @@ def _mem(con, topic, status="active", note=None, ref=None):
     return cur.lastrowid
 
 
+def _readable_narrative(date):
+    """A one-story edition body, built by the SHIPPED assembler rather than by
+    hand — the same `generate.assemble_narrative` the pipeline writes with, so
+    what these fixtures store is byte-shaped like a real edition instead of
+    like a guess at one.
+
+    REWRITTEN, NOT VALUE-SWAPPED (NL-146 fix loop 1, QA F-4). Until this
+    milestone `_briefing` inserted a row with story_slots and NO narrative and
+    no log entry, and the archive listed it because the archive listed every
+    ROW. That state is not an edition and cannot be opened: it is the
+    post-rank window (`ranking.persist` commits the date's row; the body lands
+    last at `generate.persist_generation`) frozen permanently, and the founder's
+    own database carries exactly one of them — 2026-07-04, story_slots
+    populated, narrative NULL, no log entry, and `?date=2026-07-04` already
+    answers "Nothing for today yet". The archive now applies the edition
+    renderer's own `_stories_for` predicate, so these fixtures had to start
+    seeding editions that exist. Every assertion in the two tests below is
+    UNCHANGED; only the premise became a real one."""
+    stories = [{"tier": "full", "headline": "H1", "lede": "L1.",
+                "my_read": None}]
+    slots = [{"slot": 1, "story_title": "H1", "summary": "L1.", "item_ids": [],
+              "outlets": [], "matched_tags": [], "matched_memory": [],
+              "matched_dormant": [], "followed_analyst": False}]
+    return generate.assemble_narrative(
+        date, "A", stories,
+        {"slots": slots, "items_by_slot": {1: []}, "threads": [],
+         "prior_ctx": None, "continuity_status": "none", "window_meta": None,
+         "corroboration": {}})
+
+
 def _briefing(con, date, story_slots=None, generated="2026-07-10T04:44:00.000Z"):
     cur = con.execute(
-        "INSERT INTO briefings (date, story_slots, generated_at)"
-        " VALUES (?, ?, ?)", (date, json.dumps(story_slots or []), generated))
+        "INSERT INTO briefings (date, story_slots, narrative_text, generated_at)"
+        " VALUES (?, ?, ?, ?)", (date, json.dumps(story_slots or []),
+                                 _readable_narrative(date), generated))
     return cur.lastrowid
 
 
@@ -235,6 +266,10 @@ def test_archive_calendar_three_day_classes():
     _seed_hormuz_shaped(con)                 # editions Jul 5, 6, 10
     html = server._render_archive(con)
     con.close()
+    assert labels.ARCHIVE_EMPTY not in html, (
+        "PREMISE: the seeded days must be openable editions. An archive that "
+        "silently empties itself fails every class assertion below with a "
+        "missing-CSS-class message that says nothing about the cause")
     assert 'class="month-title">July' in html            # month title
     assert 'class="cal-cell cal-edition' in html         # edition day class
     assert 'class="cal-cell cal-gap"' in html            # gap-in-history (Jul 7-9)
@@ -259,6 +294,9 @@ def test_archive_today_is_terra_not_ringed_and_panel_carries_the_tag():
     _briefing(con, today)
     html = server._render_archive(con)
     con.close()
+    assert labels.ARCHIVE_EMPTY not in html, (
+        "PREMISE: the seeded day must be an openable edition (see "
+        "_readable_narrative)")
     assert 'cal-edition cal-today' in html               # today-with-edition class
     assert 'border: 2px solid var(--terra)' not in webui.CSS   # the ring is gone
     assert labels.ARCHIVE_TODAY_TAG in html              # TODAY tag in the panel stamp

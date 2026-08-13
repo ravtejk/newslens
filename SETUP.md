@@ -134,9 +134,10 @@ subscription lane would not, so it stays opt-in.
 - `BUDGET_CAP_USD_PER_RUN` — leave the 0.25 default unless you have a reason
   (recommended value cut from 0.50 with the M9 Analyst ruling, 2026-07-06 —
   if your .env still pins 0.50, lower it to match).
-- `GENERATE_HOUR_LOCAL` — **dormant**: v1 generates on-demand only (your
-  2026-07-03 call), nothing reads this. Leave it or delete it; the doctor
-  treats it as informational either way.
+- `GENERATE_HOUR_LOCAL` — the local hour (0–23) a **scheduled** run fires at;
+  default `6`. Dormant from your 2026-07-03 on-demand-only call until NL-146
+  brought scheduling back. It only matters once you install the launchd agent
+  (§5); on-demand `generate` ignores it.
 - `GNEWS_API_KEY` — **leave blank.** Deliberately ungranted fallback; only
   becomes relevant if the Sonar reliability spike fails, and that would come
   back to you as a checkpoint first.
@@ -227,8 +228,114 @@ still runs (stdlib-only) and exits `1` with, in short:
 
 That's the designed experience: nothing crashes, every gap names its fix.
 
+## 5. Scheduled generation — the edition is ready before you open it (NL-146)
+
+Optional, and off until you install it. Generating an edition takes about half
+an hour; scheduling it means you open, read, close.
+
+**NewsLens never installs the launchd agent.** It renders the file and prints
+the commands; you run them. Three steps:
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+newslens schedule plist > ~/Library/LaunchAgents/com.newslens.generate.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.newslens.generate.plist
+newslens schedule status
+```
+
+`newslens schedule install-instructions` prints the same steps with your own
+paths filled in. `newslens schedule plist` prints the agent and nothing else, so
+the redirect above is safe.
+
+**The hour** comes from `GENERATE_HOUR_LOCAL` in your `.env` (default `6`, i.e.
+06:00 local). It was dormant until this milestone; it is now the hour baked into
+the agent. Changing it does **not** change an already-installed agent — re-render
+and re-bootstrap:
+
+```bash
+launchctl bootout gui/$UID/com.newslens.generate
+newslens schedule plist > ~/Library/LaunchAgents/com.newslens.generate.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.newslens.generate.plist
+```
+
+`scripts/doctor` warns if the installed agent's hour and your `.env` disagree.
+
+### Pause without uninstalling — the kill switch
+
+```bash
+touch data/SCHEDULE_PAUSED    # scheduled runs decline before spending anything
+rm data/SCHEDULE_PAUSED       # resume
+```
+
+The agent stays loaded; the run declines at its first gate, records the decision,
+and charges nothing. This is the switch for travelling, a metered connection, or
+a few quiet days — uninstalling is for stopping altogether.
+
+### What a scheduled run will and won't do
+
+- **It won't generate twice.** A fire on a day that already has a published
+  edition does nothing, and says so in the record.
+- **It won't publish half an edition.** The body is written last, in one
+  transaction. A run killed at 06:20 leaves yesterday's edition exactly as it was
+  and today showing an honest empty state, not a masthead over a void.
+- **It retries only a network outage.** If nothing could be fetched anywhere it
+  backs off 15 minutes, then 45, then stops with a quiet note on the Today
+  screen. Any other failure is **not** retried — it may already have spent money,
+  and spending it twice unattended is the thing that guard exists to prevent.
+- **It cannot outspend a run you started yourself.** The retries share ONE
+  `BUDGET_CAP_USD_PER_RUN` between them, and a retry only ever follows a failure
+  that cost nothing — once a session has charged real money the ladder stops
+  there. A whole unattended morning therefore costs at most one attended run.
+- **It won't run beside a generation you started.** A scheduled fire and the
+  Generate button are two different processes, and two pipelines on one day
+  would spend twice and race each other over the same database. Whichever starts
+  first holds the machine's generation slot (`data/RUN_IN_FLIGHT` — ours to
+  write and remove, never yours to touch) and the other declines with a reason.
+  While a scheduled run is going, Today says so instead of showing an empty
+  screen and a button that would be refused.
+- **Every run is on the record.** Settings → Generation reports marks each entry
+  `Scheduled` or `You ran it`.
+
+### If your Mac is asleep at the scheduled hour
+
+This is the common case, not the edge, and launchd — not NewsLens — decides what
+happens: it starts the job **the next time the Mac wakes**, and several missed
+days coalesce into **one** fire (`man launchd.plist`). A lid opened at 09:12
+starts the run then, and the edition lands around 09:50 rather than having
+waited for you since 06:00.
+
+NewsLens adds no lateness rule on top of that, deliberately — how late is too
+late is your call, not ours. If you want 06:00 to be real, the fix is at the
+system level and is **your** command to run, not ours:
+
+```bash
+sudo pmset repeat wakeorpoweron MTWRFSU 05:55   # wakes the Mac five minutes early
+```
+
+### Removing the schedule
+
+```bash
+launchctl bootout gui/$UID/com.newslens.generate
+rm ~/Library/LaunchAgents/com.newslens.generate.plist
+```
+
 ## Troubleshooting
 
+- **`newslens schedule status` says the agent file is present but nothing ever
+  runs** — a file on disk is not a loaded job. NewsLens can see the file; only
+  launchd knows whether it is loaded. Check with
+  `launchctl print gui/$UID/com.newslens.generate` — if that errors, you skipped
+  (or lost) the `launchctl bootstrap` step.
+- **Generate says "a generation is already running" and you don't think one
+  is** — something holds the machine's generation slot, `data/RUN_IN_FLIGHT`.
+  `scripts/doctor` and `newslens schedule status` print which process and since
+  when. A slot whose process is gone is released automatically the next time
+  anything looks (that is what the recorded pid is for), so a crashed 6am run
+  never wedges the button. If the file is there and the pid in it really is a
+  live NewsLens run, the honest answer is that a run *is* going — it takes about
+  half an hour. `rm data/RUN_IN_FLIGHT` is the manual override and it is safe
+  only when you are sure nothing is generating; removing it while a run works is
+  how you get the two-pipelines-one-day case the file exists to prevent.
 - **`pip install -e ".[dev]"` fails with a "editable mode" / PEP 660 error** —
   you skipped `pip install --upgrade pip`. Run it inside the venv, retry.
 - **`newslens: command not found`** — the venv isn't activated
@@ -264,9 +371,11 @@ for it; pin `settings.tts_engine: openai` in sources.yaml and it costs
 
 ## Later milestones (placeholders, so this file has one home)
 
-- **On-demand trigger + instrumentation (M7):** `generate` stays manual (v1 is
-  on-demand only, your 2026-07-03 call — no cron/launchd), plus the
-  `read`/`listen` commands whose usage log feeds the day-30 verdict.
+- **On-demand trigger + instrumentation (M7):** the `read`/`listen` commands
+  whose usage log feeds the day-30 verdict. (The "no cron/launchd" half of this
+  placeholder is SUPERSEDED — your 2026-07-03 on-demand-only call was revisited
+  by your 2026-08-09 flow word and scheduling shipped as NL-146; see §5.
+  On-demand `generate` is unchanged and still the manual path.)
 - **Audio:** decided twice, both rulings live. The ear test ran 2026-07-06 and
   gpt-4o-mini-tts is your preferred VOICE ("I prefer the voice of the openai
   wav"); the $0-run law (2026-07-25) made Kokoro-82M local the code DEFAULT,

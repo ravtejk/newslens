@@ -27,6 +27,10 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from . import db, paths
+# The fire-line discriminator is imported, never re-spelled: a second literal
+# "schedule" in this file is a readout that filters a different set of lines
+# than the one the scheduler writes.
+from .schedule import SCHEDULE_LINE_KEY
 
 # Last calendar day (UTC) of construction. Every consumption event at or
 # before this day is org traffic (demos, gate verification, QA probes) —
@@ -282,6 +286,19 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
     entries, bad_lines = _load_entries()
     analysis_entries = [e for e in entries if e.get("stage") == "analysis"]
     entries = [e for e in entries if e.get("stage") != "analysis"]
+    # NL-146 fix loop 1 — THE FIRE LINES ARE A LINE CLASS, NOT DEFECTS.
+    #
+    # Swept out of the run population for the same reason `_run_log_entries`
+    # filters them from the reports screen: a scheduled fire that decided
+    # "today's edition already exists, do nothing" carries `date` but no
+    # `status`, so the run-shape test below (`date and status`) rejects it and
+    # the rejects land in `malformed`. A quiet, correct no-op would then be
+    # counted to the founder as a defective line in his own record — the exact
+    # inversion NL-146 built these lines to avoid. They are named and counted
+    # instead of silently dropped: a record readout that quietly discards a
+    # class of line is the other way to lie about a file.
+    fires = [e for e in entries if e.get(SCHEDULE_LINE_KEY) is not None]
+    entries = [e for e in entries if e.get(SCHEDULE_LINE_KEY) is None]
     real = [e for e in entries if e.get("date") and e.get("status")]
     samples = [e for e in real if e.get("sample")]
     record = [e for e in real if not e.get("sample")]
@@ -293,6 +310,9 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
     push(f"  entries: {len(entries)} — record runs {len(record)} "
          f"({len(ok)} ok / {len(failed)} failed) · labeled samples "
          f"{len(samples)} (never the record) · malformed/other {malformed}")
+    if fires:
+        push(f"  scheduled fires: {len(fires)} decision line(s) — not runs, "
+             f"not defects (NL-146; `newslens schedule status` reads the last)")
     latest_day = max((e.get("ts", ""))[:10] for e in entries) if entries else "—"
     if latest_day and latest_day <= CONSTRUCTION_END_UTC:
         push(f"  period: all construction (latest {latest_day}); "

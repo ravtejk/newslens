@@ -181,6 +181,34 @@ def main(argv: Optional[List[str]] = None) -> int:
     serve_p.add_argument("--port", type=int, default=8484,
                          help="port to bind on localhost (default 8484)")
 
+    # NL-146 — SCHEDULED GENERATION. Four subcommands and no `install`: the org
+    # never installs the launchd agent (dispatch 2026-08-13, law), so what ships
+    # is a renderer, an instruction printer, an honest status readout, and the
+    # entry launchd itself calls.
+    sched_p = sub.add_parser(
+        "schedule",
+        help="scheduled generation (macOS launchd): render the agent, print the "
+             "install steps you run yourself, read its honest status")
+    sched_sub = sched_p.add_subparsers(dest="schedule_cmd", required=True)
+    sched_sub.add_parser(
+        "plist",
+        help="print the launchd agent to stdout and NOTHING else — safe to "
+             "redirect into ~/Library/LaunchAgents/")
+    sched_sub.add_parser(
+        "install-instructions",
+        help="print the exact commands to install, pause, re-hour or remove the "
+             "schedule (your hands run them)")
+    sched_sub.add_parser(
+        "status",
+        help="is the agent file there, at what hour, is it paused, and what did "
+             "the last scheduled fire do")
+    sched_sub.add_parser(
+        "run",
+        help="ONE scheduled fire — what launchd calls at the scheduled hour. "
+             "Declines quietly if the kill switch is set or today's edition is "
+             "already published; otherwise generates, retrying only a systemic "
+             "fetch failure and never past one run's budget")
+
     gen_p = sub.add_parser(
         "generate",
         help="the full on-demand briefing (M5): ingest -> rank -> narrative -> "
@@ -415,11 +443,76 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         return server.serve(port=args.port)
 
+    if args.command == "schedule":
+        from . import config, generate, schedule
+
+        config.load_env()
+
+        if args.schedule_cmd == "plist":
+            # STDOUT IS THE FILE. Nothing else may print here — the documented
+            # step is `newslens schedule plist > ~/Library/LaunchAgents/...`,
+            # and one stray banner line makes an unparseable plist that launchd
+            # rejects with a message about the file, not about us. Errors go to
+            # stderr, where a redirect cannot swallow them.
+            try:
+                sys.stdout.write(schedule.render_plist())
+            except (schedule.ScheduleError, ValueError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            return 0
+
+        if args.schedule_cmd == "install-instructions":
+            try:
+                print(schedule.install_instructions())
+            except ValueError as exc:
+                print(f"{exc} — fix it in .env", file=sys.stderr)
+                return 1
+            return 0
+
+        if args.schedule_cmd == "status":
+            for line in schedule.status_lines():
+                print(line)
+            return 0
+
+        # `schedule run` — the entry launchd fires.
+        def _sched_progress(label: str, model):
+            # To stderr, which is the ONLY stream the plist keeps
+            # (StandardErrorPath). A 6am run nobody watched is readable
+            # afterwards or it is not readable at all.
+            tail = f" [{model}]" if model else ""
+            print(f"  … {label}{tail}", file=sys.stderr, flush=True)
+
+        def _runner(**kw):
+            return generate.run_generate(progress=_sched_progress, **kw)
+
+        try:
+            result = schedule.run_scheduled(runner=_runner)
+        except Exception as exc:  # noqa: BLE001 — the unattended CLI boundary
+            # NOT swallowed and NOT silent: an unexpected exception here is a
+            # BUG, and the one reader it has is StandardErrorPath at 6am. It
+            # gets the loud line and a non-zero exit, exactly like the
+            # interactive `generate` boundary below. Decided outcomes take the
+            # other door.
+            print(f"schedule run crashed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1
+        # One line, to stderr, so a successful scheduled run's stdout stays the
+        # clean narrative artifact the interactive verb also produces.
+        print(f"schedule: {result['outcome']} "
+              f"(attempts {result['attempts']}, "
+              f"${result['charged_usd']:.4f} charged)", file=sys.stderr)
+        # EXIT 0 ON EVERY DECIDED OUTCOME, INCLUDING FAILURE. A failed generate,
+        # a paused schedule and a same-day no-op are decisions this code made on
+        # purpose and recorded; the ladder above is the only retry policy this
+        # feature has, and a non-zero exit would invite launchd to grow a second
+        # one. A CRASH is not a decision and keeps its 1 (above).
+        return 0
+
     if args.command == "generate":
         import re as _re
         from datetime import datetime as _dt
 
-        from . import config, generate
+        from . import config, generate, schedule
 
         if args.date:
             ok_shape = bool(_re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date))
@@ -450,6 +543,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 refresh=not args.no_refresh,
                 no_threads=args.no_threads,
                 progress=_progress,
+                # NL-146: he typed this verb — the one caller for which the word
+                # "interactive" is literally true.
+                trigger=schedule.TRIGGER_INTERACTIVE,
             )
         except generate.GenerateError as exc:
             print(str(exc), file=sys.stderr)

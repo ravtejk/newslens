@@ -336,6 +336,14 @@ class GenReport:
     stage_timeline: List[Dict] = field(default_factory=list)
     run_started_at: str = ""        # iso Z, stamped when the timeline opens
     run_elapsed_s: float = 0.0      # whole-run wall seconds, set at close
+    # NL-146 — TRIGGER PROVENANCE. "scheduled" | "interactive" | "" (unrecorded).
+    # Carried on the REPORT rather than threaded through _run_generate_body's
+    # signature because both log arms already hold the report and only one of
+    # them lives inside that function: a parameter would have had to be passed
+    # down one level and back up none, for a value the pipeline never reads.
+    # Set once in run_generate from its `trigger` argument; nothing else writes
+    # it, nothing in the pipeline branches on it.
+    trigger: str = ""
 
 
 def wc(text: str) -> int:
@@ -3525,6 +3533,28 @@ def _analysis_pause_class() -> type:
     return analysis.SystemicFetchFailure
 
 
+def is_retryable(exc: BaseException) -> bool:
+    """Is this failure the "back off and try again" kind, or the "this run is
+    broken" kind? (NL-146 — the fork the NL-148 seam was left for.)
+
+    NAMED ONCE, deliberately. The failed-run log arm below stamps
+    `retryable: true` from this predicate and `schedule.run_scheduled` turns its
+    whole ladder on it — one rule, two readers. The alternative (the log arm
+    keeping an inline isinstance while the scheduler writes its own copy) is two
+    versions of a money-shaped rule that drift apart in one refactor, and the
+    direction they drift is the expensive one: a scheduler that thinks a broken
+    run is retryable re-bills a whole pipeline unattended, at 6am, unwatched.
+
+    TRUE FOR THE SYSTEMIC FETCH PAUSE ONLY. That pause is the one failure which
+    (a) is caused by something outside this machine and is plausibly transient,
+    and (b) is PROVEN to have published nothing and completed no story — NL-148
+    pins `any_valid_brief` False and `SUM(cost_usd) == 0` at the instant it
+    fires, so a retry has no completed work to re-bill. Every other
+    GenerateError may have spent real money in the tail (the editor, both script
+    attempts), and retrying one of those unattended spends it twice."""
+    return isinstance(exc, _analysis_pause_class())
+
+
 def run_generate(
     date: Optional[str] = None,
     con: Optional[sqlite3.Connection] = None,
@@ -3533,7 +3563,22 @@ def run_generate(
     refresh: bool = True,
     no_threads: bool = False,
     progress: Optional[Callable[[str, Optional[str]], None]] = None,
+    trigger: Optional[str] = None,
 ) -> GenReport:
+    """`trigger` is PROVENANCE, not behaviour (NL-146 item 4). It names who
+    started this run — "scheduled" (launchd fired it while nobody watched) or
+    "interactive" (he pressed the button / typed the verb) — and rides into BOTH
+    log arms so the reports screen can say which. Nothing in the pipeline reads
+    it; a scheduled run and an interactive run of the same date are the same
+    run.
+
+    DEFAULT IS None, AND THAT IS THE HONEST DEFAULT. Defaulting to
+    "interactive" would stamp that word on the battery, the backfills and every
+    scripted caller, which is a claim about a human that was never true. An
+    absent key means unrecorded, the reports screen renders nothing for it, and
+    every run already in the log stays exactly as honest as it was — no count is
+    quoted here on purpose (fix loop 1, QA F-6: the figure that used to sit in
+    this sentence was never measured against the file)."""
     import os
 
     src_env = env if env is not None else os.environ
@@ -3562,6 +3607,7 @@ def run_generate(
             "is untouched (run a plain `generate` to refresh the record)"
         )
     report.no_threads = no_threads
+    report.trigger = (trigger or "").strip()      # NL-146 provenance; see above
     if no_threads:
         report.warnings.append(
             "no-threads SAMPLE (cold-start view): thread/memory context "
@@ -3609,6 +3655,9 @@ def run_generate(
             close_stage_timeline(report)
             entry = {"date": date, "variant": variant, "sample": sample,
                      "status": "failed", "error": str(exc)[:500],
+                     # NL-146: provenance, emitted only when the caller named it
+                     # (see run_generate's docstring on the None default).
+                     **({"trigger": report.trigger} if report.trigger else {}),
                      "steps": ledger,
                      "total_usd": round(
                          sum(s.get("usd") or 0 for s in ledger), 6),
@@ -3627,7 +3676,12 @@ def run_generate(
             # from "this run is broken", which is the fork its ladder (auto-retry
             # w/ backoff -> yesterday's edition + quiet note) turns on. NL-146
             # builds the ladder; this milestone only makes the fork legible.
-            if isinstance(exc, _analysis_pause_class()):
+            #
+            # NL-146 LANDED THE LADDER, and the inline isinstance that used to
+            # sit here moved into `is_retryable` above — so the bit this entry
+            # carries and the bit `schedule.run_scheduled` acts on are the SAME
+            # predicate evaluated once, not two copies of it.
+            if is_retryable(exc):
                 entry["paused"] = "fetch"
                 entry["retryable"] = True
             log_generation(entry)
@@ -4561,6 +4615,10 @@ def _run_generate_body(
         "date": date, "variant": report.variant, "sample": report.sample,
         "no_threads": no_threads,
         "status": "ok",
+        # NL-146: provenance, emitted only when the caller named it (see
+        # run_generate's docstring on why the default is None and not
+        # "interactive").
+        **({"trigger": report.trigger} if report.trigger else {}),
         "tiers": [s.get("tier") for s in stories],
         "framings": [s.get("why_label") for s in stories],
         "editor": editor_note,

@@ -44,7 +44,11 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from . import (analysis, catalog, commissioning, config, db, entities, events,
-               follow_altitude, labels, memory, paths, webui)
+               follow_altitude, labels, memory, paths, schedule, webui)
+# `schedule` is imported at module level and imports THIS module only inside its
+# functions — the dependency runs one way (web reads the scheduler's names; the
+# scheduler reads the reader's predicates at call time), so nothing here can
+# invert into an import cycle.
 
 DEFAULT_PORT = 8484
 DEVELOPING_WINDOW_DAYS = 7  # dot = thread picked up within this many days
@@ -94,7 +98,35 @@ class _GenJob:
             # not this run's; they live on in generation_log.jsonl, which is
             # where the settings report reads them from (item 2).
             self.steps = []
-        threading.Thread(target=self._run, daemon=True).start()
+        # NL-146 fix loop 1 (QA F-2) — CLAIM THE MACHINE'S GENERATION SLOT.
+        #
+        # This lock guards THIS PROCESS. A launchd fire is another one, so
+        # without a claim on disk the two 30-minute pipelines that must never
+        # overlap are exactly the two that nothing was stopping. Claimed here
+        # rather than inside `_run` so the slot is held before `start()` returns
+        # True — a marker written on the worker thread leaves a window in which
+        # the door has already answered "started" and the disk still says idle.
+        #
+        # A LOST RACE IS NOT AN ERROR, it is the guard working: unwind the state
+        # this method just set and answer False, which the door already renders
+        # as "already running" (with the reason, from the door).
+        if schedule.claim_in_flight(
+                datetime.now().strftime("%Y-%m-%d"),
+                schedule.TRIGGER_INTERACTIVE) is not None:
+            with self.lock:
+                self.state = "idle"
+                self.started_at = None
+            return False
+        try:
+            threading.Thread(target=self._run, daemon=True).start()
+        except BaseException:
+            # A thread that never started holds nothing. Releasing here is what
+            # keeps a failed spawn from wedging the slot until the age ceiling.
+            schedule.release_in_flight()
+            with self.lock:
+                self.state = "idle"
+                self.started_at = None
+            raise
         return True
 
     def _progress(self, label: str, model: Optional[str]) -> None:
@@ -115,9 +147,12 @@ class _GenJob:
 
     def _run(self) -> None:
         try:
-            from . import generate
+            from . import generate, schedule
             config.load_env()
-            generate.run_generate(progress=self._progress)
+            # NL-146: this job exists because he pressed the button — the second
+            # caller for which the word "interactive" is literally true.
+            generate.run_generate(progress=self._progress,
+                                  trigger=schedule.TRIGGER_INTERACTIVE)
             with self.lock:
                 self.state = "done"
                 self._clear_stage_locked(completed=True)
@@ -135,6 +170,14 @@ class _GenJob:
                 self.error = str(exc)
                 self._clear_stage_locked()
         finally:
+            # NL-146 fix loop 1 (QA F-2): the slot goes back the moment this
+            # pipeline stops, on EVERY exit — done, error, or a BaseException
+            # that skips the except above. A marker outliving its run is the
+            # failure mode that would wedge his Generate button, so its release
+            # sits in the same `finally` that already exists to keep the state
+            # honest for exactly that class of exit.
+            from . import schedule as _schedule
+            _schedule.release_in_flight()
             # Ride 24 (M8): a BaseException (KeyboardInterrupt delivered to
             # this thread, SystemExit from deep inside a lib, MemoryError)
             # would skip the except above and strand state at "running" —
@@ -342,7 +385,26 @@ def _log_entry_for(date: str) -> Optional[Dict]:
     and the one that fires on the founder's profile (an edition row always
     exists there), so a torn tail here has been answering `GET /` and
     `GET /archive` with HTTP 500 since long before NL-149. Fixed with the
-    reader NL-149 added because one site is not closure (NL-149 QA F-1)."""
+    reader NL-149 added because one site is not closure (NL-149 QA F-1).
+
+    THE `schedule` FILTER IS THE SAME LOAD-BEARING FILTER `_run_log_entries`
+    CARRIES, and it is here because NL-146 QA F-1 measured what its absence
+    costs. A fire-decision line is a decision ABOUT a run, never a run: it
+    carries `date`, carries no `sample`, and — unlike the analysis stage's line,
+    which lands BEFORE the run entry and so never won last-wins — it is the
+    first writer in this file that lands AFTER it. So from the moment a ladder
+    records any decision, the fire line WAS "the run entry for the date"
+    everywhere this function feeds, and all three consequences were measured on
+    the build tree: the scheduled-failure note never rendered in the real
+    exhaustion flow (`_scheduled_failure_note` keys on `trigger`/`status`, both
+    absent on a fire line), every scheduled SUCCESS degraded to the legacy
+    narrative parse because the structured `stories` were gone, and
+    `schedule._charged_for` read $0.00 past a run entry recording $1.23 — an
+    unattended-spend guard reading nothing.
+
+    Filtering by KEY PRESENCE and not by guessing at the line's shape is the
+    file's own idiom (`stage`, then `schedule`); a fourth line class added to
+    this log gets a third `continue` here on the day it is written."""
     log = paths.DATA_DIR / "generation_log.jsonl"
     if not log.exists():
         return None
@@ -355,6 +417,8 @@ def _log_entry_for(date: str) -> Optional[Dict]:
             try:
                 e = json.loads(line)
             except ValueError:
+                continue
+            if e.get(schedule.SCHEDULE_LINE_KEY) is not None:  # NL-146 fire lines
                 continue
             if e.get("date") == date and not e.get("sample"):
                 found = e
@@ -380,12 +444,19 @@ _RUNLOG_MAX_ROWS = 30
 def _run_log_entries(limit: int = _RUNLOG_MAX_ROWS) -> Tuple[List[Dict], int]:
     """(newest-first RUN entries, total run count) from generation_log.jsonl.
 
-    Two kinds of line live in that file: RUN entries (one per generate attempt,
-    written by generate.log_generation) and per-STAGE instrumentation entries
-    (the analysis stage writes one, keyed `stage`). Only runs are reports, so
-    the stage lines are filtered out by the presence of that key rather than by
+    THREE kinds of line live in that file: RUN entries (one per generate
+    attempt, written by generate.log_generation), per-STAGE instrumentation
+    entries (the analysis stage writes one, keyed `stage`), and NL-146's
+    scheduled-fire DECISION lines (keyed `schedule`). Only runs are reports, so
+    the other two are filtered out by the presence of their key rather than by
     guessing at the run shape — 23 of the founder's 49 lines are stage lines,
     and rendering them as runs would double every day's count.
+
+    THE `schedule` FILTER IS LOAD-BEARING, not tidiness. A fire that decided
+    "today's edition already exists, do nothing" carries no status, no steps and
+    no timeline; rendered as a run it would appear in his report as a failed
+    generation that never happened — a quiet no-op turned into a visible alarm,
+    which is the opposite of the charter's "does nothing (quietly, logged)".
 
     Unreadable file -> ([], 0); an unparseable line is skipped, never guessed at.
 
@@ -420,6 +491,8 @@ def _run_log_entries(limit: int = _RUNLOG_MAX_ROWS) -> Tuple[List[Dict], int]:
         except ValueError:
             continue
         if not isinstance(e, dict) or e.get("stage") is not None:
+            continue
+        if e.get(schedule.SCHEDULE_LINE_KEY) is not None:   # NL-146 fire lines
             continue
         runs.append(e)
     runs.reverse()                      # newest first — the log appends
@@ -2549,6 +2622,97 @@ def _failure_outcome(con: sqlite3.Connection, row=None) -> str:
     return "The saved edition is empty."
 
 
+def _scheduled_failure_note(entry: Optional[Dict]) -> str:
+    """NL-146 item 4 — the quiet note for a run nobody was awake to watch.
+
+    A scheduled run fires from launchd in ANOTHER PROCESS, so when it fails
+    there is no GEN_JOB error panel in this one and no terminal anybody was
+    looking at. The only witness is the log entry that run wrote on its way out.
+    This renders that entry and nothing else.
+
+    SILENT IN EVERY OTHER CASE, deliberately:
+      * an INTERACTIVE failure gets the error panel — he watched it happen, and
+        a second note on the same fact is nagging, not informing;
+      * a successful run has nothing to report;
+      * every run already in his log predates this key and carries no `trigger`
+        at all, so they make no claim either way and get no note (NL-149's
+        precedent: an absent field is unrecorded, never inferred). NO COUNT IS
+        STATED HERE, deliberately (fix loop 1, QA F-6): the figure this prose
+        used to carry was never measured, and a hand-baked one goes stale the
+        day after it is written. The property is what matters and it is
+        checkable — `grep -c '"trigger":' data/generation_log.jsonl`. THE KEY
+        SHAPE IS THE CHECK (gate FIX-3): bare `grep -c trigger` counts the WORD,
+        which story prose in `draft_stories`/`stories` also contains — measured 8
+        on his real log today, where the property's true count is 0. An offered
+        check that measures the wrong thing is the same class of defect as the
+        hand-baked figure this prose stopped carrying.
+
+    QUIET IS A DESIGN WORD HERE, not a hedge: `empty-note`, no role="alert", no
+    colour. The reader opening at 07:00 to an absence needs the reason and the
+    way forward in two sentences, not an incident report."""
+    if not isinstance(entry, dict):
+        return ""
+    if entry.get("trigger") != schedule.TRIGGER_SCHEDULED:
+        return ""
+    if entry.get("status") != "failed":
+        return ""
+    if entry.get("retryable"):
+        # The systemic fetch pause. NL-148 pins that nothing was published and
+        # nothing completed at the instant it fires, so "nothing was charged" is
+        # a fact this surface may state, not a reassurance it is offering.
+        #
+        # BUT IT IS STATED FROM THE RECORD, NOT FROM THE PIN (gate FIX-2). The
+        # claim used to be unconditional, and NL-146's own budget guard creates
+        # the world where it is false: the ladder stands down on a retryable
+        # failure that DID charge, so that entry carries `retryable: true` AND a
+        # non-zero `total_usd` — and this note would render the opposite of the
+        # same JSON line it is reading. A surface contradicting its own source
+        # is worse than a quiet one, because it gives him no reason to look.
+        #
+        # `_charged_for`'s float guard, with ONE deliberate difference: that
+        # reader coerces an unparseable figure to 0.0 because a ladder must
+        # decide something; this one makes NO claim, because "we could not read
+        # what was spent" is not "nothing was spent" and prose has the option of
+        # saying less.
+        try:
+            charged = float(entry.get("total_usd") or 0.0)
+        except (TypeError, ValueError):
+            charged = None
+        why = "nothing could be fetched from your sources. Nothing was published"
+        why += " and nothing was charged." if charged == 0.0 else "."
+    else:
+        why = "the run stopped before it could publish anything."
+    return ('<p class="empty-note" style="margin-top:1rem;">'
+            "This morning's scheduled edition didn't finish — " + _e(why)
+            + "</p>")
+
+
+def _in_flight_elsewhere() -> Optional[Dict]:
+    """The generation running in ANOTHER process right now, or None.
+
+    Two things make this the render path's reader rather than
+    `schedule.read_in_flight` directly:
+
+    * `reap=False` — a GET must not delete a file. The staleness JUDGEMENT still
+      runs (a dead marker reads as None here exactly as it does anywhere else);
+      what is withheld is the unlink, which belongs to the writers' path. A page
+      render that mutates the data dir is the class of thing the no-real-state-
+      writes rule exists for, and "it was only a cleanup" is how that rule gets
+      eroded.
+    * OUR OWN marker is not "elsewhere". When this process is the one
+      generating, `gen_state["state"]` is `running` and the live panel — with
+      its stage, its clock and its step log — is strictly better information
+      than a timestamp read off disk.
+    """
+    try:
+        held = schedule.read_in_flight(reap=False)
+    except Exception:  # noqa: BLE001 — a marker must never break a page render
+        return None
+    if held is None or held.get("pid") == os.getpid():
+        return None
+    return held
+
+
 def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
                   gen_state: Dict[str, str],
                   briefs: Optional[Dict[int, Dict]] = None) -> str:
@@ -2559,7 +2723,33 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
     mast_date = row["date"] if row is not None \
         else datetime.now().strftime("%Y-%m-%d")
     running_or_error = gen_state["state"] in ("running", "error")
-    head = (_masthead(None if running_or_error else row, mast_date)
+
+    # NL-146 item 3 — THE HALF-EDITION HOLE, CLOSED.
+    #
+    # A ROW IS NOT AN EDITION. `ranking.persist` commits the date's row at the
+    # RANK stage and the body lands last, at `generate.persist_generation`, so
+    # for the whole post-rank window a row exists with nothing readable behind
+    # it. Until now that window was covered by the GEN_JOB panels — but GEN_JOB
+    # is THIS process's job, and a scheduled run fires from launchd in ANOTHER
+    # process. A 6am run that died after rank therefore left the job idle, both
+    # panels unreachable, and the `else` arm below rendering the masthead
+    # ceremony over an empty grid: a dateline announcing today's edition with no
+    # edition under it, no explanation, and no way to retry.
+    #
+    # MEASURED, not reasoned about: at 1f92260 that page was 1547 bytes of Today
+    # view, one heading (the dateline), and no state panel at all.
+    #
+    # The predicate is `_stories_for` — the edition renderer's own, reused and
+    # never re-derived (the NL-103 row-9 law) — so what this branch claims and
+    # what the body would render cannot disagree.
+    readable = row is not None and bool(_stories_for(row, entry)[0])
+    # ONE read of the marker per render — the panel below needs both the fact
+    # and the timestamp, and stat'ing the same file twice in one page is how a
+    # render answers from two different worlds.
+    inflight = None if readable else _in_flight_elsewhere()
+
+    head = (_masthead(None if (running_or_error or not readable) else row,
+                      mast_date)
             + _section_line("today"))
 
     if gen_state["state"] == "running":
@@ -2639,11 +2829,47 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
   <p>{_e(_outcome)}</p>
   <button class="cta-quiet" onclick="generateAgain()">Try again</button>
 </div>"""
-    elif row is None:
+    elif inflight is not None:
+        # NL-146 fix loop 1 (QA F-2) — "NOTHING YET" WAS A FALSE STATEMENT FOR
+        # ~30 MINUTES EVERY MORNING.
+        #
+        # A launchd fire runs in ANOTHER process. GEN_JOB — the only run-state
+        # this page had — is this process's job, so through the whole scheduled
+        # run Today rendered the empty state: "No edition has been generated for
+        # today", beside a Generate button, while an edition was being generated
+        # for today. The reader's rational response to that screen is to press
+        # the button, which is exactly the double spend the door now refuses.
+        #
+        # This arm sits AFTER the running/error panels (an in-process run is
+        # better information than a marker on disk, and it can actually show
+        # live progress) and BEFORE the empty state, whose claim it contradicts.
+        # Deliberately NOT shown when the edition IS readable: a re-generation
+        # over a published day is not an absence and needs no explaining.
+        #
+        # NO GENERATE BUTTON. The door would refuse it; offering an affordance
+        # whose only outcome is a refusal is the v4 affordance-absence law's
+        # exact case.
+        _when = _utc_hm(inflight.get("started_at"))
+        body = f"""
+<div class="state-panel">
+  <h2>{_e(labels.INFLIGHT_TITLE)}</h2>
+  <p>{_e(labels.INFLIGHT_BODY.format(when=_when) if _when
+         else labels.INFLIGHT_BODY_NO_TIME)}</p>
+</div>"""
+    elif not readable:
         # NL-11: no edition for TODAY -> the empty state, never an older edition
         # dressed as current. If the archive has earlier editions, point there.
+        #
+        # NL-146 WIDENED THE CONDITION FROM `row is None` TO `not readable`, and
+        # the two are the same fact to a reader: a row whose body never landed
+        # is nothing to read. The narrow test let the post-rank window through to
+        # the edition renderer (see the `readable` note above). Everything below
+        # is unchanged — same panels, same words, same Archive pointer — plus the
+        # quiet scheduled-failure note, which renders only when the last recorded
+        # run for this date was a SCHEDULED failure.
         has_archive = con.execute(
             "SELECT 1 FROM briefings LIMIT 1").fetchone() is not None
+        sched_note = _scheduled_failure_note(entry)
         # NL-103 row 18: both panels lose the pipeline enumeration ("it fetches
         # your sources, picks the stories, writes the briefing, and records the
         # episode") — a tour of machinery the reader did not ask for. What stays
@@ -2657,22 +2883,24 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         # below is NOT the bare empty state §3 bans — its own panel body names
         # the class in the next sentence.
         if has_archive:
-            body = """
+            body = f"""
 <div class="state-panel">
   <h2>Nothing for today yet</h2>
   <p>No edition has been generated for today. Generating one takes about half
      an hour.</p>
   <button class="cta-quiet" onclick="generateAgain()">Generate today’s edition</button>
+  {sched_note}
   <p class="empty-note" style="margin-top:1rem;">Earlier editions are in your
      <a href="#" onclick="showView('archive'); return false;">Archive</a>.</p>
 </div>"""
         else:
-            body = """
+            body = f"""
 <div class="state-panel">
   <h2>Nothing yet</h2>
   <p>No edition has been generated. Generating one takes about half an
      hour.</p>
   <button class="cta-quiet" onclick="generateAgain()">Generate today’s edition</button>
+  {sched_note}
 </div>"""
     else:
         # NL-11: the glance ("In today’s briefing") section is REMOVED. The lead
@@ -3534,6 +3762,24 @@ def _archive_body(con: sqlite3.Connection, anchor_month: Optional[str] = None) -
     for row in con.execute("SELECT * FROM briefings ORDER BY date DESC"):
         entry = _log_entry_for(row["date"])
         stories, _ = _stories_for(row, entry)
+        # NL-146 fix loop 1 (QA F-4) — A ROW IS NOT AN EDITION, HERE TOO.
+        #
+        # The half-edition law landed on Today only, and the archive is where it
+        # LASTS: a run that dies after `ranking.persist` leaves the date's row
+        # committed with no body behind it forever, and NL-146 makes those
+        # deaths routine and unwatched. Presenting that date as an edition puts
+        # a calendar tile, a UTC stamp and a "View briefing →" on a day that
+        # never published, opening onto the honest-empty view — the same lie the
+        # Today fix closed, one view over.
+        #
+        # The predicate is `_stories_for`, already computed on the line above:
+        # the edition renderer's own, reused and never re-derived (NL-103 row 9),
+        # so what the archive OFFERS and what the edition view would RENDER
+        # cannot disagree. Skipping is the smallest true change — an unreadable
+        # date is absent from the month grid, the day-panel stack and the month
+        # window arithmetic alike, because all three read `editions`.
+        if not stories:
+            continue
         editions.append({"date": row["date"], "utc": _utc_hm(row["generated_at"]),
                          "stories": stories})
     if not editions:
@@ -3864,6 +4110,18 @@ def _render_run(entry: Dict) -> str:
     date = entry.get("date")
     if date:
         bits.append(_e(str(date)))
+    # NL-146 — TRIGGER PROVENANCE, rendered only when the record HAS it. The
+    # charter's requirement is that scheduled runs render honestly, and honest
+    # here has two halves: name the trigger when it was recorded, and claim
+    # nothing when it wasn't. Every run in his log before this milestone, and
+    # every scripted caller after it, carries no `trigger` key and gets no word
+    # — a defaulted "You ran it" on a battery run would be a fabricated fact
+    # about a human, on the one screen whose whole job is the record.
+    _trigger = entry.get("trigger")
+    if _trigger == schedule.TRIGGER_SCHEDULED:
+        bits.append(_e(labels.RUNLOG_TRIGGER_SCHEDULED))
+    elif _trigger == schedule.TRIGGER_INTERACTIVE:
+        bits.append(_e(labels.RUNLOG_TRIGGER_INTERACTIVE))
     total_el = entry.get("elapsed_s")
     if isinstance(total_el, (int, float)) and total_el > 0:
         bits.append(f"{_e(labels.RUNLOG_TOTAL)} {_fmt_elapsed(total_el)}")
@@ -6036,6 +6294,28 @@ class Handler(BaseHTTPRequestHandler):
         if not config.load_sources().has_interests:
             return self._send_json(
                 {"ok": False, "error": labels.COMMISSION_FOUND_REFUSAL}, 409)
+        # NL-146 fix loop 1 (QA F-2) — THE CROSS-PROCESS DOOR.
+        #
+        # `GEN_JOB.start()` guards duplicates in THIS process. The 6am launchd
+        # fire is another process, and for the whole ~30 minutes it runs this
+        # door was open: pressing Generate started a second full pipeline over
+        # the same date — double spend and two writers racing one SQLite file.
+        # Worst at the wake-coalesced fire, which is the exact moment he opens
+        # the lid, sees no edition, and presses the button.
+        #
+        # REFUSED WITH THE REASON, not with a generic 409: a refusal that does
+        # not say a run is already going reads as the app being broken, and the
+        # next thing a reader does with a broken button is press it again.
+        # `start()` claims the slot itself, so this check is the honest ANSWER
+        # rather than the enforcement — the enforcement is atomic, one layer
+        # down (schedule.claim_in_flight's O_EXCL).
+        held = schedule.read_in_flight()
+        if held is not None and held.get("pid") != os.getpid():
+            when = _utc_hm(held.get("started_at"))
+            return self._send_json(
+                {"ok": False,
+                 "error": (labels.INFLIGHT_REFUSAL.format(when=when) if when
+                           else labels.INFLIGHT_REFUSAL_NO_TIME)}, 409)
         started = GEN_JOB.start()
         self._send_json({"ok": True,
                          "detail": "started" if started else "already running"})

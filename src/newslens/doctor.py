@@ -564,18 +564,22 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
         except ValueError as exc:
             out.append(Result(FAIL, f"{exc} — fix it in .env"))
 
-    # GENERATE_HOUR_LOCAL is DORMANT: v1 generation is on-demand only
-    # (DECISIONS.md 2026-07-03) — nothing requires this var. Unset/valid are
-    # informational; a set-but-garbage value still fails, because a typo in
-    # .env is a config error regardless of whether anything reads it yet.
+    # GENERATE_HOUR_LOCAL WOKE UP (NL-146). It was dormant from 2026-07-03 — v1
+    # generation was on-demand only and nothing read this var — and the doctor
+    # said so in those words. Scheduling returned, so the prose does too: this is
+    # now the hour `newslens schedule plist` bakes into the launchd agent. The
+    # VALIDATION is unchanged and still lives in config (the single validator —
+    # BUG-1 was the doctor's drifted copy of these rules); only the sentence
+    # moved, because a doctor still calling this dormant would be describing the
+    # machine as it was two milestones ago.
     if not (env.get("GENERATE_HOUR_LOCAL") or "").strip():
         out.append(
             Result(
                 INFO,
-                f"GENERATE_HOUR_LOCAL not set — fine (dormant: v1 is on-demand "
-                f"only; default {config.DEFAULT_GENERATE_HOUR_LOCAL} "
-                f"({config.DEFAULT_GENERATE_HOUR_LOCAL:02d}:00 local) would "
-                "apply only if scheduling ever returns)",
+                f"GENERATE_HOUR_LOCAL not set — fine: the default "
+                f"{config.DEFAULT_GENERATE_HOUR_LOCAL} "
+                f"({config.DEFAULT_GENERATE_HOUR_LOCAL:02d}:00 local) is the "
+                "hour `newslens schedule plist` writes into the launchd agent",
             )
         )
     else:
@@ -584,14 +588,74 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
             out.append(
                 Result(
                     PASS,
-                    f"GENERATE_HOUR_LOCAL = {hour} ({hour:02d}:00 local) — noted, "
-                    "but dormant: v1 generation is on-demand only",
+                    f"GENERATE_HOUR_LOCAL = {hour} ({hour:02d}:00 local) — the "
+                    "hour a newly-rendered launchd agent will fire at",
                 )
             )
         except ValueError as exc:
             out.append(Result(FAIL, f"{exc} — fix it in .env"))
 
     return out
+
+
+def check_schedule(env: Dict[str, str]) -> List[Result]:
+    """NL-146 item 5 — scheduled generation, stated truthfully.
+
+    THE HONESTY BOUND IS THE WHOLE POINT, and it is a bound on what this check
+    can SEE. It can stat a file and it can read a log. It cannot see whether
+    launchd has the agent loaded — that is `launchctl`'s to answer, and this
+    doctor deliberately does not shell out to it: a subprocess whose absence,
+    sandbox or non-zero exit would have to be interpreted is a new way to be
+    confidently wrong about the one thing the reader is asking.
+
+    So the file's presence is reported AS the file's presence, never as "the
+    schedule is running", and the one command that does answer the loaded
+    question is printed for his hands. Beside it goes the last recorded fire,
+    because a plist that has been sitting there for a week with no fires behind
+    it is exactly the shape the never-bootstrapped case takes.
+
+    Every line here comes from `schedule.status_lines`, shared with
+    `newslens schedule status`, so the doctor and the verb cannot drift into
+    describing the same machine differently."""
+    from . import schedule
+
+    # SEVERITY IS PER LINE, and it rides the line's TAG (fix loop 1, QA F-7).
+    # The severities below were always the intent; what was wrong was where they
+    # landed. The old code computed ONE level from the whole status and stamped
+    # it on `out[0]`, so on a paused-and-not-installed schedule the WARN sat on
+    # "no agent file…" — a sentence that is INFO by this very table — while
+    # "PAUSED by …", the sentence the warning is about, rendered INFO. Same
+    # miss for the hour mismatch, which the old comment already called WARN and
+    # which always rendered INFO because it is never line 0.
+    #
+    #   installed      -> PASS. The file is where launchd reads it.
+    #   not installed  -> INFO. Scheduling is opt-in; a reader who generates by
+    #                     hand is not misconfigured.
+    #   paused         -> WARN. A deliberate state, but a forgotten kill switch
+    #                     is silent mornings with no other symptom — which is
+    #                     exactly what a doctor is for.
+    #   hour mismatch  -> WARN. The agent wins over .env and nothing else says so.
+    #   hour invalid   -> INFO here, because `check_optional_and_guards` already
+    #                     owns the FAIL for that variable (doctor.py:595); two
+    #                     checks shouting the same fact is how a doctor teaches
+    #                     people to skim.
+    _LEVELS = {
+        schedule.LINE_INSTALLED: PASS,
+        schedule.LINE_NOT_INSTALLED: INFO,
+        schedule.LINE_PAUSED: WARN,
+        schedule.LINE_MISMATCH: WARN,
+        schedule.LINE_HOUR_ERROR: INFO,
+    }
+    try:
+        # ONE read of the world: status_lines_tagged is handed the same dict the
+        # severities are derived from, so a kill switch flipped mid-check cannot
+        # produce sentences and a severity taken from two different worlds.
+        tagged = schedule.status_lines_tagged(env=env)
+    except Exception as exc:  # noqa: BLE001 — a doctor never dies of a check
+        return [Result(WARN, f"could not read the schedule status ({type(exc).__name__}: "
+                             f"{exc}) — `newslens schedule status` will say more")]
+
+    return [Result(_LEVELS.get(tag, INFO), line) for tag, line in tagged]
 
 
 # ---------------------------------------------------------------------------
@@ -1331,6 +1395,7 @@ def run_doctor() -> int:
     sections.append(("TTS engine", check_tts()))
     sections.append(("LLM lanes", check_llm_lanes(env)))
     sections.append(("Subscription lane (claude -p)", check_subscription_lane(env)))
+    sections.append(("Scheduled generation", check_schedule(env)))   # NL-146
     sections.append(("Cost", cost_estimate()))
 
     tally = {PASS: 0, FAIL: 0, WARN: 0, INFO: 0}

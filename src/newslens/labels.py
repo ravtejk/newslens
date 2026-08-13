@@ -387,6 +387,44 @@ RUNLOG_TRUNCATED_MIDDLE = "most recent of"
 RUNLOG_TRUNCATED_SUFFIX = "runs."
 RUNLOG_RUNS_ONE = "1 run recorded"
 RUNLOG_RUNS_MANY = "{n} runs recorded"
+# NL-146 — TRIGGER PROVENANCE on the entry. Who started this run matters most
+# for the runs nobody watched: a 22-minute failure at 06:00 reads completely
+# differently once you know no one was there. Rendered ONLY when the log
+# recorded it — a run with no `trigger` key (everything before NL-146, plus
+# every scripted caller) shows neither word, because silence is honest and a
+# default would be a claim.
+RUNLOG_TRIGGER_SCHEDULED = "Scheduled"
+RUNLOG_TRIGGER_INTERACTIVE = "You ran it"
+
+# NL-146 fix loop 1 (QA F-2) — A RUN IS IN FLIGHT IN ANOTHER PROCESS.
+#
+# WORDING IS PROVISIONAL and is flagged to the gate as such; the MECHANISM is
+# what was chartered. What every line below must keep is the pair of facts a
+# reader needs and nothing else: something IS happening (so the absence is not
+# a fault), and pressing the button again would not help.
+#
+# NO REFRESH PROMISE, deliberately, and that is a correctness point rather than
+# a voice one. The live-refresh promise on the *running* panel is true because
+# that panel's poll reads GEN_JOB — THIS process's job. A launchd run is not in
+# this process, /api/status answers "idle" while it works, and nothing here can
+# poll it without a second status surface nobody commissioned. So this panel
+# carries no id the client keys on (webui's `if (getElementById('gen-running'))`
+# bootstrap) and asks for the one thing that is actually true: reload to look
+# again.
+INFLIGHT_TITLE = "Today’s edition is being generated"
+INFLIGHT_BODY = ("A run started at {when} UTC and is still going — it takes "
+                 "about half an hour. Reload this page to check on it.")
+INFLIGHT_BODY_NO_TIME = ("A run is already going — it takes about half an "
+                         "hour. Reload this page to check on it.")
+# The POST door's refusal. It states the money reason, because "already
+# running" on its own reads as a stuck app, and the next thing a reader does
+# with a stuck app is press the button again.
+INFLIGHT_REFUSAL = ("A generation is already running (started {when} UTC). "
+                    "Starting a second one would spend a second run’s worth "
+                    "and put two pipelines on the same day.")
+INFLIGHT_REFUSAL_NO_TIME = ("A generation is already running. Starting a "
+                            "second one would spend a second run’s worth and "
+                            "put two pipelines on the same day.")
 
 # =============================================================================
 # THE COMMISSIONING — Stage-0 C1, the founding page a stranger's first run opens

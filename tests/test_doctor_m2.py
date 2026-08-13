@@ -1,7 +1,8 @@
 """Doctor changes in milestone 2 (doctor.py diff; ADR-0003 §8; NOTES-M2 item 1).
 
-Covers: dormant GENERATE_HOUR_LOCAL wording with the garbage-still-fails pin
-HELD; the tier-aware sources section (fetchable-only feed checks, cautious
+Covers: GENERATE_HOUR_LOCAL wording (DORMANT until NL-146 woke it 2026-08-13 —
+see the block comment on those pins) with the garbage-still-fails pin HELD
+unchanged across both eras; the tier-aware sources section (fetchable-only feed checks, cautious
 warnings, reference-only and disabled INFO lines); the sharpened keyless
 invariant (active sources fetch feeds but NEVER the key APIs); and the two
 QA-owned unreadable-file pins carried over from the M1 review (unreadable
@@ -19,7 +20,20 @@ from newslens import config, doctor, paths
 from conftest import make_rss
 
 
-# --- GENERATE_HOUR_LOCAL: dormant, but garbage still fails --------------------------
+# --- GENERATE_HOUR_LOCAL: LIVE since NL-146; garbage still fails ---------------
+#
+# THE FIRST TWO PINS WERE REWRITTEN, NOT VALUE-SWAPPED (2026-08-13, NL-146).
+# They were named `..._says_dormant` and asserted the words "dormant" and
+# "on-demand" — the doctor's honest description of a variable nothing read,
+# following the principal's 2026-07-03 on-demand-only call. His 2026-08-09 flow
+# word revisited that call and NL-146 shipped scheduling, so this variable is
+# now the hour `newslens schedule plist` bakes into the launchd agent.
+#
+# Editing the doctor to keep these green would have pinned a sentence that is no
+# longer true; keeping the old NAMES on new bodies would have left the suite
+# describing a machine two milestones out of date. Both now assert the ABSENCE
+# of "dormant" as well, so a revert of the doctor prose is caught rather than
+# quietly re-accepted. The third pin is UNCHANGED.
 
 def _hour_line(env):
     results = doctor.check_optional_and_guards(env)
@@ -28,22 +42,29 @@ def _hour_line(env):
     return matches[0]
 
 
-def test_unset_hour_is_info_and_says_dormant():
+def test_unset_hour_is_info_and_names_the_scheduling_default():
     line = _hour_line({})
     assert line.status == doctor.INFO
-    assert "dormant" in line.text and "on-demand" in line.text
+    assert str(config.DEFAULT_GENERATE_HOUR_LOCAL) in line.text
+    assert "launchd" in line.text
+    assert "dormant" not in line.text, \
+        "the doctor is still describing a variable that woke up at NL-146"
 
 
-def test_valid_hour_passes_and_says_dormant():
+def test_valid_hour_passes_and_names_what_reads_it():
     line = _hour_line({"GENERATE_HOUR_LOCAL": "7"})
     assert line.status == doctor.PASS
-    assert "07:00 local" in line.text and "dormant" in line.text
+    assert "07:00 local" in line.text
+    assert "launchd" in line.text
+    assert "dormant" not in line.text
 
 
 @pytest.mark.parametrize("raw", ["24", "-1", "abc", "6.5"])
-def test_garbage_hour_still_fails_despite_dormancy(raw):
-    """The held pin (ADR-0003 §8): a typo'd .env line is a config error
-    regardless of whether anything reads the var yet."""
+def test_garbage_hour_still_fails(raw):
+    """The held pin (ADR-0003 §8), unchanged across both eras: a typo'd .env
+    line is a config error whether or not anything reads the var. It was written
+    when nothing did; it now guards the value a launchd agent is built from,
+    where a silent typo is worse than it was."""
     line = _hour_line({"GENERATE_HOUR_LOCAL": raw})
     assert line.status == doctor.FAIL
     assert "0-23" in line.text
