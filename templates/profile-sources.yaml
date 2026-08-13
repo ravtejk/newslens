@@ -40,6 +40,14 @@
 #               780 + fair-fill made room; hold comments discharged in-file.
 #   2026-08-07  NL-142b (5d69a8f): cnn_topstories DISABLED — frozen feed,
 #               newest 2023-04-25; founder half 5a74455; family born-red pinned.
+#   2026-08-13  SLATE RE-PROBE, comment-only — no feed, tier, posture or URL
+#               changed. Every fetchable entry in this file (65) re-checked
+#               with the binding check described below: 65/65 HTTP 200 and
+#               RSS-shaped, ZERO feeds died since the 2026-08-03 slate land.
+#               Two blocks below carry corrected verdicts from the same pass
+#               (the licensing block, and the stale/no-feed re-measurements).
+#               Full table: workspace/products/newslens/research/
+#               2026-08-13--slateland-build.md
 # test_stage0_m1_profiles.py pins that this file still parses clean with
 # active sources and zero interests, tests/test_stage0_m2.py pins the
 # zero-follows posture, and tests/test_nl135_slate_land.py pins the slate,
@@ -437,6 +445,14 @@ sources:
   #                       HTTP 200, 20 items, NEWEST ITEM 2023-04-16. Same.
   #   Yahoo Entertainment — news.yahoo.com/rss/entertainment: live, titles-only,
   #                       newest item Sep 2025 (research sweep 2026-08-02).
+  #   RE-MEASURED 2026-08-13, binding check — all three verdicts HOLD, and the
+  #   archives have aged another 10 days rather than revived:
+  #     CNN Entertainment  200, 20 items, newest 2022-12-06 (1,346d)
+  #     CNN Sport          200, 20 items, newest 2023-04-16 (1,215d)
+  #     Yahoo Entertainment 200, 5 items, newest 2025-09-30 (317d)
+  #   Also re-measured: NPR Shots (103537970), the feed NPR Health was slated
+  #   INSTEAD of — 200, 10 items, newest 2026-01-12 (213d). Still stale, so
+  #   the substitution recorded at NPR Health above still holds.
   #
   # LICENSING-BLOCKED (research sweep 2026-08-02, generic client — NOT re-run
   #   under the binding check): Variety, The Hollywood
@@ -448,9 +464,23 @@ sources:
   #   Gate re-check 2026-08-03, pipeline UA: Variety /feed/ answers 200 with
   #   current RSS — these verdicts are sweep-grade; doctor-check this block
   #   next slate round.
+  #   THAT CHECK RAN 2026-08-13, and the label above is WRONG about our fetch.
+  #   Binding check (pipeline UA + full parse), all four answer HTTP 200 with
+  #   CURRENT RSS: Variety 10 items newest same-day · The Hollywood Reporter
+  #   10 / same-day · Deadline 12 / same-day · Rolling Stone 10 / same-day.
+  #   The 402 was a GENERIC-CLIENT verdict; the pipeline UA is not tollgated
+  #   today. Corrected here rather than left standing, because a shipped file
+  #   asserting "licensing-blocked" over a measured 200 is a fabricated
+  #   absence — the one thing the coverage law forbids.
+  #   THEY REMAIN NOT SLATED, and that is deliberate, not an oversight:
+  #   adding four entertainment trades is a SLATE decision (the principal's),
+  #   and whether to ingest a publisher that tollgates other clients is a
+  #   licensing judgment, not a reachability one. Reachability is all this
+  #   probe settles. Billboard and IndieWire remain untested.
   #
   # NO FEED FOUND: Al Jazeera sport (xml/rss/sport.xml 404s — AJ sport arrives
-  #   only inside the existing all.xml feed). Science.org, Fierce Biotech,
+  #   only inside the existing all.xml feed; RE-CONFIRMED 2026-08-13, still
+  #   HTTP 404 under the binding check). Science.org, Fierce Biotech,
   #   Endpoints News: 403 bot walls (research sweep). MarketWatch top-stories is
   #   live and free but duplicates the retail-investor beat three catalog feeds
   #   already cover — noise, not coverage.

@@ -78,6 +78,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="type the profile's slug again to actually delete it. Without it "
         "this prints what WOULD be removed and changes nothing",
     )
+    # The catalog-refresh verb. A profile's sources.yaml is a COPY of the org
+    # template frozen at create time, so a profile made before a slate landed
+    # never sees it (DECISIONS 2026-08-06 ④: fresh1 ranked 385 items against
+    # health interests it had no feeds for). This is how a reader adopts the
+    # update — by typing it, never by the org editing their file.
+    prof_refresh = profile_sub.add_parser(
+        "refresh-catalog",
+        help="adopt org source-catalog ADDITIONS into an existing profile's "
+        "sources.yaml. DRY RUN unless --apply. Adds only: never edits, "
+        "re-enables, disables or removes anything already in that file, and "
+        "never touches interests or settings. Refuses the founder's own catalog",
+    )
+    prof_refresh.add_argument("name")
+    prof_refresh.add_argument(
+        "--apply", action="store_true",
+        help="actually write the additions. Without it this prints the delta "
+        "and changes nothing",
+    )
+    prof_refresh.add_argument(
+        "--skip", action="append", default=[], metavar="NAME",
+        help="decline one offered source by name (repeatable). With --apply "
+        "the decline is remembered, so that feed is never offered again",
+    )
 
     sub.add_parser(
         "doctor",
@@ -995,6 +1018,9 @@ def _profile_command(args) -> int:
               "`newslens profile list`.")
         return 0
 
+    if args.profile_command == "refresh-catalog":
+        return _profile_refresh_catalog(args)
+
     if args.profile_command == "create":
         try:
             st = profiles.create(args.name)
@@ -1035,6 +1061,120 @@ def _profile_command(args) -> int:
 
     print(f"unknown profile command: {args.profile_command}", file=sys.stderr)
     return 2
+
+
+def _profile_refresh_catalog(args) -> int:
+    """`newslens profile refresh-catalog <name> [--apply] [--skip NAME]`.
+
+    Dry run by default, like `profile delete` and `discovery-clean`. The
+    printed delta is the whole product of a dry run: the reader decides from
+    it, which is what makes the first refresh of a pre-ledger profile safe
+    (see catalog_refresh's first-run honesty note)."""
+    from . import catalog_refresh, paths, profiles
+
+    try:
+        plan = catalog_refresh.plan(args.name, skip=args.skip)
+    except (paths.ProfileError, profiles.ProfileMissingError,
+            catalog_refresh.RefreshRefused,
+            catalog_refresh.RefreshMalformed) as exc:
+        print(f"profile refresh-catalog: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:                           # CLI boundary: loud
+        print(f"profile refresh-catalog failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return 1
+
+    print(f"profile refresh-catalog: {plan.slug!r}")
+    print(f"  their catalog:  {plan.sources_file}")
+    print(f"  org catalog:    {plan.template_file} "
+          f"(sha256:{plan.template_digest[:12]})")
+
+    if plan.offers:
+        print(f"\n  WOULD ADD {len(plan.offers)} source(s) the org catalog has "
+              "and this profile does not:")
+        for offer in plan.offers:
+            print(f"    + {offer.summary}")
+    else:
+        print("\n  Nothing to add — this profile already carries every source "
+              "in the org catalog\n  that it has not already answered.")
+
+    for label, names in (
+        ("skipped by --skip this run", plan.skipped),
+        ("declined at an earlier refresh (never re-offered)",
+         plan.previously_declined),
+        ("adopted earlier and since deleted by this reader (never re-offered)",
+         plan.reader_removed),
+    ):
+        if names:
+            print(f"\n  {len(names)} {label}:")
+            for n in names:
+                print(f"    - {n}")
+
+    # A --skip that matched nothing is accepted, but silence there reads as
+    # "skipped and remembered" when it is neither (QA F-10) — most often it is
+    # a typo in the name the reader meant to decline.
+    if plan.skip_unmatched:
+        print(f"\n  {len(plan.skip_unmatched)} --skip name(s) matched nothing "
+              "this refresh would have offered\n  (already in this profile, "
+              "already answered, or not in the org catalog) — no effect, and\n"
+              "  nothing was remembered for them:")
+        for n in plan.skip_unmatched:
+            print(f"    ? {n}")
+
+    if plan.reader_only:
+        print(f"\n  {len(plan.reader_only)} source(s) in this profile that the "
+              "org catalog does not have\n  (their own additions, or entries "
+              "the org has since dropped) — left alone:")
+        for n in plan.reader_only:
+            print(f"    = {n}")
+
+    if plan.divergences:
+        print(f"\n  {len(plan.divergences)} DISAGREEMENT(S) with the org "
+              "catalog on sources you already have.\n  Reported only — your "
+              "file's line wins and nothing here is changed:")
+        for d in plan.divergences:
+            print(f"    ~ {d.name}: {d.field} — org says {d.template!r}, "
+                  f"yours says {d.profile!r}")
+
+    if not args.apply:
+        if plan.is_noop:
+            print("\nDRY RUN — nothing to do, and nothing was changed.")
+            return 0
+        print("\nDRY RUN — nothing was changed. To adopt the additions above:\n")
+        skips = "".join(f" --skip {n!r}" for n in args.skip)
+        print(f"  newslens profile refresh-catalog {plan.slug} --apply{skips}")
+        print("\nSkip any you do not want with --skip 'Exact Name' — a skip is "
+              "remembered,\nso that source is never offered again.")
+        return 0
+
+    try:
+        plan = catalog_refresh.apply(plan)
+    except catalog_refresh.RefreshMalformed as exc:
+        print(f"profile refresh-catalog: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"profile refresh-catalog failed: {type(exc).__name__}: {exc} — "
+              f"inspect {plan.sources_file}", file=sys.stderr)
+        return 1
+
+    if not plan.adopted_now and not plan.skipped:
+        print("\nAPPLIED — nothing to add, so nothing was written.")
+        return 0
+    print(f"\nAPPLIED — added {len(plan.adopted_now)} source(s) to "
+          f"{plan.sources_file}")
+    print("  your interests, settings and every source you already had: "
+          "untouched\n  (re-parsed and compared field by field before the "
+          "write landed)")
+    if plan.skipped:
+        print(f"  declined and remembered: {', '.join(plan.skipped)}")
+    if plan.mixed_line_endings:
+        style = "CRLF" if plan.line_ending == "\r\n" else "LF"
+        print(f"  note: your file mixed line endings; the merged file uses "
+              f"{style} throughout\n        (the dominant one — a refresh does "
+              "not get to pick a house style)")
+    print(f"\nNext: `newslens --profile {plan.slug} doctor` re-checks every "
+          "feed URL in that file.")
+    return 0
 
 
 def _memory_command(args) -> int:

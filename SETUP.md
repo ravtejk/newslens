@@ -173,6 +173,13 @@ profile. Adding profiles moves none of your files: `data/`, `memory.md` and
 ```bash
 newslens profile create tester1     # fresh DB, empty memory.md, own catalog
 newslens profile list               # honest status per profile; * = active
+newslens profile refresh-catalog tester1          # DRY RUN: what the org
+                                    # catalog has that this reader's copy does
+                                    # not (a profile's catalog freezes at
+                                    # create; new feed slates do not reach it)
+newslens profile refresh-catalog tester1 --apply  # adopt them. Adds only —
+                                    # your edits, interests and settings are
+                                    # re-checked field by field before it writes
 newslens --profile tester1 doctor   # health check for THAT reader's world
 newslens --profile tester1 generate
 newslens migrate --all-profiles     # upgrade every profile's database at once
