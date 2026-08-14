@@ -157,8 +157,16 @@ def plist_path(home: Optional[Path] = None) -> Path:
     `home` is an argument rather than an env override because an env override
     would be a new env var (forbidden this milestone) and because the suite
     needs to point this at a tmp dir without one — the tests pass a path, the
-    doctor passes nothing."""
-    return (home or Path.home()) / "Library" / "LaunchAgents" / PLIST_NAME
+    doctor passes nothing.
+
+    QA F-14: the DEFAULT now resolves through `paths.home_dir()` rather than
+    `Path.home()`. Explicit callers are unchanged; what changes is the callers
+    that pass nothing — `status()`, and through it the settings rows and the
+    doctor — which were stat-ing the founder's real `~/Library/LaunchAgents`
+    from inside the suite. `home_dir()` is the real home in a real run and the
+    sandbox root wherever NEWSLENS_DATA_DIR redirects, so the seam costs no new
+    env var and no behaviour change on his machine."""
+    return (home or paths.home_dir()) / "Library" / "LaunchAgents" / PLIST_NAME
 
 
 def kill_switch_path() -> Path:
@@ -166,8 +174,20 @@ def kill_switch_path() -> Path:
     every other piece of a reader's state — pausing one profile's schedule must
     not pause another's.
 
-    READ-ONLY FROM HERE. This module never creates or removes it; his hands do
-    (`touch` / `rm`). data/ is founder-owned."""
+    WRITTEN ONLY BY `set_paused`, WHICH ONLY HIS TAP CALLS (NL-152). Until then
+    this module only ever read the file and his hands did the `touch`/`rm`. The
+    settings toggle did not mint a second piece of state beside it — it became
+    the switch's UI FACE, so there is one state and one truth: the toggle, the
+    doctor line, `schedule status` and a 6am fire are all reading the same
+    file's existence. A separate `settings.schedule_enabled` key would have been
+    a second answer to one question, free to disagree with the file the ladder
+    actually consults.
+
+    data/ is founder-owned, and that still holds: nothing in the ORG's own
+    passes writes here. `set_paused` is runtime behaviour on his machine at his
+    explicit UI action — the same class as the shipped topic editor writing
+    sources.yaml (server._yaml_edit, 08-12) — and the suite exercises it only in
+    sandboxed DATA_DIRs."""
     return paths.DATA_DIR / KILL_SWITCH_NAME
 
 
@@ -180,6 +200,38 @@ def schedule_paused() -> bool:
         return kill_switch_path().exists()
     except OSError:
         return False
+
+
+def set_paused(paused: bool) -> bool:
+    """Flip the schedule off (True) or on (False). Returns the state that now
+    holds, re-read from disk rather than assumed.
+
+    THE TOGGLE'S ONLY MECHANISM. `touch` and `rm`, spelled in Python, so the
+    settings switch and his shell are doing literally the same thing to the same
+    file — there is no second state to drift.
+
+    IDEMPOTENT ON BOTH ARMS: pausing an already-paused schedule is a no-op that
+    does NOT restamp the file (`exist_ok`), and resuming an already-running one
+    swallows the missing-file error. A toggle that raises when it agrees with
+    the world is a toggle that fails on a double-tap.
+
+    THE RETURN IS A MEASUREMENT, not an echo of the argument. An unwritable
+    data dir means the flip did not happen, and the caller must be able to tell
+    him that rather than render a switch that moved on screen and nowhere else.
+    """
+    path = kill_switch_path()
+    try:
+        if paused:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+        else:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+    except OSError:
+        pass
+    return schedule_paused()
 
 
 def in_flight_path() -> Path:
@@ -801,7 +853,11 @@ def render_plist(hour: Optional[int] = None, env: Optional[dict] = None,
             f"{paths.PROJECT_ROOT}), then re-run this command. Refusing to "
             f"render a plist that points at a binary which is not there."
         )
-    hour = config.generate_hour_local(env) if hour is None else int(hour)
+    # THE RESOLVER, not the env layer (NL-152). `newslens schedule plist` is the
+    # command his settings screen tells him to re-run, so the hour it bakes must
+    # be the hour the settings screen showed him — reading GENERATE_HOUR_LOCAL
+    # here would have re-rendered the SAME plist he was told to change.
+    hour = config.generate_hour_resolved(env)[0] if hour is None else int(hour)
     if not 0 <= hour <= 23:
         raise ScheduleError(f"hour must be 0-23, got {hour}")
     return _PLIST_TEMPLATE.format(
@@ -813,6 +869,39 @@ def render_plist(hour: Optional[int] = None, env: Optional[dict] = None,
     )
 
 
+# THE PLIST REALITY (NL-152), stated once here because three surfaces render it.
+#
+# SCOUTED, NOT ASSUMED: `run_scheduled` never consults the hour — grep the whole
+# ladder and there is no hour in it. That is not an oversight to fix at fire
+# time, it is structural. launchd decides WHEN the process exists; by the time
+# `newslens schedule run` is executing, the fire has already happened. A
+# fire-time hour check could therefore only ever DECLINE — plist says 06:00,
+# settings says 07:00, the 06:00 fire refuses itself and nothing fires at 07:00
+# — which trades a visible disagreement for a schedule that silently stops.
+#
+# So the honest answer is the first of the dispatch's two: the installed agent
+# needs a re-render and a re-install, by HIS hands, and every surface that can
+# see the disagreement says so. The org never runs these.
+def reinstall_commands(home: Optional[Path] = None) -> List[str]:
+    """The exact commands his hands run to move an INSTALLED agent to a new
+    hour. Two acts: rewrite the file, reload it.
+
+    `bootout` before `bootstrap` is not optional and not defensive — launchd
+    refuses to bootstrap a label that is already loaded, so a sequence without
+    it fails on the one machine that has the feature working."""
+    target = plist_path(home)
+    return [
+        f"newslens schedule plist > {target}",
+        f"launchctl bootout gui/$UID/{LAUNCHD_LABEL} && "
+        f"launchctl bootstrap gui/$UID {target}",
+    ]
+
+
+def reinstall_commands_text(home: Optional[Path] = None) -> str:
+    """`reinstall_commands` as the indented block the CLI prints."""
+    return "".join(f"       {c}\n" for c in reinstall_commands(home))
+
+
 def install_instructions(hour: Optional[int] = None,
                          env: Optional[dict] = None,
                          home: Optional[Path] = None) -> str:
@@ -822,7 +911,7 @@ def install_instructions(hour: Optional[int] = None,
     the org never installs the launchd agent (dispatch 2026-08-13, law). What is
     on offer is an exact, copyable sequence — the failure mode this replaces is
     a half-remembered `launchctl load` from a blog post."""
-    hour = config.generate_hour_local(env) if hour is None else int(hour)
+    hour = config.generate_hour_resolved(env)[0] if hour is None else int(hour)
     target = plist_path(home)
     return f"""\
 Scheduled generation — install (your hands, three commands)
@@ -843,11 +932,14 @@ ready before you open the app. NewsLens does not install this for you.
 
        newslens schedule status
 
-To change the hour, set GENERATE_HOUR_LOCAL in your .env, then repeat step 1 and
-run `launchctl bootout gui/$UID/{LAUNCHD_LABEL}` before step 2.
+To change the hour, set it in Settings (or GENERATE_HOUR_LOCAL in your .env),
+then re-install the agent — the agent file bakes the hour in, so changing the
+setting alone does not move the fire:
 
+{reinstall_commands_text(home)}
 To PAUSE without uninstalling:      touch {kill_switch_path()}
 To resume:                          rm {kill_switch_path()}
+(the Settings toggle flips that same file)
 
 To remove the schedule entirely:
 
@@ -865,23 +957,56 @@ def last_fire() -> Optional[Dict]:
 
     None means EXACTLY "no scheduled fire has been recorded" — never "the
     schedule is broken" and never "it fired and failed". The doctor renders that
-    distinction rather than collapsing it."""
-    log = paths.DATA_DIR / "generation_log.jsonl"
-    try:
-        text = log.read_text(encoding="utf-8", errors="replace")
-    except (OSError, ValueError):
-        return None
-    found = None
-    for line in text.splitlines():
-        if not line.strip():
-            continue
+    distinction rather than collapsing it.
+
+    NL-154 / QA F-6 — AND "NOTHING EVER FIRED" MUST NOT MEAN "IT SCROLLED OUT
+    OF THE LIVE SEGMENT". Rotation MOVES lines, it does not delete them, so a
+    fire line older than the retention floor is still on disk in
+    `generation_log.archive-0001.jsonl` — and a reader that stopped at the live
+    file had the product printing "no scheduled fire has been recorded yet"
+    about a record it was still holding. Reachable whenever 60+ runs land with
+    no scheduled fire among them: a battery stretch, or a paused schedule with
+    manual generates.
+
+    THE READ STAYS BOUNDED IN THE COMMON CASE, and the shape is the one
+    `server._log_entry_for` already uses for the same reason: the live segment
+    is searched first and wins outright; the archives are opened only when the
+    live segment holds no fire AT ALL. Segments are walked NEWEST FIRST and the
+    first segment with a hit wins, which preserves this function's own
+    last-wins rule across the split — a later segment's fire always supersedes
+    an earlier one's.
+
+    The segment list comes from `generate`, not from a second spelling of the
+    log's filename here (this function used to hardcode "generation_log.jsonl";
+    two spellings of one path is how a rotation and its reader end up looking
+    at different files)."""
+    from . import generate
+
+    def _scan(path: Path) -> Optional[Dict]:
+        found = None
         try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(e, dict) and e.get(SCHEDULE_LINE_KEY) is not None:
-            found = e
-    return found
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            return None
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get(SCHEDULE_LINE_KEY) is not None:
+                found = e
+        return found
+
+    hit = _scan(generate.log_file())
+    if hit is not None:
+        return hit
+    for seg in reversed(generate.log_archives()):
+        hit = _scan(seg)
+        if hit is not None:
+            return hit
+    return None
 
 
 def status(home: Optional[Path] = None, env: Optional[dict] = None) -> Dict:
@@ -916,17 +1041,26 @@ def status(home: Optional[Path] = None, env: Optional[dict] = None) -> Dict:
         except Exception:  # noqa: BLE001 — an unreadable plist is a REPORTED
             plist_hour = None       # unknown, never a guess and never a crash
 
+    # THE ENV LAYER'S ERROR IS STILL REPORTED (`hour_error`) even when a
+    # settings value short-circuits it: a typo'd .env is a config error he
+    # should see, and hiding it because the UI happens to override it would be
+    # the doctor going quiet about a fault it can see.
     try:
-        configured_hour: Optional[int] = config.generate_hour_local(env)
+        config.generate_hour_local(env)
         hour_error = ""
     except ValueError as exc:
-        configured_hour, hour_error = None, str(exc)
+        hour_error = str(exc)
+    configured_hour, hour_source = config.generate_hour_resolved(env)
 
     return {
         "installed": present,
         "plist_path": str(p),
         "plist_hour": plist_hour,
         "configured_hour": configured_hour,
+        # NL-152: which layer supplied `configured_hour` — "settings", "env" or
+        # "default". Reported rather than inferred, so the mismatch sentence can
+        # name the thing he would actually go and change.
+        "hour_source": hour_source,
         "hour_error": hour_error,
         "paused": schedule_paused(),
         "kill_switch_path": str(kill_switch_path()),
@@ -977,10 +1111,17 @@ def status_lines_tagged(home: Optional[Path] = None, env: Optional[dict] = None,
                     "`launchctl print gui/$UID/" + LAUNCHD_LABEL + "` is)"))
         cfg_hour = st["configured_hour"]
         if isinstance(hour, int) and isinstance(cfg_hour, int) and hour != cfg_hour:
+            # NL-152 extended this sentence from "GENERATE_HOUR_LOCAL says" to
+            # "whichever layer actually decided", because the settings tab is
+            # now a way to change that number and a warning that named the .env
+            # would have sent him to edit a file that was no longer winning.
+            where = {config.HOUR_SOURCE_SETTINGS: "your Settings say",
+                     config.HOUR_SOURCE_ENV: "GENERATE_HOUR_LOCAL says"}.get(
+                         st.get("hour_source") or "", "the default is")
             out.append((
                 LINE_MISMATCH,
                 f"  MISMATCH: the agent fires at {hour:02d}:00 but "
-                f"GENERATE_HOUR_LOCAL says {cfg_hour:02d}:00 — the agent wins "
+                f"{where} {cfg_hour:02d}:00 — the agent wins "
                 f"until you re-render it (`newslens schedule install-instructions`)"))
     else:
         out.append((LINE_NOT_INSTALLED,

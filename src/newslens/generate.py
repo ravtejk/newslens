@@ -105,6 +105,63 @@ PROMPT_SCRIPT = "script_adapt.txt"
 BRIEFINGS_DIR_NAME = "briefings"
 GENERATION_LOG_NAME = "generation_log.jsonl"
 
+# ---------------------------------------------------------------------------
+# NL-154 — GENERATION-LOG RETENTION (ratified NL-149 slate ④)
+# ---------------------------------------------------------------------------
+# THE MEASUREMENT FIRST, because the charter's figure was off by ~22x and the
+# design follows the real shape. On his tree at a62c1aa:
+#
+#     699,786 bytes across 51 lines
+#     27 RUN lines    659,686 B   min 368   max 41,432   mean 24,432
+#     24 STAGE lines   40,100 B   min 777   max  3,732   mean  1,670
+#
+# So growth is ~26 KB per generate (one fat run line plus roughly one stage
+# line), not the ~1.1 KB the row assumed. Whole-file read+parse measured at
+# 2.58 ms today and projects to ~37 ms at 10 MB — real, but this is a slow leak
+# and not a fire, which is why the policy below is conservative rather than
+# aggressive.
+#
+# THE POLICY, in one sentence: when the live file passes LOG_MAX_BYTES, the
+# OLDEST lines move into a numbered archive segment beside it, and the newest
+# LOG_RETAIN_RUNS runs stay live.
+#
+# ROTATION MOVES BYTES AND NEVER DELETES THEM. Nothing here unlinks a record;
+# archive segments accumulate. A deletion policy is HIS call and is deliberately
+# absent — noted as this row's residue rather than quietly assumed.
+#
+# WHY SIZE TRIGGERS BUT COUNT RETAINS. Size is the thing that hurts (every page
+# build reads this file); run-count is the thing the readers contract on (the
+# reports screen shows 30). Triggering on the pain and retaining on the contract
+# means the retention floor can never be cut by a run that happened to be fat.
+LOG_MAX_BYTES = 4 * 1024 * 1024
+
+# TWICE the reports screen's 30 (server._RUNLOG_MAX_ROWS), so that screen is
+# whole with a full spare set behind it, and NL-146's scheduled-fire forensics
+# keep months of mornings in the file `schedule.last_fire` reads. At the
+# measured ~26 KB/run this settles the live file at ~1.5 MB.
+LOG_RETAIN_RUNS = 60
+
+# Archive segments live beside the log, are numbered in the order they were cut
+# (0001 is the OLDEST), and say "archive" in their own name — the dispatch's
+# "honestly named as archived". They are never rewritten once cut.
+LOG_ARCHIVE_PREFIX = "generation_log.archive-"
+LOG_ARCHIVE_SUFFIX = ".jsonl"
+LOG_ARCHIVE_GLOB = f"{LOG_ARCHIVE_PREFIX}*{LOG_ARCHIVE_SUFFIX}"
+
+# THE INDEX EXISTS FOR ONE READER AND ONE NUMBER. server._run_log_entries
+# returns a TOTAL run count that the settings row renders ("N runs recorded")
+# and the report's truncation line quotes ("the 30 most recent of N"). Once
+# older runs live in an archive, a live-only count would silently shrink that
+# number the morning after a rotation — the record would be intact and the
+# screen would be lying about it. Counting the archives on every page build
+# would reintroduce exactly the whole-file read this row exists to remove, so
+# the counts are computed ONCE at rotation and stored here.
+#
+# DERIVED AND REBUILDABLE, never authoritative: every number in it can be
+# recomputed by reading the segments, and a missing or corrupt index degrades to
+# "no archived runs known" rather than to a crash or a guess.
+LOG_INDEX_NAME = "generation_log.archive-index.json"
+
 # Word bands [KNOB] — §5.1 totals / §5.8 script band. Warn-grade (§5.9 #9).
 #
 # NL-63 M2 — the AMENDED slot contract (DECISIONS 2026-07-13). DERIVATION of the
@@ -3342,8 +3399,292 @@ def fold_late_steps(report: "GenReport") -> List[Dict]:
     return ledger
 
 
+# ---------------------------------------------------------------------------
+# NL-154 — the log's own files: where they are, how they rotate, who reads them
+# ---------------------------------------------------------------------------
+
+# EVERY HELPER TAKES AN OPTIONAL DIRECTORY, because the log is PROFILE-SCOPED
+# and one of its readers proves it: readerserve.read_ledger reads
+# `profile_layout(slug)["DATA_DIR"]`, not `paths.DATA_DIR`, so a segment
+# enumerator hard-wired to the process's own profile would have sent the reader
+# worlds' spend ledger looking in the founder's directory. Default None = this
+# process's profile, which is what every other caller wants.
+def log_file(data_dir: Optional[Path] = None) -> Path:
+    """The LIVE log. Every writer appends here; rotation is what keeps it from
+    growing forever."""
+    return (data_dir or paths.DATA_DIR) / GENERATION_LOG_NAME
+
+
+def log_archives(data_dir: Optional[Path] = None) -> List[Path]:
+    """Archive segments, OLDEST FIRST. Sorted by name, which is sorted by cut
+    order because the numbers are zero-padded — a lexical sort on a padded
+    counter is a chronological sort, and it stays one without a stat call per
+    file (mtimes lie after a copy; the false-mtime receipt class is on record,
+    Records 08-13-2 G-2)."""
+    try:
+        return sorted((data_dir or paths.DATA_DIR).glob(LOG_ARCHIVE_GLOB))
+    except OSError:
+        return []
+
+
+def log_segments(data_dir: Optional[Path] = None) -> List[Path]:
+    """Every segment of the record, oldest first, LIVE LAST — the reading order
+    for anything that wants the whole history (diagnose's totals, the spend
+    ledger). Appending order across the list is the log's original append order,
+    so a caller that concatenates gets the record back exactly as it was written.
+
+    THE UNION IS DISJOINT BY CONSTRUCTION: `rotate_log_if_needed` writes the
+    lines it drops into the archive and the lines it keeps into the live file,
+    never both. So a reader may concatenate segments without dedup, and no entry
+    is counted twice.
+
+    AND THE CONCATENATION IS ROTATION-INVARIANT, which is the property
+    readerserve's session delta leans on: rotation MOVES lines between segments
+    without reordering or altering them, so `"".join(segments)` is byte-identical
+    before and after a cut. A session that rotates mid-flight still sees its own
+    appends as a clean suffix, not as "the ledger changed shape"."""
+    return log_archives(data_dir) + [log_file(data_dir)]
+
+
+def _is_run_line(entry: Dict) -> bool:
+    """A RUN entry, as opposed to the analysis stage's instrumentation line or
+    NL-146's fire-decision line.
+
+    KEY PRESENCE, never line shape — the file's own idiom, and the same test
+    server._run_log_entries applies. The schedule key is imported from its owner
+    rather than re-spelled here: a second spelling of that discriminator is a
+    rotation that counts fire lines as runs while the reports screen does not."""
+    from . import schedule
+    if not isinstance(entry, dict):
+        return False
+    return (entry.get("stage") is None
+            and entry.get(schedule.SCHEDULE_LINE_KEY) is None)
+
+
+def read_log_index() -> Dict:
+    """The archive counts, or an honest empty. Never raises."""
+    try:
+        data = json.loads((paths.DATA_DIR / LOG_INDEX_NAME)
+                          .read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def count_runs_in(segments: List[Path]) -> int:
+    """RUN entries actually sitting in those files, read line by line.
+
+    THE REBUILD PRIMITIVE. Unreadable segments are skipped rather than raising:
+    this runs on the recovery path, and a recovery that dies on one bad file
+    recovers nothing."""
+    total = 0
+    for p in segments:
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+        total += sum(1 for ln in body.splitlines()
+                     if ln.strip() and _safe_is_run(ln))
+    return total
+
+
+def archived_run_count() -> int:
+    """How many RUN entries live in archive segments.
+
+    DERIVED AND REBUILDABLE, never authoritative: every number in the index can
+    be recomputed by reading the segments, and THIS FUNCTION IS WHERE THAT
+    PROMISE IS KEPT (QA F-1, 2026-08-14 — the docstring made the claim and no
+    code honoured it, so a lost index answered 0 and the next rotation re-based
+    from that 0, compounding the loss on every subsequent cut).
+
+    THE INDEX IS A CACHE, READ FIRST, because it is one small file and the
+    steady-state page build must stay one bounded read no matter how much
+    history accumulates. It is trusted only while it is CREDIBLE, which is a
+    two-part test:
+
+      - it parses and carries a non-negative integer count, and
+      - the segments it lists are EXACTLY the segments on disk.
+
+    The second half is the one that matters in practice, and it is an EQUALITY
+    rather than a containment in either direction, because the set can drift
+    both ways. The index write is deliberately best-effort and LAST (a full disk
+    must not cost the run record), so one reachable failure is "a segment landed
+    and the index did not hear about it". The other is his hands: SETUP.md
+    invites him to delete old segments, and a subset test would have called the
+    surviving segments credible against a total that still counted the deleted
+    one — a permanent over-report that the NEXT rotation bakes into a fresh
+    index (QA F-15 / gate R-B, 2026-08-14; measured 280 reported against 140 on
+    disk, then 420 against 280). Both directions are detectable for the price of
+    the glob this function already needs.
+
+    Otherwise the count is RECOMPUTED from the segments: slower, rare, and
+    right — and self-healing, because the next rotation writes its `prior` from
+    the recount.
+
+    THE BOUND, stated once so it is not mistaken for a stronger promise: what is
+    detected is SET DRIFT. An index whose count is forged over a segment set
+    that still matches disk, or a segment whose CONTENTS were edited in place
+    while its name stayed, are trusted until that set changes. Closing those
+    would take per-segment counts, which is real machinery for an informational
+    row on a one-user app and is not reachable by any operation the product
+    invites."""
+    segments = log_archives()
+    if not segments:
+        # No archives, nothing archived. Also the pre-first-rotation state,
+        # which is every profile's state until the log gets fat.
+        return 0
+    idx = read_log_index()
+    try:
+        cached = int(idx.get("archived_runs"))
+    except (TypeError, ValueError):
+        cached = None
+    listed = idx.get("segments")
+    accounts_for_disk = (isinstance(listed, list)
+                         and {p.name for p in segments} == set(listed))
+    if cached is not None and cached >= 0 and accounts_for_disk:
+        return cached
+    return count_runs_in(segments)
+
+
+def _split_index(lines: List[str], retain_runs: int) -> int:
+    """Index of the first line to KEEP, so that `retain_runs` run entries remain.
+
+    Returns 0 when the file does not hold more than `retain_runs` runs — i.e.
+    "there is nothing safe to archive", which is the answer that protects the
+    retention floor on a file that is huge for some other reason (a burst of fat
+    stage lines, one pathological run). Rotation is skipped rather than forced.
+
+    Walks from the END, because retention is defined from the newest run
+    backwards and the file is append-ordered."""
+    seen = 0
+    for i in range(len(lines) - 1, -1, -1):
+        raw = lines[i]
+        if not raw.strip():
+            continue
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            # A torn or hand-mangled line is carried with whatever side of the
+            # split it falls on; it is never a run for counting purposes and it
+            # is never dropped.
+            continue
+        if _is_run_line(entry):
+            seen += 1
+            if seen > retain_runs:
+                # This line is one run PAST the retention floor, so the keep
+                # window starts on the line after it.
+                return i + 1
+    return 0
+
+
+def rotate_log_if_needed(max_bytes: int = LOG_MAX_BYTES,
+                         retain_runs: int = LOG_RETAIN_RUNS) -> Optional[Path]:
+    """Move the oldest lines into a fresh archive segment. Returns the segment
+    written, or None when nothing needed moving.
+
+    NEVER RAISES INTO A GENERATE. This is called on the way into a log append,
+    and the append is frequently the last act of a ~30-minute pipeline that
+    already succeeded. Losing that record because housekeeping hit a full disk
+    would be the tail wagging the dog, so every failure arm here returns None
+    and leaves the log exactly as it was — un-rotated is a slow file, which is
+    the condition we started in.
+
+    THE CRASH DIRECTION IS DUPLICATION, NEVER LOSS, WITH ONE WRITER PER
+    DATA_DIR — stated because it is the one property worth choosing, and
+    qualified because the unqualified sentence reads as a concurrency guarantee
+    it does not make (QA F-2 / gate R-D, 2026-08-14). The archive is written and
+    swapped into place BEFORE the live file is replaced by its retained tail, so
+    a kill between the two `os.replace` calls leaves the archived lines present
+    in both files. That is visible, recoverable and harmless to every count
+    except a naive union; the opposite order would have a window in which those
+    lines exist nowhere.
+
+    WHAT THE QUALIFIER EXCLUDES: this is read-all -> write-archive ->
+    os.replace, and a line appended by ANOTHER PROCESS on the same DATA_DIR
+    inside that window is overwritten by the replace. Bound: one line, and only
+    for a second writer the in-flight marker did not stop. Not closed with a
+    lock — real machinery, on a one-user app, for a window behind a guard —
+    and pinned as a documented bound instead (xfail, strict) so the day anyone
+    lands the lock the pin passes and forces the marker off.
+    """
+    import os   # module-local, matching this file's three other os users
+
+    live = log_file()
+    try:
+        if live.stat().st_size <= max_bytes:
+            return None
+    except OSError:
+        return None
+    try:
+        text = live.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return None
+    lines = text.splitlines()
+    cut = _split_index(lines, retain_runs)
+    if cut <= 0:
+        return None
+
+    dropped, kept = lines[:cut], lines[cut:]
+    existing = log_archives()
+    try:
+        nxt = int(existing[-1].name[len(LOG_ARCHIVE_PREFIX):]
+                  .split(".")[0]) + 1 if existing else 1
+    except (ValueError, IndexError):
+        nxt = len(existing) + 1
+    segment = paths.DATA_DIR / f"{LOG_ARCHIVE_PREFIX}{nxt:04d}{LOG_ARCHIVE_SUFFIX}"
+
+    # THE RUNNING TOTAL IS TAKEN BEFORE THE CUT LANDS, and the ordering is the
+    # whole fix (QA F-1). `archived_run_count` now rebuilds from the segments
+    # when the index is not credible — so it must be asked while the segments
+    # still hold only the PRIOR cuts. Asked after, the rebuild would count the
+    # lines we are about to add to `moved` and the total would double.
+    prior = archived_run_count()
+
+    def _atomic(path: Path, body: str) -> None:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, path)
+
+    try:
+        _atomic(segment, "\n".join(dropped) + "\n")
+        _atomic(live, ("\n".join(kept) + "\n") if kept else "")
+    except OSError:
+        return None
+
+    # The index, refreshed from what was just cut. Written LAST and best-effort:
+    # it is derived data, and a failed write now costs nothing but speed —
+    # `archived_run_count` notices that the new segment is unaccounted for and
+    # recomputes from disk until a later rotation writes a credible index again.
+    moved = sum(1 for ln in dropped if ln.strip() and _safe_is_run(ln))
+    try:
+        _atomic(paths.DATA_DIR / LOG_INDEX_NAME, json.dumps({
+            "archived_runs": prior + moved,
+            "segments": [p.name for p in log_archives()],
+            "rotated_at": datetime.now(timezone.utc)
+                          .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }, indent=2) + "\n")
+    except OSError:
+        pass
+    return segment
+
+
+def _safe_is_run(raw: str) -> bool:
+    try:
+        return _is_run_line(json.loads(raw))
+    except ValueError:
+        return False
+
+
 def log_generation(entry: Dict) -> None:
     paths.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    # NL-154: ONE rotation site, and it is here because this is the ONE funnel
+    # every fat line goes through — generate's own run records and NL-146's
+    # fire decisions (schedule.log_fire calls this). analysis.py's stage line
+    # has its own appender and is deliberately NOT a second rotation site: two
+    # rotators racing over one file is a hazard, stage lines are the small ones
+    # (1.7 KB mean, measured), and every stage line is followed by the run entry
+    # whose append rotates for it.
+    rotate_log_if_needed()
     log_path = paths.DATA_DIR / GENERATION_LOG_NAME
     entry = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **entry}
     with log_path.open("a", encoding="utf-8") as fh:

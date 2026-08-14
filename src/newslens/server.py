@@ -404,27 +404,53 @@ def _log_entry_for(date: str) -> Optional[Dict]:
 
     Filtering by KEY PRESENCE and not by guessing at the line's shape is the
     file's own idiom (`stage`, then `schedule`); a fourth line class added to
-    this log gets a third `continue` here on the day it is written."""
-    log = paths.DATA_DIR / "generation_log.jsonl"
-    if not log.exists():
-        return None
-    found = None
-    try:
-        for line in log.read_text(encoding="utf-8",
-                                  errors="replace").splitlines():
-            if not line.strip():
-                continue
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get(schedule.SCHEDULE_LINE_KEY) is not None:  # NL-146 fire lines
-                continue
-            if e.get("date") == date and not e.get("sample"):
-                found = e
-    except (OSError, ValueError):
-        return None
-    return found
+    this log gets a third `continue` here on the day it is written.
+
+    NL-154 — THE ARCHIVE FALLBACK, and why the ORDER is live-first. This reader
+    feeds the edition renderer for ANY date, including one deep in the archive
+    screen, so a date whose entry has rotated out of the live segment must not
+    lose its structured `stories` and degrade to the legacy narrative parse.
+    But the overwhelmingly common call is for a RECENT date, which is always
+    live — so the live segment is searched first and the archives are touched
+    only on a miss. The steady-state cost is unchanged; the fallback is paid
+    exactly by the reader who opened a months-old edition.
+
+    Segments are searched NEWEST FIRST and the first hit wins, which preserves
+    the function's own last-entry-wins rule across the split: within a segment
+    the last match is taken, and a later segment's match always supersedes an
+    earlier one's.
+    """
+    from . import generate
+
+    def _scan(path: Path) -> Optional[Dict]:
+        found = None
+        try:
+            if not path.exists():
+                return None
+            for line in path.read_text(encoding="utf-8",
+                                       errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get(schedule.SCHEDULE_LINE_KEY) is not None:  # NL-146 fires
+                    continue
+                if e.get("date") == date and not e.get("sample"):
+                    found = e
+        except (OSError, ValueError):
+            return None
+        return found
+
+    hit = _scan(generate.log_file())
+    if hit is not None:
+        return hit
+    for seg in reversed(generate.log_archives()):
+        hit = _scan(seg)
+        if hit is not None:
+            return hit
+    return None
 
 
 # NL-149 item 2 — the generation report's source.
@@ -496,7 +522,21 @@ def _run_log_entries(limit: int = _RUNLOG_MAX_ROWS) -> Tuple[List[Dict], int]:
             continue
         runs.append(e)
     runs.reverse()                      # newest first — the log appends
-    return runs[:max(0, limit)], len(runs)
+    # NL-154 — THE COUNT SPANS THE ARCHIVES, THE ROWS DO NOT.
+    #
+    # This function reads the LIVE segment only, and that is the whole point of
+    # the row: rotation retains 60 runs live against this screen's 30, so the
+    # rows it renders are complete without ever touching an archive. The TOTAL
+    # is different — it is the number the settings row and the truncation line
+    # quote at him ("the 30 most recent of N runs"), and a live-only N would
+    # have silently dropped the morning after the first rotation. The archived
+    # figure comes from the index generate writes AT rotation, so this stays one
+    # bounded read of one file no matter how much history accumulates.
+    #
+    # An unreadable index contributes 0 — under-reporting history that the
+    # segments still hold, never inventing runs that never happened.
+    from . import generate
+    return runs[:max(0, limit)], len(runs) + generate.archived_run_count()
 
 
 _MOVE_RE = re.compile(r"^\*\*(?P<label>[^*]+):\*\*\s*(?P<text>.*)$", re.S)
@@ -1060,7 +1100,19 @@ _YAML_LOCK = threading.Lock()
 
 def _yaml_edit(mutate) -> Tuple[bool, str]:
     """Apply mutate(lines)->(ok, msg, lines); reload-validate; restore on
-    failure."""
+    failure.
+
+    LF IS THE CONTRACT (QA F-7 / gate R-E, 2026-08-14). This splits with
+    `str.splitlines()` and rebuilds with `"\\n".join(...)`, so every edit
+    NORMALISES the file's line breaks to LF: CRLF endings, and the exotic
+    breaks `splitlines()` also honours (U+2028, U+2029, U+0085, VT, FF), come
+    back as newlines. Chosen, not overlooked — this is a Unix-only tool writing
+    a file it also parses, and his file measured 0 CRLF and 0 U+2028. Where it
+    would matter it usually cannot bite: a break that damages the YAML is caught
+    by the reload-validate below and reverted. The residue is a break that
+    splits two comments into two valid comments — the file parses, the revert
+    never fires, and the character is gone under a success message. Pinned as a
+    contract, not a defect, in tests/test_nl152_154_settings_batch_qa.py."""
     with _YAML_LOCK:
         path = paths.SOURCES_FILE
         original = path.read_text(encoding="utf-8")
@@ -1317,6 +1369,114 @@ def topic_remove(name: str) -> Tuple[bool, str]:
                     del lines[i]
                     return True, f"removed {name!r}", lines
         return False, f"{name!r} not found in interests", lines
+
+    return _yaml_edit(mutate)
+
+
+# ---------------------------------------------------------------------------
+# NL-152 — the generation hour, written where every other principal switch lives
+# ---------------------------------------------------------------------------
+# THROUGH `_yaml_edit`, DELIBERATELY, and not through a yaml.safe_dump round
+# trip: that file is 200+ lines of HIS comments (source rationales, the tier
+# taxonomy, the tts_engine ear-test note), and a dump would silently delete all
+# of them the first time he changed the time his news arrives. Line surgery
+# keeps the comments and gets the same reload-validate-or-revert guarantee the
+# topic editor has had since M7.
+
+_SETTINGS_KEY = "generate_hour"
+
+
+def _settings_block(lines: List[str]) -> Tuple[int, int]:
+    """(start, end) line range of the `settings:` block's BODY, or (-1, -1).
+
+    The block ends at the next line that starts in column 0 — the same
+    structural read `_find_interest_list` does — so blank lines and comments
+    inside the block ride along with it and are never used as terminators.
+
+    THE STATED BOUND (QA F-9 / gate R-E, 2026-08-14): a COLUMN-0 comment is
+    adopted into the body by that rule, so a `# --- Section ---` header sitting
+    between this block and the next top-level key extends the block past it and
+    an absent key is appended BELOW the header. The file still parses and the
+    hour still reads back correctly — it is a filing defect, not a data one —
+    and the shape is absent from his file (a blank line, then `sources:`).
+    Accepted rather than fixed: skipping trailing comments on the walk-back is
+    surgery on the crown-jewel writer for a cosmetic shape nobody has, and this
+    function's other bound (a comment INSIDE the block is part of the block) is
+    the one that keeps his in-block notes safe. Pinned as a placement bound, not
+    a promise, in tests/test_nl152_154_settings_batch_qa.py."""
+    start = -1
+    for i, ln in enumerate(lines):
+        if start < 0:
+            if ln.startswith("settings:"):
+                start = i + 1
+            continue
+        if ln.strip() and not ln[0].isspace() and not ln.startswith("#"):
+            return start, i
+    return (start, len(lines)) if start >= 0 else (-1, -1)
+
+
+def _trailing_comment(line: str) -> str:
+    """The ` #…` fragment at the end of a `key: value` line, or "".
+
+    GATE G-1 (2026-08-14). The hour rewrite below replaces the WHOLE line, so a
+    note he had written beside the value vanished under a success message — the
+    one line in this file the product itself rewrites, in a file organised
+    entirely around his annotations. Comment survival is this editor's headline
+    claim (see the block comment above); it held everywhere except here.
+
+    BOUND: a `#` inside a QUOTED scalar is data, not a comment, and re-emitting
+    it after a bare integer would change what the line means. So the fragment is
+    taken only when nothing between the colon and the `#` opens a quote. Losing
+    a comment is bad; inventing one out of a value is worse."""
+    after = line.split(":", 1)[1] if ":" in line else ""
+    # `\s+` and not `\s`: the whole run of whitespace belongs to the fragment,
+    # or a `value  # note` he aligned by hand comes back one space narrower —
+    # a smaller version of the same silent rewrite this function exists to stop.
+    m = re.search(r"\s+#.*$", after)
+    if not m or '"' in after[:m.start()] or "'" in after[:m.start()]:
+        return ""
+    return m.group(0)
+
+
+def settings_set_hour(hour: int) -> Tuple[bool, str]:
+    """Persist the scheduled-generation hour into sources.yaml `settings:`.
+
+    VALIDATES BEFORE IT WRITES, because `_yaml_edit`'s revert protects the FILE
+    and not the reader: an out-of-range hour would round-trip through YAML
+    intact, land in `cfg.problems`, and come back as the generic "that change
+    would have broken your sources file" — a true sentence about the wrong
+    thing. The bound here is config's own (0-23), stated once."""
+    try:
+        hour = int(hour)
+    except (TypeError, ValueError):
+        return False, "Nothing was saved — pick a whole hour of the day."
+    if not 0 <= hour <= 23:
+        return False, "Nothing was saved — pick a whole hour of the day."
+
+    def mutate(lines):
+        start, end = _settings_block(lines)
+        if start < 0:
+            # No `settings:` block at all. REFUSED rather than created: this
+            # editor's whole contract is surgery on a structure that exists,
+            # and inventing a top-level block is the one edit whose failure
+            # mode is a file that parses but means something new.
+            return False, ("Nothing was saved — your sources file has no "
+                           "settings section."), lines
+        pat = re.compile(r"^(\s+)" + _SETTINGS_KEY + r"\s*:.*$")
+        for i in range(start, end):
+            m = pat.match(lines[i])
+            if m:
+                lines[i] = (f"{m.group(1)}{_SETTINGS_KEY}: {hour}"
+                            + _trailing_comment(lines[i]))
+                return True, f"generation hour set to {hour:02d}:00", lines
+        # Absent key: append at the block's end, past any trailing blank lines
+        # so the new key lands inside the block rather than after the gap that
+        # separates it from `sources:`.
+        insert_at = end
+        while insert_at > start and not lines[insert_at - 1].strip():
+            insert_at -= 1
+        lines.insert(insert_at, f"  {_SETTINGS_KEY}: {hour}")
+        return True, f"generation hour set to {hour:02d}:00", lines
 
     return _yaml_edit(mutate)
 
@@ -2622,7 +2782,62 @@ def _failure_outcome(con: sqlite3.Connection, row=None) -> str:
     return "The saved edition is empty."
 
 
-def _scheduled_failure_note(entry: Optional[Dict]) -> str:
+# How far back the failure-morning door looks for something readable. THIRTY,
+# and deliberately the same number as `_RUNLOG_MAX_ROWS` above — the reports
+# screen's depth is the depth the product already tells him it remembers, so the
+# door and the screen agree about how much history is in view. Tied by intent,
+# not aliased: they are two different promises that happen to want one depth,
+# and either could move without the other (QA F-5 / gate R-C, 2026-08-14).
+_LAST_EDITION_SCAN_ROWS = 30
+
+
+def _last_generated_edition(con: sqlite3.Connection,
+                            before_date: str) -> Optional[Dict]:
+    """The newest edition STRICTLY BEFORE `before_date` that a reader can
+    actually open, or None. {"date", "human"}.
+
+    READABLE AND NOT MERELY PRESENT — the same predicate the scheduler's
+    idempotence gate uses (`_stories_for` non-empty, schedule.published_edition_
+    exists), reused rather than re-derived. A briefings ROW exists from the rank
+    stage onward with nothing behind it, so a row-existence test would have
+    offered him a button that opens an empty page on exactly the mornings this
+    note exists for.
+
+    STRICTLY BEFORE, because this is only ever called from the today-is-absent
+    branch: today's own row is by construction the unreadable one, and offering
+    "the last generated edition" that resolves to today would be the button
+    contradicting the sentence above it.
+
+    BOUNDED AT `_LAST_EDITION_SCAN_ROWS`, and the bound is spent on ROWS, which
+    is why the old five was wrong (QA F-5 / gate R-C, 2026-08-14). A scheduled
+    morning that failed after the rank stage LEAVES a row with nothing behind
+    it, so five failed mornings consumed the whole window and the button
+    disappeared on exactly the morning it was built for, with a readable edition
+    sitting at row six. The door's whole job is to survive a run of failures.
+
+    THE COST LINE THAT JUSTIFIED FIVE IS GONE, not just outvoted: it said each
+    candidate is "a full read of a log that is ~700KB", but NL-154 made
+    `_log_entry_for` a bounded read of the LIVE segment with the archives
+    touched only on a miss, so the per-candidate cost no longer grows with the
+    archive. The loop below also returns on the first READABLE row, so the deeper
+    bound is paid only in the failure run it exists for."""
+    try:
+        rows = con.execute(
+            "SELECT * FROM briefings WHERE date < ? ORDER BY date DESC LIMIT ?",
+            (before_date, _LAST_EDITION_SCAN_ROWS)).fetchall()
+    except Exception:      # noqa: BLE001 — a missing table is "nothing to
+        return None        # offer", never a 500 on the failure morning itself
+    for r in rows:
+        try:
+            if _stories_for(r, _log_entry_for(r["date"]))[0]:
+                return {"date": r["date"], "human": _human_date(r["date"])}
+        except Exception:  # noqa: BLE001 — one unrenderable edition is not a
+            continue       # reason to withhold an older one that works
+    return None
+
+
+def _scheduled_failure_note(entry: Optional[Dict],
+                            last: Optional[Dict] = None) -> str:
     """NL-146 item 4 — the quiet note for a run nobody was awake to watch.
 
     A scheduled run fires from launchd in ANOTHER PROCESS, so when it fails
@@ -2682,9 +2897,37 @@ def _scheduled_failure_note(entry: Optional[Dict]) -> str:
         why += " and nothing was charged." if charged == 0.0 else "."
     else:
         why = "the run stopped before it could publish anything."
-    return ('<p class="empty-note" style="margin-top:1rem;">'
+    note = ('<p class="empty-note" style="margin-top:1rem;">'
             "This morning's scheduled edition didn't finish — " + _e(why)
             + "</p>")
+
+    # NL-153 — THE FAILURE-MORNING DOOR (his copy, verbatim).
+    #
+    # OFFERED, NEVER TAKEN. The note still says the absence first; this is a
+    # second affordance under it, not a redirect. Nothing auto-opens, nothing
+    # substitutes: the reader who wants today's absence to stand simply doesn't
+    # press it. That is the trust-quiet register — same `empty-note` prose, same
+    # `cta-quiet` button the empty state already uses, no alert role, no colour.
+    #
+    # NL-11'S LAW IS THE CONSTRAINT AND IT IS SATISFIED TWICE OVER: the date is
+    # named in the sentence ABOVE the button in both human and ISO form, so the
+    # offer is unambiguous before it is taken, and the destination fragment
+    # leads with `_human_date(row["date"])` as its view title, so the edition
+    # cannot be mistaken for today's after it opens either. An older edition is
+    # never dressed as current — it is labelled as what it is at both ends.
+    #
+    # ABSENT WHEN THERE IS NOTHING TO OFFER (v4 affordance-absence law): `last`
+    # is None on a first-week profile, and a button whose only outcome is an
+    # empty page is worse than no button.
+    if isinstance(last, dict) and last.get("date"):
+        note += (
+            '<p class="empty-note" style="margin-top:0.75rem;">'
+            f'The last edition NewsLens generated is from {_e(last.get("human") or "")}'
+            f' ({_e(last["date"])}).</p>'
+            f'<button class="cta-quiet" style="margin-top:0.5rem;"'
+            f' onclick="return openEdition(\'{_e(last["date"])}\', event)">'
+            'Read last generated edition</button>')
+    return note
 
 
 def _in_flight_elsewhere() -> Optional[Dict]:
@@ -2869,7 +3112,13 @@ def _render_today(con: sqlite3.Connection, row, entry: Optional[Dict],
         # run for this date was a SCHEDULED failure.
         has_archive = con.execute(
             "SELECT 1 FROM briefings LIMIT 1").fetchone() is not None
-        sched_note = _scheduled_failure_note(entry)
+        # NL-153: the last-edition lookup is done ONLY on the arm that can
+        # render the note (`has_archive` is already computed here, and it is
+        # exactly the precondition for there being anything to offer), so the
+        # ordinary morning pays nothing for it.
+        sched_note = _scheduled_failure_note(
+            entry, _last_generated_edition(con, mast_date) if has_archive
+            else None)
         # NL-103 row 18: both panels lose the pipeline enumeration ("it fetches
         # your sources, picks the stories, writes the briefing, and records the
         # episode") — a tour of machinery the reader did not ask for. What stays
@@ -4187,6 +4436,115 @@ def _render_run_log(recorded: Optional[Tuple[List[Dict], int]] = None) -> str:
     return "".join(out)
 
 
+def _render_schedule_rows() -> str:
+    """NL-152 — scheduled generation, settable from the settings tab.
+
+    TWO ROWS AND NOT ONE, because they are two different facts and the existing
+    `.settings-row` is a flex with room for exactly one control: whether the
+    schedule runs at all (the toggle) and what time it runs (the popup). Both
+    are the shipped idiom — the toggle is Dark mode's, the popup is the
+    add-topic/add-writer editor's — so this row pair introduces no CSS.
+
+    THE VALUE LINE IS THE HONEST ONE, and it is where the plist reality lands.
+    `installed` means the agent FILE is at the path launchd reads and nothing
+    more (schedule.status's own bound), so the copy never says "the schedule is
+    running". Where the file's baked hour disagrees with the chosen hour, the
+    row says which one actually fires — the agent — because that is the one
+    that will wake his machine tomorrow morning.
+    """
+    st = schedule.status()
+    hour = st["configured_hour"]
+    paused = bool(st["paused"])
+    plist_hour = st["plist_hour"]
+    checked = "false" if paused else "true"
+
+    # PAUSED IS TESTED FIRST because it is the fact the TOGGLE beside this line
+    # is displaying. A paused-and-not-installed schedule read "No agent
+    # installed yet" while the switch showed off — a value line describing a
+    # different fact than the control it sits next to, which is the settings
+    # screen's own version of two records of one morning.
+    if paused:
+        state = "Paused — scheduled runs decline before spending anything"
+        if not st["installed"]:
+            state += "; no agent installed either"
+    elif not st["installed"]:
+        # NOT AN ERROR AND NOT A NAG. He may simply not have installed the agent
+        # yet; the row states the standing condition and the settings still
+        # persist, so the value he picks is already correct when he does.
+        state = "No agent installed yet — nothing fires automatically"
+    elif isinstance(plist_hour, int) and isinstance(hour, int) \
+            and plist_hour != hour:
+        state = (f"Installed, but the agent still fires at "
+                 f"{plist_hour:02d}:00 — re-install to move it")
+    elif isinstance(plist_hour, int):
+        state = f"On — today’s edition is generated at {plist_hour:02d}:00 local"
+    else:
+        state = "Installed — the agent file’s hour could not be read"
+
+    # `configured_hour` IS ALWAYS AN INT — `config.generate_hour_resolved`
+    # returns the default on every arm it can reach, INCLUDING the typo'd-env
+    # arm, and `status()` passes it straight through. So there is no "not set"
+    # state for this row to render, and the hardcoded fallback that used to sit
+    # in the button's onclick was a SECOND SPELLING of
+    # `config.DEFAULT_GENERATE_HOUR_LOCAL` — the exact two-spellings hazard the
+    # resolver's own comment was written to close (QA F-11). The invariant is
+    # pinned BEHAVIOURALLY rather than defended by a dead branch here; a
+    # defensive re-spelling would only hide the day the resolver stopped
+    # honouring it.
+    # QA F-4 / gate R-A — THE ROW NAMES THE LAYER WHEN THIS SCREEN IS THE ONE
+    # THAT WON. Settings-beats-env was chosen for a measured reason (his .env
+    # line 39 already sets GENERATE_HOUR_LOCAL, so env-wins would have shipped a
+    # control that reported success and changed nothing). The cost of that
+    # choice is that the .env line goes inert, and before this the product said
+    # so only in the doctor and in a `schedule status` MISMATCH line that needs
+    # an installed agent to fire — nowhere on the screen he is actually looking
+    # at while he changes the hour. Named here, and only when both layers are
+    # really in play: a reader with no such variable gets no note about one.
+    hour_val = f"{hour:02d}:00 local"
+    if (st.get("hour_source") == config.HOUR_SOURCE_SETTINGS
+            and (os.environ.get("GENERATE_HOUR_LOCAL") or "").strip()):
+        hour_val += " — set here; GENERATE_HOUR_LOCAL in your .env no longer decides"
+    mismatch = isinstance(plist_hour, int) and plist_hour != hour
+    if mismatch:
+        hour_val += f" — the installed agent still fires at {plist_hour:02d}:00"
+
+    # QA F-13 — THE ROW MUST CARRY A PATH BACK TO THE TWO COMMANDS. The save
+    # popup hands them over at the moment of the save, but this mismatch state
+    # PERSISTS across reloads ("re-install to move it") — and once that popup
+    # was closed, the row was an instruction with no route to the thing it
+    # instructs him to run. The commands now ride the Change button he is
+    # already being pointed at, and the popup renders them in the same
+    # `popup-status` block, in the same words, the post-save arm uses.
+    # `schedule.reinstall_commands` stays the single source. No new component,
+    # no new CSS, and the data rides the element that carries the handler
+    # rather than a parked <span> (QA's M25 shape).
+    hour_attrs = ""
+    if mismatch:
+        hour_attrs = (f' data-plist-hour="{plist_hour:02d}"'
+                      ' data-reinstall='
+                      + _e_attr(json.dumps(schedule.reinstall_commands())))
+
+    return f"""
+<div class="settings-row">
+  <div class="settings-row-main">
+    <p class="settings-row-label">Scheduled generation</p>
+    <p class="settings-row-value">{_e(state)}</p>
+  </div>
+  <div class="toggle-switch" id="schedule-toggle" role="switch"
+       aria-checked="{checked}" tabindex="0" aria-label="Scheduled generation"
+       onclick="toggleSchedule(this)"
+       onkeydown="if(event.key===' '||event.key==='Enter'){{event.preventDefault();this.click();}}"></div>
+</div>
+<div class="settings-row">
+  <div class="settings-row-main">
+    <p class="settings-row-label">Generation time</p>
+    <p class="settings-row-value">{_e(hour_val)}</p>
+  </div>
+  <button class="settings-row-action"{hour_attrs}
+          onclick="openScheduleHour({hour}, this)">Change</button>
+</div>"""
+
+
 def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict],
                      recorded: Optional[Tuple[List[Dict], int]] = None) -> str:
     cfg = config.load_sources()
@@ -4229,6 +4587,7 @@ def _render_settings(con: sqlite3.Connection, row, entry: Optional[Dict],
   </div>
   <button class="settings-row-action" onclick="openRunLog(event)">{_e(labels.RUNLOG_OPEN)}</button>
 </div>
+{_render_schedule_rows()}
 <div class="settings-row">
   <div class="settings-row-main">
     <p class="settings-row-label">Account</p>
@@ -5456,6 +5815,8 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/note": self._api_note,
                 "/api/topic/add": self._api_topic_add,
                 "/api/topic/remove": self._api_topic_remove,
+                "/api/schedule/pause": self._api_schedule_pause,
+                "/api/schedule/hour": self._api_schedule_hour,
                 "/api/writer/add": self._api_writer_add,
                 "/api/writer/remove": self._api_writer_remove,
                 "/api/commission": self._api_commission,
@@ -6250,6 +6611,51 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": "name required"}, 400)
         ok, msg = topic_remove(name)
         self._send_json({"ok": ok, "detail" if ok else "error": msg})
+
+    def _api_schedule_pause(self, body: Dict) -> None:
+        """NL-152 — the settings toggle. ONE state: data/SCHEDULE_PAUSED.
+
+        The answer reports the state that NOW HOLDS, re-read from disk by
+        `set_paused`, never the state that was asked for. A toggle that reports
+        its own argument back is a switch that always looks like it worked —
+        including on a read-only data dir, where nothing moved."""
+        paused = not bool(body.get("enabled", True))
+        now_paused = schedule.set_paused(paused)
+        if now_paused != paused:
+            return self._send_json(
+                {"ok": False, "paused": now_paused,
+                 "error": "That didn’t save — the schedule is unchanged."}, 500)
+        self._send_json({"ok": True, "paused": now_paused})
+
+    def _api_schedule_hour(self, body: Dict) -> None:
+        """NL-152 — the generation hour, plus the plist truth.
+
+        THE RE-INSTALL DISCLOSURE RIDES ON THE SAVE RESPONSE and is computed
+        from `schedule.status()`, not assumed: the commands are worth showing
+        only when an agent file actually exists and its baked hour actually
+        disagrees with what he just chose. Telling a reader with no agent
+        installed to `launchctl bootout` a label that was never loaded is a
+        command that fails in his terminal for no reason."""
+        raw = body.get("hour")
+        try:
+            hour = int(raw)
+        except (TypeError, ValueError):
+            return self._send_json(
+                {"ok": False,
+                 "error": "Nothing was saved — pick a whole hour of the day."},
+                400)
+        ok, msg = settings_set_hour(hour)
+        if not ok:
+            return self._send_json({"ok": False, "error": msg}, 400)
+        st = schedule.status()
+        stale = (st["installed"] and isinstance(st["plist_hour"], int)
+                 and st["plist_hour"] != hour)
+        self._send_json({
+            "ok": True, "detail": msg, "hour": hour,
+            "needs_reinstall": bool(stale),
+            "plist_hour": st["plist_hour"] if stale else None,
+            "commands": schedule.reinstall_commands() if stale else [],
+        })
 
     def _api_writer_add(self, body: Dict) -> None:
         name = str(body.get("name") or "").strip()

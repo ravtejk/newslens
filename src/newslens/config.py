@@ -22,7 +22,7 @@ import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 from . import paths
 
@@ -149,7 +149,7 @@ _VALID_SOURCE_KEYS = {
 _VALID_TOP_LEVEL_KEYS = {"sources", "interests", "settings"}
 _VALID_INTEREST_KEYS = {"broad", "granular"}
 _VALID_SETTINGS_KEYS = {"threads_steer_selection", "tts_engine",
-                        "gap_report_second_pass"}
+                        "gap_report_second_pass", "generate_hour"}
 
 # Source tiers (milestone 2, principal's source list):
 #   full           — usable RSS content (title + summary/excerpt)
@@ -226,6 +226,19 @@ class SourcesConfig:
     # position — the gap_report is the hook a sanctioned-retrieval leg would
     # later consume, not a retrieval leg itself.
     gap_report_second_pass: bool = False
+    # NL-152: the local hour (0-23) a SCHEDULED run fires at, as HE set it
+    # through the settings tab. None means "he has never set it here" — NOT
+    # "midnight" — which is why it is Optional and not an int with a default:
+    # the absent key must fall through to the env layer, and a 0 default would
+    # be indistinguishable from him choosing 00:00.
+    #
+    # WHY THIS FILE AND NOT A NEW ONE. `settings:` is already the block every
+    # principal-facing switch lives in (threads_steer_selection, tts_engine,
+    # gap_report_second_pass), it is already the file the shipped topic editor
+    # writes at his tap (server._yaml_edit, the 08-12 precedent), and a new
+    # env var is a checkpoint act this batch is forbidden. One storage class,
+    # one writer discipline, no new door.
+    generate_hour: Optional[int] = None
 
     @property
     def fetchable_sources(self) -> List[Source]:
@@ -449,6 +462,20 @@ def load_sources(path: Optional[Union[str, Path]] = None) -> SourcesConfig:
                     "settings.gap_report_second_pass must be true or false")
             else:
                 cfg.gap_report_second_pass = grsp
+            # NL-152. ABSENT is the common case and is not a problem: it means
+            # the env layer decides. PRESENT-BUT-WRONG is loud, exactly like
+            # every other key here — and `isinstance(x, bool)` is excluded on
+            # purpose, because YAML parses `true` as a bool and `bool` is a
+            # subclass of `int`, so `generate_hour: true` would otherwise land
+            # as hour 1 instead of being refused.
+            if "generate_hour" in raw_settings:
+                gh = raw_settings.get("generate_hour")
+                if isinstance(gh, bool) or not isinstance(gh, int) \
+                        or not 0 <= gh <= 23:
+                    cfg.problems.append(
+                        "settings.generate_hour must be a whole hour 0-23")
+                else:
+                    cfg.generate_hour = gh
 
     raw_interests = raw.get("interests")
     if raw_interests is not None:
@@ -525,3 +552,57 @@ def generate_hour_local(env: Optional[dict] = None) -> int:
             f"GENERATE_HOUR_LOCAL must be an integer hour 0-23, got {raw!r}"
         )
     return value
+
+
+# NL-152 — WHERE THE HOUR COMES FROM, resolved in exactly one place.
+#
+# `generate_hour_local` above is the ENV LAYER and nothing more. It is not "the
+# hour", and every caller that wants the hour the schedule actually runs on
+# calls the resolver below instead. Two spellings of "the hour" is precisely how
+# a scheduler and a settings screen end up disagreeing about when the morning
+# starts (the same reason `run_scheduled` routes its date through
+# `ranking.local_today` rather than re-deriving strftime beside it).
+HOUR_SOURCE_SETTINGS = "settings"
+HOUR_SOURCE_ENV = "env"
+HOUR_SOURCE_DEFAULT = "default"
+
+
+def generate_hour_resolved(env: Optional[dict] = None,
+                           cfg: Optional["SourcesConfig"] = None
+                           ) -> Tuple[int, str]:
+    """(hour, source) — the local hour a scheduled run is configured to fire at.
+
+    SETTINGS BEATS ENV, and the ordering is a measured decision rather than a
+    taste: his own `.env` line 39 already sets `GENERATE_HOUR_LOCAL`, so an
+    env-wins layering would have shipped a settings control that silently did
+    nothing on the one machine it was built for. A control whose value is
+    ignored is worse than no control, because it reports success.
+
+    The env var keeps its whole meaning for anyone who never touches the
+    settings tab, and the disagreement is never silent: `schedule.status` and
+    the doctor both name which layer won (`hour_source`) whenever both are set.
+
+    RAISES nothing. An invalid `GENERATE_HOUR_LOCAL` still raises out of the env
+    layer when that layer is consulted — but a settings value SHORT-CIRCUITS it,
+    because a typo in a file he is not editing must not brick a schedule he set
+    through the UI. Callers that must report the env error keep calling
+    `generate_hour_local` directly (the doctor does).
+    """
+    if cfg is None:
+        try:
+            cfg = load_sources()
+        except Exception:      # noqa: BLE001 — an unreadable sources.yaml is
+            cfg = None         # the env layer's cue, never a crash here
+    hour = getattr(cfg, "generate_hour", None)
+    if isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23:
+        return hour, HOUR_SOURCE_SETTINGS
+    src = env if env is not None else os.environ
+    if (src.get("GENERATE_HOUR_LOCAL") or "").strip():
+        try:
+            return generate_hour_local(env), HOUR_SOURCE_ENV
+        except ValueError:
+            # A typo'd env var is a REPORTED unknown here, not a crash: the
+            # doctor already FAILs that line by name, and the schedule surfaces
+            # need an hour to render honestly beside it.
+            return DEFAULT_GENERATE_HOUR_LOCAL, HOUR_SOURCE_DEFAULT
+    return DEFAULT_GENERATE_HOUR_LOCAL, HOUR_SOURCE_DEFAULT

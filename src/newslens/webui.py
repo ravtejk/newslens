@@ -891,6 +891,27 @@ POPUPS = """
     </div>
   </div>
 </div>
+<!-- NL-152: the generation-hour editor. Same popup idiom as add-topic /
+     add-writer (scrim + card + label + text input + popup-actions + a
+     popup-status that carries both the refusal and the receipt) — no new CSS
+     and no new component. The input is type="text" and not type="number"
+     because type="text" is the ONE input the design system has a token for
+     (.popup-card input[type="text"]); the hour is validated on BOTH sides
+     regardless, so the wider keyboard costs nothing. -->
+<div class="popup-scrim" id="popup-schedule-hour" role="dialog" aria-modal="true" aria-labelledby="popup-schedule-hour-title">
+  <div class="popup-card">
+    <h3 id="popup-schedule-hour-title">Generation time</h3>
+    <label for="schedule-hour-input">Hour of the day (0–23, your local time)</label>
+    <input type="text" id="schedule-hour-input" inputmode="numeric" placeholder="6">
+    <p class="popup-note">Today’s edition is generated at this hour, so it is
+       ready before you open the app.</p>
+    <p class="popup-status" id="schedule-hour-status" aria-live="polite"></p>
+    <div class="popup-actions">
+      <button class="cta-outline" onclick="closePopup('popup-schedule-hour')">Cancel</button>
+      <button class="cta-quiet" onclick="saveScheduleHour()">Save</button>
+    </div>
+  </div>
+</div>
 <div class="popup-scrim" id="popup-delete-confirm" role="dialog" aria-modal="true" aria-labelledby="popup-delete-title">
   <div class="popup-card">
     <h3 id="popup-delete-title">Delete “<span id="delete-topic-name"></span>”?</h3>
@@ -1870,6 +1891,85 @@ function closeRunLog(e) {
   if (back) back.classList.add('active');
   window.scrollTo(0, 0);
   return false;
+}
+/* NL-152 — scheduled generation, from the settings tab.
+
+   THE TOGGLE IS THE KILL SWITCH'S FACE, not a second state: it POSTs to a door
+   that touches/removes data/SCHEDULE_PAUSED, and it renders the state the
+   SERVER reports back rather than the one it optimistically flipped. That is
+   the difference between a switch and a picture of a switch — on a read-only
+   data dir the server answers ok:false and the toggle snaps back to the truth
+   instead of showing "on" over a schedule that is still paused.
+
+   Deliberately NOT toggleDark's shape (localStorage, no server): dark mode is a
+   browser preference and this is machine state a 6am launchd fire reads. */
+function toggleSchedule(el) {
+  var wasOn = el.getAttribute('aria-checked') === 'true';
+  el.setAttribute('aria-checked', String(!wasOn));
+  api('/api/schedule/pause', {enabled: !wasOn}, function (d) {
+    if (d && d.ok) { reloadPreservingView(); return; }
+    /* Put it back where the machine says it is. */
+    el.setAttribute('aria-checked', String(wasOn));
+    alert((d && d.error) || 'That didn\\u2019t save \\u2014 the schedule is unchanged.');
+  });
+}
+/* ONE SPELLING OF THE RE-INSTALL SENTENCE (QA F-13). Two surfaces reach it now
+   — the save that creates the disagreement, and the row that keeps reporting it
+   afterwards — and two copies of an instruction is how one of them goes stale.
+   The commands themselves are never composed here: they come from
+   schedule.reinstall_commands() on the server, which is the single source. */
+function showReinstall(s, lead, plistHour, commands) {
+  s.textContent = lead + 'The installed agent still fires at '
+    + String(plistHour) + ':00 \\u2014 run these two commands to move it:\\n\\n'
+    + (commands || []).join('\\n');
+  s.style.whiteSpace = 'pre-wrap';
+  s.classList.remove('err');
+  s.classList.add('showing', 'found');
+}
+/* `el` is the button that was tapped. When the installed agent disagrees with
+   the chosen hour, that button CARRIES the two commands (data-reinstall), so
+   opening the editor from the row shows him the way out of the disagreement the
+   row is reporting — not only the save that first created it (QA F-13). */
+function openScheduleHour(hour, el) {
+  var i = document.getElementById('schedule-hour-input');
+  i.value = String(hour);
+  var s = document.getElementById('schedule-hour-status');
+  s.classList.remove('showing', 'found', 'err');
+  s.textContent = '';
+  s.style.whiteSpace = '';
+  var raw = el && el.getAttribute && el.getAttribute('data-reinstall');
+  if (raw) {
+    try {
+      showReinstall(s, '', el.getAttribute('data-plist-hour'), JSON.parse(raw));
+    } catch (e) {}
+  }
+  openPopup('popup-schedule-hour');
+}
+function saveScheduleHour() {
+  var raw = document.getElementById('schedule-hour-input').value.trim();
+  var s = document.getElementById('schedule-hour-status');
+  api('/api/schedule/hour', {hour: raw}, function (d) {
+    if (!d || !d.ok) {
+      s.textContent = (d && d.error)
+        || 'Nothing was saved \\u2014 pick a whole hour of the day.';
+      s.classList.remove('found');
+      s.classList.add('showing', 'err');
+      return;
+    }
+    /* THE PLIST REALITY, told at the moment it becomes true (NL-152).
+       The launchd agent BAKES the hour, and the fired command never consults
+       config \\u2014 so a saved setting alone does not move tomorrow's run. The
+       popup stays open carrying the two commands rather than closing on a
+       success that would have been a half-truth. Where no agent is installed,
+       or its hour already agrees, there is nothing to re-install and the popup
+       simply closes. */
+    if (d.needs_reinstall) {
+      showReinstall(s, 'Saved. ', d.plist_hour, d.commands);
+      return;
+    }
+    closePopup('popup-schedule-hour');
+    reloadPreservingView();
+  });
 }
 function toggleDark(el) {
   var on = el.getAttribute('aria-checked') === 'true';

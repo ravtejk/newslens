@@ -137,7 +137,10 @@ subscription lane would not, so it stays opt-in.
 - `GENERATE_HOUR_LOCAL` — the local hour (0–23) a **scheduled** run fires at;
   default `6`. Dormant from your 2026-07-03 on-demand-only call until NL-146
   brought scheduling back. It only matters once you install the launchd agent
-  (§5); on-demand `generate` ignores it.
+  (§5); on-demand `generate` ignores it. **Since NL-152 this is the fallback,
+  not the last word:** setting the hour in Settings › Generation time writes
+  `settings.generate_hour` in `sources.yaml` and that value wins. The doctor
+  says which layer decided whenever the two disagree.
 - `GNEWS_API_KEY` — **leave blank.** Deliberately ungranted fallback; only
   becomes relevant if the Sonar reliability spike fails, and that would come
   back to you as a checkpoint first.
@@ -202,6 +205,24 @@ What a new profile gets, and what it deliberately does not:
 - **The same safety guard.** A profile's state is real state: refused to an
   unsanctioned process exactly like yours, never a sandbox redirection.
 
+### The generation log rotates (NL-152 batch)
+
+`data/generation_log.jsonl` is the append-only record of every run, every
+analysis stage and every scheduled fire. It grows by roughly **26 KB per
+generate** (measured on your own file: 700 KB across 51 lines, run entries
+averaging 24 KB), and it is read on every page build — so it rotates.
+
+- When the live file passes **4 MB**, the oldest lines move into
+  `generation_log.archive-0001.jsonl` (then `-0002`, and so on) beside it, and
+  the newest **60 runs** stay live. The reports screen shows 30, so it is always
+  whole.
+- **Rotation moves bytes; it never deletes them.** Archive segments accumulate
+  and are never rewritten. Deleting old segments is your call, not the app's —
+  nothing here will ever do it for you.
+- Nothing you read gets shorter. `newslens diagnose` totals every segment, the
+  per-profile spend ledger spans them, the settings row still counts every run
+  ever recorded, and opening an archived edition still finds its entry.
+
 `NEWSLENS_PROFILE=tester1` does the same thing as `--profile` for a shell or a
 launchd job; the flag wins when both are set. An unknown or malformed name is
 **refused, never created** — so a typo cannot quietly mint an empty world and
@@ -254,10 +275,16 @@ newslens schedule status
 paths filled in. `newslens schedule plist` prints the agent and nothing else, so
 the redirect above is safe.
 
-**The hour** comes from `GENERATE_HOUR_LOCAL` in your `.env` (default `6`, i.e.
-06:00 local). It was dormant until this milestone; it is now the hour baked into
-the agent. Changing it does **not** change an already-installed agent — re-render
-and re-bootstrap:
+**The hour** is set in **Settings › Generation time** (NL-152), which writes
+`settings.generate_hour` into `sources.yaml`. If you have not set it there, it
+falls back to `GENERATE_HOUR_LOCAL` in your `.env`, then to `6` (06:00 local).
+Whichever layer wins is the hour baked into the agent.
+
+Changing the hour — in Settings or in `.env` — does **not** change an
+already-installed agent. The plist bakes the hour, and the fired command never
+re-reads it, so the agent keeps firing at its old time until you re-render and
+re-bootstrap. Settings tells you this at the moment you save, and both
+`newslens schedule status` and the doctor keep saying it until you do:
 
 ```bash
 launchctl bootout gui/$UID/com.newslens.generate
@@ -265,9 +292,14 @@ newslens schedule plist > ~/Library/LaunchAgents/com.newslens.generate.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.newslens.generate.plist
 ```
 
-`scripts/doctor` warns if the installed agent's hour and your `.env` disagree.
+`scripts/doctor` warns if the installed agent's hour and the resolved hour
+disagree, and names which layer set the one it is comparing against.
 
 ### Pause without uninstalling — the kill switch
+
+**Settings › Scheduled generation** is the switch for this — the toggle flips
+exactly the file below, so the screen, the doctor and a 6am fire are always
+reading one state. The shell form is unchanged and still works:
 
 ```bash
 touch data/SCHEDULE_PAUSED    # scheduled runs decline before spending anything

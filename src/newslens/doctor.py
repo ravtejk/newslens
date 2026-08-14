@@ -572,14 +572,32 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
     # BUG-1 was the doctor's drifted copy of these rules); only the sentence
     # moved, because a doctor still calling this dormant would be describing the
     # machine as it was two milestones ago.
+    # WHICH LAYER ACTUALLY DECIDES IS RESOLVED FIRST, because the two sentences
+    # below are about the ENV LAYER and only one of the layers is the outcome
+    # (QA F-3, 2026-08-14). NL-152 added the settings line underneath these and
+    # left them phrased as outcomes — so on his live machine (.env line 39 sets
+    # the var, Settings holds an hour) the doctor printed BOTH "GENERATE_
+    # HOUR_LOCAL = 6 … the hour a newly-rendered launchd agent will fire at" AND
+    # "Settings … wins over GENERATE_HOUR_LOCAL", both PASS. Two contradictory
+    # facts about one hour, on the surface whose entire job is telling him what
+    # is true. The env sentences now describe the VARIABLE when they are not the
+    # outcome, and describe the outcome only when they are it.
+    resolved, source = config.generate_hour_resolved(env)
+    env_decides = source == config.HOUR_SOURCE_ENV
+    default_decides = source == config.HOUR_SOURCE_DEFAULT
     if not (env.get("GENERATE_HOUR_LOCAL") or "").strip():
         out.append(
             Result(
                 INFO,
-                f"GENERATE_HOUR_LOCAL not set — fine: the default "
-                f"{config.DEFAULT_GENERATE_HOUR_LOCAL} "
-                f"({config.DEFAULT_GENERATE_HOUR_LOCAL:02d}:00 local) is the "
-                "hour `newslens schedule plist` writes into the launchd agent",
+                (f"GENERATE_HOUR_LOCAL not set — fine: the default "
+                 f"{config.DEFAULT_GENERATE_HOUR_LOCAL} "
+                 f"({config.DEFAULT_GENERATE_HOUR_LOCAL:02d}:00 local) is the "
+                 "hour `newslens schedule plist` writes into the launchd agent")
+                if default_decides else
+                (f"GENERATE_HOUR_LOCAL not set — fine: your Settings hour "
+                 f"({resolved:02d}:00 local) is the one `newslens schedule "
+                 "plist` bakes into the launchd agent, so the variable is not "
+                 "needed"),
             )
         )
     else:
@@ -588,12 +606,32 @@ def check_optional_and_guards(env: Dict[str, str]) -> List[Result]:
             out.append(
                 Result(
                     PASS,
-                    f"GENERATE_HOUR_LOCAL = {hour} ({hour:02d}:00 local) — the "
-                    "hour a newly-rendered launchd agent will fire at",
+                    (f"GENERATE_HOUR_LOCAL = {hour} ({hour:02d}:00 local) — the "
+                     "hour a newly-rendered launchd agent will fire at")
+                    if env_decides else
+                    (f"GENERATE_HOUR_LOCAL = {hour} ({hour:02d}:00 local) in "
+                     "your .env — the env layer only; your Settings hour "
+                     f"({resolved:02d}:00 local) overrides it, see below"),
                 )
             )
         except ValueError as exc:
             out.append(Result(FAIL, f"{exc} — fix it in .env"))
+
+    # NL-152 — WHICH LAYER ACTUALLY DECIDES, said out loud whenever the settings
+    # tab has an opinion. The env lines above describe `.env` and only `.env`;
+    # since the settings value BEATS them (config.generate_hour_resolved), a
+    # reader who stopped at those lines would walk away with the wrong hour. One
+    # extra line, emitted only when the override is live, so the common case
+    # gains no noise.
+    if source == config.HOUR_SOURCE_SETTINGS:
+        out.append(
+            Result(
+                PASS,
+                f"scheduled generation is set to {resolved:02d}:00 local in "
+                f"Settings — that value wins over GENERATE_HOUR_LOCAL, and it "
+                f"is the hour `newslens schedule plist` bakes in",
+            )
+        )
 
     return out
 

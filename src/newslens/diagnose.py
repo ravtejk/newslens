@@ -62,23 +62,43 @@ _BUCKETS: List[Tuple[str, str]] = [
 
 
 def _load_entries() -> Tuple[List[Dict], int]:
-    """(parsed entries, malformed-line count)."""
-    log = paths.DATA_DIR / "generation_log.jsonl"
-    if not log.exists():
-        return [], 0
+    """(parsed entries, malformed-line count).
+
+    NL-154 — READS EVERY SEGMENT, oldest archive through live. This is the
+    diagnostic that totals lifetime cost and counts every run ever recorded, so
+    it is exactly the reader that must not stop at the live file: a live-only
+    total would quietly reset his spend history the first morning after the log
+    rotated, and a diagnostic that under-reports is worse than one that is slow.
+
+    The segments are disjoint by construction (see generate.log_segments), so
+    this concatenation IS the record — no dedup, nothing counted twice.
+
+    `errors="replace"` is new here and matches the page-path readers' torn-append
+    discipline (NL-149 QA F-1): a partial multibyte tail costs the torn line,
+    which then dies at json.loads and is COUNTED in `bad`, instead of raising a
+    UnicodeDecodeError out of the whole diagnostic."""
+    from . import generate
+
     entries, bad = [], 0
-    for line in log.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
+    for log in generate.log_segments():
         try:
-            e = json.loads(line)
-        except ValueError:
-            bad += 1
+            if not log.exists():
+                continue
+            text = log.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
             continue
-        if isinstance(e, dict):
-            entries.append(e)
-        else:
-            bad += 1
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                bad += 1
+                continue
+            if isinstance(e, dict):
+                entries.append(e)
+            else:
+                bad += 1
     return entries, bad
 
 

@@ -310,29 +310,59 @@ def totals(entries: List[Dict]) -> Tuple[float, float]:
 def read_ledger(slug: str, anchor: Optional[Path] = None) -> Ledger:
     """Read-only. A malformed line is COUNTED, never swallowed: a spend record
     we could not parse is information, not noise (diagnose._load_entries'
-    discipline)."""
-    path = paths.profile_layout(slug, anchor)["DATA_DIR"] / LEDGER_NAME
-    if not path.exists():
+    discipline).
+
+    NL-154 — SPANS THE ARCHIVES, because this is a SPEND record. Money that
+    rotated out of the live segment was still spent, and a live-only total would
+    have under-reported this profile's lifetime charge the first morning after a
+    cut. `path` still names the LIVE file: it is what the printout shows as
+    "this profile's own ledger", it is where the next append lands, and it is
+    the file whose absence means nothing was ever generated here.
+
+    THE SESSION DELTA IS UNAFFECTED BY A MID-SESSION ROTATION, and that is a
+    property rather than luck: the segment concatenation is rotation-invariant
+    (generate.log_segments), so `after.entries[:before.count] == before.entries`
+    still holds across a cut and `session_lines` reports a clean append instead
+    of falling back to its changed-shape arm."""
+    data_dir = paths.profile_layout(slug, anchor)["DATA_DIR"]
+    path = data_dir / LEDGER_NAME
+    from . import generate
+
+    segments = [p for p in generate.log_segments(data_dir) if p.exists()]
+    if not segments:
         return Ledger(path=path, exists=False, entries=[], malformed=0)
     entries, bad = [], 0
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        # Unreadable is a fact about the ledger, not a reason to crash the
-        # door on its way out; malformed=-1 makes it visible in the printout.
-        return Ledger(path=path, exists=True, entries=[], malformed=-1)
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
+    for seg in segments:
         try:
-            parsed = json.loads(line)
-        except ValueError:
-            bad += 1
-            continue
-        if isinstance(parsed, dict):
-            entries.append(parsed)
-        else:
-            bad += 1
+            raw = seg.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            # Unreadable is a fact about the ledger, not a reason to crash the
+            # door on its way out; malformed=-1 makes it visible in the printout.
+            #
+            # `errors="replace"` AND the ValueError arm are the torn-append
+            # discipline every other reader of this file already carries
+            # (NL-149 QA F-1; diagnose._load_entries above). UnicodeDecodeError
+            # subclasses ValueError, NOT OSError, so a bare `except OSError`
+            # never saw a partial multibyte tail — and this reader runs on the
+            # way INTO the reader server and again inside the `finally` that
+            # prints the session delta, so the crash took both doors. NL-154
+            # widened the exposure from one file to every segment in the
+            # profile's history; QA F-1 (2026-08-14) measured it. A replaced
+            # byte costs the torn LINE, which then dies at json.loads and is
+            # COUNTED in `bad` — visible, never swallowed.
+            return Ledger(path=path, exists=True, entries=[], malformed=-1)
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                bad += 1
+                continue
+            if isinstance(parsed, dict):
+                entries.append(parsed)
+            else:
+                bad += 1
     return Ledger(path=path, exists=True, entries=entries, malformed=bad)
 
 

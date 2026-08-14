@@ -168,6 +168,38 @@ def anchor_dir() -> Path:
     return PROJECT_ROOT
 
 
+def home_dir() -> Path:
+    """The HOME whose `~/Library` machine-level agents live under — the real one
+    normally, the SANDBOX ROOT when NEWSLENS_DATA_DIR redirects.
+
+    WHY THIS EXISTS (QA F-14, 2026-08-14): `schedule.plist_path()` resolved
+    `Path.home()` directly, so every in-suite caller that did not pass an
+    explicit `home` — `schedule.status()`, and through it
+    `server._render_schedule_rows()` and the doctor's schedule check — was
+    stat-ing the FOUNDER'S REAL `~/Library/LaunchAgents` from inside the test
+    run. Read-only, so nothing of his was ever at risk; but it makes a test's
+    verdict depend on whether he happens to have the agent installed, which is
+    the recurrence shape of the v7-M1 pinhole class (a probe that escapes the
+    sandbox through a location the seam did not cover).
+
+    NO NEW ENV VAR, deliberately. This rides the DATA_DIR redirection exactly
+    the way DB_PATH does on the guarded arm below — "one variable sandboxes
+    both" — so the seam family stays ONE door: a process that redirected its
+    data dir has declared itself sandboxed, and a sandboxed process's `~` is
+    the sandbox. Nothing in this codebase ever WRITES here (the org never
+    installs the launchd agent; his hands do), so this is a read-location seam.
+
+    Not on the `_GUARDED`/`__getattr__` arm, for the same reason `anchor_dir` is
+    not: those five names are the STATE the guard refuses to hand an
+    unsanctioned process. This is a lookup, and refusing it would break the
+    doctor's honest "no agent file at ..." line on the one machine that matters.
+    """
+    override = os.environ.get(_ENV_OVERRIDE["DATA_DIR"])
+    if override:
+        return Path(override).parent
+    return Path.home()
+
+
 def profiles_dir(anchor: Optional[Path] = None) -> Path:
     """Where non-default profiles live. Never created as a side effect of
     asking (the db.py read-only discipline)."""
