@@ -23,7 +23,19 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from conftest import anthropic_envelope, rank_keys
-from newslens import config, llm as llm_mod, memory, paths, ranking
+from newslens import config, generate, llm as llm_mod, memory, paths, ranking
+
+
+def publish(con, date=None):
+    """NL-108: memory's clocks and revivals move at the PROMOTE, not at rank.
+
+    Tests whose subject is "the effect is recorded" now have to publish to see
+    it — that is the whole point of the change, and the timing itself is pinned
+    by tests/test_nl108_memory_on_publish.py."""
+    applied = generate.persist_generation(
+        con, date or DATE, "Body.", "Script.", [])
+    memory.refresh_file_after_publish(con, applied)
+    return applied
 
 NOW = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
 DATE = "2026-07-04"
@@ -334,6 +346,13 @@ def test_revival_end_to_end_all_products(migrated_con, memfile, llm):
     report = ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),
                               env={"OPENAI_API_KEY": "sk-x"})
 
+    # NL-108: the rank DETECTS the revival; the promote APPLIES it. Until the
+    # edition publishes the thread is exactly as dormant as it was.
+    assert migrated_con.execute(
+        "SELECT status FROM memory WHERE topic = 'Helium Shortage'"
+    ).fetchone()["status"] == "dormant"
+    publish(migrated_con)
+
     # DB: dormant -> active, referenced to THIS briefing.
     row = migrated_con.execute(
         "SELECT status, last_referenced_briefing_id FROM memory"
@@ -363,13 +382,17 @@ def test_revival_end_to_end_all_products(migrated_con, memfile, llm):
         )
     ]
     ok = [m for m in metas if m["status"] == "ok"]
-    assert ok and ok[0]["revivals"] == [
+    # NL-108: the rank row records what it WOULD revive — it cannot claim the
+    # transition, because a run that dies before the promote never makes one.
+    assert ok and ok[0]["revivals_pending"] == [
         {"topic": "Helium Shortage", "last_covered": "2026-07-01"}
     ]
 
-    # Dated, visible run warning.
+    # Dated, visible run warning — future tense at rank (the past-tense
+    # confirmation is emitted by run_generate once the edition is published;
+    # see test_nl108_memory_on_publish.py).
     assert any(
-        "auto-revived by slot-earning stories" in w
+        "will auto-revive when this edition publishes" in w
         and "Helium Shortage (last covered 2026-07-01)" in w
         for w in report.warnings
     )
@@ -427,11 +450,17 @@ def test_thread_reference_recording_e2e(migrated_con, memfile, llm):
     briefing_id = migrated_con.execute(
         "SELECT id FROM briefings WHERE date = ?", (DATE,)
     ).fetchone()["id"]
-    ref = migrated_con.execute(
-        "SELECT last_referenced_briefing_id FROM memory WHERE topic = 'Iran War'"
-    ).fetchone()["last_referenced_briefing_id"]
-    assert ref == briefing_id
-    # File annotation reflects it immediately.
+
+    def ref_now():
+        return migrated_con.execute(
+            "SELECT last_referenced_briefing_id FROM memory"
+            " WHERE topic = 'Iran War'").fetchone()[0]
+
+    # NL-108: recognition is recorded by the EDITION, so nothing has moved yet.
+    assert ref_now() != briefing_id
+    publish(migrated_con)
+    assert ref_now() == briefing_id
+    # File annotation reflects it as soon as the edition is on the record.
     assert "(last referenced: 2026-07-04)" in memfile.read_text(encoding="utf-8")
 
 
@@ -541,7 +570,16 @@ def test_gatefix3_untouched_file_gets_the_refresh_with_no_warning(
     report = ranking.run_rank(date=DATE, con=migrated_con, cfg=rank_cfg(),
                               env={"OPENAI_API_KEY": "sk-x"})
     assert not any("in flight" in w for w in report.warnings)
-    assert "(last referenced: 2026-07-04)" in memfile.read_text(encoding="utf-8")
+    # NL-108 re-aim: the reference annotation is no longer written at rank (it
+    # lands at the promote — see test_nl108_memory_on_publish.py), so the
+    # refresh is evidenced by the generation counter instead. The opening sync
+    # bumps it once, the post-run refresh again, and the file on disk carries
+    # the later stamp — which is exactly what "the refresh happened, and it was
+    # not skipped" means.
+    text = memfile.read_text(encoding="utf-8")
+    gen = memory.sync_state(migrated_con)["generation"]
+    assert gen >= 2
+    assert memory.parse_stamp(text)["generation"] == gen
 
 
 def test_gatefix4_hostile_bracketed_title_cannot_mint_id_tokens():

@@ -2300,10 +2300,14 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
     overwrite happens atomically with the new body in persist_generation. The
     bodyless and no-row arms are unchanged.
 
-    Lifecycle v2: applies earned-slot auto-revival here — POST-selection by
+    Lifecycle v2: DETECTS earned-slot auto-revival here — POST-selection by
     construction (only slots that already won on merits reach this function),
     which is the hard constraint's guarantee that dormant threads never boost
-    their own revival. Returns the revived list [{topic, last_covered}]."""
+    their own revival. NL-108: detection is all that happens at rank. The
+    memory table is not written by this function at all; the transition is
+    applied by generate.persist_generation when the edition publishes. Returns
+    the PENDING revival list [{topic, last_covered}] — what will be revived on
+    publish, computed against memory as of rank."""
     # Revival PREVIEW before serialization: capture each matched dormant
     # thread's previous coverage date so the slot JSON carries the
     # back-reference ("last covered <date>") for M5's narrative.
@@ -2412,7 +2416,6 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
                     "`newslens migrate`, then rank again. Your saved edition "
                     f"was left exactly as it was ({exc})"
                 ) from exc
-            briefing_id = existing["id"]
         elif existing is not None:
             # A row with NO body: nothing readable to protect (a failed FIRST
             # run, or a rank that never got published). Byte-for-byte the
@@ -2439,29 +2442,44 @@ def persist(con: sqlite3.Connection, report: RankReport, meta: Dict) -> List[Dic
                 " script_text = NULL, audio_file_path = NULL WHERE id = ?",
                 (story_slots, corroboration, token_cost, now, existing["id"]),
             )
-            briefing_id = existing["id"]
         else:
-            cur = con.execute(
+            con.execute(
                 "INSERT INTO briefings (date, story_slots, corroboration_labels,"
                 " token_cost, generated_at) VALUES (?, ?, ?, ?, ?)",
                 (report.date, story_slots, corroboration, token_cost, now),
             )
-            briefing_id = cur.lastrowid
-        # Continuity's spine: matched threads record which briefing referenced
-        # them (drives the dormancy clock + most-recently-referenced cap).
-        matched_threads = [t for s in report.slots for t in s.matched_memory]
-        if matched_threads:
-            memory.update_references(con, briefing_id, matched_threads)
-        # Earned-slot auto-revival (dormant -> active, dated; never touches
-        # dismissed_user — memory.revive_matched filters on status='dormant').
-        dormant_matched = [t for s in report.slots for t in s.matched_dormant]
-        revived = (
-            memory.revive_matched(con, briefing_id, dormant_matched)
-            if dormant_matched
-            else []
-        )
+        # NL-108: THE MEMORY SIDE-EFFECTS DO NOT FIRE HERE ANY MORE.
+        #
+        # Continuity's spine (update_references -> the dormancy clock and the
+        # most-recently-referenced cap) and earned-slot auto-revival
+        # (revive_matched, dormant -> active) used to run at RANK time, in this
+        # transaction. That advanced both clocks for editions that never
+        # published: this function commits at the rank stage, and analysis,
+        # narrative, script, audio and budget all come AFTER it. A run that died
+        # downstream — or every losing attempt of the NL-146 retry ladder — left
+        # threads looking fresher than the reader's record supported.
+        #
+        # They now fire at generate.persist_generation, inside the promote's own
+        # transaction, keyed off the slots that edition actually installs. This
+        # is the SAME trigger discipline the moat's delta ledger already runs on
+        # (M1 gate F, generate.py: "a delta is written ONLY once its edition is
+        # published"); memory's clocks were the last sidecar still writing on
+        # rank rather than on publication.
+        #
+        # `revived_preview` above stays here and stays READ-ONLY: the slot JSON
+        # needs each thread's prior coverage date ("last covered <date>") before
+        # serialization, and reading it cannot move anything. It is also what
+        # makes the deferral honest — the narrative's back-reference is computed
+        # against the state as of rank, and the promote applies the transition
+        # the preview described.
+        revived = list(revived_preview.values())
         if revived:
-            meta["revivals"] = revived
+            # The rank's SELECTION record — what this attempt would revive on
+            # publish, not what it revived. The transition itself is recorded by
+            # the published edition (slot JSON revived_threads); a rank attempt
+            # that never publishes now leaves the memory table untouched, and
+            # this row is the only trace it was ever considered.
+            meta["revivals_pending"] = revived
         con.execute(
             "INSERT INTO ranking_runs (date, meta, token_usage) VALUES (?, ?, ?)",
             (
@@ -2913,14 +2931,20 @@ def _run_rank_body(
     revived = persist(con, report, meta)
     if revived:
         # Every automatic transition is surfaced, dated, never silent
-        # (lifecycle v2 contract).
+        # (lifecycle v2 contract) — and NL-108 makes the surfacing honest about
+        # WHEN. At this point nothing has been revived: the transition applies
+        # at the promote, so a run that dies between here and there leaves these
+        # threads dormant, exactly as it found them. Announcing "auto-revived"
+        # in the past tense here is what the 2026-08-10 case did, and that
+        # morning's revival was announced to a run that never published.
         names = ", ".join(
             r["topic"] + (f" (last covered {r['last_covered']})" if r["last_covered"] else "")
             for r in revived
         )
         report.warnings.append(
-            f"memory: {len(revived)} dormant thread(s) auto-revived by "
-            f"slot-earning stories: {names} — see memory.md"
+            f"memory: {len(revived)} dormant thread(s) earned their slots and "
+            f"will auto-revive when this edition publishes: {names} — memory.md "
+            "changes at publication, not now"
         )
     # memory.md must reflect THIS run's own effects (revivals, new reference
     # dates) immediately — not on the next run's sync. Render-only, and

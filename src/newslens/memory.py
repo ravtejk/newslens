@@ -1807,3 +1807,83 @@ def write_memory_file(con: sqlite3.Connection) -> Optional[int]:
     gen = bump_generation(con)
     paths.MEMORY_FILE.write_text(render_file(con), encoding="utf-8")
     return gen
+
+
+def refresh_file_after_publish(
+    con: sqlite3.Connection, revived: Optional[List[Dict]] = None
+) -> Optional[str]:
+    """Re-render memory.md after the promote applied an edition's memory
+    effects (NL-108). Returns None on success, or a disclosure line explaining
+    why the file was left alone.
+
+    This exists because deferring the memory writes to publication opens a
+    window the old ordering did not have. ranking.run_rank renders memory.md at
+    the END of the rank stage — which is now BEFORE the transition applies. If
+    the file were left showing the pre-publish state, it would still carry a
+    matching generation stamp, so the next morning's sync would read it as
+    lawful, and the file wins on status (plan_import): a thread this edition
+    legitimately revived would be quietly pushed back to dormant by the very
+    file that was supposed to mirror it. Publication moves the database, so
+    publication must re-take the mirror.
+
+    Two refusals, both inherited rather than invented:
+
+      * NL-81 §5.2 — if the file is not the one this database last wrote, it is
+        STALE and nothing may be written to it. Safe to decline: a stale file is
+        refused by the next sync too, so it cannot revert anything.
+      * M4 gate — a transparency surface never overwrites edits it has not read.
+        `plan_import` is the same read-only pending-edit probe the bootstrap
+        path uses; the ONLY difference it may legitimately show here is the
+        file still calling this edition's revived threads dormant. Any other
+        pending edit is a hand edit made while the run was in flight, and the
+        file is left for the next sync to reconcile.
+
+    PRECISION, so the next reader does not re-file it as a bug (NL-108 QA F-4):
+    "a run that fails downstream leaves memory untouched" is BYTE-exact for the
+    memory TABLE, and THREAD-STATE-exact — not byte-exact — for memory.md. A
+    failed morning still moves exactly one line of the file: the
+    `<!-- newslens-sync: gen=N -->` stamp, re-written by the opening sync and
+    by the rank-stage render (pre-existing NL-81 machinery, untouched by
+    NL-108). That is by design — the stamp is how the database claims
+    authorship of the file it last wrote, and it is the very thing `_check_stamp`
+    reads below to decide whether this refresh may write at all. Measured on a
+    failed morning (QA probe P-stamp, 2026-08-14): the entire file delta is
+    that one comment line, no thread line moves.
+    """
+    from . import paths
+
+    def _left_alone(why: str) -> str:
+        return (f"memory.md was not refreshed after publication — {why}. The "
+                "database is correct and the next sync reconciles the file")
+
+    try:
+        text = paths.MEMORY_FILE.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _left_alone(f"it could not be read ({exc})")
+    verdict, detail = _check_stamp(con, text)
+    if verdict != "lawful":
+        return _left_alone(
+            "it is not the file this database last wrote"
+            + (f" ({detail})" if detail else ""))
+    try:
+        plan = plan_import(con, parse_file(text))
+    except Exception as exc:                    # noqa: BLE001 — never crash a
+        return _left_alone(f"it could not be parsed ({exc})")   # published run
+    revived_keys = {(r.get("topic") or "").casefold() for r in (revived or [])}
+    # A revival makes the file say 'dormant' where the database now says
+    # 'active' — that one disagreement is this function's whole reason to run.
+    unexpected = [
+        s for s in plan.status_changes
+        if not (s["topic"].casefold() in revived_keys
+                and s["old"] == "active" and s["new"] == "dormant")
+    ]
+    if (plan.inserts or plan.note_updates or plan.dismissals or plan.blocked
+            or unexpected):
+        return _left_alone(
+            "it changed while this run was in flight and the edit has not been "
+            "read yet")
+    try:
+        write_memory_file(con)
+    except OSError as exc:
+        return _left_alone(f"it could not be written ({exc})")
+    return None

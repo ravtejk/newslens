@@ -9,6 +9,39 @@ Design rules for this suite:
     the code and nodding.
   * The shipped artifacts (template sources.yaml, migrations/, prompts/,
     .env.example) are tested as shipped — copied or referenced read-only.
+
+OFF-TREE COPY CHECKLIST — binding on every born-red / mutation / green leg that
+runs this suite from a copy (ENGINEERING.md, "off-tree legs prove the executed
+artifact"). This is where the recipe lives; a copy is made like this and no
+other way:
+
+    rsync -a --exclude='.env' --exclude='.venv' --exclude='data/' \
+             --exclude='profiles/' --exclude='__pycache__' \
+             --exclude='.pytest_cache' <tree>/ <copy>/
+
+`.git` is NOT excluded: the repo-hygiene contract shells out to
+`git check-ignore` / `git ls-files` against the tree root, so a copy without it
+fails on missing history rather than on the behaviour under test.
+
+  1. NEVER copy `.env`. The suite does not read it (see _NEVER_HASHED below —
+     it is not even hashed), so a copy carrying it has no purpose but to
+     multiply the number of places the principal's real keys exist. NL-108 QA
+     F-1: a kept born-red tree held a byte-identical copy of the real `.env`
+     for a whole loop, and a leg proved the suite runs green without it.
+  2. Never copy live state — the real `data/` (the founder's DB and generation
+     log) or `profiles/` (each reader's own DB, memory.md and sources.yaml).
+     No test may resolve them: every path a test gets is a sandbox from the
+     fixtures below, and the profile tests do path arithmetic on names that do
+     not exist on disk. RECEIPT (NL-108 fix loop): a full ordered leg from a
+     copy with BOTH excluded ran 3986 passed / 1 skipped / 1 xfailed — the
+     same counts as the leg that carried them. Copy either one only as an
+     explicit, hash-verified, read-only specimen for a census, never as part
+     of a runnable tree.
+  3. Set PYTHONPATH to the COPY's `src` and assert in-process that
+     `newslens.__file__` resolves inside the copy before the leg runs — the
+     venv's editable `.pth` otherwise silently re-imports the real checkout.
+  4. Delete the copy when the loop that made it is over, or say in the report
+     where it was kept and why.
 """
 
 from __future__ import annotations

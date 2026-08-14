@@ -3463,10 +3463,63 @@ def run_baseline_backfill(
             con.close()
 
 
+def _apply_memory_effects(
+    con: sqlite3.Connection, briefing_id: int, slots_json: Optional[str]
+) -> List[Dict]:
+    """NL-108 — the memory side-effects of PUBLISHING an edition, applied at
+    the promote and nowhere else.
+
+    Continuity's spine (`update_references` -> the dormancy clock and the
+    most-recently-referenced cap) and earned-slot auto-revival
+    (`revive_matched`, dormant -> active) used to fire in `ranking.persist`, at
+    rank time. Everything expensive and failure-prone happens after that point,
+    so a run that died downstream had already advanced thread clocks and flipped
+    dormant threads for an edition nobody ever read — and the NL-146 retry
+    ladder could do it several times in one morning.
+
+    The threads come from the slots being INSTALLED, not from the rank report:
+    that is what ties the write to the published selection by construction. On
+    the promote path those are the staged slots; on the plain path they are the
+    slots already on the row, which is what a `--no-refresh` publish installs.
+    Either way this reads the same JSON the reader's edition renders from.
+
+    Called INSIDE the caller's publish transaction, so the memory writes commit
+    if and only if the edition does. That closes the hole in both directions:
+    no clock moves for an unpublished edition, and no published edition leaves
+    its threads un-referenced (which would age them toward a premature
+    dormancy). Returns the revivals actually applied [{topic, last_covered}].
+    """
+    try:
+        slots = json.loads(slots_json or "[]")
+    except ValueError:
+        # A row whose slots JSON will not parse is a corrupt edition, but this
+        # is the publish transaction — raising here would roll back a finished
+        # edition over a sidecar. Publish it; the memory effects are simply not
+        # derivable, and the next real edition re-references the threads.
+        return []
+    if not isinstance(slots, list):
+        return []
+    referenced: List[str] = []
+    dormant_matched: List[str] = []
+    for s in slots:
+        if not isinstance(s, dict):
+            continue
+        referenced.extend(t for t in (s.get("matched_memory") or []) if t)
+        dormant_matched.extend(t for t in (s.get("matched_dormant") or []) if t)
+    if referenced:
+        memory.update_references(con, briefing_id, referenced)
+    if not dormant_matched:
+        return []
+    # Still filtered to status='dormant' inside revive_matched, so a thread the
+    # principal dismissed between rank and publish is not resurrected by the
+    # promote, and a thread some other path already revived is not re-dated.
+    return memory.revive_matched(con, briefing_id, dormant_matched)
+
+
 def persist_generation(
     con: sqlite3.Connection, date: str, narrative: str, script: str,
     steps: List[Dict], audio_path: Optional[str] = None
-) -> None:
+) -> List[Dict]:
     """Write narrative/script onto the briefing row. If a narrative already
     exists (re-generation), archive the row to briefings_history first —
     same rule persist() applies on re-rank.
@@ -3477,7 +3530,14 @@ def persist_generation(
     new body, drop the staged row. Before this instant the reader has the whole
     old edition; after it they have the whole new one; there is no instant in
     between. A run that dies before reaching here leaves the staged row behind
-    and the reader's edition untouched — the next re-rank writes over it."""
+    and the reader's edition untouched — the next re-rank writes over it.
+
+    NL-108 — THIS IS ALSO WHERE MEMORY MOVES. Thread reference dates and
+    earned-slot revivals are applied here, in the same transaction, off the
+    slots this edition installs (see _apply_memory_effects). Publication is the
+    single trigger for every durable consequence of an edition. Returns the
+    revivals applied, so the caller can announce a transition that has actually
+    happened."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     with con:
         row = con.execute("SELECT * FROM briefings WHERE date = ?", (date,)).fetchone()
@@ -3525,7 +3585,10 @@ def persist_generation(
             # (c) The staging row has done its job. Dropping it inside the same
             # transaction is what makes "staged" mean "not yet published".
             con.execute("DELETE FROM briefings_pending WHERE date = ?", (date,))
-            return
+            # (d) NL-108: the edition is now the record, so its threads get
+            # their reference date and their revivals — off the STAGED slots,
+            # the ones just installed, in this same transaction.
+            return _apply_memory_effects(con, row["id"], pending["story_slots"])
         if row["narrative_text"]:
             con.execute(
                 "INSERT INTO briefings_history (briefing_id, date, story_slots,"
@@ -3551,6 +3614,10 @@ def persist_generation(
             (narrative, script, audio_path,
              json.dumps({"steps": all_steps, "total_usd": total}), now, row["id"]),
         )
+        # NL-108, plain path: the slots already on the row ARE this edition's
+        # selection (this arm never rewrites them), including the --no-refresh
+        # publish where rank ran in an earlier process.
+        return _apply_memory_effects(con, row["id"], row["story_slots"])
 
 
 def _fold_cost_steps(con: sqlite3.Connection, date: str,
@@ -5180,8 +5247,49 @@ def _run_generate_body(
     # --- Persist (never for samples), artifact, instrumentation ---
     if not report.sample:
         _emit_progress(progress, "persist")
-        persist_generation(con, date, narrative, script, report.steps,
-                           audio_path=audio_path_str)
+        # DO NOT REFLOW the call below. Its first three positional arguments are
+        # kept on one physical line deliberately: the ratified NL-107 order pin
+        # greps this source for that exact call spelling to prove the promote
+        # still precedes the memory pass. The needle is spelled out ONLY by the
+        # call itself — never here — because a pin a comment can satisfy is not
+        # a pin (ENGINEERING.md; NL-108 QA F-2, which caught this comment
+        # answering the grep before the code did).
+        applied_revivals = persist_generation(con, date, narrative, script,
+                                              report.steps,
+                                              audio_path=audio_path_str)
+        # NL-108: the edition is on the record, so its memory effects are too —
+        # they committed in the same transaction. NOW the lifecycle v2 promise
+        # ("every automatic transition is surfaced, dated, never silent") can be
+        # kept in the past tense, because the transition has actually happened.
+        # The rank stage announced these as pending; this is the confirmation,
+        # and on a run that died before here neither line was ever printed.
+        if applied_revivals:
+            names = ", ".join(
+                r["topic"]
+                + (f" (last covered {r['last_covered']})" if r["last_covered"] else "")
+                for r in applied_revivals
+            )
+            report.warnings.append(
+                f"memory: {len(applied_revivals)} dormant thread(s) auto-revived "
+                f"by slot-earning stories in this published edition: {names} — "
+                "see memory.md")
+        # memory.md is rendered at the END of the rank stage, which is before
+        # the promote applied any of this — so the file must be re-taken here or
+        # it would out-vote the database on the next sync (file wins on status).
+        #
+        # Contained like the memory pass below, and for the same reason: the
+        # edition is ALREADY PUBLISHED. The helper handles the expected OSErrors
+        # itself; this catches the rest — notably paths.MEMORY_FILE raising
+        # RuntimeError in an unsanctioned process (the 2026-07-14 incident
+        # guard), which must never turn a published edition into a crash.
+        try:
+            _left_alone = memory.refresh_file_after_publish(con, applied_revivals)
+        except Exception as exc:            # noqa: BLE001 — post-persist
+            _left_alone = (
+                f"memory.md was not refreshed after publication ({exc}). The "
+                "database is correct and the next sync reconciles the file")
+        if _left_alone:
+            report.warnings.append(_left_alone)
         # --- Memory core (NL-63 M1): the delta ledger + standing state ---
         # M1 gate F (orphan-delta reorder): runs AFTER persist_generation so a
         # delta is written ONLY once its edition is published — a narrative,

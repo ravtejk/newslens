@@ -1906,10 +1906,18 @@ def test_A6_steering_off_still_records_references_and_persists_flag(
     briefing_id = migrated_con.execute(
         "SELECT id FROM briefings WHERE date = ?", (A_DAY,)
     ).fetchone()["id"]
-    ref = migrated_con.execute(
-        "SELECT last_referenced_briefing_id FROM memory WHERE topic = 'Iran War'"
-    ).fetchone()["last_referenced_briefing_id"]
-    assert ref == briefing_id  # recognition-only still RECORDS (continuity intact)
+    def ref_now():
+        return migrated_con.execute(
+            "SELECT last_referenced_briefing_id FROM memory"
+            " WHERE topic = 'Iran War'").fetchone()[0]
+
+    # NL-108: continuity is recorded by the EDITION, not by the rank attempt —
+    # a run that dies downstream must leave memory untouched. The subject of
+    # this test is unchanged (recognition-only still RECORDS, continuity
+    # intact); only the moment moved, to the promote.
+    assert ref_now() != briefing_id
+    generate.persist_generation(migrated_con, A_DAY, "Body.", "Script.", [])
+    assert ref_now() == briefing_id
     meta = json.loads(migrated_con.execute(
         "SELECT meta FROM ranking_runs WHERE date = ? ORDER BY id DESC LIMIT 1", (A_DAY,)
     ).fetchone()["meta"])
