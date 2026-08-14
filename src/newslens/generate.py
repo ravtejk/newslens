@@ -223,11 +223,29 @@ WINDOW_LINE = (
     "Generated {timestamp}. Covers items fetched {start} → {end}. NewsLens "
     "sees only its configured sources within this window."
 )
-# NL-148 clause 3 (the skip disclosure, "Fetch failed for prioritized story
-# <title>.") HAS NO CONSTANT HERE ON PURPOSE. It discloses clause 2's skips,
-# clause 2 stopped at a design decision (see analysis.py's NL-148 header), and
-# a frozen reader-facing sentence that nothing can ever render is worse than an
-# absent one — it reads as a shipped guarantee. It lands with clause 2.
+# NL-151 clause 3 — THE SKIP DISCLOSURE. It lands now because clause 2 landed:
+# `run_analysis` reports `fetch_skipped`, the assembler below renders from it,
+# and the pin that guarded against half a disclosure shipping is inverted to
+# guard the whole one. NL-148's objection is answered rather than overruled —
+# the sentence is no longer wired to an unreachable trigger.
+#
+# HIS WORDS, VERBATIM (ruling 2026-08-09, carried into the 2026-08-13 ruling as
+# clause 3's wording). The only substitution is the story's own title; no
+# rewording, no grammar-fitting, no "we" voice.
+#
+# WHERE IT RENDERS: the assembler's footer block, AFTER the standing
+# corroboration caveat — the literal bottom of the briefing, which is what he
+# ruled. Placing it there also keeps the pinned footer ORDER intact (the window
+# line still precedes the caveat), so the disclosure is additive to the
+# furniture contract rather than a re-cut of it.
+#
+# TRUST-QUIET, and the register is a ruling not a preference: one plain
+# sentence per skipped story, no count, no "we tried", no machinery theater —
+# and the story PROMOTED into the freed depth slot gets NO badge anywhere. It
+# is simply covered. A reader who never looks at the footer should not be able
+# to tell a promotion happened; a reader who does should learn exactly what was
+# lost and nothing more.
+FETCH_SKIP_LINE = "Fetch failed for prioritized story {title}."
 VARIANT_B_STAMP = (
     'Voice: B — includes the narrator\'s own analytical judgments, always '
     'labeled "My read."'
@@ -308,6 +326,12 @@ class GenReport:
     # Exact twin of memory_usd / memory_shadow_usd below.
     analysis_shadow_usd: float = 0.0
     deep_views: Dict[str, str] = field(default_factory=dict)  # slot -> availability (Axel instrumentation)
+    # NL-151: the prioritized stories this run skipped out of the depth tier,
+    # as the analysis stage recorded them. On the run record because the report
+    # and schedule surfaces (NL-146) must show a skip as honestly as the
+    # briefing's footer does — a skip visible to the reader but absent from the
+    # run log would be the record disagreeing with the machine.
+    fetch_skipped: List[Dict] = field(default_factory=list)
     memory_usd: float = 0.0            # NL-63: state-rewrite spend charged (real money)
     # R-B3a (B3): the state-rewrite SHADOW spend (always API-priced). Equals
     # memory_usd on the api lane; on a subscription-lane state seat memory_usd
@@ -1920,6 +1944,21 @@ def assemble_narrative(
     parts.append("*" + WINDOW_LINE.format(timestamp=now_ts, start=start, end=end) + "*")
     parts.append("")
     parts.append("*" + ranking.CORROBORATION_CAVEAT + "*")
+    # NL-151 clause 3 — the skip disclosure, at the literal bottom. Renders
+    # from the analysis stage's own `fetch_skipped` record, so it cannot claim
+    # a skip the stage did not make. Only entries the STAGE marked `disclose`
+    # appear: a slot that never opened a socket was not a fetch failure, and
+    # this renderer does not re-decide that — it reads the flag set beside the
+    # outcome that justified it.
+    #
+    # Nothing renders when nothing was skipped, so the footer of an ordinary
+    # edition is byte-identical to today's.
+    for skip in (inputs.get("fetch_skipped") or []):
+        if not skip.get("disclose"):
+            continue
+        parts.append("")
+        parts.append("*" + FETCH_SKIP_LINE.format(
+            title=skip.get("story_title") or "(untitled)") + "*")
     # A1: the variant stamp retired with the alternation window (samples are
     # labeled by their file headers; no methodology self-reference in output).
     return "\n".join(parts)
@@ -3972,6 +4011,14 @@ def _run_generate_body(
     # or the deep-view ladder. deep_views reflects analyst-brief PRESENCE alone.
     analyst_slot3_tier = analysis_mod.analyst_slot3_tier(con, date)
     inputs["briefs_by_slot"] = briefs_by_slot
+    # NL-151 clause 3: the stage's skip record reaches the assembler's footer.
+    # Sourced from `a_rep` and NOT re-derived from briefs_by_slot — an absent
+    # brief has many causes (model rejection, budget floor, a dead stage) and
+    # only the stage knows which of them was a fetch failure. `a_rep` is {} when
+    # the stage never ran or died, which yields no disclosure, which is correct:
+    # a run that never reached the fetcher has no fetch failure to report.
+    inputs["fetch_skipped"] = a_rep.get("fetch_skipped") or []
+    report.fetch_skipped = inputs["fetch_skipped"]
     inputs["analyst_slot3_tier"] = analyst_slot3_tier
     report.deep_views = {
         str(n): ("available" if briefs_by_slot.get(n) else "absent")
@@ -4629,6 +4676,7 @@ def _run_generate_body(
         "memory_usd": round(report.memory_usd, 6),   # NL-63: state-rewrite spend
         "memory": report.memory,                     # NL-63: ledger/state instrumentation
         "deep_views": report.deep_views,  # Axel's asymmetry instrumentation
+        "fetch_skipped": report.fetch_skipped,   # NL-151 clause 2/3
         "draft_stories": draft_payload.get("stories"),  # carryover 18b: forensics
         "stories": stories,  # M7: the UI's structured render source (ADR-0010)
         "audio": audio_path_str,

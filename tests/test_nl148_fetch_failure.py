@@ -11,16 +11,25 @@ two shipped is itself a false claim:
             the principal rather than an implementation detail that happened
             to hold. Each carries a mutation receipt (the enforcement removed,
             the red observed) per the pin-proves-its-route law.
-  clause 2  skip + promote. NOT BUILT — stopped and returned as a design
-            decision. Pinned here ONLY as the two measured facts that forced
-            the stop, so the next implementer inherits evidence instead of a
-            summary. These are DETECTOR pins: if either fact stops being true,
-            the stop's premise has moved and the ruling must be re-read.
-  clause 3  bottom-of-briefing disclosure. NOT BUILT (it discloses clause 2's
-            skips). One pin guards against a half-landed disclosure.
-  clause 4  systemic pause + retry. BUILT — born RED (9 of the 10 clause-4
-            pins fail at HEAD; the tenth is the labeled born-green CONTROL
+  clause 2  skip + promote. RULED 2026-08-13 and BUILT BY NL-151 — see
+            tests/test_nl151_fetch_skip.py. The two DETECTOR pins below stay,
+            and both are still GREEN, which is the point: neither measured fact
+            changed. Finding (a) (a failed fetch still leaves excerpt material)
+            was never an obstacle to the skip — only to hanging the skip off
+            SOURCE-MAP EMPTINESS; NL-151 triggers on fetch OUTCOMES instead.
+            Finding (b) (no story identity in the table) is avoided rather than
+            resolved: NL-151 moves the depth TIER, never the slot NUMBER, so
+            the promote that needed a schema field never happens. If either pin
+            goes red the premises have moved and BOTH rulings must be re-read.
+  clause 3  bottom-of-briefing disclosure. BUILT BY NL-151 with clause 2. The
+            pin that guarded against half a disclosure is INVERTED, not
+            deleted — it now guards the whole one.
+  clause 4  systemic pause + retry. BUILT — born RED (10 of the 11 clause-4
+            pins fail at HEAD; the eleventh is the labeled born-green CONTROL
             that proves the degrade handler it must escape is actually live).
+            The count was stale at 9-of-10: the QA-F4 fix loop added
+            test_clause4_the_pause_can_fire_after_real_spend... after this
+            docstring was written. Corrected by NL-151's scout.
 
 PROOF CLASSES ARE LABELED PER PIN and they are not decoration: born-red,
 carried-invariant/born-green, and mutation-receipt answer different questions,
@@ -294,15 +303,31 @@ def test_clause2_premise_b_the_brief_table_has_no_story_identity():
         con.close()
 
 
-def test_clause3_no_disclosure_furniture_ships_before_its_trigger():
-    """Clause 3 discloses clause 2's skips. Until clause 2 is ruled there are
-    none, and a frozen reader-facing sentence that nothing can render reads as
-    a shipped guarantee. This pin fails the moment half the disclosure lands."""
-    assert not hasattr(generate, "FETCH_SKIP_LINE")
-    # the assembler must not carry an unreachable footer branch either
+def test_clause3_the_disclosure_landed_whole_with_its_trigger():
+    """INVERTED BY NL-151, deliberately, and NOT deleted.
+
+    This pin used to assert the disclosure's ABSENCE — the right guard while
+    clause 2 was an open design decision, because a frozen reader-facing
+    sentence wired to an unreachable trigger reads as a shipped guarantee. The
+    principal ruled clause 2 on 2026-08-13 and clause 3 landed with it, so the
+    premise moved and the pin turned over.
+
+    GATE F-2 TRUTH-EDIT (2026-08-13): this pin is the PRESENCE-LEVEL FURNITURE
+    TRIPWIRE only — it reads source text, so it is comment-satisfiable by
+    construction (gate mutation M4: an assembler loop replaced by a comment
+    carrying both tokens leaves it green). It does NOT prove the disclosure
+    ships whole. The register is actually held by the behavioral pins:
+    test_L2_the_disclosure_is_his_sentence_verbatim_at_the_bottom (red under
+    M4) and test_nl151_qa.py::test_e2e_disclosure_reaches_the_persisted_edition
+    (red under M3, the severed-plumbing mutant). Keep this pin for the cheap
+    early warning; trust those for the property."""
+    assert hasattr(generate, "FETCH_SKIP_LINE")
     import inspect
     src = inspect.getsource(generate.assemble_narrative)
-    assert "fetch_skipped" not in src
+    assert "fetch_skipped" in src
+    assert "FETCH_SKIP_LINE" in src
+    # ...and the trigger is live: the stage reports the key the renderer reads.
+    assert "fetch_skipped" in inspect.getsource(analysis.run_analysis)
 
 
 # ===========================================================================

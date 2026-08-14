@@ -1072,6 +1072,113 @@ DEGRADE_RECORD_STATUS = ("this edition carried no section naming this story")
 # an unrequested rider mid-milestone. It is a checkpoint item.
 FETCH_PAUSE_MESSAGE = "Fetch failed, please try again in a few minutes"
 
+# ---------------------------------------------------------------------------
+# NL-151 — CLAUSES 2/3 RULED (principal 2026-08-13). THREE LAWS.
+# ---------------------------------------------------------------------------
+#
+#   L1  NO degraded (excerpt-only) coverage in the depth tier, EVER.
+#   L2  a prioritized story whose fetches fail is SKIPPED, DISCLOSED at the
+#       bottom of the briefing, and the next prioritized story is PROMOTED
+#       into the depth treatment.
+#   L3  degraded coverage is PERMITTED (not mandated) for In-Brief stories.
+#
+# WHAT NL-148 STOPPED ON, AND WHY IT NO LONGER STOPS. Its finding (a) — every
+# unfetched cluster item still mints a C# excerpt key, so there is no
+# "no material" state — REMAINS TRUE and its detector pin stays green. It was
+# never the obstacle it looked like: it only proved the skip could not hang off
+# SOURCE-MAP EMPTINESS. The trigger below reads FETCH OUTCOMES instead
+# (`fetch_attempted`/`fetch_ok`, already computed, already in the run record),
+# which is what the ruling's own words are about. Finding (b) — the promote
+# renumbers slots and mis-attributes analysis — is avoided by TIER
+# REASSIGNMENT: the depth TIER moves to the next-ranked story's slot while slot
+# NUMBERING stays untouched, so `analysis_briefs` (date, slot) keeps meaning
+# exactly what it meant and the resume-from-failed-slot default survives. No
+# schema field, no migration, no renumbering.
+#
+# L1 IS TRUE BY CONSTRUCTION WHEN ARMED, NOT BY REVIEW. Two gates below return
+# before any brief is synthesized, and `analyze_story` is only ever called for
+# full/medium tiers — so under either live arm a `degraded` brief can no longer
+# be minted at all. That is the strongest available form of "ever", and it is
+# what the L1 invariant pin asserts (the pin arms the contract; it does not
+# assert L1 of the OFF default, which is today's shipped behaviour and does not
+# hold it). The `degraded` machinery is deliberately NOT deleted: it is the
+# honest label if a future tier ladder analyses In-Brief stories (L3 permits
+# exactly that), and deleting it would trade a live safety label for tidiness.
+#
+# THE GATES ALSO SAVE MONEY, which is why they sit above the ladder rather than
+# beside the `degraded` mint. A slot that cannot lawfully hold depth coverage
+# must not buy Sonar verification or a synthesis it will never publish — the
+# $0.74 of billed-then-rejected briefs QA measured on one clause-4 pause is
+# exactly this spend. Post-NL-151 a systemic-failure day costs $0 in the
+# analysis stage and still pauses (clause 4 unchanged; see the composition pin).
+#
+# TWO OUTCOMES, AND THE SPLIT IS ABOUT HONESTY, NOT MECHANISM. Both are
+# disqualified from depth by L1; only one is a FETCH FAILURE:
+#   * FETCH_SKIP_OUTCOME     — sockets opened, nothing came back. This is L2's
+#     subject, and it is the ONLY one that earns the principal's disclosure
+#     sentence.
+#   * NO_FETCHABLE_OUTCOME   — nothing was ever attempted, because every
+#     cluster source sits outside the 2026-07-06 tier boundaries. Nothing
+#     failed, so saying "Fetch failed" would be false; the run record carries
+#     it, the reader does not. Same reasoning the clause-4 any/all split
+#     already encodes (a slot that never opened a socket casts no vote).
+#     MEASURED REACHABILITY, on the principal's own generation_log.jsonl: over
+#     24 analysis stages / 72 prioritized slots, 71 got full text, 1 was
+#     attempted-and-failed, and ZERO were never-attempted. This branch is
+#     structurally reachable and has never been observed — it exists so L1's
+#     "ever" is literally true, not because it is a live path.
+FETCH_SKIP_OUTCOME = "skipped-fetch-failed"
+NO_FETCHABLE_OUTCOME = "skipped-no-fetchable-sources"
+# The outcomes that DISQUALIFY a slot from the depth tier and hand its tier to
+# the next-ranked story. One name, so the stage walk and the pins cannot drift.
+DEPTH_DISQUALIFYING = (FETCH_SKIP_OUTCOME, NO_FETCHABLE_OUTCOME)
+
+# ---------------------------------------------------------------------------
+# THE FORK, AND WHY THIS SWITCH EXISTS RATHER THAN A PICK
+# ---------------------------------------------------------------------------
+#
+# His three laws fix what happens to the DEPTH TIER. They do not fix what
+# happens to the SKIPPED STORY ITSELF, and his words carry two readings:
+#
+#   ARM "drop"      the story leaves the edition body entirely; the disclosure
+#                   line at the bottom is its only trace.
+#   ARM "in-brief"  the story lands as an In-Brief story with degraded/excerpt
+#                   treatment — lawful under L3, which PERMITS (never mandates)
+#                   degraded coverage there.
+#
+# Both are lawful. The choice is editorial, it is his, and an implementer's
+# pick would be legislation, so the arms are scaffolded and the default is OFF.
+#
+# OFF IS NOT FURNITURE, AND THE DISTINCTION MATTERS BECAUSE NL-148 REFUSED
+# FURNITURE ON THIS EXACT CONTRACT. What it refused was a frozen READER-FACING
+# SENTENCE wired to an unreachable trigger — a shipped guarantee that could
+# never fire. This is the opposite: working, tested machinery whose arms both
+# execute under the pins, held at OFF because the ruling that selects one has
+# not been made. Nothing is promised to a reader that cannot happen.
+#
+# WHY OFF RATHER THAN A PROVISIONAL ARM. Arming without the writer/reader
+# propagation would be a REGRESSION, measured not assumed: the gates stop a
+# failed slot from minting its brief, but the writer still assigns tiers by
+# POSITION, so that slot would render as a full-picture story carrying
+# "Analysis: unavailable — built from feed excerpts." That is strictly less
+# coverage than today AND still degraded coverage in a depth slot — L1 broken
+# by the change meant to enforce it. The propagation is where the two arms
+# diverge and where the cost lives (nine positional homes for the depth tier
+# across four modules; see the build report), so it is the checkpoint, not a
+# thing to guess at.
+FETCH_SKIP_ARM_OFF = "off"
+FETCH_SKIP_ARM_IN_BRIEF = "in-brief"
+FETCH_SKIP_ARM_DROP = "drop"
+# NOT an env var (none may land without his checkpoint) and not config: a
+# module constant the pins monkeypatch, so every arm is exercised at $0.
+FETCH_SKIP_ARM = FETCH_SKIP_ARM_OFF
+
+
+def depth_skip_armed() -> bool:
+    """Is the NL-151 depth-skip contract live? One reader, so the gates, the
+    stage walk and the pins can never disagree about whether it is on."""
+    return FETCH_SKIP_ARM != FETCH_SKIP_ARM_OFF
+
 
 class SystemicFetchFailure(RuntimeError):
     """Clause 4: nothing fetched at all, so the edition cannot be built.
@@ -1190,7 +1297,9 @@ class StoryAnalysis:
     slot: int
     tier: str
     outcome: str            # ok | rejected | skipped-budget | skipped-thin |
-                            # demoted-quick | failed
+                            # demoted-quick | failed |
+                            # skipped-fetch-failed | skipped-no-fetchable-sources
+                            #   (NL-151 gates A/B; armed-only — see FETCH_SKIP_ARM)
     detail: str = ""
     cost_usd: float = 0.0     # usd_CHARGED — real money; persisted as-is
     # NL-95: usd_SHADOW — what this slot would cost at api prices. The edition
@@ -3370,6 +3479,96 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
                            "(escalation-flag class)")
         return sa
 
+    # NL-151 GATE A (L1 + L2) — THE FETCH-FAILURE SKIP. Sockets opened for this
+    # prioritized story and nothing came back, so under L1 it cannot hold a
+    # depth slot and under L2 it is skipped, disclosed, and its tier handed on.
+    #
+    # PLACEMENT IS LOAD-BEARING IN BOTH DIRECTIONS.
+    #   * ABOVE the ladder (this line sits between the budget floor's return
+    #     and Sonar rung 1): the slot buys nothing it cannot publish. Sonar
+    #     verification and synthesis for a brief L1 forbids is pure waste, and
+    #     it is the spend QA measured on a clause-4 pause.
+    #   * BELOW the budget floor: the floor's C-5 free-verdict row (ruling (a),
+    #     2026-08-06) is a decision the reader needs whatever the fetch did, and
+    #     under exhaustion the run has no money to reach a brief anyway. Hoisting
+    #     this gate over the floor would silently retire that row.
+    #
+    # The predicate is FETCH OUTCOMES, never source-map emptiness — NL-148's
+    # finding (a) is that the source map is never empty here, and it still
+    # isn't. `fetch_attempted` is what separates this from Gate B: it means the
+    # network was actually asked.
+    if depth_skip_armed() and sa.fetch_attempted and not sa.fetch_ok:
+        sa.outcome = FETCH_SKIP_OUTCOME
+        sa.detail = (
+            f"no cluster source yielded full text ({sa.fetch_attempted} "
+            "attempted, 0 extracted) — skipped out of the depth tier under L1 "
+            "(no degraded coverage in the main slots), disclosed at the bottom "
+            "of the briefing under L2, and the depth tier passes to the next "
+            "prioritized story")
+        return sa
+
+    # NL-151 GATE B (L1 only) — NOTHING WAS EVER FETCHABLE. Gate A returned
+    # immediately above for every slot that opened a socket, so a slot reaching
+    # this line with `fetch_attempted == 0` never opened one: every cluster
+    # source sits outside the 2026-07-06 tier boundaries. L1 disqualifies it
+    # from depth exactly as it disqualifies a failed fetch — the reader cannot
+    # tell the two apart, and "no degraded coverage in the depth tier, ever"
+    # does not have a policy exemption.
+    #
+    # IT IS NOT DISCLOSED, and that is the honest choice rather than a gap.
+    # L2's disclosure sentence is the principal's words and its subject is a
+    # FETCH THAT FAILED; nothing failed here, so rendering it would state
+    # something untrue about the run. Inventing a second reader-facing sentence
+    # to cover an unobserved branch is the "frozen guarantee nothing can render"
+    # mistake NL-148 refused, pointed the other way. The run record carries it.
+    #
+    # PLACEMENT IS LOAD-BEARING IN BOTH DIRECTIONS — the same two as Gate A,
+    # which is the point of the gate ruling that put it here (R-A, 2026-08-13).
+    #   * ABOVE the ladder. This block used to sit below Sonar rung 1, where a
+    #     funded never-attempted slot paid for verification of a brief the gate
+    #     then refused to mint — QA measured 3 Sonar calls / $0.06 on a 3-slot
+    #     all-Gate-B day. The header's design law ("THE GATES ALSO SAVE MONEY,
+    #     which is why they sit above the ladder") is now true of BOTH gates
+    #     instead of Gate A alone. Same waste class the header itself cites.
+    #   * BELOW the budget floor, for Gate A's C-5 reason exactly: the floor's
+    #     free demoted-quick verdict row (ruling (a), 2026-08-06) is a decision
+    #     the reader needs whatever the fetch did, and hoisting this gate over
+    #     the floor would silently retire that ruled row.
+    #
+    # `items` IS THE CONJUNCT THE OLD POSITION GOT FOR FREE. Below the
+    # total-failure rule, a slot with an EMPTY cluster was caught by
+    # `skipped-thin` first and never reached this gate. Above that rule the
+    # guard has to be written down: an empty cluster has nothing that could be
+    # "unfetchable", so it falls through to `skipped-thin` exactly as it does
+    # today. This gate's subject is unchanged — a slot that HAS material (C#
+    # excerpt keys, per NL-148's still-true finding (a)) and may not use it at
+    # this tier. The key is `not fetch_attempted` rather than `not fetch_ok`
+    # because above the ladder the two stop being interchangeable: Gate A no
+    # longer stands between this line and every attempted-and-failed slot by
+    # position alone, so the never-attempted case is now stated, not inferred.
+    #
+    # ONE ARMED-ONLY CONSEQUENCE, MEASURED AND DELIBERATE. A never-attempted
+    # slot-3 MEDIUM used to reach the slot-3 demotion rule below and leave as
+    # `demoted-quick`, holding its depth slot with $0.02 of Sonar already spent;
+    # above the ladder it leaves here as `skipped-no-fetchable-sources` at $0
+    # and the tier passes on. That makes Gate B agree with Gate A, which already
+    # preempts that same demotion for the attempted-and-failed slot — before the
+    # hoist the two gates disagreed about this one slot. It does NOT widen L1
+    # past the principal's scope: the predicate is still fetch outcomes only,
+    # and whether L1 should reach further is his open call, not this block's.
+    # At the OFF default `depth_skip_armed()` is False and this block is dead:
+    # the reordering is zero-delta in production, measured rather than argued
+    # (identical outcome/tier/spend vector on both sides of the hoist).
+    if depth_skip_armed() and items and not sa.fetch_attempted:
+        sa.outcome = NO_FETCHABLE_OUTCOME
+        sa.detail = (
+            "no cluster source was fetchable at all (every source outside the "
+            "2026-07-06 tier boundaries; 0 attempted, 0 extracted) — skipped "
+            "out of the depth tier under L1, NOT disclosed as a fetch failure "
+            "because nothing was attempted, and the depth tier passes to the "
+            "next prioritized story")
+        return sa
+
     # Ladder rung 1 (cheapest first): Sonar goes before synthesis money
     sonar_results: List[Dict] = []
     sonar_ran = False
@@ -3468,9 +3667,24 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         # off this branch would have been enforcement over a dead path.
         return sa
 
+    # NL-151 GATE B USED TO SIT HERE, below this rule. The gate ruling R-A
+    # (2026-08-13) hoisted it above Sonar rung 1 so it stops paying for the
+    # verification of a brief it then refuses; the empty-cluster slots that
+    # this rule catches keep their `skipped-thin` outcome because the hoisted
+    # gate carries an explicit `items` conjunct. See the block above rung 1.
+
     # `template` was read above the sonar decision (LADDER PRICING) and is
     # reused here verbatim — the artifact rung 1 priced IS the artifact rung 2
     # renders. Re-reading it would reopen the two-addresses class.
+    #
+    # NL-151: `degraded` is UNREACHABLE WHENEVER THE CONTRACT IS ARMED — Gates
+    # A and B both return on `fetch_ok == 0`, and this function only ever runs
+    # at full/medium tier. At the OFF default it stays exactly as live as it is
+    # today, which is why today's pins on the "Analysis: unavailable" label are
+    # untouched. It is kept, not deleted, because it is the correct label the
+    # day an In-Brief tier is analysed (L3 PERMITS degraded coverage there), and
+    # because the L1 invariant pin asserts this unreachability under each armed
+    # arm rather than trusting it.
     degraded = None
     if sa.fetch_ok == 0:
         degraded = ("no full-text extraction succeeded — brief built from "
@@ -3858,9 +4072,44 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
                   "lane": llm.fallback_lane_label(analyst_fb, analyst_cfg.lane),
                   "per_story": [], "total_usd": 0.0,
                   "derating": False, "warnings": []}
-        for i, (slot, tier) in enumerate(zip(slots, tiers), start=1):
-            if tier not in ("full", "medium"):
-                continue
+        # NL-151 — THE DEPTH-TIER WALK (L2's promote, without a promote).
+        #
+        # OFF (today, byte-for-byte): `tiers` is positional, the loop visits the
+        # slots it names and skips the rest. ARMED: the depth tiers become a
+        # QUEUE handed out in rank order, and a slot disqualified by Gate A or B
+        # DOES NOT CONSUME ITS TIER — the next-ranked story inherits it. That is
+        # "the next prioritized story is PROMOTED into the depth treatment"
+        # expressed as tier movement, which is what keeps NL-148's finding (b)
+        # from biting: SLOT NUMBERING NEVER CHANGES, so `analysis_briefs`
+        # (date, slot) still means the story it always meant, `latest_valid_brief`
+        # cannot return another story's analysis, and the ruled resume-from-
+        # failed-slot default survives untouched. No schema field, no migration.
+        #
+        # WHAT DOES *NOT* HAND ITS TIER ON, and the line is his words: only
+        # FETCH outcomes disqualify. A brief the model rejected, or one skipped
+        # under the budget floor, keeps its slot in the depth tier exactly as
+        # today — those are different failure classes with their own disclosed
+        # ladders, and re-routing them here would be legislating past the
+        # ruling. (The residual this leaves is named in the build report: a
+        # rejected brief still shows the reader "Analysis: unavailable" in a
+        # depth slot, which a broad reading of L1 would also forbid. That
+        # reading is his to make, not this loop's.)
+        #
+        # The walk stops when the queue empties — an armed run analyses exactly
+        # as many stories as it needs to FILL the depth tier, and no more.
+        queue = ([t for t in tiers if t in ("full", "medium")]
+                 if depth_skip_armed() else None)
+        depth_tiers: List[Optional[str]] = [None] * len(slots)
+        fetch_skipped: List[Dict] = []
+        for i, slot in enumerate(slots, start=1):
+            if queue is None:
+                tier = tiers[i - 1] if i - 1 < len(tiers) else "quick"
+                if tier not in ("full", "medium"):
+                    continue
+            else:
+                if not queue:
+                    break
+                tier = queue[0]
             sa = analyze_story(con, date, i, slot, tier, cfg, openai_key,
                                pplx_key, cap - spent, memory_lines, prior,
                                fetch=fetch, chat=chat, sonar=sonar, sleep=sleep)
@@ -3895,6 +4144,32 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
                     "attempted, 0 extracted")
             if any(w.startswith("derating:") for w in sa.warnings):
                 report["derating"] = True
+            if queue is not None:
+                if sa.outcome in DEPTH_DISQUALIFYING:
+                    # The tier is NOT consumed: the next-ranked story inherits
+                    # it on the following pass. `disclose` separates L2's
+                    # subject (fetches that actually failed) from a slot that
+                    # never opened a socket — only the former earns his
+                    # sentence, and the flag is decided HERE, next to the
+                    # outcome that justifies it, so no renderer has to
+                    # re-derive intent from a string.
+                    fetch_skipped.append({
+                        "slot": sa.slot, "story_title": sa.story_title,
+                        "outcome": sa.outcome,
+                        "disclose": sa.outcome == FETCH_SKIP_OUTCOME})
+                    continue
+                depth_tiers[i - 1] = queue.pop(0)
+            else:
+                depth_tiers[i - 1] = tier
+        # The per-slot tier vector this stage actually ran, full length, with
+        # non-depth slots as "quick". The writer and the reader surfaces are
+        # positional today (nine homes across four modules), so THIS is the
+        # value the propagation will consume when an arm is ruled — reported
+        # rather than applied, because applying it is the forked half.
+        report["depth_tiers"] = [t or "quick" for t in depth_tiers]
+        report["fetch_skipped"] = fetch_skipped
+        report["depth_slots"] = [n for n, t in enumerate(depth_tiers, start=1)
+                                 if t is not None]
         report["total_usd"] = round(charged_total, 6)          # REAL money
         report["total_usd_shadow"] = round(spent - already_spent, 6)  # the cap figure
         # NL-148 CLAUSE 4 — THE SYSTEMIC-FAILURE VERDICT. This stage REPORTS
