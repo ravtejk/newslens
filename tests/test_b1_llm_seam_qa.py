@@ -54,7 +54,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import anthropic_sse_bytes
+from conftest import anthropic_sse_bytes, sandbox_bin_env
 from newslens import analysis, doctor, generate, llm, ranking
 
 # ---------------------------------------------------------------------------
@@ -995,7 +995,10 @@ def test_doctor_lanes_default_env_renders_all_seats_no_fail():
     # B3: the default map renders rank/editor/script on the subscription lane
     # and the rest on api — every line INFO (the sandbox stub satisfies the
     # binary gate exactly as a real installed CLI would).
-    results = doctor.check_llm_lanes({})
+    # NL-156: the stub is DECLARED in the env now. This read `{}` and passed
+    # because check_lane went behind the mapping to os.environ — so the test
+    # said "default env" while relying on a variable the mapping never carried.
+    results = doctor.check_llm_lanes(sandbox_bin_env())
     assert len(results) == len(llm.SEATS) + 2       # seats + fallback + lane note
     assert all(r.status == doctor.INFO for r in results)
     seat_lines = [r.text for r in results[:len(llm.SEATS)]]
@@ -1033,7 +1036,8 @@ def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
     joined it 2026-07-17 (option a), so a global subscription flip is a config
     error ONLY for the LONE still-openai seat (synthesis); the six anthropic
     seats render INFO on their registered lane."""
-    results = doctor.check_llm_lanes({"NEWSLENS_LANE": "subscription"})
+    results = doctor.check_llm_lanes(
+        sandbox_bin_env(NEWSLENS_LANE="subscription"))   # NL-156: declared
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
     infos = [r for r in seat_results if r.status == doctor.INFO]
@@ -1045,16 +1049,21 @@ def test_doctor_lanes_global_subscription_fails_only_the_openai_seats():
         assert "lane=subscription" in r.text
 
 
-def test_doctor_lanes_missing_binary_fails_the_subscription_seats(
-        monkeypatch, tmp_path):
+def test_doctor_lanes_missing_binary_fails_the_subscription_seats(tmp_path):
     """The doctor's fail-loud twin of check_lane's binary gate: with the
-    binary unresolvable (check_lane reads os.environ), the SIX subscription-default
-    seats FAIL naming the fix; the api seats stay INFO. (NL-17-M1 added
-    follow_altitude; 2026-07-17 added state, then writer/analyst via item C; the
-    07-20 resolver exception moved follow_altitude to api and NL-99 moved it
-    back, so SEVEN sub seats fail and synthesis is the lone api INFO seat.)"""
-    monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(tmp_path / "absent"))
-    results = doctor.check_llm_lanes({})
+    binary unresolvable, the SEVEN subscription-default seats FAIL naming the
+    fix; the api seats stay INFO. (NL-17-M1 added follow_altitude; 2026-07-17
+    added state, then writer/analyst via item C; the 07-20 resolver exception
+    moved follow_altitude to api and NL-99 moved it back, so SEVEN sub seats
+    fail and synthesis is the lone api INFO seat.)
+
+    NL-156: the unresolvable binary is DECLARED in the env handed to the doctor.
+    This used to say "(check_lane reads os.environ)" and stage the world with
+    `monkeypatch.setenv` while passing `{}` — a test whose stated input could
+    not produce its asserted output. The monkeypatch is gone; the mapping is
+    the whole world."""
+    results = doctor.check_llm_lanes(
+        {"NEWSLENS_CLAUDE_BIN": str(tmp_path / "absent")})
     seat_results = results[:len(llm.SEATS)]
     fails = [r for r in seat_results if r.status == doctor.FAIL]
     # NL-99: follow_altitude joins the seats that need the binary — it is on
@@ -1067,15 +1076,20 @@ def test_doctor_lanes_missing_binary_fails_the_subscription_seats(
 
 
 def test_doctor_lanes_armed_fallback_warns():
-    results = doctor.check_llm_lanes({"NEWSLENS_LANE_FALLBACK": "api"})
+    results = doctor.check_llm_lanes(sandbox_bin_env(NEWSLENS_LANE_FALLBACK="api"))
     warns = [r for r in results if r.status == doctor.WARN]
     assert len(warns) == 1 and "ARMED" in warns[0].text
 
 
 def test_doctor_lanes_probe_makes_no_transport_call(monkeypatch):
+    # NL-156: declare the working stub in BOTH worlds. With an undeclared `{}`
+    # every subscription seat now dies at the binary gate, and a gate that
+    # fails early makes "no transport call" vacuously true. Declaring the CLI
+    # keeps this pin on its real claim: the lanes probe reaches the point where
+    # a call WOULD be made and still makes none.
     calls = _transport_tripwire(monkeypatch)
-    doctor.check_llm_lanes({})
-    doctor.check_llm_lanes({"NEWSLENS_LANE": "subscription"})
+    doctor.check_llm_lanes(sandbox_bin_env())
+    doctor.check_llm_lanes(sandbox_bin_env(NEWSLENS_LANE="subscription"))
     assert calls == []
 
 

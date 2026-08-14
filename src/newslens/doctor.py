@@ -202,10 +202,14 @@ def load_effective_env() -> Tuple[Dict[str, str], List[Result]]:
 
 def check_openai_key(env: Dict[str, str]) -> List[Result]:
     """A″ (2026-07-17): required precisely when — under the current seat map + lane
-    env — some seat resolves to the OpenAI provider (gpt-4o). Post-B4 that is only
-    the state/memory seat (and synthesis, which has no live call site yet);
-    rank/editor/script/analyst/writer/follow_altitude are anthropic and the OpenAI
-    key is INERT for them. So a keyless install with all-anthropic content seats is
+    env — some LIVE seat resolves to the OpenAI provider (gpt-4o). Today that is
+    NO seat at all: `synthesis` is the only openai row left and it is dormant
+    (no live call site), so this check's not-needed branch is the one a default
+    install takes. (This said "that is only the state/memory seat (and
+    synthesis...)" until NL-155, 2026-08-14 — ENG-M0 moved `state` to Opus 4.8
+    on the subscription lane 2026-08-06 and the sentence outlived it.) All seven
+    of rank/editor/script/analyst/writer/state/follow_altitude are anthropic and
+    the OpenAI key is INERT for them. So a keyless install with all-anthropic content seats is
     HEALTHY — reported plainly, not as a failure (the prior blanket FAIL was stale
     once the content seats flipped off gpt-4o). Gate ruling 2 (2026-07-17): a
     DORMANT seat (declared, no live call site — llm.DORMANT_SEATS) never forces
@@ -331,18 +335,54 @@ def _probe_model() -> str:
 
 def check_anthropic_key(env: Dict[str, str]) -> List[Result]:
     """The Claude API lane credential (B2). Required precisely when — under the
-    current seat map + lane env — some seat resolves to the anthropic provider.
-    A keyless install is reported honestly (those seats cannot run) rather than
-    making a live call without a key; when a key is present, a harmless read-only
-    GET /v1/models validates it. The value is never echoed anywhere.
+    current seat map + lane env — some seat resolves to the anthropic provider
+    ON THE API LANE. When a key is present, a harmless read-only GET /v1/models
+    validates it. The value is never echoed anywhere.
+
+    NL-155 (2026-08-14) — THE LANE HALF WAS MISSING, AND IT MADE THE DOCTOR LIE.
+    This filtered seats by PROVIDER alone and never looked at the lane, so on a
+    keyless DEFAULT install — the shape every Claude seat has had since B3
+    (2026-07-16) — it emitted a FAIL reading "the analyst, editor,
+    follow_altitude, rank, script, state, writer seat(s) now run on the Claude
+    API lane and cannot run without it". Both clauses were false: those seats
+    run on the `claude -p` SUBSCRIPTION lane, and they run there perfectly well
+    with no key at all. The doctor's whole job is to tell the principal what is
+    actually wrong with his machine; a red line on a healthy install is worse
+    than no line, because it trains him to discount the section.
+
+    The three worlds now separate:
+      * some anthropic seat is genuinely on the API lane -> FAIL, unchanged
+        wording (it was always the right sentence, just for the wrong world);
+      * no API-lane seat but NEWSLENS_LANE_FALLBACK=api is armed -> WARN: the
+        default path is fine, but the fall-over he armed has nothing to fall to,
+        so a CLI outage would die at the API call instead of surviving it;
+      * no API-lane seat, no armed fall-over -> INFO: not needed, and say what
+        WOULD make it needed.
 
     The models are DERIVED (see `_models_for`) — this docstring used to assert
     "rank/editor/script run Haiku 4.5 by default" and outlived that by two seat
     batches."""
-    anthropic_seats = sorted(
-        name for name in llm.SEATS
-        if llm.resolve_seat(name, env).provider == "anthropic"
-    )
+    resolved = {name: llm.resolve_seat(name, env) for name in llm.SEATS}
+    anthropic_seats = sorted(n for n, c in resolved.items()
+                             if c.provider == "anthropic")
+    # THE SEATS THAT ACTUALLY SPEND THIS KEY: anthropic provider AND api lane.
+    api_seats = sorted(n for n in anthropic_seats if resolved[n].lane == "api")
+    # FIX LOOP 1 (QA F-3, 2026-08-14) — A PARTITION, NOT A SUBTRACTION.
+    # `sub_seats` used to be "anthropic seats minus api seats", which is only a
+    # subscription bucket if every remaining lane is the subscription lane. A
+    # lane comes from an env var, so `NEWSLENS_LANE=sbscription` — one dropped
+    # letter — swept all seven Claude seats into it and this check printed INFO
+    # "the … seat(s) run on the claude -p subscription lane": a POSITIVE claim
+    # about a machine on which `check_llm_lanes` (below, same report) FAILs
+    # every seat. Two sections of one doctor run contradicting each other, and
+    # the reassuring one read first. The valid set is DERIVED from the dispatch
+    # registry so a lane added later is recognised here without an edit.
+    valid_lanes = set(llm.registered_lanes("anthropic"))
+    unregistered = sorted(n for n in anthropic_seats
+                          if resolved[n].lane not in valid_lanes)
+    sub_seats = sorted(n for n in anthropic_seats
+                       if n not in api_seats and n not in unregistered)
+    armed = llm.fallback_armed(env)
     key = (env.get("ANTHROPIC_API_KEY") or "").strip()
     if not anthropic_seats:
         # Everything routes to openai (e.g. lanes overridden) — the key is not
@@ -352,12 +392,59 @@ def check_anthropic_key(env: Dict[str, str]) -> List[Result]:
                                  "routes to the Claude API lane — unused")]
         return [Result(INFO, "ANTHROPIC_API_KEY not needed — no seat routes to "
                              "the Claude API lane under the current seat map")]
-    seats_txt = ", ".join(anthropic_seats)
+    if unregistered:
+        # The fourth world (QA F-3). This check answers "do I need this key?",
+        # and under a lane nothing implements the honest answer is that the
+        # question does not yet have one — so it is WITHHELD rather than
+        # guessed. Not a FAIL: `check_llm_lanes` owns the root-cause verdict and
+        # already prints it once per seat; a second red here would blame the
+        # credential for a config error and hand the reader a fix (buy a key)
+        # that changes nothing. A WARN cannot be misread as "healthy", which is
+        # the whole defect being closed. Deliberately BEFORE the key-present
+        # branch: a machine that cannot run a step earns no live validation
+        # call, and the seat roles that line would print are exactly the ones
+        # we cannot state.
+        bad = sorted({resolved[n].lane for n in unregistered})
+        return [Result(
+            WARN,
+            "ANTHROPIC_API_KEY — verdict withheld: the "
+            f"{', '.join(unregistered)} seat(s) resolve to lane "
+            f"{', '.join(repr(b) for b in bad)}, which has no registered "
+            "implementation, so any step on those seats dies at the lane gate "
+            "before a key could matter (the LLM lane map below FAILs each one "
+            "— fix that first). Unset NEWSLENS_LANE / NEWSLENS_LANE_<SEAT>, or "
+            "name a lane that exists: "
+            f"{', '.join(llm.registered_lanes('anthropic'))}",
+        )]
+    seats_txt = ", ".join(api_seats or anthropic_seats)
+    if not key and not api_seats:
+        # The DEFAULT install. Not a failure — the subscription lane is the
+        # shipped path and it needs the logged-in CLI, not this key.
+        sub_txt = ", ".join(sub_seats)
+        if armed:
+            return [Result(
+                WARN,
+                f"ANTHROPIC_API_KEY not set, but NEWSLENS_LANE_FALLBACK=api is "
+                f"ARMED — the {sub_txt} seat(s) run on the claude -p "
+                "subscription lane and need no key, so the default path is "
+                "fine; the fall-over you armed, however, has nothing to fall "
+                "to: a missing/unauthed CLI would die at the API call instead "
+                "of surviving it. Add a key (console.anthropic.com/settings/"
+                "keys, set a monthly cap) or unset NEWSLENS_LANE_FALLBACK",
+            )]
+        return [Result(
+            INFO,
+            f"ANTHROPIC_API_KEY not needed — the {sub_txt} seat(s) run on the "
+            "claude -p subscription lane against your logged-in CLI (checked "
+            "in the Subscription lane section below), not the Claude API. It "
+            "becomes required only if you pin a seat to the API lane with "
+            "NEWSLENS_LANE_<SEAT>=api or arm NEWSLENS_LANE_FALLBACK=api",
+        )]
     if not key:
         return [Result(
             FAIL,
             f"ANTHROPIC_API_KEY not set — the {seats_txt} seat(s) now run on the "
-            f"Claude API lane ({_models_for(anthropic_seats, env)}) and cannot "
+            f"Claude API lane ({_models_for(api_seats, env)}) and cannot "
             "run without it; get one at console.anthropic.com/settings/keys, "
             "set a monthly cap, add to .env",
         )]
@@ -372,11 +459,22 @@ def check_anthropic_key(env: Dict[str, str]) -> List[Result]:
             payload = json.load(resp)
         elapsed = time.monotonic() - started
         count = len(payload.get("data", []))
+        # NL-155: say what the key actually does HERE. "powers the <seats>"
+        # was printed even when every one of those seats was on the
+        # subscription lane and spending nothing of it.
+        if api_seats:
+            role = f"powers the {seats_txt} seat(s)"
+        elif armed:
+            role = (f"no seat spends it on the default path — it backs the "
+                    f"ARMED fall-over for the {', '.join(sub_seats)} seat(s)")
+        else:
+            role = ("no seat spends it today — every Claude seat is on the "
+                    "claude -p subscription lane; it is here for a pinned "
+                    "NEWSLENS_LANE_<SEAT>=api or an armed fall-over")
         return [Result(
             PASS,
             f"ANTHROPIC_API_KEY valid — read-only GET /v1/models OK "
-            f"({count} models visible, {elapsed:.1f}s); powers the {seats_txt} "
-            "seat(s)",
+            f"({count} models visible, {elapsed:.1f}s); {role}",
         )]
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
@@ -1223,6 +1321,27 @@ def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
         if llm.resolve_seat(name, env).lane == "subscription"
     )
     if not sub_seats:
+        # FIX LOOP 1 (2026-08-14) — QA F-3's defect class at its sibling site,
+        # found while fixing the named one. The bucket being empty has TWO
+        # causes and this line asserted one of them: "the api lane covers the
+        # anthropic seats" is true when the seats moved to the api lane, and
+        # false when they resolved to a lane nothing implements, where they are
+        # covered by nothing at all. The seat test here is a positive membership
+        # check (lane == "subscription"), so it never had the subtraction bug —
+        # only the reassurance attached to its empty case.
+        stray = sorted({c.lane for c in
+                        (llm.resolve_seat(n, env) for n in llm.SEATS)
+                        if c.provider == "anthropic"
+                        and c.lane not in set(llm.registered_lanes("anthropic"))})
+        if stray:
+            return [Result(INFO, "no seat resolves to the claude -p "
+                                 "subscription lane — and NOT because they "
+                                 "moved to the api lane: "
+                                 f"{', '.join(repr(s) for s in stray)} is not a "
+                                 "registered lane, so those seats are covered "
+                                 "by nothing (the LLM lane map below FAILs each "
+                                 "one). Nothing to check here until that is "
+                                 "fixed")]
         return [Result(INFO, "no seat resolves to the claude -p subscription "
                              "lane under the current config — nothing to check "
                              "(the api lane covers the anthropic seats)")]
@@ -1314,7 +1433,12 @@ def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
                 f"timeout {cfg.timeout_s}s · "
                 f"${cfg.usd_per_mtok_in:.2f}/${cfg.usd_per_mtok_out:.2f} per MTok")
         try:
-            llm.check_lane(cfg)  # preflight only — no live call
+            # NL-156: preflight only (no live call) — and against THIS env, the
+            # same one `resolve_seat` just used. Until 2026-08-14 the binary leg
+            # read os.environ, so a NEWSLENS_CLAUDE_BIN set in .env but not
+            # exported was honoured by the "Subscription lane" section below
+            # (which passes env) and ignored by this one.
+            llm.check_lane(cfg, env)
             out.append(Result(INFO, line))
         except llm.LaneUnavailable as exc:
             out.append(Result(FAIL, f"{line} — {exc}"))

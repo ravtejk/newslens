@@ -94,6 +94,28 @@ def _default_stub_claude() -> Path:
 
 _STUB_CLAUDE_BIN = _default_stub_claude()
 
+# NL-156: the dead stand-in for llm.CLAUDE_BIN_DEFAULT under the sandbox (see
+# sandbox_paths). Deliberately NOT under tmp_path: pytest's tmp_path embeds the
+# TEST NAME, and this path is echoed verbatim in the doctor's lane-FAIL text —
+# test_nl147_no_haiku asserts "haiku" appears on no doctor surface and is itself
+# named ..._no_haiku, so a tmp_path sentinel made that test fail on its own
+# filename. (Same trap `_doctor_surfaces` documents having already sprung once.)
+_NO_MACHINE_DEFAULT_CLAUDE = "/nonexistent/newslens-suite/no-machine-default-claude"
+
+
+def sandbox_bin_env(**extra) -> dict:
+    """An env mapping that DECLARES the sandbox's stub `claude` — i.e. "a normal
+    install, CLI present and resolvable".
+
+    NL-156 (2026-08-14): `check_lane` resolves the binary from the env it is
+    handed, so a test passing a hand-built mapping to `effective_seat` or
+    `doctor.check_llm_lanes` must say what binary that world has. Before, such a
+    mapping quietly inherited the process env's stub and the test read as though
+    `{}` meant "a healthy machine" — it did not, it meant "ask os.environ". Use
+    this where the intended world has a working CLI; pass a path that does not
+    resolve where the intended world has none."""
+    return {"NEWSLENS_CLAUDE_BIN": str(_STUB_CLAUDE_BIN), **extra}
+
 
 def rank_keys(content):
     """NL-70 re-key: a real rank seat emits bracketed [id=KEY] Crockford codes,
@@ -775,6 +797,21 @@ def sandbox_paths(tmp_path, monkeypatch, scrub_env):
     # never do). A test that exercises the subprocess overrides this with its
     # own shim; a test asserting api-lane transport pins NEWSLENS_LANE_<SEAT>=api.
     monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", str(_STUB_CLAUDE_BIN))
+    # NL-156 (2026-08-14) — THE SAME GUARD, MADE STRUCTURAL. The env pin above
+    # only protects resolution that READS os.environ. Now that check_lane
+    # honours the env it is handed, any caller passing a HAND-BUILT mapping
+    # (doctor.check_llm_lanes({}), effective_seat(seat, {...}) — the suite is
+    # full of them) skips the env leg entirely: PATH resolves to "" by the
+    # resolve_claude_bin rule, and the last leg, CLAUDE_BIN_DEFAULT, is a FIXED
+    # MACHINE PATH that no env can redirect. On this machine
+    # ~/.local/bin/claude exists, so that leg would hand product code the real
+    # agent binary and make the suite's verdict depend on whether the developer
+    # has the CLI installed. Kill the leg for the whole suite; the three tests
+    # that exercise it (test_b3_subscription_lane_qa.py) monkeypatch their own
+    # synthetic default on top of this, which still wins.
+    from newslens import llm as _llm
+    monkeypatch.setattr(
+        _llm, "CLAUDE_BIN_DEFAULT", _NO_MACHINE_DEFAULT_CLAUDE)
     return tmp_path
 
 

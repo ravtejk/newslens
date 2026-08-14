@@ -1295,7 +1295,21 @@ def resolve_claude_bin(env: Optional[Dict[str, str]] = None) -> Tuple[Optional[s
     (returns None) rather than silently falling through to PATH — the operator
     pointed at a specific binary, and a wrong path must be named, not skipped.
     (This is also what keeps the test suite from ever reaching the real binary:
-    the conftest points NEWSLENS_CLAUDE_BIN at a non-existent sentinel.)"""
+    the conftest points NEWSLENS_CLAUDE_BIN at a canned-success STUB shim that
+    exists. NL-155 truth-edit: this said "a non-existent sentinel" until
+    2026-08-14, describing an alternative ADR-0015 considered and REJECTED —
+    a sentinel reddened the ~680 assertions that only need check_lane to pass.
+    See tests/conftest.py's SCRUBBED_ENV_VARS note and `_STUB_CLAUDE_SRC`.)
+
+    THE ENV IS THE WHOLE WORLD (NL-156, 2026-08-14). When a caller hands in an
+    env, every leg reads THAT mapping — including PATH, which defaults to ""
+    (search nothing) rather than to None. `shutil.which(path=None)` silently
+    consults os.environ["PATH"], so a hand-built env without a PATH key used to
+    resolve against the CALLING PROCESS's PATH — on a developer machine with the
+    real `claude` installed that is a resolution the caller never asked for and
+    cannot see. The default leg (CLAUDE_BIN_DEFAULT) is a fixed machine path and
+    is deliberately NOT env-derived; the suite kills it structurally in conftest
+    so a partial env cannot reach the real binary through it either."""
     env = os.environ if env is None else env
     override = (env.get("NEWSLENS_CLAUDE_BIN") or "").strip()
     if override:
@@ -1303,7 +1317,7 @@ def resolve_claude_bin(env: Optional[Dict[str, str]] = None) -> Tuple[Optional[s
             return override, "env"
         return None, (f"NEWSLENS_CLAUDE_BIN={override!r} is not an executable "
                       "file — fix the path or unset it to fall back to PATH")
-    found = shutil.which("claude", path=env.get("PATH"))
+    found = shutil.which("claude", path=env.get("PATH", ""))
     if found:
         return found, "path"
     if os.path.isfile(CLAUDE_BIN_DEFAULT) and os.access(CLAUDE_BIN_DEFAULT, os.X_OK):
@@ -1519,8 +1533,15 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
     cfg = req.cfg
     bin_path, source = resolve_claude_bin()
     if bin_path is None:
-        # Belt-and-suspenders: check_lane already resolved the binary at the
-        # gate, so this only fires on a between-gate-and-call disappearance.
+        # Belt-and-suspenders. Since NL-156 the gate resolves the binary from
+        # the env it was HANDED (check_lane(cfg, env)) while this transport
+        # resolves from os.environ, so the two agree only because load_env()
+        # merges .env into os.environ at every entrypoint — a caller that hands
+        # check_lane a mapping os.environ does not carry would preflight one
+        # binary and call another (QA F-8, 2026-08-14). Under that coincidence
+        # this fires on a between-gate-and-call disappearance; without it, on a
+        # gate/transport disagreement. Either way it is a raise, never a
+        # silent fall-through.
         raise LaneUnavailable(
             f"seat '{cfg.seat}' is on the claude -p subscription lane but "
             f"{source}"
@@ -1613,6 +1634,25 @@ _PROVIDERS: Dict[str, Provider] = {
 }
 
 
+def registered_lanes(provider: str) -> Tuple[str, ...]:
+    """The lanes `provider` has a registered implementation for, DERIVED from
+    the dispatch registry above — so this can never drift from what `chat`
+    will actually accept.
+
+    NL-155 fix loop 1 (QA F-3, 2026-08-14). The doctor was partitioning seats
+    by SUBTRACTION — "anthropic seats that are not api-lane seats" — which put
+    every seat on an unimplemented lane (`NEWSLENS_LANE=sbscription`) into the
+    subscription bucket and printed a cheerful INFO about a machine that cannot
+    run a single step. Subtraction is the wrong shape for a partition whose
+    third cell (invalid) is reachable from a typo in a env var. Note the
+    registry's openai key is the bare provider name (openai lives only on the
+    api lane), which is why the lane is read as `key.partition(":")[2] or
+    "api"` rather than by splitting on a required colon."""
+    lanes = {key.partition(":")[2] or "api"
+             for key in _PROVIDERS if key.split(":", 1)[0] == provider}
+    return tuple(sorted(lanes))
+
+
 def _provider_key(cfg: SeatConfig) -> str:
     # openai lives only on the api lane; forcing it onto another lane is an
     # unavailable combo and must fail loud (never a silent api call).
@@ -1671,7 +1711,9 @@ def effective_seat(seat: str,
     env = os.environ if env is None else env
     cfg = resolve_seat(seat, env)
     try:
-        check_lane(cfg)
+        # NL-156: the SAME env the seat was resolved from also resolves the
+        # binary. These two lines used to read different worlds.
+        check_lane(cfg, env)
         return cfg, None
     except LaneUnavailable as sub_exc:
         # Fall ONLY a GENUINE subscription lane — one whose subscription provider
@@ -1686,7 +1728,7 @@ def effective_seat(seat: str,
         if cfg.lane == "subscription" and sub_registered and fallback_armed(env):
             api_cfg = replace(cfg, lane="api")
             try:
-                check_lane(api_cfg)
+                check_lane(api_cfg, env)
             except LaneUnavailable:
                 raise sub_exc      # both lanes dead -> die loud on the original
             return api_cfg, "subscription_unavailable"
@@ -1700,13 +1742,37 @@ def fallback_lane_label(reason: Optional[str], lane: str) -> str:
     return lane if not reason else f"{lane}(fallback:{reason})"
 
 
-def check_lane(cfg: SeatConfig) -> None:
+def check_lane(cfg: SeatConfig, env: Optional[Dict[str, str]] = None) -> None:
     """Preflight: raise LaneUnavailable (fail-loud, named fix) if the seat's
     resolved lane has no registered provider. A caller runs this ONCE per step
     BEFORE any transport or retry, so a config error never sleeps, never
     retries, and — the D1 close — never lets one seat's transport run while a
     different seat's lane is what the ledger records: the preflighted seat is
     the seat the ledger attributes and the lane the bytes ride.
+
+    `env` (NL-156, 2026-08-14) is the mapping the BINARY is resolved from, and
+    it must be the same mapping the SEAT was resolved from. It used to be
+    neither passed nor accepted: `resolve_claude_bin()` read os.environ while
+    the caller had already resolved `cfg` out of some other env, so this gate
+    answered a question about a world its caller was not in. Two concrete
+    harms, both observed rather than theorised:
+
+      * PRODUCTION — the doctor. `check_llm_lanes(env)` builds `env` from
+        `load_effective_env()` (.env values under os.environ), resolves each
+        seat from it, then preflighted the binary from os.environ. A principal
+        who set NEWSLENS_CLAUDE_BIN in .env WITHOUT exporting it got a "LLM
+        lanes" section judging a binary that env never named, while the
+        "Subscription lane" section right below it (doctor.py's
+        resolve_claude_bin(env) call) judged the one it did. Two sections of
+        one report, disagreeing about the same machine.
+      * QA — the swallowed probe. Two 08-13 fall-over probes passed
+        NEWSLENS_CLAUDE_BIN in the mapping handed to `effective_seat` and had
+        to ALSO monkeypatch the process env to make the fall fire; both
+        docstrings conceded the mapping entry was inert. A probe that must
+        reach around the seam it is probing cannot witness that seam break.
+
+    Default None => os.environ, so the callers that legitimately have no env in
+    hand (generate's stage preflight, memory_core's state gate) are unchanged.
 
     B3: for a subscription-lane seat the binary must ALSO resolve here (pure
     filesystem check, no spawn) — a missing/misconfigured CLI is a config
@@ -1717,7 +1783,7 @@ def check_lane(cfg: SeatConfig) -> None:
     means BOTH the provider is registered AND its binary is present."""
     _select_provider(cfg)
     if cfg.lane == "subscription":
-        bin_path, reason = resolve_claude_bin()
+        bin_path, reason = resolve_claude_bin(env)
         if bin_path is None:
             raise LaneUnavailable(
                 f"seat '{cfg.seat}' is on the claude -p subscription lane but "
@@ -1768,13 +1834,26 @@ def seat_is_openai(seat: str, env: Optional[Dict[str, str]] = None) -> bool:
     """True iff `seat` resolves to the OpenAI provider (gpt-4o) — i.e. it needs
     OPENAI_API_KEY. A″ (2026-07-17, keyless-OpenAI audit): the legacy per-stage
     'OPENAI_API_KEY not set -> refuse' checks were written when every seat was
-    gpt-4o. Post-B4 only `state` (and `synthesis`, no live call site yet) is
-    openai; rank/editor/script/analyst/writer/follow_altitude are anthropic and
-    the OpenAI key is INERT for them (passed as the openai offline-test seam value,
-    ignored by the anthropic providers). So a caller requires the key ONLY when
-    `seat_is_openai(seat)` — a keyless-OpenAI run with all-anthropic seats is
-    healthy. Provider is fixed per seat (env overrides change only lane/model), so
-    this is False for the anthropic seats regardless of NEWSLENS_MODEL_/LANE_."""
+    gpt-4o.
+
+    THE LIVE ROSTER (NL-155 truth-edit, 2026-08-14): `synthesis` is the ONLY
+    openai seat, and it still has no live call site — so `seat_is_openai` is
+    False for every seat the pipeline actually calls. All seven of
+    rank/editor/script/analyst/writer/state/follow_altitude are anthropic, and
+    the OpenAI key is INERT for them (passed as the openai offline-test seam
+    value, ignored by the anthropic providers).
+
+    This paragraph said "only `state` (and `synthesis`, no live call site yet)
+    is openai" until 2026-08-14 — written at the 07-17 audit and outlived by
+    ENG-M0 (2026-08-06), which moved `state` to Opus 4.8 on the subscription
+    lane. generate.py's keyless-OpenAI arm around the state preflight already
+    describes the seat correctly and goes quiet; this docstring was the last
+    place still naming `state` as the openai seat.
+
+    So a caller requires the key ONLY when `seat_is_openai(seat)` — a
+    keyless-OpenAI run is healthy today. Provider is fixed per seat (env
+    overrides change only lane/model), so this is False for the anthropic seats
+    regardless of NEWSLENS_MODEL_/LANE_."""
     return resolve_seat(seat, env).provider == "openai"
 
 

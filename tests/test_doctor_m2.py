@@ -142,8 +142,15 @@ def test_keyless_doctor_with_active_sources_fetches_feeds_but_never_the_apis(
     request when keyless. Verified by pointing BOTH API constants at the local
     fake and asserting it recorded only feed GETs. Gate ruling 2 (2026-07-17):
     keyless-OpenAI is no longer an API-key FAIL — after the state flip no live
-    seat routes to gpt-4o, so the OpenAI line renders INFO 'not needed'; the
-    honest exit-1 rests on the required ANTHROPIC key instead."""
+    seat routes to gpt-4o, so the OpenAI line renders INFO 'not needed'.
+
+    NL-155 (2026-08-14): nor is the Claude key. This docstring said "the honest
+    exit-1 rests on the required ANTHROPIC key instead" — it did not. Every
+    Claude seat is on the `claude -p` subscription lane, and the FAIL that
+    sentence leaned on came from `check_anthropic_key` filtering seats by
+    PROVIDER and never by lane. Keyless is now keyless in both directions; the
+    exit-1 rests on genuinely undone setup. This test's spine — zero API traffic
+    on a keyless machine — is untouched."""
     _write_tiered(fake_api)
     monkeypatch.setattr(doctor, "OPENAI_MODELS_URL", fake_api.base_url + "/v1/models")
     monkeypatch.setattr(
@@ -151,9 +158,15 @@ def test_keyless_doctor_with_active_sources_fetches_feeds_but_never_the_apis(
     )
     code = doctor.run_doctor()
     out = capsys.readouterr().out
-    assert code == 1  # keys still missing — honest exit
+    assert code == 1  # setup still undone — honest exit
     assert "OPENAI_API_KEY not needed — no live seat routes to OpenAI" in out  # ruling 2: INFO
-    assert "ANTHROPIC_API_KEY not set" in out                                  # the real required failure
+    assert "ANTHROPIC_API_KEY not needed" in out            # NL-155: nor this one
+    assert "ANTHROPIC_API_KEY not set" not in out
+    # NL-155: no credential may be reported as a failure on a keyless machine
+    # whose every seat runs on the subscription lane.
+    fail_lines = [l.strip() for l in out.splitlines() if "✗" in l]
+    assert fail_lines, "exit 1 with no ✗ line to justify it"
+    assert not any("API_KEY" in l for l in fail_lines), fail_lines
     hit = {(r["method"], r["path"]) for r in fake_api.recorded}
     assert ("GET", "/v1/models") not in hit
     assert ("POST", "/chat/completions") not in hit

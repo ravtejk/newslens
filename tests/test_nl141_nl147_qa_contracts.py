@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from newslens import llm
+from newslens import doctor, llm
 
 PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,6 +44,78 @@ PROTOTYPE_ROOT = Path(__file__).resolve().parents[1]
 # their mentions are dated history rows and measurement receipts, which the
 # no-Haiku law protects rather than purges.
 SHIPPED_PROSE = (".env.example", "README.md", "SETUP.md")
+
+
+def _readme_env_row(var: str):
+    """(required_cell, why_cell) for one row of README's credentials table."""
+    text = (PROTOTYPE_ROOT / "README.md").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if line.startswith(f"| `{var}`"):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            assert len(cells) >= 3, f"malformed env-table row for {var}: {cells}"
+            return cells[1], cells[2]
+    raise AssertionError(f"no README env-table row for {var}")
+
+
+@pytest.mark.parametrize("var,check", [
+    ("OPENAI_API_KEY", "check_openai_key"),
+    ("ANTHROPIC_API_KEY", "check_anthropic_key"),
+])
+def test_readme_never_demands_a_key_the_doctor_calls_unnecessary(var, check):
+    """NL-155 (2026-08-14). BORN RED at ce334d1 on OPENAI_API_KEY.
+
+    The README's `Required` column and the doctor's keyless verdict are two
+    answers to one question — "must I fill this in for a default install?" —
+    and they had drifted apart. README said **Yes** for OPENAI_API_KEY and
+    justified it with "the narrative (writer), analyst, and synthesis seats",
+    while `check_openai_key({})` on that same tree returned INFO / "not needed"
+    because writer and analyst left for the Claude lane at B4/item C and
+    `synthesis` is dormant. The prose was two seat batches stale and demanded a
+    purchase the product had stopped needing.
+
+    This pin does not hardcode which keys are needed — it DERIVES the answer
+    from the doctor (which derives it from `llm.SEATS` + `llm.DORMANT_SEATS`)
+    and only requires the table not to contradict it. A future seat flip that
+    genuinely re-arms a key turns the doctor's verdict red-or-FAIL first, and
+    then a bare "Yes" is allowed again.
+
+    Scope, deliberately narrow: it constrains the Required CELL, not the prose
+    cell. The Why column carries dated correction narratives by design, and a
+    grep-the-prose rule would fight those."""
+    required, why = _readme_env_row(var)
+    verdict = getattr(doctor, check)({})
+    assert len(verdict) == 1, f"{check}({{}}) is no longer a single line"
+    status, text = verdict[0].status, verdict[0].text
+    # FIX LOOP 1, QA F-4 (2026-08-14) — THE PREDICATE IS TEXT-DRIVEN, AND IT MAY
+    # NOT SHRUG. Keyed on `status == INFO` it went vacuous under every other
+    # verdict: QA disarmed this pin entirely by moving the verdict to WARN with
+    # the words "not needed" still in it and a bare `**Yes**` restored to the
+    # table — green, with the contradiction fully present. That world is not
+    # hypothetical, because THIS batch added a WARN branch to the ANTHROPIC row
+    # (armed fall-over, no key); a future default that arms it would have
+    # switched half the pin off silently. A FAIL is the only verdict that can
+    # make a key genuinely required, so anything else is read for its words —
+    # and a non-FAIL whose words this pin cannot read FAILS LOUDLY rather than
+    # passing, which is the difference between a pin and a decoration.
+    _DENIALS = ("not needed", "need no key", "not required", "verdict withheld")
+    unnecessary = status != doctor.FAIL and any(d in text for d in _DENIALS)
+    if unnecessary:
+        # FIX LOOP 1, QA F-5: a LEADING yes, however qualified. `!= "yes"`
+        # caught `**Yes**` and waved through `Yes (text generation)` — which is
+        # the exact shape the stale claim NL-155 deleted would grow back as.
+        assert not re.match(r"yes\b", required.strip().strip("*_ ").lower()), (
+            f"README marks {var} Required='{required}', but the doctor's own "
+            f"keyless verdict on this tree is:\n    [{status}] {text}\n"
+            "One of the two is lying to the principal about what he must buy "
+            "before the product will run.")
+    else:
+        assert status == doctor.FAIL, (
+            f"{check}({{}}) returned [{status}] with wording this pin cannot "
+            f"read:\n    {text}\nThat is neither a FAIL (the key is genuinely "
+            f"required, so a bare 'Yes' is allowed) nor any denial it knows "
+            f"{_DENIALS}. Teach it the new wording — a pin that cannot read "
+            "the verdict must say so, not pass.")
+    assert why, f"{var} row has an empty Why/scope cell"
 
 
 @pytest.mark.parametrize("relpath", SHIPPED_PROSE)
@@ -82,7 +154,7 @@ def test_no_shipped_artifact_claims_a_haiku_seat(relpath):
         + ", ".join(f"{n}={c.model}" for n, c in sorted(llm.SEATS.items())))
 
 
-def test_the_shipped_fall_over_keeps_each_seats_own_model(monkeypatch):
+def test_the_shipped_fall_over_keeps_each_seats_own_model():
     """QA F-2 (2026-08-13) — the fall-over pin with teeth.
 
     As first written, `test_a_lane_fall_over_never_substitutes_the_model`
@@ -96,13 +168,19 @@ def test_the_shipped_fall_over_keeps_each_seats_own_model(monkeypatch):
     This drives the shipped function instead. The fall is forced the way the
     product forces it — NEWSLENS_LANE_FALLBACK=api armed, and the subscription
     lane genuinely unavailable because the `claude` binary does not resolve.
-    Note `check_lane` resolves that binary from os.environ, NOT from the env
-    mapping passed to `effective_seat`, which is why this monkeypatches the
-    process environment.
+
+    NL-156 (2026-08-14): the `monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", ...)`
+    that used to sit here is DELETED. Its docstring conceded that "`check_lane`
+    resolves that binary from os.environ, NOT from the env mapping passed to
+    `effective_seat`" — so the mapping's NEWSLENS_CLAUDE_BIN entry bought
+    nothing and the process env forced the fall. A probe that has to reach
+    around the seam it is probing cannot see that seam break. `check_lane` now
+    honours the env it is handed, so the mapping alone stages the fall; this is
+    BORN RED on the pre-NL-156 tree (conftest's process-env stub EXISTS, so the
+    old `check_lane` found it, nothing fell, and `assert fell` failed).
 
     No spawn, no network, no spend: `check_lane`'s binary check is a filesystem
     stat and the api-lane check is a registry lookup."""
-    monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", "/nonexistent/qa/no-such-claude")
     env = {
         "NEWSLENS_LANE_FALLBACK": "api",
         "ANTHROPIC_API_KEY": "sk-ant-not-a-real-key-never-sent",

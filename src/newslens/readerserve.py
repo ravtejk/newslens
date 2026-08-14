@@ -259,6 +259,13 @@ class Ledger:
     exists: bool
     entries: List[Dict]
     malformed: int
+    # NL-155: a segment could not be read at all, so `entries` is not the
+    # record — it is whatever was reachable, which may be nothing. This was
+    # smuggled through `malformed=-1`, a sentinel that `session_lines` printed
+    # verbatim ("-1 unparseable line(s) in this ledger") and that let the
+    # printout assert "lifetime: charged $0.0000" for a ledger it had failed to
+    # open. A count is the wrong type for "I could not look".
+    unreadable: bool = False
 
     @property
     def count(self) -> int:
@@ -323,7 +330,42 @@ def read_ledger(slug: str, anchor: Optional[Path] = None) -> Ledger:
     property rather than luck: the segment concatenation is rotation-invariant
     (generate.log_segments), so `after.entries[:before.count] == before.entries`
     still holds across a cut and `session_lines` reports a clean append instead
-    of falling back to its changed-shape arm."""
+    of falling back to its changed-shape arm.
+
+    NL-155 — RUN LINES ONLY, via the shared predicate. This was the last reader
+    of generation_log.jsonl with no discriminator; `server`, `diagnose` and
+    `generate` all filtered, and NL-146's F-1 sweep routed this one to the gate
+    as a batch row rather than fixing it. Two harms, the second measured:
+
+      * a scheduled-fire line has no `status`, so it rendered a row reading
+        `?` and inflated the entry count of a profile that had generated
+        nothing;
+      * REAL MONEY WAS DOUBLE-COUNTED. The analysis stage appends its own line
+        carrying `total_usd`, and the run entry carries the same figure as
+        `analysis_usd`, which `entry_money` deliberately adds. With both lines
+        in `entries`, metered Sonar spend hit the charged total twice —
+        $0.027628 reported for $0.013814 spent, on the very figure this door
+        exists to prove is zero. (`entry_money`'s docstring rules out
+        double-counting for the FAILED-entry case and is correct there; it
+        never considered the stage's own line being in the same list.)
+
+    THE BOUND ON THAT CLAIM, MEASURED (QA F-2, 2026-08-14) — THIS COUNTS RUNS,
+    AND ONLY RUNS. A charged total assembled from run entries is not the same
+    thing as the log's total charge: an analysis pass whose money NO run entry
+    carries is invisible here. That is a real state, not a hypothetical — on the
+    founder's own log, `analyze` ran twice on 2026-07-17 and the run that
+    followed carried only the later pass's figure, orphaning the
+    `2026-07-17T22:09:58` stage line. Measured over that log:
+
+        old door $0.926921  ·  THIS door $0.684297  ·  log-true $0.686870
+        old error +$0.240051 (1.35x OVER)   this error -$0.002573 (0.37% under)
+
+    So the honest sentence is "the money the runs account for", never "the money
+    the log records". The direction is not in question — a 35% over-report
+    became a 0.4% under-report — but the residue is real and belongs in the
+    claim, because the next reader of this door will otherwise reconcile it
+    against the raw log and find a gap nothing explains. Closing that gap means
+    attributing orphaned stage lines, which is a different (charterable) job."""
     data_dir = paths.profile_layout(slug, anchor)["DATA_DIR"]
     path = data_dir / LEDGER_NAME
     from . import generate
@@ -350,7 +392,8 @@ def read_ledger(slug: str, anchor: Optional[Path] = None) -> Ledger:
             # profile's history; QA F-1 (2026-08-14) measured it. A replaced
             # byte costs the torn LINE, which then dies at json.loads and is
             # COUNTED in `bad` — visible, never swallowed.
-            return Ledger(path=path, exists=True, entries=[], malformed=-1)
+            return Ledger(path=path, exists=True, entries=[], malformed=0,
+                          unreadable=True)
         for line in raw.splitlines():
             if not line.strip():
                 continue
@@ -360,7 +403,11 @@ def read_ledger(slug: str, anchor: Optional[Path] = None) -> Ledger:
                 bad += 1
                 continue
             if isinstance(parsed, dict):
-                entries.append(parsed)
+                # NL-155: the shared predicate, imported from its owner. A
+                # non-run line is not malformed — it is a different KIND of
+                # line, correctly written, and simply not this door's subject.
+                if generate.is_run_line(parsed):
+                    entries.append(parsed)
             else:
                 bad += 1
     return Ledger(path=path, exists=True, entries=entries, malformed=bad)
@@ -377,16 +424,51 @@ def session_lines(before: Ledger, after: Ledger, live: bool) -> List[str]:
         out.append("  no generation_log yet — nothing was generated in this "
                    "world during this session.")
         return out
-    if after.count >= before.count and after.entries[:before.count] == before.entries:
+    if after.unreadable:
+        # NL-155: say what happened instead of printing zeros. A total we could
+        # not compute must never render as a total that happens to be zero —
+        # "$0.0000 lifetime" reads as "you have never spent anything", which is
+        # the opposite of "I could not open the file".
+        out.append(f"  this ledger COULD NOT BE READ (a segment under "
+                   f"{after.path.parent} would not open) — no session or "
+                   "lifetime figure can be shown. Nothing was lost: the file "
+                   "is untouched by this door. Check its permissions.")
+        return out
+    # `delta_known` is the whole question this block answers: do we know what
+    # THIS session appended? Only the first arm below does. The other two show
+    # the whole file, and what they show must never be labelled a session
+    # figure (below).
+    if before.unreadable:
+        # NL-155 FIX LOOP 1 (QA F-1, 2026-08-14) — THE OTHER HALF OF THE GUARD.
+        # `after.unreadable` was checked above and `before.unreadable` was not,
+        # and the two are not symmetric: an unreadable BEFORE still produces a
+        # Ledger with `entries == []` and `count == 0`, which the delta arm
+        # cannot distinguish from "this profile had no runs yet". Its predicate
+        # `after.entries[:0] == []` matches VACUOUSLY, so the door announced
+        # "this session appended N runs" and billed the profile's entire
+        # lifetime to one session — a money sentence it could not support, the
+        # exact class NL-155 exists to kill. Constructible, not theoretical:
+        # `main` reads `before` at startup (:563) and `after` in the `finally`
+        # (:574), so a permission fixed — or a rotated segment restored — while
+        # the server ran lands here.
+        delta_known = False
+        new = after.entries
+        label = ("the ledger COULD NOT BE READ when this session started, so "
+                 "no session delta can be computed — showing the WHOLE file "
+                 f"({after.count} run{'' if after.count == 1 else 's'}), not "
+                 "this session's own append")
+    elif after.count >= before.count and after.entries[:before.count] == before.entries:
+        delta_known = True
         new = after.entries[before.count:]
-        label = f"this session appended {len(new)} entr" \
-                f"{'y' if len(new) == 1 else 'ies'}"
+        label = f"this session appended {len(new)} run" \
+                f"{'' if len(new) == 1 else 's'}"
     else:
         # The file was rewritten or truncated under us — say so instead of
         # printing a delta that would be arithmetic on two different files.
+        delta_known = False
         new = after.entries
         label = (f"the ledger changed shape during this session "
-                 f"(was {before.count} entries, now {after.count}) — showing "
+                 f"(was {before.count} runs, now {after.count}) — showing "
                  f"the WHOLE file, not a delta")
     out.append(f"  {label}:")
     for entry in new[-10:]:
@@ -394,14 +476,33 @@ def session_lines(before: Ledger, after: Ledger, live: bool) -> List[str]:
         out.append(f"    {entry.get('ts', '?')}  {entry.get('status', '?'):<7}"
                    f"charged ${charged:.4f}   shadow ${shadow:.4f}")
     if len(new) > 10:
-        out.append(f"    … and {len(new) - 10} earlier entr"
-                   f"{'y' if len(new) - 10 == 1 else 'ies'}")
-    s_charged, s_shadow = totals(new)
+        out.append(f"    … and {len(new) - 10} earlier run"
+                   f"{'' if len(new) - 10 == 1 else 's'}")
     l_charged, l_shadow = totals(after.entries)
-    out.append(f"  session:   charged ${s_charged:.4f}  ·  shadow "
-               f"${s_shadow:.4f}")
+    if delta_known:
+        s_charged, s_shadow = totals(new)
+        out.append(f"  session:   charged ${s_charged:.4f}  ·  shadow "
+                   f"${s_shadow:.4f}")
+    # ELSE: no session line at all. In both non-delta arms `new` IS
+    # `after.entries`, so a figure printed here would be the LIFETIME figure
+    # wearing the word "session" — the false sentence QA F-1 caught on the
+    # unreadable-before arm, and the same one the changed-shape arm had been
+    # printing since it was written (it refuses to show a delta in words, then
+    # showed one in money). The lifetime line below states that number once,
+    # under its true name.
+    # NL-155: the count is RUNS (stage and scheduled-fire lines are not runs and
+    # are no longer counted or charged), and the lifetime figure spans every
+    # rotated segment while the filename above names only the live one — the
+    # sibling reader on the reports screen discloses the same span.
+    #
+    # RUNS-ONLY IS ALSO THE BOUND ON THE MONEY (QA F-2): this is what the runs
+    # account for, not what the log records. A metered pass that no run entry
+    # carries — an orphaned analysis stage line, measured once in the founder's
+    # log — is not in this total. See read_ledger's docstring for the figures.
     out.append(f"  lifetime:  charged ${l_charged:.4f}  ·  shadow "
-               f"${l_shadow:.4f}   ({after.count} entries)")
+               f"${l_shadow:.4f}   ({after.count} run"
+               f"{'' if after.count == 1 else 's'}, spanning this profile's "
+               "archived log segments, not just the file named above)")
     if after.malformed:
         out.append(f"  {after.malformed} unparseable line(s) in this ledger — "
                    "not counted above, and worth a look")

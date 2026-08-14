@@ -54,6 +54,7 @@ import dataclasses
 
 import pytest
 
+from conftest import sandbox_bin_env
 from newslens import battery, doctor, llm
 
 
@@ -116,7 +117,7 @@ def test_the_seam_carries_no_haiku_price_constants():
 # 2. The structural guarantee — a lane event cannot change what runs
 # ===========================================================================
 
-def test_a_lane_fall_over_never_substitutes_the_model(monkeypatch):
+def test_a_lane_fall_over_never_substitutes_the_model():
     """CARRIED INVARIANT, and the reason the deleted rows were unarmed rather
     than live: an armed fall moves the TRANSPORT and nothing else, so no
     NEWSLENS_LANE_FALLBACK and no per-seat NEWSLENS_LANE_<SEAT>=api could ever
@@ -135,15 +136,24 @@ def test_a_lane_fall_over_never_substitutes_the_model(monkeypatch):
 
     The fall is forced the way the product forces it: armed via the env mapping,
     with the subscription lane genuinely dead at the gate because the `claude`
-    binary does not resolve. The monkeypatch is not optional and not belt-and-
-    braces — conftest points NEWSLENS_CLAUDE_BIN at a stub that EXISTS, so
-    without this override `check_lane` passes and no seat falls at all.
-    `check_lane` reads that binary from os.environ rather than from the mapping
-    handed to `effective_seat`, which is why this sets the process env too.
+    binary does not resolve.
+
+    NL-156 (2026-08-14) — THE WORKAROUND IS GONE, AND THAT IS THE POINT. This
+    body used to carry `monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", ...)` beside
+    the mapping below, with a docstring conceding "`check_lane` reads that
+    binary from os.environ rather than from the mapping handed to
+    `effective_seat`, which is why this sets the process env too." The mapping's
+    NEWSLENS_CLAUDE_BIN entry was therefore INERT — the process env did all the
+    work, and this probe could not have caught `check_lane` ignoring the env it
+    was handed, because it was silently relying on exactly that. NL-156 made
+    `check_lane` honour its env argument; the monkeypatch is deleted so the
+    mapping is load-bearing, and this test is now the pin for that. It is BORN
+    RED against the pre-NL-156 tree: conftest points the process env's
+    NEWSLENS_CLAUDE_BIN at a stub that EXISTS, so the old `check_lane` resolved
+    it, no seat fell, and the final `assert fell` failed.
 
     No spawn, no network, no spend: the binary check is a filesystem stat and
     the api-lane check is a provider-registry lookup."""
-    monkeypatch.setenv("NEWSLENS_CLAUDE_BIN", "/nonexistent/nl147/no-such-claude")
     env = {
         "NEWSLENS_LANE_FALLBACK": "api",
         "NEWSLENS_CLAUDE_BIN": "/nonexistent/nl147/no-such-claude",
@@ -225,11 +235,19 @@ def _doctor_surfaces(tmp_path):
     echoes the resolved binary path, pytest's `tmp_path` embeds the TEST NAME,
     and this test is named ..._no_haiku — so the first run failed on its own
     filename appearing in the doctor's output. An assertion that can be tripped
-    by what you called the test is not measuring the product."""
+    by what you called the test is not measuring the product. (NL-156 sprang the
+    same trap a second time from the other side: the sandbox's stand-in for
+    CLAUDE_BIN_DEFAULT was briefly a tmp_path child, and the lane-FAIL text
+    echoed it. The stand-in is a fixed name-free constant in conftest now.)
+
+    NL-156: the lane surface is rendered against a DECLARED binary. It was `{}`,
+    which reached os.environ behind the mapping; left as `{}` it would now
+    render seven binary-gate FAILs and this pin would be reading the doctor's
+    error path rather than its lane map."""
     bin_path = _claude_stub(tmp_path)
     surfaces = {
         "anthropic-key (keyless)": doctor.check_anthropic_key({}),
-        "llm lanes": doctor.check_llm_lanes({}),
+        "llm lanes": doctor.check_llm_lanes(sandbox_bin_env()),
         "subscription probe design": doctor.check_subscription_lane(
             {"NEWSLENS_CLAUDE_BIN": bin_path,
              "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE": "1"}),

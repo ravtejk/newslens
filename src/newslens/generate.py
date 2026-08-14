@@ -3660,14 +3660,20 @@ def log_segments(data_dir: Optional[Path] = None) -> List[Path]:
     return log_archives(data_dir) + [log_file(data_dir)]
 
 
-def _is_run_line(entry: Dict) -> bool:
+def is_run_line(entry: Dict) -> bool:
     """A RUN entry, as opposed to the analysis stage's instrumentation line or
     NL-146's fire-decision line.
 
     KEY PRESENCE, never line shape — the file's own idiom, and the same test
     server._run_log_entries applies. The schedule key is imported from its owner
     rather than re-spelled here: a second spelling of that discriminator is a
-    rotation that counts fire lines as runs while the reports screen does not."""
+    rotation that counts fire lines as runs while the reports screen does not.
+
+    PUBLIC since NL-155 (2026-08-14), and for that exact reason: `readerserve`
+    was the last reader of generation_log.jsonl with no discriminator at all,
+    and the fix is to CALL this one rather than grow a fourth spelling of it.
+    A private name on the org's shared predicate was quietly arguing for
+    duplication."""
     from . import schedule
     if not isinstance(entry, dict):
         return False
@@ -3782,7 +3788,7 @@ def _split_index(lines: List[str], retain_runs: int) -> int:
             # split it falls on; it is never a run for counting purposes and it
             # is never dropped.
             continue
-        if _is_run_line(entry):
+        if is_run_line(entry):
             seen += 1
             if seen > retain_runs:
                 # This line is one run PAST the retention floor, so the keep
@@ -3884,7 +3890,7 @@ def rotate_log_if_needed(max_bytes: int = LOG_MAX_BYTES,
 
 def _safe_is_run(raw: str) -> bool:
     try:
-        return _is_run_line(json.loads(raw))
+        return is_run_line(json.loads(raw))
     except ValueError:
         return False
 

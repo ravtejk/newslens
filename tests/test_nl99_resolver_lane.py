@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import sandbox_bin_env
 from newslens import llm
 
 
@@ -114,10 +115,16 @@ def test_the_api_lane_is_reachable_only_by_explicit_sanction():
 
 def test_nothing_falls_from_subscription_to_the_metered_lane_on_its_own():
     """The $0-RUN LAW's teeth on this seat. With no override the default holds,
-    and the api fallback stays UNARMED (07-17 pure-fail-loud)."""
-    cfg, reason = llm.effective_seat("follow_altitude", {})
+    and the api fallback stays UNARMED (07-17 pure-fail-loud).
+
+    NL-156: the world is a HEALTHY install — CLI present, no lane overrides —
+    and it now says so. `{}` used to mean "no overrides, and let check_lane find
+    a binary in os.environ"; with that seam closed, `{}` means a machine with no
+    CLI at all, which fails the lane for a reason this pin is not about."""
+    env = sandbox_bin_env()
+    cfg, reason = llm.effective_seat("follow_altitude", env)
     assert cfg.lane == "subscription" and reason is None
-    assert llm.fallback_armed({}) is False
+    assert llm.fallback_armed(env) is False
 
 
 def test_an_api_forced_resolve_gets_no_thinking_suppression_because_it_needs_none():

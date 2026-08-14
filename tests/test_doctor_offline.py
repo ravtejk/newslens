@@ -71,12 +71,28 @@ def test_keyless_template_run_exits_1_with_fix_hints_and_zero_network(
 
     assert code == 1
     # Gate ruling 2 (2026-07-17): keyless-OpenAI is no longer a required FAIL —
-    # after the state flip no live seat routes to gpt-4o, so the OpenAI key renders
-    # INFO "not needed". The exit-1 now rests on the genuinely-required key: the
-    # anthropic content seats (analyst/editor/rank/script/state/writer/…) make
-    # ANTHROPIC_API_KEY the required one.
+    # after the state flip no live seat routes to gpt-4o, so the OpenAI key
+    # renders INFO "not needed".
     assert "OPENAI_API_KEY not needed — no live seat routes to OpenAI" in out
-    assert "ANTHROPIC_API_KEY not set" in out          # the real required failure
+    # NL-155 (2026-08-14) — AND NEITHER IS THE CLAUDE KEY. This asserted
+    # "ANTHROPIC_API_KEY not set" and called it "the real required failure";
+    # that was the lane-blind bug itself. Every Claude seat has been on the
+    # `claude -p` SUBSCRIPTION lane since B3, so a keyless install needs the
+    # logged-in CLI (checked in its own section below) and no API key at all.
+    # A keyless template run has ZERO missing credentials, and that is the
+    # truth about that machine.
+    assert "ANTHROPIC_API_KEY not needed" in out
+    assert "subscription lane" in out
+    assert "ANTHROPIC_API_KEY not set" not in out
+    # So the exit-1 must rest on something real — and this pin now NAMES it,
+    # rather than passing on an exit code nobody can account for. What is
+    # genuinely undone on a template machine is setup work, not credentials.
+    fail_lines = [l.strip() for l in out.splitlines() if "✗" in l]
+    assert fail_lines, "exit 1 with no ✗ line to justify it"
+    assert any("TTS engine venv missing" in l for l in fail_lines), fail_lines
+    assert not any("API_KEY" in l for l in fail_lines), (
+        "a credential is reported as a FAILURE on a healthy keyless install: "
+        f"{fail_lines}")
     # Discovery PAUSED (2026-07-25): the doctor reports the RULING here, not a
     # missing-key hint — a key-shaped nag under a pause is how a paused feature
     # gets helpfully un-paused. (PERPLEXITY_HINT returns once unpaused; pinned

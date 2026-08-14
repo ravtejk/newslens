@@ -811,14 +811,119 @@ def test_analyst_lane_misconfig_degrades_per_slot_not_run_killing(
 def test_doctor_keyless_anthropic_is_a_fail_line_with_zero_network(no_network):
     """Keyless degrade: the seats that need the key are NAMED, the fix is
     actionable (console URL + monthly-cap nudge), and the check makes NO
-    network attempt — proven by the socket recorder, not by reading the code."""
-    results = doctor.check_anthropic_key({})
+    network attempt — proven by the socket recorder, not by reading the code.
+
+    NL-155 (2026-08-14) — SAME CLAIM, RESTAGED IN THE WORLD THAT MAKES IT TRUE.
+    Every assertion below is the one this pin has always made. What changed is
+    the input: it used to pass `{}` — a keyless DEFAULT install — and the FAIL
+    it observed there was the bug, not the contract. Since B3 (2026-07-16) the
+    default install puts every Claude seat on the `claude -p` subscription
+    lane, where this key is not used and not wanted; `check_anthropic_key`
+    filtered on PROVIDER only, never lane, so it failed a healthy machine while
+    telling it those seats "now run on the Claude API lane and cannot run
+    without it" — two false clauses in one red line.
+
+    The FAIL is real for the world it describes, so the world is now stated:
+    `NEWSLENS_LANE=api` puts the anthropic seats on the metered lane, which is
+    precisely when a missing key stops them. The default-install verdict is
+    pinned next door in
+    test_doctor_keyless_anthropic_on_a_default_install_is_not_a_failure."""
+    results = doctor.check_anthropic_key({"NEWSLENS_LANE": "api"})
     assert [r.status for r in results] == [doctor.FAIL]
     text = results[0].text
     for seat in ("editor", "rank", "script"):
         assert seat in text
     assert "console.anthropic.com" in text
     assert "monthly cap" in text
+    assert no_network == []
+
+
+def test_doctor_keyless_anthropic_on_a_default_install_is_not_a_failure(
+        no_network):
+    """NL-155, the verdict this batch changes. BORN RED at ce334d1, where the
+    keyless default install scored FAIL.
+
+    The shipped default: every Claude seat on the subscription lane, no key, no
+    lane overrides, no armed fall-over. Nothing is wrong with that machine, so
+    nothing may be reported wrong about it. The line must also EARN its place —
+    an INFO that just says "not needed" leaves the reader wondering what the
+    variable is for, so it names the lane those seats actually use, points at
+    the section that checks that lane, and states the two things that would
+    make the key required."""
+    results = doctor.check_anthropic_key({})
+    assert [r.status for r in results] == [doctor.INFO]
+    text = results[0].text
+    assert "not needed" in text
+    # the honest reason, not a bare denial
+    assert "subscription lane" in text
+    for seat in ("editor", "rank", "script", "writer", "analyst", "state"):
+        assert seat in text
+    # and what WOULD make it required
+    assert "NEWSLENS_LANE_<SEAT>=api" in text
+    assert "NEWSLENS_LANE_FALLBACK=api" in text
+    # the two false clauses of the old FAIL must not reappear in any form
+    assert "cannot run without it" not in text
+    assert no_network == []
+
+
+def test_doctor_keyless_anthropic_warns_when_the_fallover_is_armed(no_network):
+    """NL-155: the third world. The default path is healthy (subscription lane,
+    no key needed), but NEWSLENS_LANE_FALLBACK=api is armed and there is no key
+    for it to fall onto — so the safety net he deliberately armed is not
+    attached to anything. That is neither a failure (nothing is broken today)
+    nor a bare INFO (a CLI outage would now die at the API call instead of
+    surviving it), and it names both exits."""
+    results = doctor.check_anthropic_key({"NEWSLENS_LANE_FALLBACK": "api"})
+    assert [r.status for r in results] == [doctor.WARN]
+    text = results[0].text
+    assert "ARMED" in text
+    assert "nothing to fall" in text
+    assert "console.anthropic.com" in text      # exit 1: add a key
+    assert "unset NEWSLENS_LANE_FALLBACK" in text   # exit 2: disarm
+    assert no_network == []
+
+
+def test_doctor_never_calls_an_unregistered_lane_the_subscription_lane(
+        no_network):
+    """FIX LOOP 1, QA F-3 (2026-08-14). BORN RED at the NL-155 build bytes
+    (doctor.py sha256 0e7fb072…).
+
+    The fourth world: a lane override that names a lane nothing implements.
+    `sub_seats` was computed by SUBTRACTION (`anthropic_seats − api_seats`), so
+    every seat on a garbage lane fell into the subscription bucket and this
+    check printed a positive INFO — "the … seat(s) run on the claude -p
+    subscription lane" — about a machine that cannot run at all. A green-shaped
+    sentence over a broken config is worse than the (differently wrong) FAIL it
+    replaced, because `check_llm_lanes` FAILs all eight seats in the same report
+    and the reader is left with two doctor sections contradicting each other.
+
+    The partition is DERIVED from the dispatch registry (`llm.registered_lanes`)
+    rather than by subtraction, so a lane added to `_PROVIDERS` later is
+    recognised here without an edit."""
+    env = {"NEWSLENS_LANE": "sbscription"}         # a plausible typo, not a joke
+    results = doctor.check_anthropic_key(env)
+    assert len(results) == 1
+    text = results[0].text
+    assert "subscription lane" not in text, (
+        f"an unregistered lane described as the subscription lane:\n{text}")
+    assert results[0].status != doctor.INFO, (
+        f"a positive verdict over a config that cannot run:\n{text}")
+    assert "sbscription" in text, "the offending lane value is not named"
+    assert "NEWSLENS_LANE" in text                  # the actionable fix
+    # and it must agree with the section that owns the root-cause verdict
+    assert [r.status for r in doctor.check_llm_lanes(env)].count(doctor.FAIL) == \
+        len(llm.SEATS)
+    # THE SIBLING SITE, same report, same world: `check_subscription_lane`'s
+    # seat test is a positive membership check, so its bucket is correctly
+    # empty here — but its empty-case line asserted a REASON ("the api lane
+    # covers the anthropic seats") that is only true when the seats moved to
+    # the api lane. Under an unregistered lane nothing covers them.
+    sub_section = doctor.check_subscription_lane(env)
+    assert len(sub_section) == 1 and sub_section[0].status == doctor.INFO
+    assert "api lane covers" not in sub_section[0].text, (
+        f"the doctor still explains an unregistered lane as api-lane "
+        f"coverage:\n{sub_section[0].text}")
+    assert "sbscription" in sub_section[0].text
     assert no_network == []
 
 
