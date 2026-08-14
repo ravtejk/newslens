@@ -83,7 +83,10 @@ def _real_stage_with(monkeypatch, fetch, chat=None):
     monkeypatch.setattr(analysis, "run_analysis", _wrapped)
 
 
-def _pipeline_world(con, monkeypatch, fake_model, n=5):
+def _pipeline_world(con, monkeypatch, fake_model, n=5, tiers=None):
+    """NL-151b: `tiers` threads the per-position vector the pipeline will brief
+    the writer for. Callers whose run never reaches the writer (the systemic
+    pause) leave it None and get the positional payload unchanged."""
     from newslens import ingest as ingest_mod, ranking as ranking_mod
     slots = [gen_slot(i, title=f"QA Story {i}") for i in range(1, n + 1)]
     seed_briefing(con, A_DAY, slots)
@@ -96,7 +99,7 @@ def _pipeline_world(con, monkeypatch, fake_model, n=5):
     monkeypatch.setattr(ingest_mod, "run_ingest",
                         lambda *a, **k: ingest_mod.IngestReport())
     monkeypatch.setattr(ranking_mod, "run_rank", _noop_rank)
-    fake_model.narrative = stories_payload(slots)
+    fake_model.narrative = stories_payload(slots, tiers=tiers)
     fake_model.script = compliant_script(slots)
     _fake_audio_ok(monkeypatch, [])
     return slots
@@ -135,7 +138,15 @@ def test_e2e_disclosure_reaches_the_persisted_edition(tmp_paths, fake_model,
     db.migrate()
     con = db.connect()
     try:
-        _pipeline_world(con, monkeypatch, fake_model)
+        # NL-151b: the writer now RECEIVES the demoted vector, so the fake
+        # returns it. Before the propagation landed the pipeline briefed
+        # positionally and the payload matched by accident; after it, a
+        # positional payload is a writer disobeying its instructions and the
+        # run correctly dies at validation. The pin's subject — the
+        # a_rep -> inputs -> assembler -> run-record disclosure chain — is
+        # untouched, and every assertion below is the original.
+        _pipeline_world(con, monkeypatch, fake_model,
+                        tiers=["quick", "full", "medium", "medium", "quick"])
         _real_stage_with(monkeypatch, _dead_urls(1))
         rep = generate.run_generate(date=A_DAY, con=con, env=GEN_ENV,
                                     refresh=True)

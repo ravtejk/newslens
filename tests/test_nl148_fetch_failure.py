@@ -434,7 +434,7 @@ def test_clause4_no_completed_story_exists_at_the_pause():
 
 
 def test_clause4_the_pause_can_fire_after_real_spend_and_the_ruling_still_holds(
-        ):
+        monkeypatch):
     """BORN RED — the honest half of F4, pinned so the overclaim cannot return.
 
     The world: every fetch fails AND the model is UP. Each slot is synthesized
@@ -446,7 +446,18 @@ def test_clause4_the_pause_can_fire_after_real_spend_and_the_ruling_still_holds(
     What survives, and is what the principal actually ruled: nothing COMPLETED
     was paid for, so the retry re-bills no completed story. Both facts are
     asserted together on purpose — a future edit that restores the "$0" claim
-    has to delete a passing assertion to do it."""
+    has to delete a passing assertion to do it.
+
+    ARM-PINNED 2026-08-14 (NL-151b), and the reason is a MEASURED WIN rather
+    than a test-fitting convenience. Under his ruled arm this billed world is
+    STRUCTURALLY UNREACHABLE: clause 4 needs `all(not fetch_ok)`, and Gate A
+    returns every attempted-and-failed slot ABOVE the ladder at $0, so a
+    systemic day can no longer buy a synthesis it then rejects — exactly the
+    $0.74 QA measured on one pause. The world is preserved HERE at the OFF arm
+    because the overclaim it guards against is a claim about the DESIGN, which
+    still permits a billed pause the moment the gates are off. The armed twin
+    is the pin immediately below."""
+    monkeypatch.setattr(analysis, "FETCH_SKIP_ARM", analysis.FETCH_SKIP_ARM_OFF)
     db.migrate()
     con = db.connect()
     try:
@@ -472,11 +483,70 @@ def test_clause4_the_pause_can_fire_after_real_spend_and_the_ruling_still_holds(
         con.close()
 
 
-def test_clause4_a_story_that_still_produced_a_brief_never_pauses():
+def test_clause4_at_his_arm_the_same_world_pauses_at_exactly_zero():
+    """NL-151b — the ARMED twin of the pin above, and the measurement that
+    makes the arming worth more than L1 alone.
+
+    Same world, model up, every fetch failed, HIS DEFAULT ARM: the pause still
+    fires and the stage charges nothing, because Gate A refuses each slot
+    before the ladder can buy a brief the depth tier would then reject. The
+    two pins together state the whole truth — the design permits a billed
+    pause; the shipped arm cannot reach one.
+
+    GATE R-E TRUTH-EDIT (2026-08-14): the chat sentinel is belt-and-braces
+    noise, NOT the proof. Under MUT-H (Gate A neutered — the exact condition
+    the old claim named) the sentinel's AssertionError is swallowed by
+    analyze_story's per-slot `except Exception` into outcome `failed` at
+    fake-$0 and THIS PIN STAYS GREEN — measured independently by QA and the
+    gate, 2026-08-14. The register is held by name in
+    test_nl151b_qa.py::test_the_systemic_pause_is_free_because_of_the_gates_
+    not_the_fakes, observed red under the same mutant."""
+    db.migrate()
+    con = db.connect()
+    try:
+        seed_min(con)
+
+        def chat_sentinel(key, prompt):
+            raise AssertionError(
+                "synthesis was bought on a systemic-failure day — Gate A has "
+                "fallen below the ladder and the billed pause is back")
+
+        report = analysis.run_analysis(
+            date=DATE, con=con, env=dict(ENV_OK), chat=chat_sentinel,
+            sonar=sonar_none, fetch=_fetch_all_fail, sleep=lambda s: None)
+
+        assert report["fetch_systemic_failure"] is True
+        assert report["total_usd"] == 0.0
+        assert con.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) AS s FROM analysis_briefs"
+            " WHERE date = ?", (DATE,)).fetchone()["s"] == 0
+        assert analysis.any_valid_brief(con, DATE) is False
+        assert _completed_spend(con, DATE) == 0
+    finally:
+        con.close()
+
+
+def test_clause4_a_story_that_still_produced_a_brief_never_pauses(monkeypatch):
     """BORN RED — the guard that keeps the pause from eating a working
     edition. Fetch fails everywhere, but the analysis still lands a valid
     brief from the material it has; an edition CAN be built, so the run must
-    continue rather than pause and throw that work away."""
+    continue rather than pause and throw that work away.
+
+    ARM-PINNED 2026-08-14 (NL-151b), and this one is a RULING-LEVEL note, not
+    a fixture detail — it is the ONE behavioural delta the default flip
+    carries on a previously-ruled contract. The "working edition" this world
+    builds is a valid brief minted from an excerpt-only map AT A DEPTH SLOT,
+    which is precisely the degraded depth coverage his L1 abolishes. Under the
+    ruled arm that brief never mints, `not any_valid_brief` holds, and the day
+    PAUSES where it used to publish.
+
+    The guard itself is not weakened, and that matters more than the delta:
+    its lawful successor — `test_clause4_does_not_fire_when_the_walk_finds_a_
+    survivor` (both arms, test_nl151_fetch_skip.py) — proves that an edition
+    with a HEALTHY story further down the ranking still runs, which is the
+    case the guard was written to protect. Kept here at OFF because the
+    historical behaviour is worth staying executable."""
+    monkeypatch.setattr(analysis, "FETCH_SKIP_ARM", analysis.FETCH_SKIP_ARM_OFF)
     db.migrate()
     con = db.connect()
     try:

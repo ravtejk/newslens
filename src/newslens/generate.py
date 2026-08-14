@@ -303,6 +303,89 @@ WINDOW_LINE = (
 # to tell a promotion happened; a reader who does should learn exactly what was
 # lost and nothing more.
 FETCH_SKIP_LINE = "Fetch failed for prioritized story {title}."
+
+
+# ---------------------------------------------------------------------------
+# NL-151b — THE DEPTH-TIER VECTOR (his arm (ii), 2026-08-14)
+# ---------------------------------------------------------------------------
+#
+# The depth tier used to be a POSITION: slot 1 is the lead, 2-3 are the
+# full-picture stories, 4+ are In Brief. Nine sites across four modules said so
+# in their own words. Under arm (ii) that stops being true on a morning where a
+# prioritized story loses its full text: the story keeps its SLOT NUMBER (which
+# is what keeps NL-148 finding (b) — brief mis-attribution — off the table) and
+# the depth TREATMENT walks down the ranking to the next story that has
+# material. So position and tier come apart, and every site that inferred one
+# from the other has to read the vector instead.
+#
+# THE VECTOR IS THE STAGE'S, NOT THIS MODULE'S. `run_analysis` reports
+# `depth_tiers` — one entry per slot, the tier that slot ACTUALLY RAN AT, with
+# every non-depth slot as "quick". It is the only place that knows, because it
+# is the only place that watched the fetches. generate consumes it; it never
+# re-derives it, for the same reason the clause-3 disclosure is sourced from
+# `fetch_skipped` rather than from an absent brief: an absent brief has many
+# causes and only the stage knows which one this was.
+#
+# ABSENCE MEANS TODAY, NOT "EVERYTHING IS QUICK". A sample, a `--no-refresh`
+# run, a run whose analysis stage died — none of them have a live vector, and
+# their answer is the positional contract, unchanged. That fallback is what
+# keeps the twenty-eight test files that build payloads from
+# `tier_for_position` green without a value swap.
+
+
+def depth_arm_is_in_brief(arm: Optional[str] = None) -> bool:
+    """Is the depth-skip contract running HIS arm — (ii), demote to in brief?
+
+    Reads `analysis.FETCH_SKIP_ARM` when no arm is named, so there is exactly
+    one answer in the process.
+
+    THE DROP ARM ANSWERS TRUE, AND THAT IS A DISCLOSURE, NOT A BUG. Arm (i)
+    ("drop" — the story leaves the edition body) was never built: it needs the
+    slot-identity plumbing his ruling made unnecessary. Rather than let the
+    constant imply a behaviour nobody wrote, every non-OFF arm gets the
+    in-brief propagation and a pin says so by name. See the fork block in
+    analysis.py."""
+    from . import analysis as analysis_mod
+    return (analysis_mod.FETCH_SKIP_ARM if arm is None else arm) \
+        != analysis_mod.FETCH_SKIP_ARM_OFF
+
+
+def edition_tiers(inputs: Dict, n: int) -> List[str]:
+    """The per-position tier vector THIS edition runs on.
+
+    The stage's vector when there is one and the arm is live; the positional A2
+    contract otherwise. Short vectors pad with "quick" rather than reverting to
+    positional — a slot the walk never reached was never in the depth tier, and
+    silently promoting it back would be the L1 breach by the other door.
+
+    ARM-GATED HERE and nowhere else. At the OFF arm this returns today's
+    positional vector whatever the record holds, so the legacy behaviour is
+    reproduced byte-for-byte by construction rather than by care."""
+    from . import analysis as analysis_mod
+    v = list(inputs.get("depth_tiers") or [])
+    if not v or not depth_arm_is_in_brief():
+        return analysis_mod.positional_tiers(n)
+    return (v + ["quick"] * n)[:n]
+
+
+def depth_slot_numbers(slots: List[Dict], tiers: List[str]) -> List[int]:
+    """The slot NUMBERS holding the depth treatment.
+
+    Two different keys meet here and the join is deliberate. The vector is
+    POSITIONAL — the stage's walk built it by enumerating this same slot list
+    — while the record (`analysis_briefs`, `latest_valid_brief`, the run log)
+    is keyed by SLOT NUMBER. So the vector is read by position and the answer
+    is reported as `slot["slot"]`, rather than assuming the two coincide.
+
+    Under arm (ii) they do coincide, because nothing is filtered and nothing is
+    reordered — that coincidence is the whole reason (ii) was the cheap arm and
+    it is pinned by name (test_L2_slot_NUMBERING_never_moves...). Writing the
+    zip anyway costs one line and means the sites that used to say `n <= 3` are
+    not each re-deriving the equality a tenth time."""
+    return [int(s["slot"]) for s, t in zip(slots, tiers)
+            if t in ("full", "medium")]
+
+
 VARIANT_B_STAMP = (
     'Voice: B — includes the narrator\'s own analytical judgments, always '
     'labeled "My read."'
@@ -389,6 +472,14 @@ class GenReport:
     # briefing's footer does — a skip visible to the reader but absent from the
     # run log would be the record disagreeing with the machine.
     fetch_skipped: List[Dict] = field(default_factory=list)
+    # NL-151b: the tier vector this edition ran on, and the slot numbers that
+    # held the depth treatment. Recorded because after a demotion "which three
+    # stories got the full picture" is no longer derivable from the slot
+    # numbers — the reports screen, the archive reader and any later forensic
+    # read would each have to guess, and three guesses is how a record starts
+    # disagreeing with itself.
+    depth_tiers: List[str] = field(default_factory=list)
+    depth_slots: List[int] = field(default_factory=list)
     memory_usd: float = 0.0            # NL-63: state-rewrite spend charged (real money)
     # R-B3a (B3): the state-rewrite SHADOW spend (always API-priced). Equals
     # memory_usd on the api lane; on a subscription-lane state seat memory_usd
@@ -1093,11 +1184,19 @@ def load_briefing_inputs(con: sqlite3.Connection, date: str,
 # and a constant cannot be unparseable.
 
 
-def _slot_budget_line(slot_n: int) -> str:
+def _slot_budget_line(slot_n: int, tier: Optional[str] = None) -> str:
     # Budget lines are tier-aware (A2). NL-63 M2 — the AMENDED slot contract:
     # the lead and both full-picture stories DOUBLE their Today-page depth, and
     # "In Brief" (slot 4+) is the OLD medium register (structured — NOT the dead
     # <=60-word snippet). Slots 1-3 are EXACTLY the three full-picture stories.
+    #
+    # NL-151b: `tier` OVERRIDES the slot-number derivation, and this is the site
+    # where the demotion becomes real for the writer. Under his arm (ii) slot 1
+    # can be an In-Brief story and slot 4 can be the lead — a budget line keyed
+    # on the number would brief the writer for a tier the validator then
+    # rejects, which is a failed run rather than a demoted story. `tier=None`
+    # reproduces the positional line exactly, for every caller that has no
+    # vector (samples, fixtures, the twenty-eight-file payload contract).
     #
     # LENGTH REGIME 2026-07-30 (principal-ratified, product-wide): these numbers
     # are TARGETS, not floors. The NL-63 M2 fix stated them "HARD, as floors not
@@ -1106,7 +1205,9 @@ def _slot_budget_line(slot_n: int) -> str:
     # one thing the no-fabrication rule forbids. So the floor words come out and
     # the ORDERING rule (the lead is the day's longest story) stays: on a thin
     # day the other stories tighten, the lead does not inflate.
-    if slot_n == 1:
+    if tier is None:
+        tier = "full" if slot_n == 1 else "medium" if slot_n in (2, 3) else "quick"
+    if tier == "full":
         return ("FULL tier (the lead) — TARGET ~640 words WHEN THE MATERIAL "
                 "SUPPORTS IT. This is THE LEAD: it must be the single LONGEST "
                 "story of the day, visibly longer than any full-picture story "
@@ -1118,7 +1219,7 @@ def _slot_budget_line(slot_n: int) -> str:
                 "never pads to get there. On a rich day, spend the budget: lede "
                 "3-6 sentences; why_it_matters a full 8-12 sentences built from "
                 "source specifics; watch_for 2-3 sentences")
-    if slot_n in (2, 3):
+    if tier == "medium":
         return ("MEDIUM tier (a full-picture story, DOUBLED depth) — TARGET ~440 "
                 "words, shorter than the lead but a real full "
                 "picture: lede 3-5 sentences; why_it_matters 5-8 sentences; "
@@ -1170,14 +1271,25 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
     # authoritative here — so the authoritative signal is the one threaded.
     first_edition = inputs.get("continuity_status") == "none"
 
+    # NL-151b: the tier the writer is BRIEFED for, per position, from the
+    # analysis stage's own walk. Resolved once for the whole prompt so the
+    # budget line and the analysis-availability note below can never disagree
+    # about a slot's tier — they did not disagree before because both derived
+    # from the slot number, and that shared derivation is exactly what moves.
+    prompt_tiers = edition_tiers(inputs, len(inputs["slots"]))
+
     story_parts = []
-    for s in inputs["slots"]:
+    for i, s in enumerate(inputs["slots"]):
         n = s["slot"]
-        lines = [f"STORY {n} — budget: {_slot_budget_line(n)}"]
+        tier = prompt_tiers[i] if i < len(prompt_tiers) else "quick"
+        lines = [f"STORY {n} — budget: {_slot_budget_line(n, tier)}"]
         # NL-63 M2: slots 1-3 are the EXACTLY-THREE full-picture stories (1 lead
         # + 2 medium); slot 3 no longer demotes to quick (the amended contract
         # pins it to full-picture), so the old analyst medium-vs-quick annotation
-        # is gone — _slot_budget_line already states MEDIUM for it.
+        # is gone — _slot_budget_line already states MEDIUM for it. NL-151b
+        # amends the SOURCE of that tier, not the register of any tier: the
+        # three full-picture stories are still exactly three, they are just not
+        # guaranteed to be slots 1-3 on a morning a prioritized fetch died.
         lines.append(f"working title (rewrite it): {s.get('story_title', '')}")
         lines.append(f"what happened (one line): {s.get('summary', '')}")
         # NL-138 (ruling ④): the "ranking's significance seed" line is GONE.
@@ -1278,9 +1390,17 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
             for it in inputs["items_by_slot"].get(n, []):
                 lines.append(f"  * [{it['outlet']}] {it['title']}")
         else:
-            if slot_no <= 3 and not (inputs.get("briefs_by_slot") or {}):
+            # NL-151b: keyed on the story's TIER, not on `slot_no <= 3`. This
+            # line is the DEPTH tier's apology — it exists because a
+            # full-picture story with no brief is a degraded one. A quick-tier
+            # In-Brief story has never carried it and must not start now: under
+            # arm (ii) the demoted story is not a degraded depth story at all,
+            # it is an ordinary In-Brief story, and telling the writer
+            # otherwise would re-import the degradation L1 just removed.
+            is_depth = tier in ("full", "medium")
+            if is_depth and not (inputs.get("briefs_by_slot") or {}):
                 pass  # whole stage absent: run-level warning already covers it
-            elif slot_no <= 3:
+            elif is_depth:
                 lines.append(
                     "(analysis unavailable for this story — the excerpts "
                     "below are the report lane; disclosed in the meta line)")
@@ -1325,9 +1445,19 @@ def _scan_banned(text: str) -> List[str]:
 
 def validate_narrative_payload(
     payload: object, slots: List[Dict], variant: str,
+    depth_tiers: Optional[List[str]] = None,
 ) -> Tuple[List[Dict], List[str]]:
     """Structural checks BLOCK (retry-then-fail); style checks warn.
-    Mandatory disclosures (revival dates) block."""
+    Mandatory disclosures (revival dates) block.
+
+    `depth_tiers` (NL-151b) is the per-position tier vector the pipeline
+    briefed the writer for. It stays OPTIONAL and its absence reproduces the
+    A2 positional gate exactly — that is not politeness to old callers, it is
+    the correct answer for every caller that genuinely has no vector (samples,
+    `--no-refresh` on an unanalysed date, the fixtures in twenty-eight test
+    files). What it must never become is a SUGGESTION: given a vector, the
+    gate is that vector, and a writer returning the positional tiers on a
+    demotion morning is returning a full-picture story built on no full text."""
     if not isinstance(payload, dict) or not isinstance(payload.get("stories"), list):
         raise ValueError("payload must be a JSON object with a `stories` list")
     stories = payload["stories"]
@@ -1349,7 +1479,13 @@ def validate_narrative_payload(
         # a demoted slot 3 would leave only 2 full-picture stories, violating the
         # exactly-3 ruling. Code enforces every position now; the model proposes
         # no tier of its own.
+        #
+        # NL-151b: still exactly three full-picture stories, still code-owned,
+        # still no model-proposed tier — the vector says WHICH positions hold
+        # them when a prioritized fetch died. Without a vector this expression
+        # is the positional tuple it has always been.
         allowed = (
+            (depth_tiers[i],) if depth_tiers and i < len(depth_tiers) else
             ("full",) if i == 0 else
             ("medium",) if i in (1, 2) else
             ("quick",)
@@ -2183,10 +2319,47 @@ def script_covered_slots(inputs: Dict) -> set:
     """The slot numbers the digest airs (principal 2026-07-14): the top
     k = _script_coverage(n) by the edition's rank order. story_slots is
     rank-ordered (the lead is slot 1), so the covered set is the k lowest slot
-    numbers actually present — robust to non-contiguous slot ids."""
+    numbers actually present — robust to non-contiguous slot ids.
+
+    NL-151b GATE R-B (2026-08-14) — THE DEPTH TIER GOES FIRST. The charter was
+    written when "the lead is slot 1" was an invariant; his arm (ii) retired
+    that, so reading rank ORDER positionally is the same inference the nine
+    propagation sites just gave up. The edition's depth slots are taken first
+    and the rest of k is filled with the lowest remaining slot numbers, so the
+    episode airs the stories the edition actually treated deeply.
+
+    IT REDUCES TO THE OLD LINE BY CONSTRUCTION, not by care: at the OFF arm and
+    on any morning with no vector, `edition_tiers` answers the positional
+    contract, whose depth slots ARE the lowest present ids (1 full + 2 medium),
+    and the fill completes the same k-lowest set the old `ordered[:k]` returned.
+    Byte-identity of the built prompt on those days is pinned by name."""
     ordered = sorted(int(s["slot"]) for s in inputs["slots"])
     k = _script_coverage(len(ordered))
-    return set(ordered[:k])
+    tiers = edition_tiers(inputs, len(ordered))
+    covered = sorted(depth_slot_numbers(inputs["slots"], tiers))[:k]
+    for n in ordered:                      # fill to k, lowest remaining first
+        if len(covered) >= k:
+            break
+        if n not in covered:
+            covered.append(n)
+    return set(covered)
+
+
+def script_lead_slot(inputs: Dict, covered: Optional[set] = None) -> int:
+    """The slot the episode opens on and spends its deepest segment.
+
+    THE FULL-TIER STORY, not position 1 (gate R-B, 2026-08-14). Print and audio
+    must not make two different claims about today's most important story: the
+    print lead is the story with the full tier — the 640-word budget, the deep
+    view — and on a demotion morning that is the PROMOTED story. Falls back to
+    the lowest covered slot when no full tier is present (a vector that never
+    reached one, an empty edition), which is what position 1 meant anyway."""
+    covered = script_covered_slots(inputs) if covered is None else covered
+    tiers = edition_tiers(inputs, len(inputs["slots"]))
+    for s, t in zip(inputs["slots"], tiers):
+        if t == "full" and int(s["slot"]) in covered:
+            return int(s["slot"])
+    return min(covered) if covered else 1
 
 
 def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -> str:
@@ -2194,7 +2367,21 @@ def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -
     n_slots = len(inputs["slots"])
     _, per_desc, k = _script_budgets(n_slots)
     covered = script_covered_slots(inputs)
+    lead = script_lead_slot(inputs, covered)
     others = k - 1
+    # NL-151b GATE R-B (2026-08-14) — THE CARRIED PREDICATE, and the whole
+    # byte-identity guarantee rests on it: `_carried` is true exactly when the
+    # tier vector moved NOTHING off the rank order — the covered set is still
+    # the k lowest present ids and the lead is still the first of them. On
+    # those days (every OFF day, every no-vector day, every ordinary armed
+    # morning: 16 of 17 real dates) every string below is emitted with the
+    # pre-fix bytes, including the literal "story 1" the old line hard-coded
+    # for an edition whose first present id is not 1. Only a vector that
+    # actually moved the depth changes a byte of this prompt.
+    _ordered = sorted(int(s["slot"]) for s in inputs["slots"])
+    _carried = (sorted(covered) == _ordered[:k]
+                and (not _ordered or lead == _ordered[0]))
+    _lead_name = "story 1" if _carried else f"story {lead}"
     if k <= 1:
         coverage_line = (
             "This edition has a single story — cover the LEAD only; there is no "
@@ -2202,16 +2389,32 @@ def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -
     elif k >= n_slots:
         coverage_line = (
             f"This episode covers all {k} stories in the edition — the LEAD "
-            f"(story 1, the deepest segment) plus the other {others}, in rank "
+            f"({_lead_name}, the deepest segment) plus the other {others}, in rank "
             "order. The lead is the episode's center of gravity.")
     else:
-        last = max(covered)
+        # "1 through {last}" is exact ONLY while the covered set is a prefix of
+        # the present ids (the old invariant, documented in QA's ragged-ids
+        # pin). A moved depth tier can cover a non-prefix set, so that day gets
+        # the slots named — an inclusive range would silently order the writer
+        # to cover a story the episode excludes.
+        scope = (f"Cover stories 1 through {max(covered)} ONLY" if _carried
+                 else "Cover stories "
+                      + ", ".join(str(x) for x in sorted(covered)) + " ONLY")
         coverage_line = (
-            f"This episode covers {k} stories — the LEAD (story 1, the deepest "
-            f"segment) plus the {others} next-most-consequential. Cover stories "
-            f"1 through {last} ONLY; the remaining {n_slots - k} stories are NOT "
+            f"This episode covers {k} stories — the LEAD ({_lead_name}, the deepest "
+            f"segment) plus the {others} next-most-consequential. {scope}"
+            f"; the remaining {n_slots - k} stories are NOT "
             "in this episode — they live in the text briefing. The lead is the "
             "episode's center of gravity; never cover every story.")
+    if not _carried:
+        # The per-story CEILINGS follow the lead too, or the writer is told to
+        # spend 400 words on the story the edition demoted. `_script_budgets`'
+        # episode ceiling is position-independent (one 400 + k-1 × 200,
+        # whichever slots those are), so the :4901 call site and every ceiling
+        # pin are untouched — only the guide text names different slots.
+        per_desc = " · ".join(
+            f"slot {n}: up to ~{script_segment(1 if n == lead else 2)}"
+            for n in sorted(covered))
     weekday, human = _spoken_date(date)
     epistemic = (
         '; epistemic first person ("I think") is banned in this voice'
@@ -2747,9 +2950,20 @@ def run_memory_backfill(
         from . import analysis as analysis_mod
         published_at = inputs["row"]["generated_at"]
         briefs_by_slot: Dict[int, Optional[Dict]] = {}
+        # NL-151b: the depth slots of the edition being backfilled, recovered
+        # from its own run record. The backfill never runs the analysis stage,
+        # so `n <= 3` would silently skip a PROMOTED story's brief — and the
+        # ledger deltas the backfill writes are derived from these briefs, so
+        # the miss would land in the thread record permanently rather than in
+        # one morning's edition. At the OFF arm this reduces to `n <= 3`.
+        backfill_depth = depth_slot_numbers(
+            slots,
+            edition_tiers({"depth_tiers":
+                           analysis_mod.depth_tiers_from_record(date, len(slots))},
+                          len(slots)))
         for s in slots:
             n = int(s["slot"])
-            if n <= 3:
+            if n in backfill_depth:
                 doc = analysis_mod.coherent_valid_brief(con, date, n,
                                                         published_at)
                 if doc:
@@ -4337,9 +4551,25 @@ def _run_generate_body(
     # those slots with a rival's newest brief was the render mixture inside a
     # sample artifact — so a sample reads what the reader reads. On a date with
     # no rival staged that is the same row this loop returns anyway.
+    # NL-151b — THE VECTOR REACHES THE RUN. Live from the stage when it ran;
+    # RECOVERED from the run record when it did not (`--no-refresh`, a sample,
+    # a stage that died). The recovery is the L1 hole this batch had to close:
+    # falling back to the positional vector on a `--no-refresh` finishing an
+    # interrupted armed regenerate would put the fetch-failed story back in a
+    # depth slot with no brief behind it — a degraded lead, produced by the
+    # machinery that exists to forbid one. `edition_tiers` is the arm gate, so
+    # at the OFF arm every line below reduces to today's `n <= 3`.
+    inputs["depth_tiers"] = (
+        a_rep.get("depth_tiers")
+        or analysis_mod.depth_tiers_from_record(date, len(inputs["slots"])))
+    depth_tiers = edition_tiers(inputs, len(inputs["slots"]))
+    inputs["depth_tiers"] = depth_tiers
+    report.depth_tiers = depth_tiers
+    depth_slots = depth_slot_numbers(inputs["slots"], depth_tiers)
+    report.depth_slots = depth_slots
     for s in inputs["slots"]:
         n = int(s["slot"])
-        if n <= 3:
+        if n in depth_slots:
             doc = (analysis_mod.coherent_valid_brief(
                        con, date, n, inputs["row"]["generated_at"])
                    if report.sample else
@@ -4361,9 +4591,15 @@ def _run_generate_body(
     inputs["fetch_skipped"] = a_rep.get("fetch_skipped") or []
     report.fetch_skipped = inputs["fetch_skipped"]
     inputs["analyst_slot3_tier"] = analyst_slot3_tier
+    # NL-151b: the ladder's denominator is the DEPTH TIER, which after a
+    # demotion is not `(1, 2, 3)`. Leaving the literal here would have reported
+    # the promoted slot's brief as missing (it is not in 1-3) and the demoted
+    # slot's absence as a degrade (it is an In-Brief story now, and In-Brief
+    # stories have never had a deep view to be absent) — a doubly wrong
+    # asymmetry figure on the one instrument that measures the ladder.
     report.deep_views = {
         str(n): ("available" if briefs_by_slot.get(n) else "absent")
-        for n in (1, 2, 3) if any(int(s["slot"]) == n for s in inputs["slots"])
+        for n in depth_slots if any(int(s["slot"]) == n for s in inputs["slots"])
     }
     inputs["deep_views"] = report.deep_views  # assembler reads the ladder label
 
@@ -4583,6 +4819,7 @@ def _run_generate_body(
                     "callbacks must survive (A9 preserve-enforcement)")
         stories, narrative_warnings = validate_narrative_payload(
             edited_payload, inputs["slots"], report.variant,
+            depth_tiers=inputs.get("depth_tiers"),
         )
         # BUG17 wiring (M3 gate 1a): the trace check runs on the EDITED
         # stories — an invented numeral the editor introduced (or kept)
@@ -4598,6 +4835,7 @@ def _run_generate_body(
             try:
                 stories, narrative_warnings = validate_narrative_payload(
                     draft_payload, inputs["slots"], report.variant,
+                    depth_tiers=inputs.get("depth_tiers"),
                 )
                 # BUG17 wiring, degrade path: the surviving DRAFT stories
                 # get the same trace check — both validation sites covered.
@@ -4636,6 +4874,24 @@ def _run_generate_body(
     # emits nothing, and counting notes would silently undercount exactly the
     # days D3 exists to find. The record has every shipped lead regardless of
     # gate, editor behaviour, or degrade path.
+    #
+    # NL-151b GATE G-2 AMENDMENT (2026-08-14) — "lead = story 1" ABOVE IS THE
+    # PRE-ARMING READING AND THE FALSIFIER MUST NOT KEEP IT. After his arm (ii)
+    # the lead is the FULL-TIER story per the run record's `tiers`, which is
+    # position 1 on every edition published before this commit and on every
+    # ordinary morning after it — but NOT on a demotion morning, where story 1
+    # is the demoted In-Brief story and the real lead is the promoted one. So
+    # the week-of-editions query above must be read with the date's `tiers`
+    # beside it (`analysis._tiers_for(date, n)`) and the lead taken as the full
+    # position; counting `narrative_text`'s first story on a demotion date
+    # measures an In-Brief story against a lead threshold.
+    #
+    # THE NOTE ITSELF IS LEFT POSITIONAL, deliberately and for now: its gate
+    # (`briefs_by_slot.get(1)`) suppresses it exactly when slot 1 demotes — a
+    # demoted slot has no depth brief — so it emits NO FALSE LINE, it just goes
+    # quiet on the ~1-in-17 morning and leaves the promoted lead unmeasured.
+    # Keying the note to the vector is hygiene-batch work, not a fix (gate G-2,
+    # comment-grade).
     lead_w = _lead_words({"stories": stories})
     if (inputs.get("briefs_by_slot") or {}).get(1) \
             and lead_w < LEAD_SHORT_NOTE_WORDS:
@@ -5018,6 +5274,11 @@ def _run_generate_body(
         "memory": report.memory,                     # NL-63: ledger/state instrumentation
         "deep_views": report.deep_views,  # Axel's asymmetry instrumentation
         "fetch_skipped": report.fetch_skipped,   # NL-151 clause 2/3
+        # NL-151b: the depth tier as it actually ran. `tiers` above is the same
+        # vector read off the shipped stories, and the two agreeing is a
+        # property worth being able to check on the record rather than assert
+        # in a test alone.
+        "depth_slots": report.depth_slots,
         "draft_stories": draft_payload.get("stories"),  # carryover 18b: forensics
         "stories": stories,  # M7: the UI's structured render source (ADR-0010)
         "audio": audio_path_str,

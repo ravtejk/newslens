@@ -3339,10 +3339,17 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     # §12.3 slot routing. Ids/tiers use the ORIGINAL enumerate index so
     # _collect_deep_views stays aligned (a still-tracking slot consumes its
     # index but gets no deep view — it is a status line, not a story).
+    # NL-151b: the reader side was ALREADY vector-driven — `tiers` is the run
+    # record's own `tiers` key, which is the writer's shipped tier per story,
+    # which after a demotion is ["quick", "full", "medium", ...]. So this loop
+    # needed no change to honour arm (ii); the fallback below is the positional
+    # A2 contract for entries that carry no vector (pre-NL-63 editions), and it
+    # now names the one shared definition instead of open-coding a fourth copy.
+    from . import analysis as analysis_mod
+    _positional = analysis_mod.positional_tiers(len(stories))
     for i, st in enumerate(stories):
         slot = slots[i] if i < len(slots) else {}
-        tier = tiers[i] if i < len(tiers) else (
-            "full" if i == 0 else "medium" if i <= 2 else "quick")
+        tier = tiers[i] if i < len(tiers) else _positional[i]
         if slot.get("still_tracking"):
             line = _still_tracking_line(slot)
             if line:
@@ -4371,6 +4378,38 @@ def _render_run(entry: Dict) -> str:
         bits.append(_e(labels.RUNLOG_TRIGGER_SCHEDULED))
     elif _trigger == schedule.TRIGGER_INTERACTIVE:
         bits.append(_e(labels.RUNLOG_TRIGGER_INTERACTIVE))
+    # NL-151b — the depth demotion, counted, on the run's own meta line. The
+    # count comes from `fetch_skipped`, the analysis stage's own record, so
+    # this line cannot claim a demotion the stage did not make; and a run
+    # recorded before the contract existed has no key and gets no word, the
+    # same silence-is-honest rule the trigger word above follows.
+    #
+    # GATE R-A (2026-08-14, QA F-1) — BUCKETED BY OUTCOME, not counted as one.
+    # `fetch_skipped` carries both gates, and their CAUSES differ: Gate A tried
+    # and failed, Gate B never opened a socket. One count under the Gate-A
+    # parenthetical would put on the record screen the exact sentence the
+    # briefing renderer refuses for a Gate-B skip as false. So each non-empty
+    # bucket gets its own bit, Gate A first (the ordinary morning's cause, and
+    # 72/72 of the real log to date). An entry that is not a dict, or carries an
+    # outcome nobody wrote, counts as Gate A — the same total the pre-fix line
+    # rendered, never a dropped demotion.
+    _skipped = entry.get("fetch_skipped")
+    if isinstance(_skipped, list) and _skipped:
+        from . import analysis as analysis_mod
+        _gate_a: List[Dict] = []
+        _gate_b: List[Dict] = []
+        for _s in _skipped:
+            (_gate_b if isinstance(_s, dict)
+             and _s.get("outcome") == analysis_mod.NO_FETCHABLE_OUTCOME
+             else _gate_a).append(_s)
+        for _bucket, _one, _many in (
+                (_gate_a, labels.RUNLOG_DEPTH_SKIPPED_ONE,
+                 labels.RUNLOG_DEPTH_SKIPPED_MANY),
+                (_gate_b, labels.RUNLOG_DEPTH_NOFETCH_ONE,
+                 labels.RUNLOG_DEPTH_NOFETCH_MANY)):
+            if _bucket:
+                bits.append(_e(_one if len(_bucket) == 1
+                               else _many.format(n=len(_bucket))))
     total_el = entry.get("elapsed_s")
     if isinstance(total_el, (int, float)) and total_el > 0:
         bits.append(f"{_e(labels.RUNLOG_TOTAL)} {_fmt_elapsed(total_el)}")
@@ -5387,6 +5426,7 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
     stories_probe, _ = _stories_for(row, entry)
     slots = _slots_for(row)
     tiers = (entry or {}).get("tiers") or []
+    _positional = analysis_mod.positional_tiers(len(stories_probe))
     for i, st in enumerate(stories_probe):
         slot = slots[i] if i < len(slots) else None
         # A still-tracking slot renders as a status strip on Today, not a story,
@@ -5396,8 +5436,24 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
             continue
         # tier derivation MATCHES _render_briefing_body's so the entry link and
         # the collected view agree for every slot (no link without a view).
-        tier = tiers[i] if i < len(tiers) else (
-            "full" if i == 0 else "medium" if i <= 2 else "quick")
+        tier = tiers[i] if i < len(tiers) else _positional[i]
+        # NL-151b LEFT THIS `i + 1` ALONE, DELIBERATELY. It is the brief lookup
+        # by POSITION, and under arm (i) ("drop") it would have had to become
+        # `slot["slot"]` or the reader would meet another story's analysis —
+        # the cardinal-breach class NL-148 finding (b) named. Arm (ii) removes
+        # nothing from the body and reorders nothing, so position and slot
+        # number stay identical and this line stays correct. That equality is
+        # the whole reason (ii) was the cheap arm, and it is pinned by name
+        # (test_L2_slot_NUMBERING_never_moves...).
+        #
+        # GATE R-C (2026-08-14, QA F-4): a DEMOTED slot with a same-date
+        # coherent brief from an EARLIER run serves the full deep view here
+        # while the body row says In-Brief. That co-occurrence is lawful and
+        # deliberate — NL-66(b) is ruled law (brief present -> deep view),
+        # the earlier brief is true, sourced, same-date coverage, and
+        # bounding this read to the current run's depth slots would delete
+        # real coverage to buy cosmetic body/tap register alignment.
+        # Accepted at the gate; revisit only on the principal's word.
         doc = analysis_mod.coherent_valid_brief(con, row["date"], i + 1,
                                                 row["generated_at"])
         if doc and doc.get("brief"):

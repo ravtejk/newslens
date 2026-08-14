@@ -776,22 +776,28 @@ def test_analyst_lane_misconfig_degrades_per_slot_not_run_killing(
     )
     # One cluster item -> a C1 excerpt source, so the thin-material rung
     # passes and the ladder actually REACHES the synthesis chat (whose gate
-    # then raises). The fetch stub fails offline; no socket is ever touched.
+    # then raises). No socket is ever touched: the fetch is a fixture read.
+    #
+    # NL-151b: the fetch stub used to RAISE, and under his ruled arm that is
+    # now a fetch failure — Gate A returns the slot out of the depth tier
+    # ABOVE the ladder, so the synthesis chat this pin is about is never
+    # reached and the outcome is 'skipped-fetch-failed' rather than 'failed'.
+    # A working fetch restores the world where the ladder runs, which is the
+    # world whose containment behaviour is the subject here.
     migrated_con.execute(
         "INSERT INTO source_items (id, source_type, outlet, url, title,"
         " fetched_at) VALUES (1, 'rss', 'Outlet A', 'https://a.example/1',"
         " 'Story', '2026-07-16T00:00:00.000Z')")
     migrated_con.commit()
 
-    def offline_fetch(url, **kw):
-        raise OSError("offline stub — no article fetch in this test")
+    from test_analysis_brief_qa import fetch_fixture
 
     sa = analysis.analyze_story(
         migrated_con, "2026-07-16", 1,
         {"story_title": "T", "summary": "S", "item_ids": [1]},
         "full", cfg, openai_key="sk-x", pplx_key="",
         remaining_usd=1.0, memory_lines=[], prior=[],
-        fetch=offline_fetch, sleep=lambda s: None)
+        fetch=fetch_fixture, sleep=lambda s: None)
     assert sa.outcome == "failed"
     assert "LaneUnavailable" in sa.detail
     assert sa.cost_usd == 0.0

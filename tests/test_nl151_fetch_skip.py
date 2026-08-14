@@ -9,25 +9,27 @@ His three laws, and where each is pinned:
   L2  a fetch-failed prioritized story is SKIPPED, DISCLOSED at the bottom of
       the briefing in his words, and the next prioritized story is PROMOTED
       into the depth treatment.
-  L3  degraded coverage is PERMITTED (not mandated) for In-Brief stories —
-      which is one half of the FORK below, so it is scaffolded, not ruled.
+  L3  degraded coverage is PERMITTED (not mandated) for In-Brief stories.
+      RULED IN 2026-08-14: it is what the demoted story now gets (arm (ii)).
 
-WHAT IS BUILT AND WHAT IS DELIBERATELY NOT, because a file that pins a whole
-contract when half of it is a checkpoint is itself a false claim:
+WHAT THIS FILE HOLDS, and what NL-151b added beside it:
 
-  BUILT   detection (Gates A and B in `analyze_story`), the depth-tier WALK in
+  HERE    detection (Gates A and B in `analyze_story`), the depth-tier WALK in
           `run_analysis`, the clause-3 disclosure, and the run record. All of
-          it is arm-INDEPENDENT: both readings of his words need exactly this.
-  NOT     the writer/reader propagation of the reassigned tier vector. The
-          depth tier is positional in NINE places across four modules, and the
-          two arms diverge precisely there. `FETCH_SKIP_ARM` therefore defaults
-          to "off" and these pins arm it themselves.
+          it is arm-INDEPENDENT: both readings of his words need exactly this,
+          which is why every behavioural pin below still runs under both arms.
+  THERE   test_nl151b_propagation.py — the writer/reader propagation of the
+          reassigned tier vector (the depth tier was positional in NINE places
+          across four modules) and the DEFAULT FLIP that makes the contract
+          live on an ordinary morning.
 
-THE FORK, which is the checkpoint question and NOT decided here: his words
-support (i) the skipped story LEAVING the edition body entirely — "drop" — and
-(ii) it landing as an In-Brief story with degraded treatment, lawful under L3 —
-"in-brief". Every behavioural pin below runs under BOTH arms, so whichever he
-rules is already proven; none of them assumes one.
+THE FORK IS RULED. His word, 2026-08-14: "(ii) demote to in brief" — the
+skipped story lands as an In-Brief story with excerpt treatment, lawful under
+L3, keeping its slot number. Arm (i) ("drop", the story leaving the edition
+body) was NOT built: it needed slot-identity plumbing his ruling made
+unnecessary. The ARMS parametrisation below stays because these pins are
+genuinely arm-independent; the propagation's own file pins what the unbuilt
+arm constant actually does today, by name, so nobody discovers it the hard way.
 
 PROOF CLASSES, labelled per pin. Everything here is BORN RED at HEAD (8ac0492)
 in the strongest available sense — the module under test has no
@@ -388,21 +390,36 @@ def test_the_skip_spends_nothing_on_the_slot_it_skips(db_con, monkeypatch,
 # THE OFF DEFAULT — today's behaviour, unchanged, until he rules
 # ===========================================================================
 
-def test_off_is_the_default_and_the_fork_is_still_open(db_con):
-    """The arm is a CHECKPOINT, not an implementer's pick. This pin fails the
-    day someone quietly defaults it, which is the day the principal's editorial
-    call gets made by a diff instead of by him."""
-    assert analysis.FETCH_SKIP_ARM == analysis.FETCH_SKIP_ARM_OFF
-    assert analysis.depth_skip_armed() is False
+def test_the_fork_is_RULED_and_the_arm_is_his_not_a_diffs(db_con):
+    """INVERTED 2026-08-14 (NL-151b), not deleted — the F-2 truth-edit
+    precedent this file's clause-3 pin already set.
+
+    WHAT THIS PIN USED TO SAY: "the default is OFF and the fork is still
+    open", failing the day someone quietly defaulted the arm. Its subject was
+    an OPEN CHECKPOINT, and the principal closed it: "(ii) demote to in
+    brief". A pin asserting an open fork after the ruling would be the record
+    contradicting the decision.
+
+    WHAT IT SAYS NOW is the same protection pointed the other way — the arm is
+    HIS, so it may not be moved OFF his ruling by a diff either. The armed
+    default itself is pinned in test_nl151b_propagation.py, next to the
+    propagation that made arming safe."""
+    assert analysis.FETCH_SKIP_ARM == analysis.FETCH_SKIP_ARM_IN_BRIEF
+    assert analysis.depth_skip_armed() is True
 
 
-def test_off_default_preserves_todays_degraded_depth_brief(db_con):
-    """CARRIED INVARIANT, born GREEN and labelled — the control.
+def test_off_arm_preserves_todays_degraded_depth_brief(db_con, monkeypatch):
+    """CARRIED INVARIANT — the control, now under an EXPLICIT arm.
 
-    At the OFF default a fetch-failed depth slot still mints its degraded
-    brief exactly as it does today. Two things are pinned by that: the change
-    is genuinely inert until armed, and the L1 pins above are measuring a real
-    difference rather than a world where degraded briefs never existed."""
+    Unchanged in substance: at the OFF arm a fetch-failed depth slot still
+    mints its degraded brief exactly as it did before the contract existed.
+    The only edit is that OFF is now named rather than inherited from the
+    default, because the default is his ruled arm. Two things stay pinned by
+    it: the legacy behaviour is still REACHABLE (which is what lets the
+    `--no-refresh` recovery prove itself inert there), and the L1 pins above
+    are measuring a real difference rather than a world where degraded briefs
+    never existed."""
+    monkeypatch.setattr(analysis, "FETCH_SKIP_ARM", analysis.FETCH_SKIP_ARM_OFF)
     _seed_slots(db_con, 3)
     _run(db_con, _fetch_failing_slots(1),
          chat=lambda k, p: (_excerpt_brief(), 0.0))

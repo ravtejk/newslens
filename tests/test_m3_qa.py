@@ -36,6 +36,7 @@ import pytest
 from newslens import analysis, config, db, generate, paths, server, webui
 from test_generate import (A_DAY, _inputs_for, compliant_script,
                            seed_briefing, slot, stories_payload)
+from test_analysis_brief_qa import fetch_fixture   # NL-151b — a fetch that works
 
 DATE = "2026-07-07"
 ENV = {"OPENAI_API_KEY": "sk-qa-fake"}
@@ -338,7 +339,15 @@ def test_already_spent_rides_into_the_one_cap(tmp_paths):
 def test_tiers_override_beats_the_recorded_log_tiers(tmp_paths):
     """The log says all-quick (which would analyze nothing); the override
     forces the generate-time contract [full, medium, medium] — three
-    per_story rows prove the override governs."""
+    per_story rows prove the override governs.
+
+    NL-151b: the fetch stub now SUCCEEDS (`fetch_fixture`, was `lambda: b""`).
+    Under his ruled arm an empty-bytes fetch means no full text, which means
+    the slot leaves the depth tier and does not consume its tier — so all
+    three rows would read "full" (the walk offers the queue head to each next
+    story) and this pin would be measuring the SKIP rather than the override.
+    A world where the fetch works is the world the override governs, and it is
+    also the ordinary day: 71 of 72 prioritized slots on his real log."""
     db.migrate()
     con = db.connect()
     try:
@@ -350,7 +359,7 @@ def test_tiers_override_beats_the_recorded_log_tiers(tmp_paths):
         rep = analysis.run_analysis(
             date=DATE, con=con, env=dict(ENV),
             chat=lambda k, p: ({}, 0.0), sonar=lambda k, t, c: ([], 0.0, "ok"),
-            fetch=lambda *a, **k: b"", sleep=lambda s: None,
+            fetch=fetch_fixture, sleep=lambda s: None,
             tiers_override=["full", "medium", "medium"])
         assert len(rep["per_story"]) == 3
         assert [r["tier"] for r in rep["per_story"]] == \

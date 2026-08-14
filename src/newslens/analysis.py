@@ -1134,11 +1134,11 @@ NO_FETCHABLE_OUTCOME = "skipped-no-fetchable-sources"
 DEPTH_DISQUALIFYING = (FETCH_SKIP_OUTCOME, NO_FETCHABLE_OUTCOME)
 
 # ---------------------------------------------------------------------------
-# THE FORK, AND WHY THIS SWITCH EXISTS RATHER THAN A PICK
+# THE FORK — RULED 2026-08-14. ARM (ii), "demote to in brief".
 # ---------------------------------------------------------------------------
 #
-# His three laws fix what happens to the DEPTH TIER. They do not fix what
-# happens to the SKIPPED STORY ITSELF, and his words carry two readings:
+# His three laws fixed what happens to the DEPTH TIER. They did not fix what
+# happens to the SKIPPED STORY ITSELF, and his words carried two readings:
 #
 #   ARM "drop"      the story leaves the edition body entirely; the disclosure
 #                   line at the bottom is its only trace.
@@ -1146,32 +1146,35 @@ DEPTH_DISQUALIFYING = (FETCH_SKIP_OUTCOME, NO_FETCHABLE_OUTCOME)
 #                   treatment — lawful under L3, which PERMITS (never mandates)
 #                   degraded coverage there.
 #
-# Both are lawful. The choice is editorial, it is his, and an implementer's
-# pick would be legislation, so the arms are scaffolded and the default is OFF.
+# HIS WORD, 2026-08-14: "(ii) demote to in brief". So `FETCH_SKIP_ARM` now
+# defaults to IN_BRIEF and the contract is LIVE on every ordinary morning.
 #
-# OFF IS NOT FURNITURE, AND THE DISTINCTION MATTERS BECAUSE NL-148 REFUSED
-# FURNITURE ON THIS EXACT CONTRACT. What it refused was a frozen READER-FACING
-# SENTENCE wired to an unreachable trigger — a shipped guarantee that could
-# never fire. This is the opposite: working, tested machinery whose arms both
-# execute under the pins, held at OFF because the ruling that selects one has
-# not been made. Nothing is promised to a reader that cannot happen.
+# WHAT THE DEFAULT FLIP TURNS ON, all of it built and inert since NL-151:
+# Gates A and B above the ladder, the depth-tier walk, the clause-3 disclosure
+# and the run record — plus NL-151b's propagation, which is what makes arming
+# safe rather than a regression. Before the propagation existed, arming would
+# have LEFT the failed slot in a depth position with "Analysis: unavailable —
+# built from feed excerpts", breaking L1 with the change meant to enforce it.
+# That is why NL-151 shipped OFF and why this flip rides with the vector work.
 #
-# WHY OFF RATHER THAN A PROVISIONAL ARM. Arming without the writer/reader
-# propagation would be a REGRESSION, measured not assumed: the gates stop a
-# failed slot from minting its brief, but the writer still assigns tiers by
-# POSITION, so that slot would render as a full-picture story carrying
-# "Analysis: unavailable — built from feed excerpts." That is strictly less
-# coverage than today AND still degraded coverage in a depth slot — L1 broken
-# by the change meant to enforce it. The propagation is where the two arms
-# diverge and where the cost lives (nine positional homes for the depth tier
-# across four modules; see the build report), so it is the checkpoint, not a
-# thing to guess at.
+# OFF IS STILL CONSTRUCTIBLE and still pinned. It is no longer the default; it
+# is the LEGACY arm — today-before-the-ruling, reachable so the armed pins
+# measure a real difference and so `--no-refresh` recovery can be proven inert
+# there. Nothing reads it from the environment: see the constant's note below.
+#
+# ARM "drop" WAS NOT BUILT and the constant is a placeholder, not a second
+# behaviour. Arm (i) needs slot-IDENTITY plumbing (the filtered `story_slots`
+# and server.py's `i + 1` brief lookup becoming `slot["slot"]`) which nobody
+# wrote, because his ruling made it unnecessary. Setting the constant to
+# "drop" therefore yields the IN-BRIEF propagation. That is stated in code
+# (`generate.depth_arm_is_in_brief`) and pinned by name, so it cannot be
+# discovered the hard way; retiring the constant or building (i) is his call.
 FETCH_SKIP_ARM_OFF = "off"
 FETCH_SKIP_ARM_IN_BRIEF = "in-brief"
 FETCH_SKIP_ARM_DROP = "drop"
 # NOT an env var (none may land without his checkpoint) and not config: a
 # module constant the pins monkeypatch, so every arm is exercised at $0.
-FETCH_SKIP_ARM = FETCH_SKIP_ARM_OFF
+FETCH_SKIP_ARM = FETCH_SKIP_ARM_IN_BRIEF
 
 
 def depth_skip_armed() -> bool:
@@ -4262,22 +4265,77 @@ def _render_prompt(template: str, mapping: Dict[str, str]) -> str:
     return template
 
 
-def _tiers_for(date: str, n: int) -> List[str]:
+def positional_tiers(n: int) -> List[str]:
+    """The A2 positional contract: 1 lead full, 2 medium, the rest quick.
+
+    The expression this replaces was written out at four sites (here,
+    generate's validator, and server's two tier derivations). It is the
+    FALLBACK now rather than the rule — every consumer prefers the vector when
+    one exists — so it gets one name, and a future amendment to the shape of
+    the depth tier has one place to land."""
+    return ["full" if i == 0 else "medium" if i <= 2 else "quick"
+            for i in range(n)]
+
+
+def _newest_log_entry(date: str, match) -> Optional[Dict]:
+    """The LAST generation-log line for `date` satisfying `match`.
+
+    One scanner for the two record-derived tier reads below, so they cannot
+    drift on how the log is parsed (last-wins, unreadable lines skipped). A
+    corrupt line is passed over rather than raising: the log is an append-only
+    forensic record a crashed run can tear, and a tier lookup is not the place
+    to turn that into a dead run."""
     from . import paths
     log = paths.DATA_DIR / "generation_log.jsonl"
-    tiers: Optional[List[str]] = None
+    found: Optional[Dict] = None
     if log.exists():
         for line in log.read_text(encoding="utf-8").splitlines():
             try:
                 e = json.loads(line)
             except ValueError:
                 continue
-            if e.get("date") == date and not e.get("sample") and e.get("tiers"):
-                tiers = e["tiers"]
+            if isinstance(e, dict) and e.get("date") == date and match(e):
+                found = e
+    return found
+
+
+def _tiers_for(date: str, n: int) -> List[str]:
+    e = _newest_log_entry(
+        date, lambda e: not e.get("sample") and bool(e.get("tiers")))
+    tiers = e["tiers"] if e else None
     if tiers and len(tiers) >= n:
         return tiers[:n]
-    return ["full" if i == 0 else "medium" if i <= 2 else "quick"
-            for i in range(n)]
+    return positional_tiers(n)
+
+
+def depth_tiers_from_record(date: str, n: int) -> List[str]:
+    """The depth-tier vector this date's ANALYSIS STAGE actually ran, read back
+    off the run record. `[]` when no armed stage has run for the date.
+
+    WHY THIS EXISTS — the L1 hole the propagation would otherwise open, and it
+    is a hole in the paths the principal uses by hand. `--no-refresh`, a
+    sample, and the ledger backfill all skip the analysis stage, so there is no
+    live `depth_tiers` for them to consume. Falling back to the positional A2
+    vector there would put a fetch-failed story back into a depth slot with no
+    brief behind it — a degraded lead, produced by the very machinery that
+    exists to forbid one. So the vector is RECOVERED instead.
+
+    THE STAGE ENTRY AND NOT THE RUN ENTRY, deliberately: a `--no-refresh`
+    completing an interrupted regenerate has a stage entry (the stage ran, then
+    the run died) and no run entry at all. `_tiers_for` above reads the run
+    entry because its question is different — what did the last PUBLISHED
+    edition look like.
+
+    Not gated on the arm here. The gate belongs at the consumer
+    (`generate.edition_tiers`), because this function is also how a reader or a
+    probe asks the record a question, and a record read that lies depending on
+    a module constant would be worse than no reader at all."""
+    e = _newest_log_entry(
+        date, lambda e: e.get("stage") == "analysis" and bool(e.get("depth_tiers")))
+    if not e:
+        return []
+    tiers = list(e["depth_tiers"])
+    return (tiers + ["quick"] * n)[:n]
 
 
 # X4 (case file 2026-07-28) — the exact-4,000-char prior-briefing rows. The

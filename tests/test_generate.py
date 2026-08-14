@@ -101,7 +101,16 @@ def tier_for_position(i):
     return "full" if i == 1 else ("medium" if i in (2, 3) else "quick")
 
 
-def stories_payload(slots, variant="A", lede_extra="", my_read=None):
+def stories_payload(slots, variant="A", lede_extra="", my_read=None,
+                    tiers=None):
+    """A writer payload for `slots`.
+
+    `tiers` (NL-151b) is the per-POSITION tier vector the pipeline briefed the
+    writer for. Pass it when the edition demoted a fetch-failed story out of
+    the depth tier — a real model is told its tier per story in the prompt and
+    complies, so a fake that always returns the positional tiers is modelling a
+    writer that ignores its instructions. Omitted, every existing caller gets
+    the A2 positional payload it has always got: an extension, not a swap."""
     stories = []
     for i, s in enumerate(slots, start=1):
         lede = "The opening sentence reports the development. A second sentence adds context."
@@ -110,7 +119,8 @@ def stories_payload(slots, variant="A", lede_extra="", my_read=None):
                 f"We last covered {rv['last_covered']} this thread; here is what changed. "
                 "The development moved again today."
             )
-        tier = tier_for_position(i)
+        tier = (tiers[i - 1] if tiers and i - 1 < len(tiers)
+                else tier_for_position(i))
         story = {
             "tier": tier,
             "headline": f"Rewritten headline {s['slot']}",

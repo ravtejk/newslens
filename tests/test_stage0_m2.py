@@ -38,6 +38,14 @@ from newslens import (analysis, config, db, generate, llm, paths, profiles,
                       ranking)
 
 from test_generate import seed_briefing, slot
+# NL-151b: a fetch that SUCCEEDS. Under his ruled arm a slot whose fetches all
+# fail leaves the depth tier ABOVE the ladder at $0 — correct behaviour, and
+# fatal to a fixture whose subject is what the ladder SPENDS. These worlds
+# named no fetch at all, so they were failing every fetch by accident against
+# the conftest loopback guard; naming a working one restores the world the cap
+# pins were written to measure (on his real log, 71 of 72 prioritized slots
+# got full text — a fetching slot is the ordinary case, not the exotic one).
+from test_analysis_brief_qa import fetch_fixture
 
 GUARDED_NAMES = ("DATA_DIR", "DB_PATH", "SOURCES_FILE", "ENV_FILE", "MEMORY_FILE")
 
@@ -405,6 +413,7 @@ def test_nl95_analysis_cap_binds_shadow(monkeypatch, tmp_path):
             env={"OPENAI_API_KEY": "sk-qa-fake",
                  "BUDGET_CAP_USD_PER_RUN": "0.40"},   # exactly one slot's shadow
             chat=chat, sonar=sonar, sleep=lambda s: None,
+            fetch=fetch_fixture,          # NL-151b — see the import note
             tiers_override=["full", "medium"])
     finally:
         con.close()
@@ -453,6 +462,7 @@ def test_nl95_per_story_row_carries_charged_and_shadow_side_by_side(
             date="2026-07-25", con=con, env={"OPENAI_API_KEY": "sk-qa-fake"},
             chat=lambda k, p: ({"headline": "h", "body": "b"}, 0.0, 0.05),
             sonar=lambda k, t, c: ([], 0.0, "skipped"),
+            fetch=fetch_fixture,          # NL-151b — see the import note
             sleep=lambda s: None, tiers_override=["full"])
     finally:
         con.close()

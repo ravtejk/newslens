@@ -609,6 +609,39 @@ def hsr_worksheet(con: sqlite3.Connection, date: str, stories: List[Dict],
 # T3 — the Concept B input pack ($0, no LLM, read-only)
 # ---------------------------------------------------------------------------
 
+def _loudness_by_slot(date: str, slots: List[Dict]) -> Dict[int, str]:
+    """Concept B's three loudness levels, per slot number, for one edition.
+
+    The edition's own depth-tier vector when the record has one; the positional
+    grammar otherwise. `full` is the lead, `medium` is secondary, everything
+    else is an In-Brief move — the same three-way split Design specified, keyed
+    off what the edition did instead of off the slot's ordinal.
+
+    GATE R-D RE-AIM (2026-08-14): `_tiers_for` and NOT
+    `depth_tiers_from_record`, because the two answer different questions and
+    this pack asks the first one. `_tiers_for` reads the RUN entry — "what did
+    the last published edition look like" — while `depth_tiers_from_record`
+    reads the STAGE entry, which exists in a window where nothing published
+    (an interrupted regenerate, a stage whose run died). In that window the old
+    call made this pack contradict the shipped page it feeds Design from, and
+    the sentence above would have been an in-file claim the code refuses. The
+    no-record fallback is unchanged in effect: `_tiers_for` returns the
+    positional vector, which reaches the same three labels through the zip
+    below (pinned)."""
+    tiers = analysis._tiers_for(date, len(slots))
+    if not tiers or not generate.depth_arm_is_in_brief():
+        return {int(s["slot"]): ("lead" if int(s["slot"]) == 1
+                                 else "secondary" if int(s["slot"]) <= 3
+                                 else "in-brief")
+                for s in slots}
+    out: Dict[int, str] = {}
+    for s, t in zip(slots, tiers):
+        out[int(s["slot"])] = ("lead" if t == "full"
+                               else "secondary" if t == "medium"
+                               else "in-brief")
+    return out
+
+
 def concept_b_pack(con: sqlite3.Connection, date: str,
                    inputs: Dict) -> Tuple[str, Dict]:
     """The material Design hand-builds Concept B from — NOT the design artifact.
@@ -620,15 +653,26 @@ def concept_b_pack(con: sqlite3.Connection, date: str,
     behind it, and which stories mint day-one files ("New files opened" — the
     mandatory loud section, the serendipity valve).
 
-    Loudness grammar per Concept B: slot 1 = the lead file, slots 2-3 =
-    secondary, the rest = one-line In-Brief moves.
+    Loudness grammar per Concept B: the lead file, secondary files, and
+    one-line In-Brief moves.
+
+    NL-151b — WHICH STORY IS WHICH follows the EDITION, not the slot number.
+    Design's grammar (three loudness levels) is unchanged and is not this
+    harness's to amend; what changed is that "slot 1 = the lead" stopped being
+    true on a morning where the lead's fetches died and the depth treatment
+    walked down the ranking. The pack is INPUT MATERIAL for a hand-built
+    concept, so calling a demoted story "the lead file" would feed the design
+    exploration a fact the edition contradicts. Editions with no recorded
+    vector (every edition before the contract, and every unanalysed date) fall
+    back to the positional grammar, which is what they actually shipped.
     """
     slots = inputs["slots"]
+    loudness = _loudness_by_slot(date, slots)
     files: List[Dict] = []
     new_files: List[Dict] = []
     for s in slots:
         n = int(s["slot"])
-        loud = "lead" if n == 1 else ("secondary" if n <= 3 else "in-brief")
+        loud = loudness[n]
         topics = [t for t in (s.get("matched_memory") or []) if t]
         story = {
             "slot": n,

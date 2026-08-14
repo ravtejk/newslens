@@ -395,6 +395,33 @@ RUNLOG_RUNS_MANY = "{n} runs recorded"
 # default would be a claim.
 RUNLOG_TRIGGER_SCHEDULED = "Scheduled"
 RUNLOG_TRIGGER_INTERACTIVE = "You ran it"
+# NL-151b — THE DEMOTION, ON THE RECORD SCREEN. His arm (ii) is deliberately
+# trust-quiet in the BRIEFING: one sentence at the bottom naming the story that
+# failed, and no badge anywhere on the story promoted in its place. The reports
+# screen is the other audience and it gets the count, because a scheduled run
+# that reshuffled his depth tier at 06:00 and said nothing on the one screen
+# whose whole job is the record is the NL-146 charter's own failure mode.
+#
+# "moved to In Brief" and not "skipped": the story is still in the edition —
+# that is precisely what arm (ii) decided — so a word implying it vanished
+# would be the record disagreeing with the page. Rendered only when the run
+# actually demoted something; silence on an ordinary morning.
+RUNLOG_DEPTH_SKIPPED_ONE = "1 story moved to In Brief (fetch failed)"
+RUNLOG_DEPTH_SKIPPED_MANY = "{n} stories moved to In Brief (fetch failed)"
+# GATE R-A (2026-08-14, QA F-1) — THE PARENTHETICAL IS THE CAUSE, AND THE CAUSE
+# IS NOT THE SAME ON BOTH GATES. A Gate-B skip (every cluster source outside the
+# fetchable set) never opened a socket, so "(fetch failed)" is the exact sentence
+# the briefing's own renderer refuses to print for it, on honesty grounds — and
+# the record screen may not state what the edition refused. Gate A keeps its
+# words; Gate B gets these. The DEMOTION half of the sentence is identical
+# either way because the demotion is identical either way; only the cause
+# differs. A mixed morning renders BOTH lines, each counting its own bucket —
+# no single parenthetical is true for both, which is why this is two labels and
+# not one keyed on `disclose` (that shape either lies about half the count or
+# goes silent about a cause the record actually holds).
+RUNLOG_DEPTH_NOFETCH_ONE = "1 story moved to In Brief (no fetchable sources)"
+RUNLOG_DEPTH_NOFETCH_MANY = (
+    "{n} stories moved to In Brief (no fetchable sources)")
 
 # NL-146 fix loop 1 (QA F-2) — A RUN IS IN FLIGHT IN ANOTHER PROCESS.
 #
