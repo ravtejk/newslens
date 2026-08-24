@@ -1227,16 +1227,55 @@ def add_thread(con: sqlite3.Connection, topic: str, note: Optional[str] = None,
                     " updated_at = ?, dismissed_via = NULL WHERE id = ?",
                     (now, now, row["id"]),
                 )
+        _queue_cold_start_baseline(con, row["id"])
         return "revived"
     with con:
-        con.execute(
+        cur = con.execute(
             "INSERT INTO memory (topic, status, principal_note,"
             " last_referenced_briefing_id, status_changed_at, created_at,"
             " updated_at) VALUES (?, 'active', ?, ?, ?, ?, ?)",
             (topic, (note or "").strip() or None, last_referenced_briefing_id,
              now, now, now),
         )
+    _queue_cold_start_baseline(con, cur.lastrowid)
     return "added-truncated" if truncated else "added"
+
+
+def _queue_cold_start_baseline(con: sqlite3.Connection, thread_id: int) -> None:
+    """NL-77 THE INTENT GATE (ADR-0013 §5), on the UI side of the house.
+
+    A follow IS the §F explicit action, so it records that a cold-start thread
+    WANTS its "How we got here" founding floor — a `pending` thread_baselines
+    row. $0 AND NO MODEL CALL: the row is an intent, nothing more. Generation
+    stays behind the explicit, cap-gated `newslens memory-baseline` command
+    ("never a silent LLM call from a memory verb"), which is what drains this
+    queue — not the next generate, and not this tap.
+
+    WHY HERE rather than in each route: add_thread is the principal verb surface
+    every explicit follow door funnels through (the plain follow verb, THE TAP's
+    seed, every altitude commit, the revive), so the gate holds for all of them
+    by construction and a route added later inherits it. cli.py's `memory add`
+    runs its OWN insert (see the module header) and calls the intent writer
+    itself, so there is no double-write — and its semantics are the ones mirrored
+    here: queue on a new or revived follow, never on 'already-active'.
+
+    COLD START ONLY: a thread carrying a ledger delta has a real record and needs
+    no founding floor. Silent by design — a follow must never fail because the
+    baseline bookkeeping did, so a pre-0017 DB (no table) and any bookkeeping
+    error leave the follow itself untouched.
+    """
+    from . import memory_core, ranking
+    try:
+        if con.execute("SELECT 1 FROM thread_deltas WHERE thread_id = ? LIMIT 1",
+                       (thread_id,)).fetchone():
+            return
+        memory_core.write_baseline_intent(con, thread_id, ranking.local_today())
+    except sqlite3.Error:
+        # The FOLLOW is the reader's act and it has already landed; entry-zero
+        # bookkeeping is downstream of it. Never turn a successful follow into a
+        # failed one over the founding floor — the backlog sweep
+        # (threads_awaiting_baseline) finds this thread on its own regardless.
+        return
 
 
 # ---------------------------------------------------------------------------

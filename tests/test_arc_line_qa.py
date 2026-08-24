@@ -561,7 +561,11 @@ def test_0018_applies_over_armed_append_only_triggers_and_keeps_them(tmp_path):
                         "0024_entities.sql",
                         "0025_follow_settle_events.sql",
                         # NL-17 M2: the vocabulary-move ledger.
-                        "0026_vocabulary_moves.sql"]
+                        "0026_vocabulary_moves.sql",
+                        # NL-77 remnant: the thread_baselines rebuild. It runs
+                        # over 0017's OWN armed append-only triggers, which is
+                        # the same shape this test already asserts for 0010.
+                        "0027_thread_baselines_delete_cascade.sql"]
     con = db.connect(db_path)
     try:
         row = con.execute("SELECT arc_line FROM thread_state").fetchone()

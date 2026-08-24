@@ -106,3 +106,32 @@ read/thread_view event NEVER triggers a baseline (tested).
   server-side emission wiring (not yet live). The intent entrypoint
   (`capture_baseline_intent`) is ready but has no src call site yet; follow +
   the explicit command are the only wired paths this milestone.
+
+## Superseded in part — 2026-08-24, migration 0027 (the delete triangle)
+
+§1's append-only reasoning ("recreating a trust-critical table past its
+RAISE(ABORT) triggers is the disqualifying carve-out") was applied to
+`thread_deltas` and held. It was NOT a promise that `thread_baselines` itself
+would never be rebuilt, and migration 0027 rebuilds it on the principal's ruling
+of 2026-08-24 (DECISIONS, "THE SLATE RULED" item 3 — Option A).
+
+**What changed.** The FK gains `ON DELETE CASCADE`, and
+`trg_thread_baselines_no_delete` — which §2's lifecycle describes as absolute —
+is now GUARDED: `WHEN EXISTS (SELECT 1 FROM memory WHERE id = OLD.thread_id)`.
+So a direct `DELETE FROM thread_baselines` still ABORTs exactly as before; only
+a delete driven by the removal of the thread the row belongs to passes, because
+the parent row is already gone by the time SQLite fires the child's BEFORE
+DELETE trigger. Read §2 with that one exception in mind: a baseline is still
+never edited, never retried in place, and never deleted on its own — it is
+removed only with the thread it founds.
+
+**Why it had to happen.** The very item this ADR deferred — "thread
+renames/**deletes** (the junk sweep) land BEFORE baselines" — never landed, and
+the collision it predicted went live: ADR-0010 §4's hard delete, this table's
+never-delete trigger, and 0017's no-cascade FK are three rules that cannot all
+hold. Any thread that received a baseline row (a `pending` intent counted)
+became permanently undeletable — all 18 of the principal's retro-baselined
+threads; 0027 unblocks 15, while 3 (ids 13/16/21) remain blocked by other FK
+legs outside its ruled scope. 0027's header carries the full reasoning, the measured SQLite behaviour
+the design turns on, and the four remaining FK legs it deliberately does not
+touch.

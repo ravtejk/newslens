@@ -41,6 +41,7 @@ MIGRATION_0023 = "0023_briefings_pending.sql"          # NL-106: stage-and-promo
 MIGRATION_0024 = "0024_entities.sql"                   # NL-17 M1: entity identity — the entities table + memory.entity_id (nullable, NULL = "no broader concept")
 MIGRATION_0025 = "0025_follow_settle_events.sql"       # NL-17 M1: the append-only settle-outcome log (settled_entity / settled_none / settle_failed) + the retry bound
 MIGRATION_0026 = "0026_vocabulary_moves.sql"           # NL-17 M2: the append-only vocabulary-move ledger — the row IS the atomic switch (tag suppressed + entity steer-eligible derived together)
+MIGRATION_0027 = "0027_thread_baselines_delete_cascade.sql"  # NL-77 remnant: the delete triangle — thread_baselines REBUILT with ON DELETE CASCADE + a GUARDED no-delete trigger (a direct baseline delete still aborts)
 ALL_MIGRATIONS = [
     MIGRATION_0001, MIGRATION_0002, MIGRATION_0003,
     MIGRATION_0004, MIGRATION_0005, MIGRATION_0006, MIGRATION_0007,
@@ -49,6 +50,7 @@ ALL_MIGRATIONS = [
     MIGRATION_0015, MIGRATION_0016, MIGRATION_0017, MIGRATION_0018,
     MIGRATION_0019, MIGRATION_0020, MIGRATION_0021, MIGRATION_0022,
     MIGRATION_0023, MIGRATION_0024, MIGRATION_0025, MIGRATION_0026,
+    MIGRATION_0027,
 ]
 EXPECTED_TABLES = {
     "source_items", "briefings", "memory", "briefings_history", "ranking_runs",
@@ -78,6 +80,10 @@ EXPECTED_TABLES = {
     # Reversal is a NEW ROW naming the one it undoes; the 0004-pattern
     # triggers make a mutable "reversed" column impossible by construction.
     "vocabulary_moves",
+    # NL-77 remnant (0027) adds NO table. It REBUILDS thread_baselines (the FK
+    # gains ON DELETE CASCADE; SQLite has no in-place ALTER for that) via the
+    # 0006/0011 _v2 pattern, so the scratch `thread_baselines_v2` must be gone
+    # by COMMIT — this set is the tripwire that says so.
 }
 
 

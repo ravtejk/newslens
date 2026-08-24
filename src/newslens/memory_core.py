@@ -2165,11 +2165,28 @@ def record_baseline(con: sqlite3.Connection, thread_id: int, as_of_date: str,
 
 def capture_baseline_intent(con: sqlite3.Connection, topic: str,
                             as_of_date: str) -> Optional[int]:
-    """§F intent entrypoint keyed by TOPIC (the surface both `memory add` and the
-    server's first-open call). Resolves the thread (case-insensitive, never a
-    dismissed one), then records the pending intent. Returns the row id or None
-    (unresolvable thread, or intent already standing). NEVER inferred from
-    reading behaviour — the caller must be an explicit action."""
+    """§F intent entrypoint keyed by TOPIC. Resolves the thread
+    (case-insensitive, never a dismissed one), then records the pending intent.
+    Returns the row id or None (unresolvable thread, or intent already
+    standing). NEVER inferred from reading behaviour — the caller must be an
+    explicit action.
+
+    NO SRC CALLER TODAY, and this says so rather than implying one — it claimed
+    to be "the surface both `memory add` and the server's first-open call", and
+    neither was ever true. Both WIRED follow paths hold a thread_id already and
+    so call `write_baseline_intent` directly: cli.py's `memory add` after its own
+    INSERT, and `memory._queue_cold_start_baseline` beneath every UI follow door.
+    Keying on the id is not incidental — NL-17's settle RENAMES a seeded thread
+    (`move_follow_altitude`, mutation law), so a topic-keyed intent would be
+    orphaned by the path NL-17 made the normal one, while an id-keyed one
+    survives.
+
+    This wrapper stays for the leg ADR-0013 §5 deferred and that is STILL
+    deferred: FIRST-OPEN, which needs a per-open server signal. That signal is
+    `events.log_thread_view`, which likewise has zero src callers — the
+    server-side emission never went live, so there is nothing to hang it on yet.
+    Wire this from that emission when it lands, keyed on the topic the reader
+    actually opened."""
     tid = resolve_thread_id(con, topic)
     if tid is None:
         return None
