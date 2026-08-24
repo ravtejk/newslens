@@ -47,7 +47,7 @@ since I last read it?" It is a DELTA sentence, NOT a second copy of the state:
      beyond X" and stop) FAILS; the named change is the payload.
   C. Do NOT reuse the state paragraph's wording. The state answers "where it
      stands now"; the arc answers "what changed since last time". No shared
-     six-word run with the state, and well under half its words in common.
+     six-word run with the state.
   D. ONE sentence, at most 35 words. No "we" — name the record ("this record",
      "the last-covered entry"). No "watch for"/"expect"/"look for" (forward
      promises live elsewhere). No ordinals or entry counts.
@@ -59,7 +59,7 @@ Return ONLY a JSON object, no prose around it:
 {
   "state": "<= 5 present-tense sentences; every sentence dated inline to a ledger edition",
   "cites": ["YYYY-MM-DD", "..."],  // the edition dates your sentences lean on
-  "arc_line": "one dated past->change sentence, or an empty string if this is the thread's first entry"
+  "arc_line": "ONE sentence, at most 35 words: one dated past->change sentence, or an empty string if this is the thread's first entry"
 }
 
 The thread: {topic}

@@ -10,17 +10,27 @@ invariant on the NEW arc path, the §D strip-test residual, §F.1 calibration
 anchors at the measured margins, and the BUG-22 normalization re-pin orphaned
 by the arc-render deletion).
 
-Threshold verdict carried here (QA tuning, §F.1 "QA tunes", evidence in the
-2026-07-18 QA report): the starter thresholds STAND — ≥6-word run OR >0.40
-directed (arc∩state)/|arc|, stopwords included. Measured: the served defect and
-every trivial mutation trip (reorder 0.667, 2-synonym 0.588/run6, 4-synonym
-0.471 — fraction-prong only, the thinnest must-catch margin); genuinely
-independent lines clear at ~0.23; the two false-trip classes (verbatim ≥6-word
-endpoint quotes; short topic-heavy lines vs long states, up to 0.70) both
-degrade the SAFE direction (corrected retry that coaches the fix, then
-absence — never a shipped bad line). Dropping stopwords or raising either
-threshold loses the 4-synonym catch; lowering either false-rejects the lawful
-short-line class harder. Offline, deterministic, $0.
+THRESHOLD VERDICT — SUPERSEDED 2026-08-24 (NL-105, principal ruling: DROP).
+The 2026-07-18 verdict carried here was "the starter thresholds STAND — ≥6-word
+run OR >0.40 directed (arc∩state)/|arc|". Production falsified it: the fraction
+prong measured topicality rather than paste, every one of the 84 rejected
+candidates the record logged scored over the bar (floor 0.4103), and the arc
+line rendered zero times in 12 editions. The prong is GONE; §F.1 is the run
+prong alone. The pins below are re-aimed in place, each labelled with what it
+now carries:
+  * the MINIMAL-SWAP PASTE CLASS — a paste of the state text carrying one
+    well-placed synonym per ≤5 words, so no 6-word run survives — now PASSES
+    the mechanical floor. That is the conscious flip, ruled, with its
+    falsifier. Both ends of the class are pinned: the 4-synonym paraphrase
+    (test_PIN_four_synonym_paraphrase_now_passes_RULED_DROP) and the cheapest
+    member measured, a ONE-synonym midpoint paste
+    (test_PIN_one_synonym_midpoint_paste_now_passes_RULED_DROP).
+  * the short-topic-heavy false-trip class is CURED (it was a false REJECT).
+  * the verbatim-endpoint-quote catch is UNCHANGED — it rides the run prong
+    (measured run 7), so the §A/§F.1 boundary still holds where it was drawn.
+The corpus this rests on is tests/fixtures/arc_line_production_corpus.json and
+its pins are in tests/test_nl105_arc_prong_drop.py — real production text, the
+gap this file's synthetic-only coverage left open. Offline, deterministic, $0.
 """
 
 import json
@@ -176,23 +186,32 @@ _DEFECT_ERA_STATE = ("The conflict has moved beyond economic disputes into "
 
 
 def test_defect_mutations_trip_reorder_synonyms_noise():
-    """Anti-evasion floor: the served defect must trip under trivial mutation.
-    Reorder and noise ride the run prong; the 4-synonym paraphrase rides ONLY
-    the directed fraction (measured 0.471 vs the 0.40 bar — the thinnest
-    must-catch margin in the calibration). If a threshold change breaks any of
-    these, mutation robustness is lost — that is the flip this pin makes
-    conscious."""
+    """Anti-evasion floor, RE-AIMED 2026-08-24 (NL-105 DROP): the served defect
+    must still trip under trivial mutation — and these four do it on the RUN
+    PRONG ALONE, which is all §F.1 now has. Measured on the landed bytes:
+    reorder run=True (frac was 0.632), 2-synonym run=True (0.556), noise
+    run=True (0.667), whole-state paste run=True (0.727). The fifth mutation,
+    the 4-synonym paraphrase, rode the deleted fraction prong alone and is
+    carried out of this must-catch list into its own conscious-flip pin below —
+    NOT quietly dropped. If a change breaks any mutation still listed here,
+    mutation robustness on the surviving prong is lost.
+
+    WHAT THESE FOUR DO NOT PROVE (QA fixloop-1 finding #2, 2026-08-24): the
+    2-synonym case survives here only because BOTH its swaps sit early, leaving
+    a 6-word tail ('beyond economic disputes into open competition') intact.
+    The swaps' POSITION is doing the work, not their count — one well-placed
+    synonym per ≤5 words breaks every run and escapes. The cheapest escape
+    measured is a single swap at the midpoint; it is pinned as
+    test_PIN_one_synonym_midpoint_paste_now_passes_RULED_DROP so the surrendered
+    class is not read as 'the 4-synonym one'."""
     for mutated in (
         # clauses reordered (run prong):
         "The conflict has moved beyond economic disputes into open "
         "competition, as when this record last covered it (Jul 16).",
-        # 2 synonyms swapped (run + fraction):
+        # 2 synonyms swapped (run prong):
         "When this record last covered it (Jul 16), the dispute has shifted "
         "beyond economic disputes into open competition.",
-        # 4 synonyms swapped (FRACTION PRONG ONLY, margin 0.071):
-        "When this record last covered it (Jul 16), the standoff has drifted "
-        "past commercial disputes into open competition.",
-        # punctuation/whitespace noise (normalizer):
+        # punctuation/whitespace noise (normalizer + run prong):
         "When this record last covered it (Jul 16) — the conflict, has moved "
         "— beyond economic disputes,  into open competition...",
         # whole state pasted under a lawful anchor clause:
@@ -204,17 +223,97 @@ def test_defect_mutations_trip_reorder_synonyms_noise():
             f"defect mutation escaped §F.1: {mutated!r}")
 
 
+def test_PIN_four_synonym_paraphrase_now_passes_RULED_DROP():
+    """THE CONSCIOUS FLIP, TAKEN — the coverage the 2026-08-24 ruling bought and
+    what it cost, pinned so the loss is visible rather than deleted with the
+    prong. This 4-synonym paraphrase of the served defect is the HEAVIEST-EDIT
+    member of the class the fraction prong alone caught (no 6-word run; measured
+    directed frac 0.4444 — NB the superseded docstring here claimed 0.471 /
+    margin 0.071, and the 2026-08-14 scout re-derived the real value at 0.4444 /
+    margin 0.0444: 63% smaller, undetected because the pin asserted 'trips',
+    never the value). It now PASSES every mechanical rule.
+
+    NOT the only member, and the record used to say otherwise (QA fixloop-1
+    finding #2): the surrendered class is every minimal-swap paste — see
+    test_PIN_one_synonym_midpoint_paste_now_passes_RULED_DROP for its cheapest
+    measured member, one swap. Naming the class after this specimen understated
+    what the drop gave up.
+
+    Why that was ruled acceptable: the prong bought this synthetic catch at
+    the price of every real arc line — 84/84 logged rejected production
+    candidates over the bar (floor 0.4103), 12 editions blank. This class joins
+    the §D tense-splice residual: owned by the state spot-check and falsifier #1.
+
+    FALSIFIER, pre-registered at the ruling (DECISIONS 2026-08-24): one SERVED
+    paste that clears the run prong and the five structural rules reopens the
+    prong question on new evidence. If that happens, THIS pin flips back — that
+    is its job."""
+    four_synonym = ("When this record last covered it (Jul 16), the standoff "
+                    "has drifted past commercial disputes into open "
+                    "competition.")
+    assert not memory_core._shared_contiguous_run(
+        memory_core._arc_word_seq(four_synonym),
+        memory_core._arc_word_seq(_DEFECT_ERA_STATE), 6)
+    assert not memory_core.arc_overlap_trips(four_synonym, _DEFECT_ERA_STATE)
+    clean, _ = V(four_synonym, _DEFECT_ERA_STATE, "2026-07-16")
+    assert clean == four_synonym            # the cost of the drop, on the record
+
+
+def test_PIN_one_synonym_midpoint_paste_now_passes_RULED_DROP():
+    """THE CONSCIOUS FLIP AT ITS TRUE PRICE — the second cost pin, added by QA
+    fixloop 1 (finding #2, 2026-08-24). The record named the surrendered class
+    after the 4-synonym paraphrase, i.e. after its WEAKEST member. This is the
+    cheapest member measured: the defect-era state pasted whole, minus its
+    trailing clause, with exactly ONE synonym swapped at the midpoint
+    (economic → commercial). Measured on the landed bytes: directed frac 0.6111
+    — far deeper into the old prong's reject region than the 4-synonym case at
+    0.4444 — longest shared contiguous run 5 words, so the surviving run prong
+    does not see it.
+
+    The mechanism, stated so the class is not re-narrowed later: a single swap
+    splits the pasted body into a 5-word head and a 4-word tail, and §F.1 needs
+    6. One well-placed synonym per ≤5 words defeats the run prong at ANY paste
+    length. Edit COUNT was never the variable; edit POSITION is.
+
+    BORN-RED SENSE (this pin documents a cost, so its red is on the OLD bytes):
+    at 699586a this line is REJECTED — 'reproduces the state summary (≥6-word
+    run or >40% shared tokens)' — measured in a fresh `git archive 699586a`
+    export with the prong asserted present (0.4). The fraction prong caught it;
+    nothing mechanical catches it now.
+
+    FALSIFIER, unchanged and shared with the pin above (DECISIONS 2026-08-24):
+    one SERVED paste that clears the run prong and the five structural rules
+    reopens the prong question. Production evidence still stands against that —
+    11 of 84 logged rejected candidates carried a 6-word run and 0 of 88
+    measured candidates escaped — but this pin is what makes the exposure
+    honest rather than flattering."""
+    one_synonym_midpoint = ("When this record last covered it (Jul 16), the "
+                            "conflict has moved beyond commercial disputes "
+                            "into open competition.")
+    seq = memory_core._arc_word_seq(one_synonym_midpoint)
+    state_seq = memory_core._arc_word_seq(_DEFECT_ERA_STATE)
+    frac = len(set(seq) & set(state_seq)) / len(set(seq))
+    assert round(frac, 4) == 0.6111         # the measured value, not "trips"
+    assert memory_core._shared_contiguous_run(seq, state_seq, 5)
+    assert not memory_core._shared_contiguous_run(seq, state_seq, 6)
+    assert not memory_core.arc_overlap_trips(one_synonym_midpoint,
+                                             _DEFECT_ERA_STATE)
+    clean, _ = V(one_synonym_midpoint, _DEFECT_ERA_STATE, "2026-07-16")
+    assert clean == one_synonym_midpoint    # the true cost, on the record
+
+
 def test_PIN_verbatim_endpoint_quote_trips_reworded_endpoint_passes():
-    """The §A/§F.1 boundary, pinned with the CONTRACT'S OWN specimens: a
-    now-as-endpoint is licensed (§A), but an endpoint that QUOTES the current
-    state for ≥6 contiguous words is treated as paste — the contract's FULL
-    reframe specimen (endpoint spelled out) and its minimal-repair specimen
-    both TRIP against states that phrase the same endpoint (measured run 7 /
-    frac 0.483 and run 8 / 0.593). Working-as-intended verdict: §F.1's job is
-    forcing the arc to say the endpoint in its own words; the corrected retry
-    coaches exactly that, and the reworded endpoint passes with margin (0.259).
-    NB the implementer's calibration test uses the TRUNCATED reframe form —
-    this pin carries the full-form behavior honestly."""
+    """The §A/§F.1 boundary, pinned with the CONTRACT'S OWN specimens —
+    UNCHANGED by the 2026-08-24 drop, and the reason the drop was survivable:
+    a now-as-endpoint is licensed (§A), but an endpoint that QUOTES the current
+    state for ≥6 contiguous words is treated as paste. The contract's FULL
+    reframe specimen (endpoint spelled out) TRIPS on the RUN prong (measured
+    run 7 — the frac was 0.483 and is no longer consulted), so this catch
+    survives the prong's deletion intact. Working-as-intended verdict: §F.1's
+    job is forcing the arc to say the endpoint in its own words; the corrected
+    retry coaches exactly that, and the reworded endpoint passes (no shared
+    run). NB the implementer's calibration test uses the TRUNCATED reframe form
+    — this pin carries the full-form behavior honestly."""
     state = ("Shipping and insurance are restructuring around a strait "
              "treated as closed; tanker rates have tripled since the strikes "
              "(Jul 17).")
@@ -230,21 +329,27 @@ def test_PIN_verbatim_endpoint_quote_trips_reworded_endpoint_passes():
     assert V(reworded, state, "2026-07-16")[0] == reworded
 
 
-def test_PIN_short_topic_heavy_lawful_line_false_trips_the_fraction():
-    """PIN of the second documented false-trip class: a SHORT lawful line
-    (≤ ~13 words) over a LONG state inflates the directed fraction — every
-    thread-vocabulary noun is a large step of |arc|. Measured 0.545 here.
-    Degrade direction is safe (retry coaches 'under 40% shared words' → the
-    model pads/rephrases; worst case absence). Pinned so a threshold retune
-    weighs this class against test_defect_mutations' 0.471 must-catch —
-    the two bounds bracket the fraction bar from both sides."""
+def test_PIN_short_topic_heavy_lawful_line_is_CURED_by_the_drop():
+    """RE-AIMED 2026-08-24 (NL-105 DROP) — this pin used to assert the REJECT.
+    The documented false-trip class: a SHORT lawful line (≤ ~13 words) over a
+    LONG state inflated the directed fraction, because every thread-vocabulary
+    noun is a large step of |arc| (measured 0.545 here). It shares no 6-word
+    run with the state and never did — it was a paste-free, contract-compliant
+    delta sentence that the prong threw away. It now PASSES, verbatim.
+
+    This is the mechanism the production corpus showed at scale: the prong was
+    measuring topicality, and short lines paid the most for it. The old
+    docstring called the degrade direction 'safe' because the retry could coach
+    around it — production measured that comfort false (the retry did not steer
+    the fraction at all: mean Δ −0.0064 over 35 paired attempts, improvement on
+    17/35, a coin flip)."""
     long_state = ("The strait is closed to commercial transit and the strikes "
                   "have paused; insurance rates for the region have tripled "
                   "and talks are stalled in Vienna with no date set to resume "
                   "(Jul 16).")
     short_lawful = "On Jul 16 the strait was closed; transit has since resumed."
-    with pytest.raises(R, match="reproduces the state"):
-        V(short_lawful, long_state, "2026-07-16")
+    clean, _ = V(short_lawful, long_state, "2026-07-16")
+    assert clean == short_lawful
 
 
 # ===========================================================================

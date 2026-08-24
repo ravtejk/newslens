@@ -1,0 +1,928 @@
+{
+ "_meta": {
+  "what": "Every arc-line candidate the record LOGGED as rejected, paired with the two inputs validate_arc_line actually saw at generation time — plus every arc line that has ever actually rendered. NL-105's evidence base and NL-35's first harness piece; the binding acceptance condition of the 2026-08-24 DROP ruling.",
+  "population_bound": "NOT 'everything the model ever wrote' (wording corrected by QA fixloop 1, finding #8, 2026-08-24). memory_core._author_arc_line carries rejected candidate TEXT into the warn — and thus into generation_log's state_rewrites detail — only when BOTH attempts fail; its retry-accepted return hands back an empty warn, so an attempt-1 rejected and then rescued by a passing retry is structurally unlogged and cannot appear here. The gap can only conceal candidates the pre-fix validator REJECTED, so every 84-based claim understates the case rather than overstating it.",
+  "extracted": "2026-08-24",
+  "rejected_specimens": 42,
+  "rejected_candidates": 84,
+  "accepted_lines": 4,
+  "editions": [
+   "2026-07-20",
+   "2026-07-22",
+   "2026-07-23",
+   "2026-07-24",
+   "2026-07-25",
+   "2026-07-26",
+   "2026-08-01",
+   "2026-08-03",
+   "2026-08-06",
+   "2026-08-07",
+   "2026-08-10",
+   "2026-08-11",
+   "2026-08-12",
+   "2026-08-13",
+   "2026-08-14",
+   "2026-08-24"
+  ],
+  "sources_as_extracted": {
+   "data/generation_log.jsonl": {
+    "sha256": "11229d9725d71bd88ba1dd0988b25c3eecd765c751b065a4386d33b92fb5cd83",
+    "runs": 61
+   },
+   "data/newslens.db": {
+    "sha256": "24e78b9dd9f0ea3e6176bd0b2bd6cc9a5b7666667357bab8d2d2b9e656665a8d",
+    "note": "read at mode=ro; thread_state 62 rows, 4 with a non-empty arc_line"
+   }
+  },
+  "recipe": [
+   "rejected: parse each generation_log run's memory.state_rewrites[].detail between 'attempt-1 candidate: \"' and '\"; retry candidate: \"' (memory_core._fmt_arc_candidate's quoting, 2026-07-18 observability mini) — verbatim, untouched.",
+   "accepted: thread_state rows WHERE arc_line <> '' — the lines that actually reached a reader.",
+   "state_text: thread_state.state_text for the same (thread, edition), ORDER BY id DESC LIMIT 1 — the `clean` state rewrite_state hands _author_arc_line.",
+   "anchor_iso: max LIVE thread_deltas.edition_date strictly before the edition date (superseded rows excluded), mirroring memory_core.rewrite_state's prior_dates."
+  ],
+  "provenance_note": "SUPERSET of the 2026-08-14 scout's 35 specimens / 70 candidates. Two editions were added after that scout's read: 2026-08-14 (which ran later the same day) and 2026-08-24, which GENERATED AT 18:00:43Z DURING the fix loop that landed the drop — an interactive run by the principal after he cleared the OAuth outage, on PRE-FIX bytes, 2m06s before the first source edit. Nothing here was dropped or edited.",
+  "streak_note": "The 2026-08-24 edition BROKE the blank streak on the OLD validator: 1 of 3 eligible threads authored an arc (directed frac 0.375, just under the 0.40 bar), the first since 2026-07-23. It does not rescue the prong — all 84 prior logged candidates were over the bar, and the pass region is the bottom few percent of the natural distribution, which is what a non-separating classifier looks like. It is on the record here because a corpus that quietly omitted the one edition cutting against its own conclusion would not be evidence.",
+  "streak_note_correction": "QA fixloop 1, finding #9 (2026-08-24): this note first said 'the other 2 threads died on it' — the prong alone. Measured per candidate on landed bytes: Strait of Hormuz died on the prong ALONE (attempt-1 frac 0.5333 / retry 0.6176, neither sharing a 6-word run — both PASS post-fix, so the thread renders); Iran War died on the CAP at attempt-1 (frac 0.4412, no run) and on run+frac at the retry (frac 0.5938, shares_6_word_run true — F1-RUN post-fix), so it stays lawfully arcless on a SURVIVING rule. Post-fix that edition serves 2 of 3 eligible threads, not 3 of 3. The no-rescue conclusion is unchanged and slightly stronger.",
+  "measurements": "directed_frac = |set(arc) & set(state)| / |set(arc)| and shares_6_word_run, both over memory_core._arc_word_seq's normalization. Properties of the TEXT, not of any threshold — pinned so a normalizer change cannot drift the record silently (the 2026-08-14 scout found a stated §F.1 margin 63% off its real value with nothing detecting it)."
+ },
+ "specimens": [
+  {
+   "edition": "2026-07-20",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-07-18",
+   "state_text": "The US and Iran conflict has escalated from economic disputes to direct military strikes since abandoning a ceasefire (2026-07-16), with the US now targeting civilian infrastructure like desalination plants and Iran striking regional states including Saudi Arabia for the first time in months (2026-07-18). The Houthis have declared a formal naval blockade of Saudi Arabia and Iran's IRGC claimed tanker explosions in the Hormuz Strait, choking shipping routes (2026-07-20). The conflict has killed 17 in US casualties from attacks in Jordan and Iraq, with Brent crude briefly exceeding $90 per barrel (2026-07-20). Iran signals through mediators it would consider renewed talks despite ongoing military operations (2026-07-20).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 18, military strikes had moved to civilian infrastructure; since then, naval blockades and tanker explosions extended the conflict to shipping lanes and Iran signaled openness to talks.",
+     "directed_frac": 0.6296,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By July 18, military strikes reached civilians; by July 20, Houthis blockaded Saudi Arabia and Iran claimed Hormuz Strait tanker explosions.",
+     "directed_frac": 0.7368,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-20",
+   "topic": "Iran War",
+   "anchor_iso": "2026-07-18",
+   "state_text": "The U.S. maintains its naval blockade of the Strait of Hormuz (2026-07-14) and has expanded military strikes to include civilian targets like a desalination plant serving Iranian villages (2026-07-18). Regional actors have broadened involvement, with the Houthis now formally blockading Saudi Arabia (2026-07-20) and Iran extending its strikes to include Saudi Arabia for the first time in months (2026-07-18). The conflict has shifted from infrastructure strikes to blockades and tanker attacks that choke shipping directly (2026-07-20), as Iran's IRGC claims responsibility for explosions in Hormuz (2026-07-20). U.S. military casualties from attacks in Jordan and Iraq have reached 17 (2026-07-20), while Brent crude briefly exceeded $90 for the first time (2026-07-20). Iran is signaling for the first time since the ceasefire collapsed that it would consider renewed talks through mediators (2026-07-20).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 18, the war involved infrastructure strikes; by Jul 20, the Houthis declared a Saudi blockade, tanker attacks emerged in Hormuz, U.S. deaths reached 17, and Iran signaled openness to talks.",
+     "directed_frac": 0.7188,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "As of July 18, the U.S. strike campaign on civilian infrastructure had drawn Iranian retaliation across the Gulf; since then, Houthi blockades and tanker attacks have choked maritime routes while Iran signals openness to mediation.",
+     "directed_frac": 0.5143,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-20",
+   "topic": "Ukraine War",
+   "anchor_iso": "2026-07-16",
+   "state_text": "Ukraine fired 400+ drones at Moscow and expanded mid-range strikes on Russian logistics up to 100km behind the front (2026-07-20). Russian rear-area logistics once considered safe are now inside a sustained strike zone (2026-07-20). The campaign gives Kyiv a chance to blunt Moscow's summer offensive (2026-07-20). Zelenskyy is managing fallout from Fedorov's dismissal (2026-07-20). Defense Minister Reznikov was dismissed amid protests and corruption allegations (2026-07-16).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Reznikov's dismissal for corruption (Jul 16) was followed by Ukraine's escalation with 400+ drone strikes on Moscow and logistics strikes 100km behind the front.",
+     "directed_frac": 0.7083,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By July 16, Zelensky had dismissed Defense Minister Reznikov; within days, Ukraine launched sustained drone attacks on Moscow while pushing strikes deeper into Russian rear-supply zones.",
+     "directed_frac": 0.4444,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-22",
+   "topic": "Ukraine War",
+   "anchor_iso": "2026-07-20",
+   "state_text": "Reznikov stands dismissed as Defense Minister (2026-07-16) following corruption allegations and public protests. Ukraine has fired 400+ drones at Moscow and expanded mid-range strikes on Russian logistics (2026-07-20) up to 100km behind the front. Zelenskyy has fired Syrskyi and installed Drapatyi (2026-07-22) after six days of Kyiv protests demanding Fedorov's rival be removed.",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 20, Ukraine was conducting massive drone strikes while Zelenskyy managed Fedorov's dismissal; six days later, Drapatyi replaced Syrskyi.",
+     "directed_frac": 0.5455,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "Through July 20, Ukraine maintained intensive operations targeting Moscow and Russian rear areas; on July 22, Zelenskyy elevated Drapatyi and removed Syrskyi from military command.",
+     "directed_frac": 0.4783,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-23",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-07-20",
+   "state_text": "The conflict has moved from ceasefire (2026-07-16) to direct military strikes on civilian infrastructure and shipping routes (2026-07-18, 2026-07-20). Congress has twice opposed the war—the House passed a resolution (214-208) and the Senate rejected a binding version (47-49)—but Trump says he is close to a massive attack with a B-1 bomber flying its first mission (2026-07-23). The Houthis maintain a naval blockade of Saudi Arabia while the IRGC claims tanker explosions in Hormuz disrupt shipping (2026-07-20). Iran has signaled willingness to negotiate through mediators despite the escalation (2026-07-20).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul 20, when Iran was signaling negotiation and blockades held firm, Congress formally opposed the war twice while Trump announced imminent massive escalation.",
+     "directed_frac": 0.5,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "Through Jul 20, military strikes and Iranian mediation efforts coexisted; Trump's Jul 23 announcement of imminent B-1 operations escalated the conflict.",
+     "directed_frac": 0.5455,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-24",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-07-20",
+   "state_text": "Houthi attacks in the Red Sea have closed off the Yanbu pipeline (Jul 24), the bypass the market was counting on, pushing Brent above $100 for the first time since May (Jul 24). The conflict originated in Iran's offer of \"special treatment\" for Strait passage tied to new transit fees (Jul 5), but escalated into direct military strikes after the U.S. bombed 90 Iranian military sites and Iran closed the strait (Jul 10). The war has since spread to civilian infrastructure, with U.S. strikes hitting a desalination plant serving 20 Iranian villages (Jul 18), while Iran has struck Saudi Arabia (Jul 18), Kuwait, Bahrain, and Jordan (Jul 18), and the Houthis declared a formal naval blockade of Saudi Arabia (Jul 20). Global supply chains are restructuring to avoid the region—China raised fuel prices (Jul 17), Iraq signed bypass pipeline agreements with Chevron and Syria (Jul 17), and South Korea locked in non-Hormuz supply routes (Jul 17). Iran has signaled willingness to consider renewed talks through mediators (Jul 20), though the conflict continues with 17 U.S. casualties from attacks in Jordan and Iraq (Jul 20).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 20, the Houthis had declared a Saudi blockade, but by Jul 24 their Red Sea attacks had shut the Yanbu pipeline, pushing crude above $100.",
+     "directed_frac": 0.76,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Jul 20, strikes had widened regionally; Houthis have since severed Yanbu, sending Brent crude past $100.",
+     "directed_frac": 0.5294,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-24",
+   "topic": "Ukraine War",
+   "anchor_iso": "2026-07-22",
+   "state_text": "Zelenskyy dismissed Defense Minister Reznikov (2026-07-16) and then General Syrskyi (2026-07-22), restructuring Ukraine's military leadership. Ukraine's drone strikes have escalated: from 400+ drones on Moscow and strikes within 100km of the front (2026-07-20) to Wildberries warehouses nationwide, including one in Kirov 1,000km deep in Russia (2026-07-24). Trump is set to meet Zelenskyy early next week (2026-07-24) as a US-brokered diplomatic track opens alongside the strike campaign.",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul 22, Ukraine's drone strikes penetrated Russia's civilian economy 1,000km deep, while Trump was scheduled to meet Zelenskyy early next week.",
+     "directed_frac": 0.6667,
+     "shares_6_word_run": true
+    },
+    {
+     "attempt": "retry",
+     "text": "After Drapatyi's appointment on July 22, Ukraine expanded drone strikes to include Wildberries warehouse networks nationwide, as Trump scheduled a Zelenskyy meeting.",
+     "directed_frac": 0.5652,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-25",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-07-23",
+   "state_text": "The US-Iran military exchange has paused for the first strike-free night in 13 days (2026-07-25), yet the war spans two active fronts—the core US-Iran strikes and a newly vigorous Saudi-Houthi clash over Red Sea shipping. Houthis are striking Saudi cities and tanker fleet while maintaining their formal naval blockade (2026-07-25, 2026-07-20), prompting Saudi-led coalition strikes on Yemen positions. The broader conflict has destroyed civilian infrastructure including desalination plants and ports across Iran (2026-07-18), choked shipping through blockades and tanker attacks (2026-07-20), and left at least 17 US casualties (2026-07-20). Iran accuses the US of bypassing its June Memorandum on Hormuz routes (2026-07-25), signaling willingness to resume talks even as military escalation continues. Congress has twice rejected binding war-powers resolutions against the conflict (2026-07-23), while Trump moves toward a \"massive attack\" that exceeds any scale Congress has debated (2026-07-23).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul 23, Trump moved toward major escalation amid congressional gridlock; the record now shows US-Iran hostilities halted for the first pause in 13 days while Saudi Arabia faced direct Houthi offensive operations.",
+     "directed_frac": 0.4545,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Jul 23, Trump prepared a B-1 bomber campaign while Congress twice opposed the war; since then, Houthis escalated Red Sea tanker strikes and the conflict entered a strike pause.",
+     "directed_frac": 0.5517,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-25",
+   "topic": "Iran War",
+   "anchor_iso": "2026-07-23",
+   "state_text": "The war now runs on two active fronts—the core US-Iran exchange and a newly live Saudi-Houthi clash over Red Sea shipping (Jul 25). The Hormuz strike campaign shows its first pause, with the U.S. and Iran recording their first strike-free night in 13 days (Jul 25). Iran accuses Washington of bypassing the June MoU on Hormuz transit routes (Jul 25). Houthi forces struck the Saudi city of Jizan and Saudi tankers, prompting a Saudi-led coalition strike on Houthi positions in Yemen (Jul 25). Congress has twice voted against the war with no legal effect (Jul 23), while Trump moves toward a \"massive attack\" exceeding the strike scale Congress debated (Jul 23).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul 23, when Congressional opposition twice failed to constrain Trump's planned massive escalation, the US-Iran strikes have paused and the Houthi-Saudi clash has escalated into a second front.",
+     "directed_frac": 0.4839,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "Through July 23, volleys between Washington and Tehran defined the conflict; by July 25, that exchange entered a lull as a Red Sea naval war commenced.",
+     "directed_frac": 0.4167,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-25",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-07-24",
+   "state_text": "The conflict now runs across two military fronts: direct US-Iran strikes in the Strait of Hormuz and Saudi-Houthi fighting over Red Sea shipping (Jul 25). US-Iran strikes in the Strait have paused for the first strike-free night in 13 days (Jul 25), even as the Saudi-Houthi clash accelerates in the Red Sea. The Yanbu pipeline, Saudi Arabia's planned bypass around the blockaded strait, is under attack (Jul 24), leaving no reliable alternative route for regional exports. Brent crude has broken through $100 per barrel for the first time (Jul 24).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 24, Houthi attacks had forced Saudi Arabia's Yanbu bypass route under fire; now Saudi strikes back and the Hormuz front pauses for the first time.",
+     "directed_frac": 0.7407,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Jul 24, military operations had closed the Yanbu route and struck civilian targets across the region; on Jul 25, US-Iran action halted overnight as Houthi-Saudi fighting accelerated in the Red Sea.",
+     "directed_frac": 0.5806,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-26",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-07-25",
+   "state_text": "The US and Iran have paused direct military strikes after 13 consecutive nights of bombardment (2026-07-26), with mediated talks resuming even as the conflict has widened to independent fronts. (2026-07-18) Iran's strikes on Kuwait, Bahrain, Jordan, and Saudi Arabia marked the conflict's shift from shipping-lane disputes to hits on civilian infrastructure and new state involvement. (2026-07-20) Houthi naval blockades and tanker explosions in Hormuz have choked direct shipping while oil prices briefly broke $90. (2026-07-25) A Saudi-Houthi clash now runs parallel to the core US-Iran exchange, with Ukrainian strikes on Iranian vessels opening a third front. (2026-07-26) The US and UK are planning a Hormuz-shipping conference as the pause tests whether a ceasefire can be converted into a transit arrangement.",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 25, the conflict ran on two active fronts—the US-Iran exchange and a Saudi-Houthi clash—with a first strike-free night; by Jul 26, both sides paused direct action while talks resumed and new fronts opened independently in the Red Sea and Caspian Sea.",
+     "directed_frac": 0.561,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "As of Jul 25, the US-Iran strike pause held, but Ukraine opened a third front with attacks on Iranian vessels while Saudi-Houthi fighting intensified over Red Sea shipping.",
+     "directed_frac": 0.6,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-26",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-07-25",
+   "state_text": "The U.S. and Iran have paused direct strikes for the first time in 13 days (Jul 26), with mediated talks ongoing, though the core dispute over Strait of Hormuz transit terms and fees remains unresolved. What began as a pricing dispute over Iranian transit fees (Jul 5) escalated into military strikes across 90+ Iranian sites and Iranian countermoves (Jul 10), then widened to civilian infrastructure including water systems (Jul 18) and pulled in Saudi Arabia as a direct target (Jul 18). The war has now spawned independent fronts: Houthis have declared a naval blockade of Saudi Arabia and struck the Red Sea shipping route (Jul 24), while the Caspian Sea has become a new theater (Jul 26). Global markets have responded by locking in non-Hormuz supply chains—Iraq signed pipeline deals, South Korea and China secured alternate routes, and oil prices broke $100 (Jul 24)—meaning even if the U.S.-Iran pause holds, the regional conflict and supply-chain rewiring are advancing on separate tracks (Jul 26). The U.S. and UK are planning a Hormuz-shipping conference (Jul 26) as diplomacy attempts to convert the 13-day strike pause into a durable transit agreement.",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 25, the war ran on two fronts—U.S.-Iran strikes and a Saudi-Houthi Red Sea clash—with the Hormuz bombing showing its first pause; by Jul 26, that pause has held while new theaters in the Caspian opened and mediated talks resumed, narrowing the immediate conflict to whether the quiet can convert into a transit agreement.",
+     "directed_frac": 0.6604,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Jul 25, US-Iran strikes in the Strait had paused for the first time in 13 days, while Saudi-Houthi fighting accelerated in the Red Sea and the Yanbu pipeline faced attack.",
+     "directed_frac": 0.6786,
+     "shares_6_word_run": true
+    }
+   ]
+  },
+  {
+   "edition": "2026-07-26",
+   "topic": "Iran War",
+   "anchor_iso": "2026-07-25",
+   "state_text": "After 13 straight nights of US strikes, both the US and Iran paused direct military action (2026-07-26), with mediated talks continuing even as the conflict has widened to independent fronts: Houthi attacks on Saudi Arabia and Ukrainian strikes on Iranian vessels (2026-07-26). The core US-Iran exchange has moved from civilian infrastructure hits—desalination plants, bridges, railways (2026-07-18)—to direct tanker attacks in the Strait of Hormuz (2026-07-20), where Brent crude briefly broke $90 (2026-07-20). Congress has twice voted against the war with narrow margins (214-208 and 47-49) with no legal effect (2026-07-23), while Trump prepared strikes at a scale beyond congressional debate (2026-07-23). The US and UK are now planning a Hormuz-shipping conference (2026-07-26) to test whether the current pause can become a lasting transit arrangement.",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 25, the war ran on two active fronts with a first strike-free night; now both the US and Iran have paused for 13 days and mediated talks are underway, though Houthi and Ukrainian strikes keep the conflict's edges moving independently.",
+     "directed_frac": 0.5366,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "As of Jul 25, the US-Iran exchange paused after 13 strike-free nights, while Houthi attacks on Saudi shipping opened a second active front.",
+     "directed_frac": 0.68,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-01",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-07-26",
+   "state_text": "The US-Iran military conflict has resumed direct strikes after a brief pause (2026-08-01), with Trump ordering attacks on Iranian energy infrastructure planned for the weekend. Tankers have been hit off Oman and Kuwait faces drone attacks (2026-08-01), signaling the collapse of the MOU-brokered ceasefire that held for 13 nights (2026-07-26). The war now operates on multiple fronts simultaneously: the core US-Iran exchange, a Saudi-Houthi clash over Red Sea shipping (2026-07-25), and Houthi blockades of Saudi Arabia (2026-07-20). Congress has twice rejected binding war powers resolutions by narrow margins (2026-07-23), while Trump moves toward strike scales that exceed what has been legislatively debated. Oil prices briefly broke $90 on tanker attacks in the Hormuz strait (2026-07-20), and civilian infrastructure—desalination plants, ports, and energy systems—remains in the targeting line (2026-07-18).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul 26, when the record showed a 13-night pause and mediated talks, tanker strikes off Oman and Trump's weekend attack order signal the collapse of the MOU ceasefire and resumption of direct strikes on Iranian energy infrastructure.",
+     "directed_frac": 0.6176,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Jul 26, a 13-night bombardment pause had resumed US-Iran talks, but Trump's weekend strike orders on Iranian energy infrastructure have now collapsed the ceasefire as tanker attacks resume off Oman.",
+     "directed_frac": 0.6765,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-01",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-07-26",
+   "state_text": "The U.S.-Iran conflict over the Strait of Hormuz has escalated from a dispute over transit fees into a direct war affecting global oil markets and regional stability (2026-07-10). Military strikes have expanded far beyond the strait — the U.S. has hit Iranian energy infrastructure while Iran and its allies have targeted Saudi Arabia, Kuwait, and shipping in the Red Sea and Gulf of Aden (2026-07-18, 2026-07-20). A 13-day pause in U.S.-Iran direct strikes appeared to open space for mediated talks (2026-07-26), but that ceasefire has broken down; tankers are again being hit off Oman and Trump has ordered new strikes on Iranian energy infrastructure (2026-08-01). Global supply chains have already rewritten themselves around the strait — China raised fuel prices, Iraq signed pipeline bypasses with Chevron and Syria, and South Korea locked in non-Hormuz routes (2026-07-17). The conflict now runs on two independent fronts: the core U.S.-Iran exchange and a live Saudi-Houthi clash over Red Sea shipping (2026-07-25).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 26, a 13-night pause in U.S.-Iran strikes and mediated talks had created space for a potential transit arrangement; the pause and talks have now collapsed, with tankers hit and Trump ordering new strikes on Iranian energy infrastructure.",
+     "directed_frac": 0.7568,
+     "shares_6_word_run": true
+    },
+    {
+     "attempt": "retry",
+     "text": "By Jul 26, the U.S.-Iran strike pause held amid talks, but tankers off Oman are hit again and Trump has ordered new strikes on Iranian energy infrastructure as of Aug 1.",
+     "directed_frac": 0.7576,
+     "shares_6_word_run": true
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-01",
+   "topic": "Iran War",
+   "anchor_iso": "2026-07-26",
+   "state_text": "The US-Iran war has returned to direct strikes after a 13-night pause (2026-07-26) in which both sides held fire while mediation continued. The MOU-brokered ceasefire has now effectively collapsed (2026-08-01), with tanker attacks resuming off Oman and Trump ordering new strikes on Iranian energy infrastructure as soon as this weekend. The conflict now operates on multiple fronts simultaneously: the core US-Iran exchange, a Saudi-Houthi clash over Red Sea shipping triggered by Houthi strikes on Jizan and Saudi tankers (2026-07-25), and Houthi naval blockades of Saudi Arabia (2026-07-20). Civilian infrastructure has been in the crosshairs since mid-campaign, including desalination plants serving Iranian villages and, now, energy systems targeted for imminent strikes (2026-07-18, 2026-08-01). Regional allies including Kuwait, Bahrain, Jordan, and Saudi Arabia have been drawn into the fighting, with Brent crude breaking $90 for the first time (2026-07-20).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 26, a 13-night bilateral pause held while mediated talks proceeded; by Aug 1, tanker strikes have resumed and Trump has ordered fresh attacks on Iranian energy infrastructure, collapsing the MOU ceasefire.",
+     "directed_frac": 0.6857,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Jul 26, both sides held fire while negotiators pursued a ceasefire; by Aug 1, tanker raids had resumed and Trump ordered fresh strikes on Iranian energy assets for the coming weekend.",
+     "directed_frac": 0.6129,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-01",
+   "topic": "Ukraine War",
+   "anchor_iso": "2026-07-24",
+   "state_text": "Russia struck Kyiv with ballistic missiles on Aug. 1, killing at least nine and wounding over 30, as Zelenskyy warned Ukraine lacks interceptors for the assault (2026-08-01). Ukraine's drone campaign has broadened from strikes within 100km of the front to targets deep in Russia's rear—warehouses nationwide and a Wildberries facility 1,000km away—amplifying pressure on Moscow's logistics (2026-07-24). The leadership crisis that dominated July has settled: Zelenskyy removed Defense Minister Reznikov on Jul. 16, then fired military chief Syrskyi six days later in favor of Drapatyi, tilting power toward modernizers (2026-07-22). A U.S. general has flagged a destroyer shortage that limits allied ballistic-missile defense, linking Kyiv's air-defense gap to broader American force constraints (2026-08-01). Trump is set to meet Zelenskyy early this week, opening a U.S. diplomatic track alongside Ukraine's sustained strike campaign (2026-07-24).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul. 24, Ukraine's drone strikes reached into Russia's deep rear while the interceptor shortage—anchoring Kyiv's air-defense crisis to U.S. destroyer constraints—became the thread's defining strain on Aug. 1.",
+     "directed_frac": 0.6875,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "As of Jul 24, Ukraine's drone campaign had broadened to targets deep in Russia's rear; by Aug 1, Russia struck back with ballistic missiles on Kyiv, killing at least nine.",
+     "directed_frac": 0.9,
+     "shares_6_word_run": true
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-03",
+   "topic": "Iran War",
+   "anchor_iso": "2026-08-01",
+   "state_text": "Trump canceled weekend strikes he had ordered on Iranian energy infrastructure and announced Monday talks with Iran (Aug 3), though Iran's Foreign Ministry immediately denied any direct US negotiating channel exists beyond parallel Oman mediation (Aug 3). The US-Iran pause that held through July 26 had effectively collapsed by Aug 1, with tanker hits near Oman and Trump ordering new attacks on Iranian infrastructure (Aug 1). The conflict now runs across multiple fronts—the core US-Iran exchange, a Saudi-Houthi clash over Red Sea shipping, and Ukrainian strikes on Iranian vessels (Jul 26)—making any bilateral ceasefire unable to arrest the war's regional spread. Brent crude briefly broke $90 as civilian infrastructure including water systems and power plants became direct targets (Jul 18, Jul 20). Congress has twice voted against the war, most recently 214-208 in the House, with no legal binding effect (Jul 23).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 26, a 13-night US-Iran pause held amid mediated talks and plans for a Hormuz shipping conference; by Aug 3, Trump canceled ordered weekend strikes and claimed Monday talks, but Iran denied any direct US channel exists.",
+     "directed_frac": 0.6944,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Aug 1, the US-Iran ceasefire had collapsed as tanker strikes resumed off Oman and Trump ordered new infrastructure attacks, shifting the conflict from pause to multi-front regional warfare.",
+     "directed_frac": 0.7667,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-03",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-08-01",
+   "state_text": "The US-Iran conflict has shifted from direct military strikes to a contested de-escalation claim (Aug 3). Trump canceled weekend strikes and announced Monday talks, but Iran's Foreign Ministry denies any US negotiating channel exists beyond parallel Oman mediation (Aug 3). The pause that held through July 26 broke down by Aug 1, with tankers hit off Oman and Trump ordering new attacks on Iranian energy infrastructure (Aug 1). The war now runs across multiple fronts — US-Iran direct strikes, Saudi-Houthi clashes in the Red Sea, and shipping attacks in the Hormuz and Caspian (Jul 26). Oil markets have reacted to Trump's de-escalation signal, but the fundamental disagreement over whether talks are actually underway leaves the conflict's next move uncertain (Aug 3).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul 26, the 13-night pause and mediated talks broke down by Aug 1 with renewed tanker attacks and Trump ordering strikes, then flipped again on Aug 3 when Trump canceled those strikes and claimed talks—a claim Iran immediately disputed.",
+     "directed_frac": 0.6111,
+     "shares_6_word_run": true
+    },
+    {
+     "attempt": "retry",
+     "text": "By Aug 1, Trump had ordered weekend strikes on Iranian energy infrastructure after tankers were hit off Oman, breaking the ceasefire that held since July 26.",
+     "directed_frac": 0.7308,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-06",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-01",
+   "state_text": "Iran and Oman have negotiated geographic coordinates for a Hormuz shipping route, with Iranian officials calling a broader deal \"in the final stages\" (Aug 6). A draft proposal to exclude U.S. and Israeli vessels from the route drew immediate U.S. rejection (Aug 6). The conflict has shifted from whether the strait reopens at all to disputed terms of passage — tolls, access rights, and vessel exclusions (Aug 6). This pivot follows a breakdown of the MOU-brokered pause in early August, when tankers were hit off Oman and Trump ordered strikes on Iranian energy infrastructure (Aug 1). Global supply chains have already begun routing around Hormuz through pipelines, Red Sea alternatives, and non-Gulf ports, even as the core dispute narrows to the terms any reopening would require (Jul 17).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 26, the US-Iran bombing pause held and mediated talks continued; by Aug 6, that ceasefire broke down into resumed strikes, then shifted to Iranian-Omani route negotiations with contested vessel-exclusion terms.",
+     "directed_frac": 0.4722,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Aug 1, the 13-day ceasefire had collapsed as tankers were struck off Oman and Trump ordered new strikes on Iranian infrastructure; by Aug 6, Iran and Oman had negotiated route coordinates with exclusions the U.S. immediately rejected.",
+     "directed_frac": 0.7059,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-06",
+   "topic": "Ukraine War",
+   "anchor_iso": "2026-08-01",
+   "state_text": "Ukraine's air defenses have collapsed under sustained Russian barrages: a strike on Aug. 1 killed nine in Kyiv with no interceptions, and another on Aug. 6 killed 17 in the region without stopping a single missile (2026-08-06). US Patriot stocks have fallen from roughly 2,330 to 800 units, exposing a dual-front interceptor shortage that now binds Ukraine's defense to broader US force-posture constraints (2026-08-06). Zelenskyy removed Defense Minister Reznikov on Jul. 16, then fired Chief of Staff Syrskyi on Jul. 22 after six days of Kyiv protests, installing modernizer Drapatyi (2026-07-22). Meanwhile, Ukraine's drone and missile campaign has pushed deep into Russian territory—striking Wildberries warehouses across Russia and two refineries up to 1,300km inside Russia—while Trump is set to meet Zelenskyy early next week (2026-07-24, 2026-08-06). The leadership crisis has given way to an acute hardware crisis that now frames the entire conflict.",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "Since Jul. 16, the thread shifted from Ukraine's internal leadership turmoil—Reznikov and Syrskyi's removals—to an explicit interceptor shortage now quantified by collapsing Patriot stocks and undefended Russian strikes killing dozens without a single interception.",
+     "directed_frac": 0.5833,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Aug. 1, Russia's barrages had killed nine in Kyiv with zero interceptions; five days later, a fresh strike killed 17 more as US Patriot stocks fell below 800 units.",
+     "directed_frac": 0.6667,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-07",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-06",
+   "state_text": "Iran and Oman have fixed the geographic coordinates for a Hormuz shipping route, with Iran calling the overall deal \"in the final stages\" (Aug 6). Iran's chief negotiator brands Trump's deal claims \"theater diplomacy,\" and Tehran denies any direct U.S.-Iran talks (Aug 7). A Fars-reported draft proposing to bar U.S. and Israeli vessels draws an immediate U.S. rejection (Aug 6). The MOU-brokered pause has broken down, with tankers hit off Oman and Trump ordering a new strike on Iranian energy infrastructure (Aug 1). The war still runs on two fronts, with the Saudi-Houthi clash over Red Sea shipping moving separately from the U.S.-Iran track (Jul 25).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The last-covered entry (Aug 6) had the fight narrowed to route coordinates and which vessels are excluded; Tehran now calls Trump's deal claims theater diplomacy and denies any direct negotiating channel exists at all.",
+     "directed_frac": 0.5294,
+     "shares_6_word_run": true
+    },
+    {
+     "attempt": "retry",
+     "text": "As of Aug 6 Tehran and Muscat had pinned down route coordinates and billed the accord nearly complete; by Aug 7 Iran's lead negotiator dismissed Trump's claims as 'theater diplomacy' and disavowed any direct talks.",
+     "directed_frac": 0.5938,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-07",
+   "topic": "Iran War",
+   "anchor_iso": "2026-08-03",
+   "state_text": "Iran's chief negotiator brands Trump's deal claims \"theater diplomacy\" and Tehran denies any direct talks with Washington (Aug 7). Iran and Oman have fixed route coordinates for Hormuz transit (Aug 7). Trump called off the strikes he had ordered on Iranian energy infrastructure for the weekend and announced Monday US-Iran talks (Aug 3), a channel Iran's Foreign Ministry says does not exist beyond its parallel Oman track (Aug 3). That escalation order followed the breakdown of the MOU-brokered pause, with tankers hit off Oman and Kuwait facing drone attacks (Aug 1). Oil prices reacted to Trump's de-escalation signal (Aug 3).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 3 Trump had canceled the ordered strikes and asserted a Monday negotiating channel Tehran disputed; since then Iran's chief negotiator has labeled his deal claims \"theater diplomacy\" and denied any direct talks exist.",
+     "directed_frac": 0.6944,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 3 Trump had scrapped ordered strikes and touted Monday negotiations; since then Tehran's lead negotiator dismissed those claims as 'theater diplomacy,' rejecting any direct channel, while Iran and Oman locked Hormuz transit coordinates.",
+     "directed_frac": 0.6571,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-07",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-08-03",
+   "state_text": "Iran's chief negotiator brands Trump's deal claims 'theater diplomacy' and Tehran denies any direct US talks exist (Aug 7). Iran and Oman fix route coordinates through their parallel channel (Aug 7). Trump has called off the weekend strikes he ordered on Iranian energy infrastructure and announced US-Iran talks that Iran's Foreign Ministry denies (Aug 3). A Saudi-Houthi clash over Red Sea shipping runs alongside the core US-Iran track after a coalition strike on Houthi positions in Yemen (Jul 25). The war's death toll stands at 17 and Brent has broken $90 (Jul 20).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 3 Tehran disputed the Monday-talks Trump announced after cancelling his weekend strikes; now Iran's chief negotiator labels his deal claims 'theater diplomacy' and denies any direct channel exists at all.",
+     "directed_frac": 0.7059,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 3 Trump's canceled strikes and claimed talks framed the standoff; since then Tehran's lead negotiator has dismissed those claims as 'theater diplomacy' while Iran and Oman locked in route coordinates.",
+     "directed_frac": 0.625,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-10",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-07",
+   "state_text": "Trump backs away from renewed strikes, saying the U.S. is \"low-keying it\" and betting on Iran's economic collapse (Aug 10). Iran has replaced its security chief and hardened its reopening conditions, now hinging on the blockade and reparations rather than the Iran-Oman route already mapped (Aug 10). Iran and Oman hold fixed coordinates for a Hormuz shipping route (Aug 6), though the U.S. rejects a Fars-reported draft that would bar U.S. and Israeli vessels (Aug 6). Tehran denies any direct talks and brands Trump's deal claims \"theater diplomacy\" (Aug 7). This follows Trump's Aug 1 order for a new strike on Iranian energy infrastructure after the mediated pause broke down (Aug 1).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of the Aug 7 entry, Tehran was branding Trump's deal claims theater and denying any channel; since then Washington has stepped back from strikes toward economic attrition and Iran replaced its security chief.",
+     "directed_frac": 0.5882,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 7 Tehran had dismissed Trump's deal boasts and denied any talks; since then Trump has retreated toward starving Iran economically while a new security chief tied reopening to lifting the blockade.",
+     "directed_frac": 0.5758,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-10",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-08-07",
+   "state_text": "The US is now \"low-keying it,\" with Trump backing away from renewed strikes and betting on Iran's economic collapse (Aug 10). Iran replaces its security chief and hardens its reopening conditions, pinning any reopening to the Houthi blockade and reparations rather than the Iran-Oman route already mapped (Aug 10). Tehran denies that any direct US negotiating channel exists and brands Trump's deal claims \"theater diplomacy,\" even after fixing transit coordinates with Oman (Aug 7). This economic-attrition turn follows Trump's Aug 3 cancellation of the strikes he had ordered days earlier on Iranian energy infrastructure (Aug 1). The mediated quiet that held after 13 straight nights of US strikes (Jul 26) broke down before this standoff took hold (Aug 1).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The Aug 7 entry had Tehran denying any US channel while fixing Oman coordinates; since then Trump has dropped the strike threat for an economic-collapse bet, and Iran replaced its security chief and raised reopening terms.",
+     "directed_frac": 0.5714,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 7 Iran dismissed Trump's deal claims as theater diplomacy while fixing Oman transit coordinates; since then Washington has shifted to economic attrition and Tehran swapped its security chief, tying reopening to Houthi blockade.",
+     "directed_frac": 0.7143,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-11",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-08-10",
+   "state_text": "A US helicopter has disabled the Panama-flagged M/V Vela Nova to enforce the shipping blockade (Aug 11). Iran's security-council secretary sets ending the war and unfreezing Iranian funds as its terms to reopen Hormuz (Aug 11). Trump says the US is 'low-keying it,' wagering on Iran's economic collapse, having stepped back from renewed strikes (Aug 10). Iran has replaced its security chief (Aug 10) and denies any direct US negotiating channel exists beyond its Oman talks (Aug 7). The strikes on Iranian energy infrastructure Trump had ordered were called off (Aug 3) after the mediated pause broke down (Aug 1).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The last-covered entry (Aug 10) had Trump easing off strikes and betting on Tehran's collapse; since then a US helicopter disabled the M/V Vela Nova and Iran raised its Hormuz-reopening price.",
+     "directed_frac": 0.6667,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 10 Trump had settled into economic-pressure mode over fresh strikes; since then a US helicopter crippled the Panama-flagged Vela Nova, and Tehran named war's end and unfrozen funds as its price for Hormuz.",
+     "directed_frac": 0.5946,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-11",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-10",
+   "state_text": "The US enforces the Hormuz blockade at sea, disabling the Panama-flagged M/V Vela Nova by helicopter (Aug 11). Iran's security-council secretary sets ending the war and unfreezing funds as its terms to reopen the strait (Aug 11). Trump holds off on renewed strikes, saying Washington is \"low-keying it\" and betting on Iran's economic collapse (Aug 10). Iran and Oman hold fixed route coordinates even as Tehran denies any direct US talks and brands Trump's deal claims \"theater diplomacy\" (Aug 7). A draft barring US and Israeli vessels drew a US rejection (Aug 6).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 10 the last-covered entry had Trump low-keying it and wagering on economic collapse; since then a US helicopter disabled the M/V Vela Nova enforcing the blockade while Tehran raised its reopening price.",
+     "directed_frac": 0.6111,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 10 Trump was still holding fire and banking on Iran's economy; since then US forces boarded the Panama-flagged Vela Nova and Tehran pegged reopening to halting the war and releasing frozen money.",
+     "directed_frac": 0.5,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-11",
+   "topic": "Trump pressure on Fed rate-cut policy",
+   "anchor_iso": "2026-08-10",
+   "state_text": "The White House is giving Cook until Aug. 26 to answer mortgage-fraud allegations, a for-cause removal process built to satisfy the notice requirement after the Supreme Court blocked the first firing attempt (Aug 10). The push to remove her runs against a Fed debate now turning on whether to hike in September, not cut (Aug 11). Friday's 23,000 July payroll loss has lowered market-priced September-hike odds (Aug 11). On CPI eve, dissenters and Cook herself signal hikes may still be needed (Aug 11), the opposite of the cuts the White House presses for (Aug 11).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 10 this record framed the Cook fight as a fresh for-cause removal push after the Court's block; since then Friday's 23,000-job payroll loss and CPI-eve signals have shifted the live question to a possible September hike.",
+     "directed_frac": 0.6,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug. 10 the White House gave Cook until Aug. 26 to answer fraud claims, reviving a for-cause removal; since then the Fed's debate has swung toward a September hike, not the cut Trump demands.",
+     "directed_frac": 0.7273,
+     "shares_6_word_run": true
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-12",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-08-11",
+   "state_text": "The US and Iran are locked in an economic-attrition standoff over a closed Hormuz, with administration officials declaring their pressure strategy is working as traffic falls to a three-month low near 13 ships a day (Aug 12). Iran's security-council secretary Rezaei reaffirms the closure and sets ending the war and unfreezing funds as terms to reopen (Aug 11, Aug 12). Trump has backed away from renewed strikes, saying the US is 'low-keying it' and betting on Iran's economic collapse (Aug 10), though a US helicopter disabled the Panama-flagged M/V Vela Nova enforcing the blockade (Aug 11). Tehran disputes that any US negotiating channel exists, its chief negotiator branding Trump's deal claims 'theater diplomacy' (Aug 7). A former US envoy calls the closure potentially indefinite (Aug 12).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 11 this record had a US helicopter disabling the Vela Nova while Tehran raised its reopening price; since then officials declared the pressure strategy working as Hormuz traffic hit a three-month low, with a former envoy calling the closure potentially indefinite.",
+     "directed_frac": 0.65,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 11 a US helicopter had crippled the Vela Nova to police the blockade; since then Washington officials touted their squeeze as effective, citing shipping through the strait sinking toward a quarterly nadir near 13 vessels daily.",
+     "directed_frac": 0.4571,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-12",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-11",
+   "state_text": "Iran keeps the strait closed and Rezaei reaffirms the closure, with traffic down to a three-month low near 13 ships a day (Aug 12). Trump administration officials say their economic-pressure strategy is working, and a former U.S. envoy calls the closure potentially indefinite (Aug 12). Tehran's terms to reopen are ending the war and unfreezing funds, set after a U.S. helicopter disabled the blockade-enforcing M/V Vela Nova (Aug 11). Trump is 'low-keying it' and betting on Iran's economic collapse rather than renewed strikes (Aug 10). Iran and Oman have fixed route coordinates (Aug 6), yet Tehran brands U.S. deal claims 'theater diplomacy' and denies any direct talks (Aug 7).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The Aug 11 record showed renewed at-sea enforcement as Tehran raised its reopening price; since then Washington declares its pressure strategy working, shipping sinks to a three-month low, and a former envoy calls the closure possibly indefinite.",
+     "directed_frac": 0.5278,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 11, US helicopters crippled the M/V Vela Nova and Tehran's security council named its price to lift the blockade; since then Rezaei has hardened that stance into what one ex-envoy calls an open-ended chokehold.",
+     "directed_frac": 0.4103,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-13",
+   "topic": "Trump pressure on Fed rate-cut policy",
+   "anchor_iso": "2026-08-11",
+   "state_text": "July PPI is flat, below the 0.2% consensus, with annual PPI down to 4.7% from 5.5%, and traders have cut September rate-hike odds (Aug 13). The live Fed debate turns on whether to hike in September, the opposite of the rate cuts the White House presses for (Aug 11). Friday's 23,000 July payroll loss lowered September-hike pricing, though dissenters and Governor Cook signal hikes may still be needed (Aug 11). Dissenter Hammack renews a call for a hike even as two months of easing pipeline prices work against that case (Aug 13). The White House has given Cook until Aug. 26 to answer mortgage-fraud allegations, a for-cause removal process built after the Supreme Court blocked the first firing (Aug 10).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 11 the September question hung on payroll weakness set against dissenters urging hikes; flat July PPI has since stacked a second month of cooling pipeline prices against the hike case.",
+     "directed_frac": 0.6667,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 11, dissenters and Cook still argued a September increase might be warranted; two days later a flat July producer-price reading, softer than forecast, pushed traders to pare those bets.",
+     "directed_frac": 0.4839,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-13",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-12",
+   "state_text": "Iran keeps the Strait of Hormuz closed, with traffic near a three-month low around 13 ships a day (Aug 12). Washington calls its economic-pressure strategy effective and bets on Iran's collapse rather than new strikes (Aug 10, Aug 12). Tehran sets ending the war and unfreezing frozen funds as its conditions to reopen, having replaced its security chief (Aug 10, Aug 11). A US helicopter disabled the Panama-flagged M/V Vela Nova enforcing the blockade (Aug 11). OPEC and the IEA cut their 2026 demand forecasts over the closure, and a record inventory build sends oil down more than 3% (Aug 13).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The last-covered entry on Aug 12 held a hardening stalemate with Hormuz traffic at a three-month low; since then OPEC and the IEA have trimmed 2026 demand forecasts, the IEA by 510,000 bpd, and oil has dropped over 3% on record inventories.",
+     "directed_frac": 0.5385,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "By Aug 12 Iran still held the strait shut with traffic near a three-month low of 13 ships daily; since then OPEC and the IEA slashed 2026 demand forecasts as record stockpiles drove crude down over 3%.",
+     "directed_frac": 0.7027,
+     "shares_6_word_run": true
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-13",
+   "topic": "OPEC+",
+   "anchor_iso": "2026-07-20",
+   "state_text": "OPEC and the IEA have cut their 2026 demand forecasts over the Hormuz closure, and a record inventory build sends oil down more than 3% even with the strait shut (Aug 13). The IEA's cut runs to 510,000 bpd, reframing the price story from a supply premium to demand erosion (Aug 13). The strait stays closed after the Houthis declared a naval blockade of Saudi Arabia and Iran's IRGC claimed tanker explosions in Hormuz, with the war's death toll at 17 (Jul 20). Brent broke $90 for the first time on that escalation (Jul 20). China's state planner has already passed the shock through to retail gasoline and diesel prices after an over-11% weekly crude gain, with Jeff Currie calling the market a structural shortage (Jul 18).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Jul 20 this record had Brent breaking $90 on the Houthi blockade and Hormuz tanker attacks; since then OPEC and the IEA have cut 2026 demand forecasts and a record inventory build drove prices down over 3%.",
+     "directed_frac": 0.7429,
+     "shares_6_word_run": true
+    },
+    {
+     "attempt": "retry",
+     "text": "On Jul 20 Brent topped $90 as the Houthis declared a Saudi blockade; since then OPEC and the IEA trimmed 2026 demand outlooks and a record stock build pushed crude lower despite Hormuz staying shut.",
+     "directed_frac": 0.6562,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-13",
+   "topic": "Iran War",
+   "anchor_iso": "2026-08-07",
+   "state_text": "The Strait of Hormuz stays shut, yet oil falls more than 3% as OPEC and the IEA cut their 2026 demand forecasts, the IEA trimming its outlook by 510,000 bpd (Aug 13). Iran denies any direct US talks exist, brands Trump's deal claims \"theater diplomacy,\" and fixes transit route coordinates with Oman (Aug 7). Trump has called off strikes he ordered for the weekend and announced US-Iran talks that Tehran's Foreign Ministry disputes (Aug 3). That claimed opening follows the breakdown of an MOU-brokered pause, with tankers hit off Oman and Trump ordering new strikes on Iranian energy infrastructure (Aug 1). Houthi forces and a Saudi-led coalition trade strikes over Red Sea shipping on a front that runs apart from the core US-Iran track (Jul 26).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 7 the record showed Tehran denying any US negotiating channel existed; official agencies have since slashed their 2026 oil demand outlooks, sending crude down more than 3% even with Hormuz closed.",
+     "directed_frac": 0.5,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 7 Tehran's negotiator dismissed Trump's accord boasts as staged and locked Hormuz coordinates with Muscat; by Aug 13 crude slid over 3% after OPEC and the IEA pared their 2026 consumption estimates.",
+     "directed_frac": 0.6061,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-14",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-08-12",
+   "state_text": "The administration ranks cheap US gas as 'goal No. 1' above Iran's nuclear program, and Bessent readies economic-isolation measures for next week (Aug 14). Hormuz stays closed with traffic near a three-month low of about 13 tankers a day, which a former US envoy calls potentially indefinite (Aug 12). Iran's terms to reopen are ending the war and unfreezing frozen funds (Aug 11). US enforcement runs kinetic, with a helicopter disabling the M/V Vela Nova (Aug 11) as the UAE reports two more tankers struck (Aug 14). Oil moves toward a 4% weekly gain (Aug 14), cutting against Trump's bet on Iran's economic collapse (Aug 10).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 12, the last-covered entry framed a protracted economic stalemate with the strait's closure called potentially indefinite; since then the administration recast its stated rationale from nuclear counter-proliferation to domestic gas prices.",
+     "directed_frac": 0.4286,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 12 officials had credited the blockade squeeze as working, but by Aug 14 Bessent was readying fresh isolation steps as two more tankers were hit and crude climbed toward a weekly gain.",
+     "directed_frac": 0.5,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-14",
+   "topic": "Iran War",
+   "anchor_iso": "2026-08-13",
+   "state_text": "Washington's stated aim now ranks cheap US gas above Iran's nuclear program (Aug 14). Bessent promises economic-isolation measures against Iran next week (Aug 14). The Strait of Hormuz stays shut and oil heads toward a 4% weekly gain, while the UAE reports two more tankers struck there (Aug 14). OPEC and the IEA cut their 2026 demand forecasts over the closure — the IEA by 510,000 bpd — and a record inventory build sent oil down more than 3% (Aug 13). Tehran denies any direct US talks exist and brands Trump's deal claims 'theater diplomacy,' disputing that a negotiating channel is open at all (Aug 7).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 13 this record logged the shut strait as demand destruction dragging oil down on a record inventory build; since then the administration recast the war's stated aim to cheap gas.",
+     "directed_frac": 0.6,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 13 forecasters slashed their 2026 demand outlooks and prices slid past 3%, but since then Bessent has pledged fresh isolation steps against Tehran as crude swung back toward a weekly climb.",
+     "directed_frac": 0.4242,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-14",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-13",
+   "state_text": "The Strait of Hormuz stays closed, with traffic near a three-month low around 13 ships a day and Rezaei reaffirming the closure (Aug 12). Iran sets ending the war and unfreezing funds as its terms to reopen (Aug 11). The administration runs an economic-pressure strategy, with Bessent promising economic-isolation measures next week and Vance ranking cheap US gas above Iran's nuclear program as the war's stated aim (Aug 14). The UAE reports two more tankers struck in Hormuz (Aug 14). OPEC and the IEA cut their 2026 demand forecasts over the closure, the IEA by 510,000 bpd, even as oil moves toward a 4% weekly gain (Aug 13, Aug 14).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The Aug 13 entry logged agencies cutting 2026 demand forecasts as oil fell on the shut strait; since then the administration recast the war's aim to domestic gas prices and two more tankers were struck.",
+     "directed_frac": 0.6061,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 13 oil had slid over 3% on a record inventory build; since then Vance called cheap gasoline the war's chief aim, Bessent pledged isolation steps, and the UAE logged two fresh tanker hits.",
+     "directed_frac": 0.4706,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-14",
+   "topic": "Israel West Bank military escalation",
+   "anchor_iso": "2026-08-13",
+   "state_text": "Israeli forces block activists from delivering aid to the three besieged Qusra homes as the White House presses Netanyahu to condemn the settler violence himself (Aug 14). US Ambassador Mike Huckabee, a settlement supporter, calls the Qusra settler siege 'a horrific act of terror' (Aug 13). The rebuke now comes from inside the Trump administration, not only from Palestinians and Israel's opposition (Aug 13). Netanyahu's coalition depends on settler support months before an October reelection, setting a US ally's electoral base against Washington (Aug 14).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The last-covered entry (Aug 13) stood at Huckabee's solo condemnation of the Qusra siege; since then Washington has turned the pressure onto Netanyahu directly while Israeli forces bar aid to the besieged homes.",
+     "directed_frac": 0.5,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 13 the criticism had turned internal as Huckabee branded the Qusra siege terror; by Aug 14 Washington was pushing Netanyahu to personally denounce the settlers while troops barred activists' aid convoys.",
+     "directed_frac": 0.5,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-14",
+   "topic": "Ukraine War",
+   "anchor_iso": "2026-08-06",
+   "state_text": "Ukraine has ended its Dnipropetrovsk operation, retaking 26 settlements while Russia intensifies strikes on railways, ports and oil sites (Aug 14). ISW puts Russia at a net 233-square-km loss this year despite the missile escalation (Aug 14). Ukraine's deep-strike campaign reaches Russian refineries up to 1,300km inside the country (Aug 6). Kyiv's air defense is thin, with US Patriot stocks down to about 800 per Hamilton and a Russian barrage killing 17 in the Kyiv region with no interception (Aug 6). Drapatyi commands Ukraine's forces after Zelenskyy fired Syrskyi following Kyiv protests (Jul 22).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 6 the last-covered entry logged a one-sided air-defense collapse with Patriot stocks near 800; since then a closed Dnipropetrovsk operation reclaims 26 settlements, and ISW logs Russia a net 233sq km loser.",
+     "directed_frac": 0.5278,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 6 Kyiv's long-range drones were hammering refineries far inside Russia as its skies stood exposed; since then Ukraine wrapped up the Dnipropetrovsk push and clawed back 26 villages.",
+     "directed_frac": 0.4688,
+     "shares_6_word_run": false
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-24",
+   "topic": "Iran War",
+   "anchor_iso": "2026-08-14",
+   "state_text": "Bessent unveils an \"economic D-Day\" sanctions campaign against Iran (Aug 24), the 60-day ceasefire window now closed. US officials cast secondary sanctions as the main lever until after the midterm elections rather than new military strikes (Aug 24). The administration's stated aim is cheap US gas as \"goal No. 1,\" ranked above Iran's nuclear program (Aug 14). Tehran disputes that any US negotiating channel exists, its negotiator branding Trump's deal claims \"theater diplomacy\" (Aug 7). The Strait of Hormuz stays shut while OPEC and the IEA cut their 2026 demand forecasts and oil falls more than 3% (Aug 13).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "The last-covered entry, Aug 14, had the administration reframing the war around domestic gas prices and reporting fresh Hormuz tanker hits; since then Bessent has launched the \"economic D-Day\" sanctions push as the ceasefire window lapsed.",
+     "directed_frac": 0.4412,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 14 Bessent had only pledged economic-isolation measures against Iran; by Aug 24 he unveiled an 'economic D-Day' sanctions campaign, officials framing secondary pressure as the chosen lever until after the midterms.",
+     "directed_frac": 0.5938,
+     "shares_6_word_run": true
+    }
+   ]
+  },
+  {
+   "edition": "2026-08-24",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-08-14",
+   "state_text": "Iran's new Persian Gulf Strait Authority blacklists named Gulf-producer tankers and threatens to halt all Persian Gulf oil exports as the UAE cuts all trade with Iran (Aug 24). The strait stays closed, with Hormuz traffic near a three-month low around 13 a day (Aug 12). Iran conditions reopening on ending the war and unfreezing its funds (Aug 11). Washington runs on economic pressure, with Bessent preparing an 'economic D-Day' (Aug 24) and Vance ranking cheap U.S. gas above Iran's nuclear program as the stated aim (Aug 14). OPEC and the IEA cut their 2026 demand forecasts over the closure (Aug 13).",
+   "candidates": [
+    {
+     "attempt": "attempt-1",
+     "text": "As of Aug 14 the fight centered on tanker strikes and Iran's passage terms; since then Iran's Strait Authority has blacklisted Gulf neighbours' tankers and threatened all Gulf exports as the UAE severs trade.",
+     "directed_frac": 0.5333,
+     "shares_6_word_run": false
+    },
+    {
+     "attempt": "retry",
+     "text": "On Aug 14 Washington leaned on economic isolation and Vance's cheap-gas aim; since then Tehran stood up a Strait Authority blacklisting Gulf tankers and threatening a full export halt while the UAE severed all trade.",
+     "directed_frac": 0.6176,
+     "shares_6_word_run": false
+    }
+   ]
+  }
+ ],
+ "accepted": [
+  {
+   "edition": "2026-07-20",
+   "topic": "Strait of Hormuz",
+   "anchor_iso": "2026-07-18",
+   "state_text": "The U.S. and Iran are in open military conflict over the Strait of Hormuz, with attacks now targeting civilian infrastructure and pulling in multiple regional states including Saudi Arabia, Jordan, Bahrain, and Kuwait (2026-07-18). Iran has closed the strait to traffic and claimed tanker explosions there, while Houthis have declared a formal naval blockade of Saudi Arabia (2026-07-10; 2026-07-20). The U.S. maintains a naval blockade of the strait (2026-07-10). Global supply chains are restructuring to avoid the route: China raised fuel prices, Iraq signed pipeline bypasses with Chevron and Syria, and South Korea and China locked in non-Hormuz supply routes (2026-07-17). Iran has signaled openness to renewed talks through mediators despite the escalation (2026-07-20).",
+   "arc_line": "By Jul 18, military strikes and blockades were ongoing; Iran has since indicated willingness to resume diplomatic discussions via intermediaries.",
+   "directed_frac": 0.3,
+   "shares_6_word_run": false
+  },
+  {
+   "edition": "2026-07-20",
+   "topic": "OPEC+",
+   "anchor_iso": "2026-07-18",
+   "state_text": "Houthis have declared a formal blockade of Saudi Arabia and Iran's IRGC claims tanker explosions in Hormuz (2026-07-20), extending the conflict from infrastructure strikes to blockades and tanker attacks that choke shipping. Brent crude briefly broke $90 (2026-07-20) as the oil market shifted from a supply deficit to a structural shortage (2026-07-18). China raised retail gasoline and diesel prices effective July 18 (2026-07-18), with the oil shock now passing from trading-desk premiums into state-regulated consumer costs. U.S. casualties from attacks in Jordan and Iraq pushed the war's death toll to 17 (2026-07-20). Iran signals willingness to consider renewed talks through mediators (2026-07-20).",
+   "arc_line": "Since Jul 18, crude surges had prompted Chinese fuel-price increases amid supply-shortage concerns; this record now shows conflict escalated to shipping blockades and tanker attacks while Iran indicated readiness for mediated dialogue.",
+   "directed_frac": 0.3824,
+   "shares_6_word_run": false
+  },
+  {
+   "edition": "2026-07-23",
+   "topic": "Iran War",
+   "anchor_iso": "2026-07-20",
+   "state_text": "Military strikes have expanded from Iranian military targets to civilian infrastructure, including a desalination plant serving 20 villages (2026-07-18). Iran has broadened its attacks to multiple Gulf states, striking Kuwait, Bahrain, and Jordan, and for the first time in months, Saudi Arabia (2026-07-18). The Houthis have declared a formal naval blockade of Saudi Arabia and Iran's IRGC has claimed tanker explosions in the Strait of Hormuz, choking shipping in critical sea lanes (2026-07-20). U.S. casualties from attacks in Jordan and Iraq have raised the war's death toll to 17, while Brent crude briefly broke $90 per barrel (2026-07-20). Congress has voted twice against the war on narrow margins with no legal effect, while President Trump is moving toward a 'massive attack' with B-1 bombers now flying combat missions (2026-07-23).",
+   "arc_line": "As of Jul 20, this record showed blockades choking shipping and Iran signaling talks; since then, Congress passed war-powers resolutions twice while Trump moves toward strike scale far beyond prior debate.",
+   "directed_frac": 0.375,
+   "shares_6_word_run": false
+  },
+  {
+   "edition": "2026-08-24",
+   "topic": "US-Iran Tensions Escalate with Military Strikes",
+   "anchor_iso": "2026-08-14",
+   "state_text": "As of Aug 24, the US pursues an \"economic D-Day\" sanctions campaign against Iran, the 60-day ceasefire window having closed, with secondary sanctions cast as the main lever until after the midterm elections rather than new strikes. The administration's stated aim ranks cheap US gas above Iran's nuclear program (Aug 14). Hormuz traffic sits near a three-month low around 13 tankers a day, and a former US envoy calls the strait's closure potentially indefinite (Aug 12). Iran's terms to reopen Hormuz are an end to the war and the unfreezing of its funds (Aug 11). Trump is \"low-keying it,\" betting on Iran's economic collapse (Aug 10).",
+   "arc_line": "On Aug 14 enforcement still ran kinetic—a disabled tanker and fresh UAE-reported strikes; since then the truce window shut and Washington pivoted to a sanctions-led squeeze, holding fire until the elections pass.",
+   "directed_frac": 0.375,
+   "shares_6_word_run": false
+  }
+ ]
+}

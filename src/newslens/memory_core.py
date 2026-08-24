@@ -1065,19 +1065,48 @@ def validate_state(state_text: str, ledger_dates: set) -> Tuple[str, List[str]]:
 # ("has become the markets — shipping and insurance restructuring") legitimately
 # shares the current state's tokens (§A licenses the now-as-endpoint); and a
 # tense classifier (past anchor governing a present-state predicate) is teeth on
-# PHRASING, which Clash-1 bars. The mechanical anti-paste teeth are the §F.1
-# whole-line overlap tripwire below (which catches the defect specimen: its
-# payload IS the reused state text — ≥6-word run and ~0.5 token overlap). The
+# PHRASING, which Clash-1 bars. The mechanical anti-paste tooth is the §F.1
+# shared-run tripwire below (which catches the defect specimen: its payload IS
+# the reused state text — a 6-word run, plus the §F.4 'we' ban). The
 # tense-splice-by-paraphrase residual is the state spot-check's job, backed by
 # the pre-registered writer-seat revert (contract Q3/Q4, falsifier #1).
+#
+# §F.1'S TOKEN-FRACTION PRONG IS DROPPED (principal ruling 2026-08-24, NL-105;
+# content round 2026-08-14 HIGH confidence). It was never a paste classifier: on
+# real thread material it measured TOPICALITY, and the paste class it existed to
+# catch sat INSIDE the lawful distribution, so no threshold separated them. The
+# measurement that killed it — of the 84 arc candidates production ever LOGGED
+# as REJECTED (tests/fixtures/arc_line_production_corpus.json; an attempt-1 that
+# a passing retry rescued is structurally unlogged — _author_arc_line's
+# retry-accepted return carries an empty warn) every single one was
+# over the 0.40 bar, floor 0.410, against a source comment claiming valid
+# reframes were "bounded away (~0.2 measured)"; the four lines that ever cleared
+# it in five weeks sat at 0.30-0.38, a sliver at the bottom of the natural
+# distribution. The arc line rendered ZERO times across the 12 editions from
+# 2026-07-24 to 2026-08-14 (35 eligible rewrites) while 49 synthetic pins stayed
+# green.
+#
+# WHAT THE DROP COSTS, on the record (widened by QA fixloop 1, 2026-08-24 —
+# the first wording named this class after the 4-synonym paraphrase, i.e. after
+# its weakest member): the MINIMAL-SWAP PASTE class is no longer caught
+# mechanically. It rode the fraction alone, and it is not about how MANY words a
+# paste changes but WHERE — one well-placed synonym per ≤5 words splits every
+# 6-word run, so a single midpoint swap escapes (measured directed frac 0.6111,
+# longest shared run 5; pinned both ends in tests/test_arc_line_qa.py). The
+# class joins the §D tense-splice residual under the state spot-check and
+# falsifier #1.
+# FALSIFIER, pre-registered at the ruling: one SERVED paste that clears the run
+# prong and the five structural rules reopens the prong question on new
+# evidence.
 # ===========================================================================
 
 ARC_MAX_WORDS = 35                      # §E: one sentence, ≤35 words
-ARC_OVERLAP_RUN = 6                     # §F.1: a shared contiguous run this long rejects
-ARC_OVERLAP_TOKEN_FRAC = 0.40           # §F.1: >this fraction of the ARC's tokens shared
-#   with the state summary rejects. STARTER thresholds (§F.1 "QA tunes"); the
-#   fraction is DIRECTED (arc∩state)/|arc| to catch the paste-INTO-arc direction
-#   the defect took, and is bounded away from valid reframes (~0.2 measured).
+ARC_OVERLAP_RUN = 6                     # §F.1: a shared contiguous run this long
+#   rejects — the whole of §F.1's mechanical teeth since the 2026-08-24 drop.
+#   It is the prong that caught the real served defect and survives every
+#   trivial mutation of it EXCEPT the minimal-swap paste class the drop
+#   surrendered (see the block header, and the corpus pins in
+#   tests/test_nl105_arc_prong_drop.py).
 
 # §F banned lexicon — word-boundary anchored so a ban never fires inside an
 # innocent longer word. Structure, not phrasing (Clash-1).
@@ -1097,8 +1126,9 @@ _ARC_BAN_MIRROR = re.compile(           # §F.2 mirror-facing / ordinal-count / 
 
 
 def _arc_word_seq(text: str) -> List[str]:
-    """Case/punctuation-normalized ORDERED word list — the run check needs order;
-    the token-fraction check derives its set from the same seq (one normalizer)."""
+    """Case/punctuation-normalized ORDERED word list — the run check needs order.
+    Shared with the corpus harness, which pins its measurements against this
+    normalizer so a change here cannot drift the record silently."""
     return _PHOTOCOPY_PUNCT_RE.sub(" ", (text or "").lower()).split()
 
 
@@ -1113,17 +1143,12 @@ def _shared_contiguous_run(a_seq: List[str], b_seq: List[str], n: int) -> bool:
 
 def arc_overlap_trips(arc_line: str, state_text: str) -> bool:
     """§F.1 the state-text reuse tripwire: True when the arc line shares a
-    ≥ARC_OVERLAP_RUN-word contiguous run with the state summary, OR more than
-    ARC_OVERLAP_TOKEN_FRAC of the arc's tokens appear in it. Deterministic; the
-    same normalized-token machinery the photocopy detector uses."""
-    a_seq, s_seq = _arc_word_seq(arc_line), _arc_word_seq(state_text)
-    if _shared_contiguous_run(a_seq, s_seq, ARC_OVERLAP_RUN):
-        return True
-    a_set = set(a_seq)
-    if not a_set:
-        return False
-    shared = len(a_set & set(s_seq))
-    return (shared / len(a_set)) > ARC_OVERLAP_TOKEN_FRAC
+    ≥ARC_OVERLAP_RUN-word contiguous run with the state summary. Deterministic;
+    the same normalized-token machinery the photocopy detector uses. The
+    directed token-fraction prong that used to sit here was DROPPED 2026-08-24
+    (see the contract block header) — it measured topicality, not paste."""
+    return _shared_contiguous_run(_arc_word_seq(arc_line),
+                                  _arc_word_seq(state_text), ARC_OVERLAP_RUN)
 
 
 def arc_names_anchor(text: str, anchor_iso: str) -> bool:
@@ -1151,8 +1176,8 @@ def validate_arc_line(arc_line: str, state_text: str,
                       anchor_iso: str) -> Tuple[str, List[str]]:
     """The arc-line contract's MECHANICAL anatomy, checkable. HARD-REJECT
     (ArcLineRejected) on: empty, anchor date absent/incorrect (§C.1), over the
-    ≤35-word / one-sentence length (§E), banned lexicon (§F.2/3/4), or the
-    state-text overlap tripwire (§F.1). Returns (clean, warnings). Teeth on
+    ≤35-word / one-sentence length (§E), banned lexicon (§F.2/3/4), or a shared
+    6-word run with the state summary (§F.1). Returns (clean, warnings). Teeth on
     STRUCTURE only — never rewrites the model's output, never constrains its
     wording (Clash-1). The strip test (§D) is NOT enforced here (see the block
     header): its honest mechanization false-rejects valid reframes."""
@@ -1182,8 +1207,8 @@ def validate_arc_line(arc_line: str, state_text: str,
             raise ArcLineRejected(f"arc line uses banned {why}: {m.group(0)!r}")
     if arc_overlap_trips(text, state_text):
         raise ArcLineRejected(
-            "arc line reproduces the state summary (≥6-word run or >40% shared "
-            "tokens) — the state-text reuse ban, the defect's own signature (§F.1)")
+            "arc line reproduces the state summary (a shared 6-word run) — the "
+            "state-text reuse ban, the defect's own signature (§F.1)")
     warnings: List[str] = []
     if text.count(";") > 1:
         warnings.append(
@@ -1205,7 +1230,7 @@ ARC_RETRY_CORRECTION = (
     "in the sentence.\n"
     "2. It is a DELTA sentence — past tense at the anchor, then the NAMED change "
     "since. Do NOT restate the standing state or reuse its wording (no shared "
-    "6-word run; under 40% shared words).\n"
+    "6-word run with it).\n"
     "3. One sentence, at most 35 words. No 'we' (name the record). No forward "
     "promises ('watch for', 'expect'). No ordinals or entry counts.\n"
     'Return ONLY a JSON object: {"arc_line": "..."}'

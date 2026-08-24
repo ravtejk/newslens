@@ -173,11 +173,14 @@ def test_the_served_defect_specimen_is_rejected():
         memory_core.validate_arc_line(specimen, state, "2026-07-16")
 
 
-def test_overlap_helper_bounds_a_valid_reframe_below_the_threshold():
+def test_overlap_helper_lets_a_valid_reframe_through():
     """The reframe class (delta endpoint == the new state) must PASS: its
-    now-as-endpoint legitimately shares state tokens but stays under the
-    directed >40% bar — the calibration that lets §F.1 catch pastes without
-    false-rejecting valid reframes (the strip-test-boundary rationale)."""
+    now-as-endpoint legitimately shares state tokens (§A licenses it) and says
+    the endpoint in its own words, so it shares no 6-word run — what lets §F.1
+    catch pastes without false-rejecting valid reframes (the strip-test-boundary
+    rationale). Carried invariant across the 2026-08-24 prong drop: it passed
+    under the fraction bar too (measured 0.105), so this pin is green on both
+    sides of that change and pins the REFRAME license, not the calibration."""
     state = ("Shipping and insurance are restructuring around a strait treated "
              "as closed (Jul 16).")
     reframe = ("When this record last covered Hormuz (Jul 16), the story was the "
