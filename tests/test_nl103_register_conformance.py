@@ -412,6 +412,11 @@ def test_row21_retired_constants_are_marked_and_rendered_nowhere():
     # company" switch that died whole with the offer class (RECONVENE-2, ruling
     # (b)). Same convention: kept named, rendered nowhere, which the loop below
     # is what actually enforces.
+    # NL-117 (mockup-v13 PASSED 2026-08-24) adds WHY_RELATED_TO: flag ② ruled the
+    # reason line NAME-LED, which retires the STEM, and this constant's only
+    # consumer was that stem. Its sibling WHY_CHOSEN_BECAUSE is NOT retired — it
+    # still leads the markdown edition's §5.7 override line and the rank CLI,
+    # neither of which this increment touched.
     assert marked == {"KICKER_LEAD", "FOLLOW_STORY_ACTIVE",
                       "FOLLOW_NARROW", "FOLLOW_RUNG_THIS_STORY",
                       "FOLLOW_ALT_FALLBACK_ENTITY", "FOLLOW_ALT_FALLBACK_STORYLINE",
@@ -420,7 +425,7 @@ def test_row21_retired_constants_are_marked_and_rendered_nowhere():
                       "FOLLOW_JUST_THIS_STORY_OPTION",
                       "FOLLOW_DEGRADE_LEAD", "FOLLOW_DEGRADE_UPGRADE",
                       "FOLLOW_DEGRADE_COMMITTED", "FOLLOW_SWITCH_FAILED",
-                      "FOLLOW_CAP_REFUSAL"}, marked
+                      "FOLLOW_CAP_REFUSAL", "WHY_RELATED_TO"}, marked
     for mod in (server, webui):
         src = Path(mod.__file__).read_text(encoding="utf-8")
         for name in marked:

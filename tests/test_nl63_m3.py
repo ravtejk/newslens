@@ -302,8 +302,12 @@ def test_sources_context_view_shows_summary_sources_tags_and_here_for(tmp_paths)
     # matched tag + tracked thread + the corroboration label
     assert "US politics" in sec and "Supreme Court" in sec
     assert "Reported by 2 named outlets" in sec
-    # the 'Here for' rationale (shared with Today's meta-footnote logic)
-    assert "Here for" in sec
+    # the rationale (shared with Today's meta-footnote logic). RE-PINNED
+    # 2026-08-24 (NL-117, mockup-v13 PASSED): the "Here for: …" sentence here
+    # is the ruled REASON LINE now — same answer, same source of truth, one
+    # spelling across card / strip / both deep views.
+    assert 'class="sc-reason"' in sec
+    assert "a topic you follow" in sec or "a thread you follow" in sec
 
 
 def test_sources_context_view_is_not_the_analyst_tier(tmp_paths):

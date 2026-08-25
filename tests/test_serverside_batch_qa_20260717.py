@@ -340,9 +340,14 @@ def test_writer_add_without_feed_url_400s_the_boundarys_basis(ui):
     assert "feed link required" in obj["error"]
 
 
-def test_sc_herefor_twin_renders_the_deduped_line(tmp_paths):
-    """The sources-&-context view (the sc-herefor twin) goes through the SAME
-    helper — the NL-68 dupe shape renders singly there too."""
+def test_sc_reason_twin_renders_the_deduped_line(tmp_paths):
+    """The sources-&-context view goes through the SAME dedupe — the NL-68 dupe
+    shape renders singly there too.
+
+    RE-PINNED 2026-08-24 (NL-117, mockup-v13 PASSED): the class is `sc-reason`
+    and the sentence is the ruled reason line. The property under test is
+    unchanged — one name, once — and it is now enforced by the reason line's own
+    class split rather than by _here_for's merge."""
     con = _con()
     try:
         slot = {"slot": 1, "story_title": "Strait story",
@@ -353,7 +358,7 @@ def test_sc_herefor_twin_renders_the_deduped_line(tmp_paths):
             "qa-story-0", "Strait story", {}, slot, con, DATE)
     finally:
         con.close()
-    line = html.split('class="sc-herefor"')[1].split("</p>")[0]
+    line = html.split('class="sc-reason"')[1].split("</p>")[0]
     assert line.count("Strait of Hormuz") == 1
     # the labeled tag/thread lines above it stay separate BY DESIGN
     assert 'class="sc-tags"' in html and 'class="sc-threads"' in html

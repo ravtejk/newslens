@@ -280,22 +280,33 @@ def test_the_deep_view_renders_no_prose_reason_even_for_an_archived_row():
         None, "2026-08-02")
     assert labels.WHY_FULL_REASON not in html
     assert "lift global oil prices" not in html
-    # The structured provenance this view is FOR still renders.
-    assert "Here for" in html
+    # The structured provenance this view is FOR still renders. RE-PINNED
+    # 2026-08-24 (NL-117, mockup-v13 PASSED): the "Here for: …" sentence in
+    # this view became the ruled reason line — same answer, name-led grammar,
+    # one spelling across every surface. The property is unchanged: this view
+    # still states, in code-owned words, why the story is here.
+    assert labels.WHY_WORLD_NEWS in html
 
 
-def test_the_front_page_why_chosen_line_is_untouched_by_this_batch():
+def test_the_front_page_reason_line_is_untouched_by_this_batch():
     """CARRIED-INVARIANT (born GREEN at 38141a3 — labelled per
     ENGINEERING.md:122, verified green on the HEAD-mirror run rather than
-    assumed). NL-134 F3's line is the surface this whole batch re-points
-    everything else ONTO; a regression here would make the ruling's
-    replacement vocabulary disappear while every deletion pin still passed."""
+    assumed). The front page's provenance line is the surface this whole batch
+    re-points everything else ONTO; a regression here would make the ruling's
+    replacement vocabulary disappear while every deletion pin still passed.
+
+    RE-PINNED 2026-08-24: flag ② (NAME-LED) retired the STEM on this surface
+    only. The markdown/§5.7 override vocabulary this batch is actually about —
+    TAG_FORM, generate.OVERRIDE_TEXT_LABEL, the spoken disclosure — is
+    untouched, and every other test in this file still pins it."""
     from newslens import server
-    assert server._why_chosen(override_slot_dict()) == TAG_FORM
+    assert server._reason_line_text(override_slot_dict()) == \
+        labels.WHY_WORLD_NEWS
     matched = override_slot_dict(
         override=False, matched_tags=[{"name": "AI regulation",
                                        "level": "topic"}])
-    assert server._why_chosen(matched) == f"{labels.WHY_RELATED_TO} AI regulation"
+    assert server._reason_line_text(matched) == \
+        f"AI regulation — {labels.WHY_TOPIC_ONE}"
 
 
 # ---------------------------------------------------------------------------

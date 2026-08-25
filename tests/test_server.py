@@ -831,11 +831,15 @@ def test_structured_and_fallback_paths_render_the_same_shape(ui):
         # Trust furniture ALWAYS from slots, on both paths:
         assert "Reported by 2 named outlets" in page, label
         assert "Outlet A" in page, label
-        # NL-134 F3 RE-PIN (was: assert "Here for" in page). The front page's
-        # code-owned provenance is the why-chosen line now; "Here for" moved to
-        # the deep view and the markdown briefing. Same contract — provenance
-        # renders from SLOT data on both paths — new copy.
-        assert 'class="why-chosen' in page, label
+        # NL-134 F3 RE-PIN (was: assert "Here for" in page), RE-PINNED AGAIN
+        # 2026-08-24 (mockup-v13 PASSED, flag ② NAME-LED): the front page's
+        # code-owned provenance is the REASON LINE, and the gate moved its
+        # mount into the trailing furniture. Same contract on both paths —
+        # provenance renders from SLOT data — new copy, new position.
+        assert 'class="furniture"' in page, label
+        assert (labels.WHY_TOPIC_ONE in page or labels.WHY_TOPIC_MANY in page
+                or labels.WHY_THREAD_ONE in page
+                or labels.WHY_WORLD_NEWS in page), label
 
 
 # --- a11y: durable markup pins ------------------------------------------------------------------
@@ -1305,11 +1309,18 @@ def test_item27_furniture_contract_through_build_page(ui):
     #    "outside your" in page.lower()` — which post-diff would still pass off
     #    this fixture's own LEDE ("A global development outside your tags"), so
     #    the loose `or` had stopped testing the furniture at all. The override's
-    #    code-owned furniture is now the why-chosen line in the principal's
+    #    code-owned furniture is now the reason line in the principal's
     #    format, pinned exactly, and the ranker's prose reason must NOT be on
     #    the front page (that recital was the F1 double-render).
-    assert "Important World News" in page
-    assert 'class="why-chosen why-chosen--world"' in page
+    #    RE-PINNED 2026-08-24 (mockup-v13 PASSED): the world fill's own
+    #    `why-chosen--world` prominence class is GONE with the above-the-headline
+    #    block — the passed artifact draws that fill as plain quiet furniture,
+    #    "no name, nothing accented". His class words are unchanged and stay the
+    #    exact pin; the mount is the trailing furniture paragraph.
+    assert labels.WHY_WORLD_NEWS in page
+    assert f'{labels.WHY_WORLD_NEWS}.</p>' in page
+    assert 'class="why-chosen' not in page   # no emit site; only the CSS
+                                             # tombstone comment names it
     # NL-138: the constant is deleted, so its text is quoted literally here —
     # and the archived row's own prose reason is asserted absent too, which is
     # the fact that only became true with this batch.
@@ -1318,8 +1329,11 @@ def test_item27_furniture_contract_through_build_page(ui):
     # 3. Meta-footnote: corroboration + outlets + provenance, from slots:
     assert "Reported by 2 named outlets" in page
     assert "Outlet A" in page
-    # NL-134 F3 RE-PIN (was: assert "Here for" in page) — see item 2.
-    assert 'class="why-chosen' in page
+    # NL-134 F3 RE-PIN (was: assert "Here for" in page) — see item 2. The
+    # reason line now rides INSIDE this same meta-footnote paragraph, which is
+    # what "3." has always been about: corroboration + outlets + provenance,
+    # all three from slots, in one trailing line.
+    assert 'class="furniture"' in page
     # 4. Disclosure trigger: the revival back-reference reaches the surface:
     assert "2026-07-01" in page
     # 5. Follow affordance (on the NON-tracked story — the tracked story drops

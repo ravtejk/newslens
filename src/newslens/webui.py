@@ -356,16 +356,40 @@ article.story { scroll-margin-top: 0.75rem; }
 .deep-view-entry-link:hover { color: var(--terra-deep); text-decoration: underline; }
 .furniture, .meta-footnote { font-size: 0.8rem; font-style: italic; color: var(--ink-faint);
   margin: 1.1rem 0 0; max-width: 38rem; line-height: 1.5; }
-/* NL-134 F3: the why-chosen line REPLACES .override-note, which is deleted
-   together with its .reason child — that span WAS the F1 double-render. This
-   line rides every story on every tier. The Related-to form reads as quiet
-   furniture; the world-impact form keeps the terra prominence the override
-   callout had, because it is still the "this one is off your map" signal. */
-.why-chosen { font-size: 0.82rem; font-weight: 400; color: var(--ink-faint);
-  font-family: var(--font-sans); margin: 0 0 0.6rem; line-height: 1.45; }
-.why-chosen .why-label { font-weight: 700; color: var(--ink-soft); }
-.why-chosen--world { color: var(--ink); }
-.why-chosen--world .why-label { color: var(--terra-deep); }
+/* Gate FIX-6 (micro-confirm 2026-08-25): adjacent furniture lines read as one
+   quiet block — the option-(b) sibling split must not inherit a full paragraph
+   gap nobody drew. Knob at his eye: 0 = artifact-literal · 0.2rem = ordered
+   default · delete the rule = as-built. */
+.furniture + .furniture { margin-top: 0.2rem; }
+/* THE REASON LINE (NL-117 §6; mockup-v13 PASSED 2026-08-24). It has NO block
+   of its own any more: it takes the .furniture register above — its OWN
+   trailing .furniture paragraph on cards (his option (b), ruled 2026-08-25:
+   the corroboration sentence is the sibling before it, so the reason is no
+   longer the tail of a long source list), the single .furniture paragraph in
+   the analyst deep view, .sc-reason in the quick deep view, and the smeta's
+   final clause on strips. No new selector: the register above already sizes
+   and colours every one of them.
+
+   NOTE for the design eye, measured not assumed: as a SIBLING the reason now
+   inherits .furniture's own block margin, so the gap between the corroboration
+   line and the reason is 1.1rem on the lead card and 0.6rem on the medium
+   cards (the .today-grid article.story override, line 176). That is a real
+   change in the card's trailing rhythm and it was NOT ruled — the ruling was
+   the sibling. Tightening it would be one adjacent-sibling rule
+   (`.furniture + .furniture { margin-top: … }`); deliberately not written here.
+
+   Only the NAMES need a rule: --terra at weight 600, INLINE — no fill, no
+   border, no container (the chip ban). Emphasis only: the class words state
+   the mechanism in TEXT on every fill, so colour and weight are never the sole
+   channel. The names sit inside italic .furniture and inherit that italic,
+   which is the artifact's own rendering.
+
+   .why-chosen / .why-chosen--world / .why-label are DELETED with this rule:
+   the NL-134 F3 above-the-headline block they dressed has no emit site left
+   (grep-verified in server.py). The world-impact fill's terra prominence goes
+   with them — the passed artifact draws that fill as plain quiet furniture,
+   "no name, nothing accented". */
+.furniture .why-name { color: var(--terra); font-weight: 600; }
 h2.headline, h3.headline, h4.headline { font-family: var(--font-display); font-weight: 700;
   margin: 0 0 0.4rem; line-height: 1.22; }
 /* NL-68 item 8: the story title IS the click-through to its deep view — it reads
@@ -714,7 +738,10 @@ details.deep-open-discrepancies[open] > summary .caret { transform: rotate(90deg
   color: var(--ink-soft); margin: 1.4rem 0 0.3rem; }
 .deep-today-prose > p { margin: 0 0 0.8rem; }
 /* NL-66(b): the In-Brief sources-&-context view. */
-.sc-tags, .sc-threads, .sc-herefor, .sc-reason { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.35rem; }
+/* .sc-herefor DROPPED from this selector (NL-117, 2026-08-24): the quick-tier
+   deep view's "Here for: …" sentence is now the reason line under .sc-reason,
+   which this rule already covered. Zero emit sites left for the old class. */
+.sc-tags, .sc-threads, .sc-reason { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 0.35rem; }
 .sc-corrob { color: var(--ink-faint); font-size: 0.85rem; margin: 0 0 0.6rem; }
 .deep-footer { font-size: 0.78rem; color: var(--ink-faint); padding-top: 1.25rem;
   margin-top: 0.5rem; border-top: 1px solid var(--rule); line-height: 1.6; }

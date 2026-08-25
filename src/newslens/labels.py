@@ -124,12 +124,55 @@ STILL_TRACKING_NO_DATE = "No next date is set."
 # conformance render, and the rank CLI all compose from here. "just" is
 # load-bearing in both directions now: one phrasing, one place, and no surface
 # says the same thing a second way.
-WHY_RELATED_TO = "Related to:"          # the reader follows the named things
-WHY_CHOSEN_BECAUSE = "Chosen because:"  # nothing followed matched
+# RETIRED-NOT-RENDERED (NL-117/NL-121, mockup-v13 PASSED 2026-08-24). The
+# NAME-LED ruling took the STEM off the front-page reason line entirely, and
+# this constant's ONE consumer was that stem (server._why_chosen_parts, the
+# only site the NL-138 sweep left holding it — grep-verified). WHY_CHOSEN_BECAUSE
+# below is NOT retired: it still leads the markdown edition's §5.7 override line
+# (generate.OVERRIDE_TEXT_LABEL) and the rank CLI, which this increment does not
+# touch. Kept named per this module's header rule; a copy sweep SKIPS it.
+WHY_RELATED_TO = "Related to:"          # RETIRED-NOT-RENDERED (name-led ruling)
+WHY_CHOSEN_BECAUSE = "Chosen because:"  # markdown/§5.7/CLI only — see above
 WHY_WORLD_NEWS = "Important World News"
-WHY_FOLLOWED_WRITER = "a writer you follow"   # composed as "<outlet> (…)" when
-                                              # the outlet name resolves, and
-                                              # rendered bare when it does not
+WHY_FOLLOWED_WRITER = "a writer you follow"   # composed as "<outlet> — …" when
+                                              # the outlet name resolves; the
+                                              # sentence-initial form below
+                                              # carries the un-named case
+
+# --- THE REASON LINE'S CLASS WORDS (NL-117 §6 grammar; mockup-v13 PASSED
+#     2026-08-24, flag ② ruled NAME-LED) -------------------------------------
+# The line is now NAME-LED: the mechanism's own output leads, the class words
+# follow after an em dash — "<A>, <B> — topics you follow". No stem. The class
+# words are the load-bearing half: a bare name is class-ambiguous ("Volkswagen"
+# — followed topic? followed thread? world pick?), which is why the 2026-07-31
+# round resolved F3 against first-name-only.
+#
+# NO PER-SURFACE SYNONYM DRIFT (Cleo's rule, ratified in that round): these
+# exact strings ride the card, the strip smeta, and both deep views. A strip
+# never says "world news" where a card says "Important World News".
+#
+# The plurals are MECHANICAL, not a second vocabulary: same words, the article
+# and number agreeing with the count the mechanism produced.
+WHY_TOPIC_ONE = "a topic you follow"
+WHY_TOPIC_MANY = "topics you follow"
+WHY_THREAD_ONE = "a thread you follow"
+WHY_THREAD_MANY = "threads you follow"
+# NEVER the verb "Following" in this component: that word opens a control, and a
+# reason line borrowing it reads as a second toggle (the collision rule).
+WHY_WRITER_MANY = "writers you follow"
+# The un-named writer credit in SENTENCE-INITIAL position — the state where
+# followed_analyst is the only mechanism and no outlet name resolves from
+# sources.yaml, so the class words lead the line. Held as its own constant
+# rather than capitalised off WHY_FOLLOWED_WRITER at render time (the
+# FOLLOW_THREAD_ARIA precedent: a render-time slice is a silent breakage the day
+# the source string changes).
+WHY_WRITER_LED = "A writer you follow"
+# MIXED MATCH (topic + thread both fired), the ruled form: the thread wins the
+# class seat and the topic names join in a trailing clause —
+# "<thread> — a thread you follow · also your topic: <A>". Words-first here, by
+# design: the thread already took the name-led seat.
+WHY_ALSO_TOPIC_ONE = "also your topic:"
+WHY_ALSO_TOPIC_MANY = "also your topics:"
 # RETIRED-NOT-RENDERED (NL-138, ruling ④ 2026-08-02). This labeled the deep
 # view's full-prose-reason paragraph for the few hours between the NL-134 land
 # and the ruling that killed the sentence it labeled. No surface renders it;

@@ -153,31 +153,52 @@ def test_f1_holds_on_every_tier_including_the_strip(tmp_paths):
 
 
 # ===========================================================================
-# F3 — the why-chosen line, in the principal's format
+# F3 — the reason line, in the principal's format
+#
+# RE-PINNED 2026-08-24 (NL-117/NL-121, mockup-v13 PASSED — DECISIONS
+# "[2026-08-24] THE SLATE RULED" item 4). His browser gate ruled flag ②
+# NAME-LED, which retires the STEM this section was written around: the line no
+# longer opens "Related to:" / "Chosen because:" — it leads with the mechanism's
+# own output and states the CLASS in words after an em dash. The gate also moved
+# the line's MOUNT off the position above the headline (the passed artifact
+# draws no line there) into the trailing furniture / the strip smeta / both deep
+# views.
+#
+# WHAT DID NOT CHANGE, and is what these pins are actually for: the line is
+# code-owned and never prose; it names EVERY match, never the first before a
+# comma; the writer credit names an outlet only when sources.yaml resolves one
+# and never fabricates a byline; a config failure degrades instead of taking the
+# page down; the line is never empty; it rides every tier including the strip;
+# the NL-68 doubling exhibit stays dead; hostile names stay escaped. Each pin
+# below keeps its own property and moves only the string it asserts.
 # ===========================================================================
 
-def test_f3_interest_matched_story_says_related_to_the_topic_names(tmp_paths):
-    """BORN RED on c3778c9. Form 1: the reader follows these topics, so the
-    line names them — every match, not the first one before a comma."""
+def test_f3_interest_matched_story_names_the_topics_and_their_class(tmp_paths):
+    """BORN RED on c3778c9 (the line did not exist). Form 1: the reader follows
+    these topics, so the line names them — every match, not the first one before
+    a comma — and says which class they are."""
     html = render(slot(tags=({"name": "Energy policy", "level": "broad"},
                              {"name": "Oil markets", "level": "specific"})))
-    assert "Related to: Energy policy, Oil markets" in visible(html)
-    assert "Chosen because:" not in html
+    assert ("Energy policy, Oil markets — topics you follow"
+            in visible(html))
+    assert labels.WHY_WORLD_NEWS not in html
 
 
-def test_f3_world_impact_override_says_chosen_because_important_world_news(
-        tmp_paths):
-    """BORN RED on c3778c9. Form 2, verbatim from the principal's spec."""
+def test_f3_world_impact_override_says_important_world_news(tmp_paths):
+    """BORN RED on c3778c9. Form 2: his exact class words, and with the stem
+    ruled away they are the whole fill. No name, nothing accented."""
     html = render(slot(override=True, reason=SPECIMEN_REASON))
-    assert "Chosen because: Important World News" in visible(html)
-    assert "Related to:" not in html
+    assert "Important World News." in visible(html)
+    assert "why-name" not in html, "the world fill accents nothing"
 
 
-def test_f3_thread_selected_story_says_related_to_the_thread(tmp_paths):
+def test_f3_thread_selected_story_names_the_thread_and_its_class(tmp_paths):
     """BORN RED on c3778c9. Form 3: no tag match, but a tracked thread put it
-    here — the thread's display name is the honest answer."""
+    here — the thread's display name is the honest answer, and the class word
+    is 'thread', never the verb 'Following' (that word opens a control)."""
     html = render(slot(mem=("Hormuz Grain Corridor",)))
-    assert "Related to: Hormuz Grain Corridor" in visible(html)
+    assert "Hormuz Grain Corridor — a thread you follow" in visible(html)
+    assert "Following" not in visible(html).split("Hormuz Grain Corridor")[1]
 
 
 def test_f3_followed_writer_credit_names_the_outlet_when_it_resolves(
@@ -188,8 +209,8 @@ def test_f3_followed_writer_credit_names_the_outlet_when_it_resolves(
     monkeypatch.setattr(server, "_followed_writer_outlets",
                         lambda: {"Stratechery"})
     sl = slot(followed=True, outlets=("Stratechery", "Wire Co"))
-    line = server._why_chosen(sl, server._followed_writer_outlets())
-    assert line == "Related to: Stratechery (a writer you follow)"
+    line = server._reason_line_text(sl, server._followed_writer_outlets())
+    assert line == "Stratechery — a writer you follow"
     assert "Wire Co" not in line, "an un-followed outlet was credited"
 
 
@@ -197,9 +218,10 @@ def test_f3_followed_writer_degrades_to_the_un_named_credit(tmp_paths):
     """BORN RED on c3778c9. When sources.yaml resolves no matching outlet (an
     unreadable config, or a followed outlet the corroboration count excluded),
     the credit renders WITHOUT a name — never a fabricated byline, never an
-    empty line."""
+    empty line. Name-led leaves the class words leading the sentence, so this
+    state has its own sentence-initial constant."""
     sl = slot(followed=True, outlets=("Some Wire",))
-    assert server._why_chosen(sl, set()) == "Related to: a writer you follow"
+    assert server._reason_line_text(sl, set()) == labels.WHY_WRITER_LED
 
 
 def test_f3_unreadable_sources_file_degrades_instead_of_raising(
@@ -211,7 +233,7 @@ def test_f3_unreadable_sources_file_degrades_instead_of_raising(
     monkeypatch.setattr(config, "load_sources", boom)
     assert server._followed_writer_outlets() == set()
     html = render(slot(followed=True))
-    assert "Related to: a writer you follow" in visible(html)
+    assert labels.WHY_WRITER_LED in visible(html)
 
 
 def test_f3_the_line_is_never_empty_for_any_slot_shape(tmp_paths):
@@ -219,31 +241,39 @@ def test_f3_the_line_is_never_empty_for_any_slot_shape(tmp_paths):
     reason on front surfaces" — including a slot with nothing on it at all
     (an older persisted row), which falls to the world-news form because
     world impact is literally why it is there."""
+    closing = (labels.WHY_TOPIC_ONE, labels.WHY_TOPIC_MANY,
+               labels.WHY_THREAD_ONE, labels.WHY_THREAD_MANY,
+               labels.WHY_FOLLOWED_WRITER, labels.WHY_WRITER_MANY,
+               labels.WHY_WRITER_LED, labels.WHY_WORLD_NEWS)
     for sl in ({}, slot(), slot(override=True), slot(followed=True),
                {"matched_tags": None, "matched_memory": None}):
-        line = server._why_chosen(sl)
-        assert line.strip(), f"empty why-chosen line for {sl!r}"
-        assert (line.startswith(labels.WHY_RELATED_TO)
-                or line.startswith(labels.WHY_CHOSEN_BECAUSE)), line
-    assert server._why_chosen({}) == "Chosen because: Important World News"
+        line = server._reason_line_text(sl)
+        assert line.strip(), f"empty reason line for {sl!r}"
+        assert line.endswith(closing), line
+    assert server._reason_line_text({}) == labels.WHY_WORLD_NEWS
 
 
 def test_f3_the_line_rides_every_tier_including_the_strip(tmp_paths):
     """BORN RED on c3778c9. NL-117's order was a provenance line on EVERY
-    story; the strip (the quick-tier grout) is a story."""
+    story; the strip (the quick-tier grout) is a story. The MOUNT differs by
+    tier per mockup-v13 (cards carry it in the trailing furniture, the strip in
+    its smeta) — the SENTENCE does not."""
     sl = slot(tags=({"name": "Energy policy", "level": "broad"},))
-    for role, tier in (("lead", "full"), ("story", "medium"),
-                       ("strip", "quick")):
+    for role, tier, mount in (("lead", "full", 'class="furniture"'),
+                              ("story", "medium", 'class="furniture"'),
+                              ("strip", "quick", 'class="smeta"')):
         html = render(sl, role=role, tier=tier)
-        assert 'class="why-chosen' in html, f"{role} has no why-chosen line"
-        assert "Related to: Energy policy" in visible(html), f"{role} line"
+        assert mount in html, f"{role} has no reason-line mount"
+        assert "Energy policy — a topic you follow" in visible(html), role
 
 
 def test_f3_the_reason_shows_just_once_per_card(tmp_paths):
     """BORN RED on c3778c9. "just be displayed as" is load-bearing: the old
     card answered the same question twice — the override note above the title
-    AND "Here for: …" in the bottom furniture. One line now; the furniture
-    keeps corroboration, which the why-chosen line never carried."""
+    AND "Here for: …" in the bottom furniture. ONE line, and the count is what
+    proves it: the mount moved to the furniture at the 2026-08-24 gate, so a
+    second rendering above the headline would show up here as a second
+    occurrence, exactly as the pre-F3 duplication did."""
     html = render(slot(tags=({"name": "Energy policy", "level": "broad"},)))
     assert html.count("Energy policy") == 1
     assert "Here for:" not in html
@@ -251,19 +281,22 @@ def test_f3_the_reason_shows_just_once_per_card(tmp_paths):
     assert "Reported by 1 named outlet" in html
 
 
-def test_f3_strip_smeta_no_longer_echoes_the_selecting_topic(tmp_paths):
-    """BORN RED on c3778c9. The strip's machine meta line carried the first
-    name BEFORE THE FIRST COMMA (a truncation, not an answer). The why-chosen
-    line above it now carries the whole answer, so the echo is duplication —
-    pinned inside the smeta element, because the strip has no bottom furniture
-    and a whole-card count cannot tell the two placements apart."""
+def test_f3_strip_smeta_carries_the_class_worded_reason_not_a_name_slice(
+        tmp_paths):
+    """RE-PINNED 2026-08-24 (mockup-v13 R2). The strip's machine meta line used
+    to carry the first name BEFORE THE FIRST COMMA — a truncation, not an
+    answer — and NL-134 F3 deleted that echo because the line above the headline
+    then held the whole answer. The gate moved the answer back INTO this line,
+    but class-worded and whole: the truncation stays dead, the ambiguity it
+    caused stays dead, and the strip is still the one tier with no bottom
+    furniture, so the pin lives inside the smeta element."""
     html = render(slot(tags=({"name": "Energy policy", "level": "broad"},
                              {"name": "Oil markets", "level": "specific"})),
                   role="strip", tier="quick")
     smeta = html.split('<p class="smeta">')[1].split("</p>")[0]
-    assert "Energy policy" not in smeta, "the strip still echoes the topic"
     assert "Reported by 1 named outlet" in smeta     # smeta itself survives
-    assert "Related to: Energy policy, Oil markets" in visible(html)
+    assert "Energy policy, Oil markets — topics you follow" in visible(smeta)
+    assert html.count("Energy policy") == 1, "the reason renders twice"
 
 
 def test_f3_full_reason_is_gone_from_the_deep_view_too_nl138(tmp_paths):
@@ -289,9 +322,16 @@ def test_f3_full_reason_is_gone_from_the_deep_view_too_nl138(tmp_paths):
         con.close()
     assert labels.WHY_FULL_REASON not in sec
     assert SPECIMEN_REASON not in sec
-    assert 'class="sc-reason"' not in sec
+    # RE-PINNED 2026-08-24: `.sc-reason` was the label-block's own class and its
+    # absence was how NL-138's kill was pinned. That class is now the REASON
+    # LINE's mount in this view (it replaced the "Here for: …" sentence), so
+    # absence-of-class no longer discriminates. The property is unchanged and
+    # pinned on what actually carried the defect: the model's prose sentence and
+    # its label, neither of which any surface renders.
+    assert labels.WHY_FULL_REASON.rstrip(":") not in sec
     # The structured provenance this view exists for is untouched.
-    assert "Here for" in sec
+    assert "Matched topics:" in sec or "Tracked threads:" in sec \
+        or labels.WHY_WORLD_NEWS in sec
 
 
 def test_f3_deep_view_reason_is_absent_on_every_slot_shape_nl138(tmp_paths):
@@ -319,15 +359,19 @@ def test_f3_labels_are_live_not_captured(tmp_paths, monkeypatch):
     """WIRING PROOF (the label-table liveness idiom): the render reads
     labels.<NAME> at call time, so a re-pin of the string table reaches the
     page. A captured import-time constant fails this."""
-    monkeypatch.setattr(labels, "WHY_RELATED_TO", "REPIN-RELATED")
-    monkeypatch.setattr(labels, "WHY_CHOSEN_BECAUSE", "REPIN-CHOSEN")
+    monkeypatch.setattr(labels, "WHY_TOPIC_ONE", "REPIN-TOPIC")
+    monkeypatch.setattr(labels, "WHY_THREAD_ONE", "REPIN-THREAD")
     monkeypatch.setattr(labels, "WHY_WORLD_NEWS", "REPIN-WORLD")
-    monkeypatch.setattr(labels, "WHY_FOLLOWED_WRITER", "REPIN-WRITER")
-    assert "REPIN-RELATED" in render(
+    monkeypatch.setattr(labels, "WHY_WRITER_LED", "REPIN-WRITER")
+    monkeypatch.setattr(labels, "WHY_ALSO_TOPIC_ONE", "REPIN-ALSO")
+    assert "REPIN-TOPIC" in render(
         slot(tags=({"name": "Energy policy", "level": "broad"},)))
-    assert "REPIN-CHOSEN" in render(slot(override=True))
+    assert "REPIN-THREAD" in render(slot(mem=("A thread",)))
     assert "REPIN-WORLD" in render(slot(override=True))
     assert "REPIN-WRITER" in render(slot(followed=True))
+    mixed = render(slot(mem=("A thread",),
+                        tags=({"name": "A topic", "level": "broad"},)))
+    assert "REPIN-ALSO" in mixed
 
 
 def test_f3_carried_invariant_the_line_escapes_hostile_names(tmp_paths):
@@ -342,22 +386,37 @@ def test_f3_carried_invariant_the_line_escapes_hostile_names(tmp_paths):
 
 
 def test_f3_the_nl68_dedupe_holds_on_the_new_surface_too(tmp_paths):
-    """BORN RED on c3778c9 — the _why_chosen half does not exist there. (The
+    """BORN RED on c3778c9 — the reason-line half does not exist there. (The
     _here_for half alone is a carried invariant, pinned separately below.) The
     NL-68 exhibit — a tag and a tracked thread of the same name doubling the
     line, "Strait of Hormuz, Strait of Hormuz" — must stay dead on BOTH
-    surfaces now that they share _selection_names' one dedupe."""
+    surfaces.
+
+    RE-PINNED 2026-08-24: the class-worded grammar resolves the collision the
+    OTHER way from _selection_names — the THREAD wins the class seat, because
+    the thread fill is the one that carries the continuity/delta obligation
+    (2026-07-31 round §6, mixed-match rule). One name, one class, one
+    appearance, on both surfaces; only the surviving class differs."""
     sl = {"matched_tags": [{"name": "Strait of Hormuz", "level": "specific"}],
           "matched_memory": ["strait of hormuz"]}
     assert server._here_for(sl) == "Strait of Hormuz"
-    assert server._why_chosen(sl) == "Related to: Strait of Hormuz"
+    assert server._reason_line_text(sl).lower().count("strait of hormuz") == 1
+    # Same exhibit, both names in the record's own casing: the thread's
+    # spelling is what renders, because the thread is what the line names.
+    exact = {"matched_tags": [{"name": "Strait of Hormuz", "level": "specific"}],
+             "matched_memory": ["Strait of Hormuz"]}
+    assert server._reason_line_text(exact) == \
+        "Strait of Hormuz — a thread you follow"
 
 
 def test_f3_carried_invariant_here_for_is_unchanged_for_its_own_surfaces(
         tmp_paths):
     """CARRIED-INVARIANT (born-green): F3 took the "Here for" clause off the
-    front page only. _here_for itself — the deep view's rationale and
-    generate.py's markdown meta-line — keeps every branch it had."""
+    front page only. _here_for itself keeps every branch it had — but since the
+    NL-117/121 increment (2026-08-24) NO HTML surface calls it: the deep views
+    render the name-led reason line and generate.py's markdown lane composes
+    its meta-line locally. This pin now guards the dedupe law-of-record only;
+    retirement chartered to the next hygiene boundary (gate R-2, truthed FIX-3)."""
     assert server._here_for({"matched_tags": [{"name": "AI regulation"}],
                              "matched_memory": []}) == "AI regulation"
     assert server._here_for({"override": True}) == \
@@ -393,8 +452,8 @@ def test_f3_full_edition_render_carries_the_line_and_not_the_reason(tmp_paths):
     finally:
         con.close()
     seen = visible(body)
-    assert "Related to: Energy policy" in seen
-    assert "Chosen because: Important World News" in seen
+    assert "Energy policy — a topic you follow" in seen
+    assert f"{labels.WHY_WORLD_NEWS}." in seen
     assert SPECIMEN_CONCATENATION not in body
     assert "Here for:" not in body
 
@@ -408,11 +467,11 @@ def test_f3_writer_credit_absorbs_a_same_named_tag_or_thread(tmp_paths):
     _selection_names' own dedupe convention."""
     sl = slot(tags=({"name": "Stratechery", "level": "specific"},),
               followed=True, outlets=("Stratechery",))
-    assert server._why_chosen(sl, {"Stratechery"}) == \
-        "Related to: Stratechery (a writer you follow)"
+    assert server._reason_line_text(sl, {"Stratechery"}) == \
+        "Stratechery — a writer you follow"
     sl_case = slot(tags=({"name": "stratechery", "level": "specific"},),
                    followed=True, outlets=("Stratechery",))
-    line = server._why_chosen(sl_case, {"Stratechery"})
+    line = server._reason_line_text(sl_case, {"Stratechery"})
     assert line.lower().count("stratechery") == 1
 
 

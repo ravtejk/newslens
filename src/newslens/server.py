@@ -12,8 +12,8 @@ Architecture (ADR-0010):
     (written from M7 on). Pre-M7 briefings fall back to parsing the
     assembled narrative markdown — safe because assemble_narrative() is
     code-owned and deterministic, so the parser mirrors a format we control.
-  * Trust furniture (corroboration lines, "Here for", tracked markers,
-    override notes) renders from SLOTS — code-owned data — never from prose.
+  * Trust furniture (corroboration lines, the reason line, tracked markers)
+    renders from SLOTS — code-owned data — never from prose.
   * Consumption events (the day-30 falsifier): a rendered briefing page-view
     logs `read`; serving the episode WAV from byte 0 logs `listen` (deduped
     to one per briefing-date per calendar day; see events.py). Server-side
@@ -1679,24 +1679,32 @@ def _deep_today_prose(st: Dict, date: str) -> str:
     return f'<div class="deep-section deep-today-prose">{"".join(paras)}</div>'
 
 
-def _strip_smeta(slot: Dict, stamp_inner: str) -> str:
+def _strip_smeta(slot: Dict, stamp_inner: str, reason: str = "") -> str:
     """The strip's machine meta line (v8-M2 item 1): a mono register line led,
     when its followed thread moved this edition, by the DEGRADED stamp
-    (● last covered <date>), then the corroboration count and the primary
-    selecting topic. CODE-OWNED, never prose; '' when there is nothing honest to
-    say. Uppercase is CSS presentation (screen readers hear natural case)."""
+    (Updated), then the corroboration count, then THE REASON LINE's compact
+    form. CODE-OWNED, never prose; '' when there is nothing honest to say.
+    Uppercase is CSS presentation (screen readers hear natural case).
+
+    NL-117 / mockup-v13 R2 (PASSED 2026-08-24): the reason returns to this line
+    as its FINAL clause, and this time class-worded, not the pre-NL-134
+    first-name-only slice a reader could not classify. `reason` arrives already
+    escaped and already composed (_reason_line_text) — the caller owns the one
+    composition so the strip and the card can never state different reasons.
+
+    THE DELTA CLAUSE NEVER RENDERS HERE (the continuation rider is not built in
+    this increment — see the reason-line composition — but the bound stands
+    regardless): below the strip meta there is no smaller slot, so the rider
+    degrades to ABSENT WHOLE, never squeezed. That is the stamp's own degrade
+    law; the deep view is where the record's full continuity lives."""
     bits: List[str] = []
     if stamp_inner:
         bits.append(stamp_inner)
     meta = (slot.get("corroboration_label") or "").strip()
     if meta:
         bits.append(_e(meta))
-    # NL-134 F3: the primary-selecting-topic echo is GONE from this line. The
-    # why-chosen line now rides above every strip's headline and carries the
-    # WHOLE answer ("Related to: <every match>"), not the first name before the
-    # first comma — and the principal's spec is that the reason shows JUST
-    # once. _here_for is untouched: it still serves the deep view and the
-    # markdown briefing's meta-line.
+    if reason:
+        bits.append(reason)
     if not bits:
         return ""
     return f'<p class="smeta">{" · ".join(bits)}</p>'
@@ -1710,7 +1718,17 @@ def _selection_names(slot: Dict) -> List[str]:
     for' rationale cannot drift apart. The NL-68 exhibit ('Strait of Hormuz,
     Strait of Hormuz' — a tag and a tracked thread of the same name doubling the
     line) must stay dead on BOTH surfaces, and ONE dedupe is how that stays
-    true. Behaviour is byte-identical to the code this replaced."""
+    true. Behaviour is byte-identical to the code this replaced.
+
+    RENDER STATUS, TRUTHED 2026-08-24 (NL-117/NL-121): this function and
+    _here_for below now have NO render site in this module. The reason line's
+    ruled grammar states the CLASS in words, which a merged tags+threads list
+    cannot carry, so the live composition is _reason_classes/_reason_segments —
+    and the collision case resolves the other way there (threads outrank tags,
+    because the thread fill carries the delta obligation). Both are LEFT IN
+    PLACE rather than deleted: their pins are QA's, they encode the dedupe law
+    of record, and retiring them is a call routed to the gate, not one an
+    implementer makes while moving a reader surface."""
     ordered: List[str] = []
     seen: set = set()
     tag_names = [t.get("name", "") for t in slot.get("matched_tags") or []
@@ -1743,63 +1761,181 @@ def _followed_writer_outlets() -> set:
         return set()
 
 
-def _why_chosen_parts(slot: Dict,
-                      followed_writers: Optional[set] = None) -> Tuple[str, str]:
-    """(prefix, subject) for THE WHY-CHOSEN LINE — code-owned, never prose,
-    never empty (NL-134 F3, folding NL-117's why-chosen provenance order).
+def _reason_classes(slot: Dict, followed_writers: Optional[set] = None
+                    ) -> Tuple[List[str], List[str], List[str], bool]:
+    """The slot's selecting mechanisms, SPLIT BY CLASS:
+    (threads, topics, writer_outlets, writer_unnamed).
 
-    THE PRINCIPAL'S DISPLAY SPEC, 2026-08-02, verbatim: "The reason for the
-    story should be just be displayed as 'Chosen because:' or 'Related to:' and
-    then '{relevant topics the user follows} or Important World News.'" Two
-    forms, nothing else:
+    This is _selection_names' dedupe law with the classes kept apart, because
+    the ruled grammar states the class in words and a merged list cannot. Two
+    deliberate differences from _selection_names, both from the 2026-07-31
+    round's own text:
 
-        Related to: <the followed things that put this story here>
-        Chosen because: Important World News
+    * THREADS OUTRANK TOPICS on a name collision. _selection_names puts tags
+      first and drops the same-named thread (the NL-68 'Strait of Hormuz,
+      Strait of Hormuz' exhibit). Here the same exhibit resolves the other way:
+      "thread fill wins the class seat (it carries the delta obligation)". The
+      doubling stays dead either way — one name, one class, one appearance.
+    * The writer credit is its OWN class, not a member of the name list. It
+      NAMES the outlet when sources.yaml resolves one (the slot's own outlets ∩
+      the followed set) and degrades to the UN-NAMED credit otherwise — never a
+      fabricated byline. A name already credited as a writer is dropped from the
+      topic/thread lists, exactly as the shipped line did.
 
-    Precedence follows _here_for's, deliberately: what the reader FOLLOWS
-    outranks the world-impact fallback, so a story is never told "we picked
-    this for you" when the reader's own topics are the true answer.
+    Order-preserving and case-insensitively deduped throughout; empties drop."""
+    def _dedupe(names, seen: set) -> List[str]:
+        out: List[str] = []
+        for name in names:
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+        return out
 
-    The followed-writer credit joins the Related-to list whenever
-    followed_analyst is a basis. It NAMES the outlet when sources.yaml resolves
-    one (the slot's own outlets ∩ the followed set) and stays un-named
-    otherwise — never a fabricated byline. A followed outlet dropped from the
-    slot's named outlets (wire-excluded) simply yields the un-named credit.
-
-    NO match at all — the world-impact override, and any zero-match slot the
-    combined score carried — takes the Chosen-because form. That is TRUE by
-    construction (personal_score contributed nothing to the pick) and it is the
-    exact wording the principal specified, so the line is never empty, never
-    false, and never the model's prose."""
-    names = _selection_names(slot)
+    writers: List[str] = []
+    writer_unnamed = False
     if slot.get("followed_analyst"):
-        named = [o for o in (slot.get("outlets") or [])
-                 if o in (followed_writers or set())]
-        credited = {o.lower() for o in named}
-        names = [n for n in names if n.lower() not in credited]
-        names = names + ([f"{o} ({labels.WHY_FOLLOWED_WRITER})" for o in named]
-                         or [labels.WHY_FOLLOWED_WRITER])
-    if names:
-        return labels.WHY_RELATED_TO, ", ".join(names)
-    return labels.WHY_CHOSEN_BECAUSE, labels.WHY_WORLD_NEWS
+        writers = [o for o in (slot.get("outlets") or [])
+                   if o in (followed_writers or set())]
+        writer_unnamed = not writers
+    seen = {o.lower() for o in writers}
+    threads = _dedupe([m for m in slot.get("matched_memory") or []], seen)
+    topics = _dedupe([t.get("name", "") for t in slot.get("matched_tags") or []
+                      if isinstance(t, dict)], seen)
+    return threads, topics, writers, writer_unnamed
 
 
-def _why_chosen(slot: Dict, followed_writers: Optional[set] = None) -> str:
-    """The why-chosen line as plain text (see _why_chosen_parts)."""
-    prefix, subject = _why_chosen_parts(slot, followed_writers)
-    return f"{prefix} {subject}"
+def _reason_segments(slot: Dict, followed_writers: Optional[set] = None
+                     ) -> List[Tuple[List[str], str, bool]]:
+    """THE REASON LINE, as ordered (names, class_words, words_first) segments —
+    code-owned, never prose, never empty (NL-117 §6; mockup-v13 PASSED
+    2026-08-24, flag ② ruled NAME-LED so no stem survives).
+
+    The closed vocabulary, one grammar, name-led:
+
+        <A>, <B> — topics you follow
+        <A> — a topic you follow
+        <thread> — a thread you follow
+        <thread> — a thread you follow · also your topic: <A>      (mixed)
+        <outlet> — a writer you follow
+        Important World News                                       (no match)
+
+    Segments join with the product's established middle dot. `words_first`
+    flips one segment's order for the mixed form's trailing clause, which is
+    the only place the ruled text puts the class words in front.
+
+    PRECEDENCE, deliberately unchanged from the line this replaces: what the
+    reader FOLLOWS outranks the world-impact fallback, so a story is never told
+    "we picked this for you" when the reader's own topics are the true answer.
+
+    NEVER EMPTY. A zero-match slot — the world-impact override, and any slot the
+    combined score carried with no personal contribution — takes the
+    Important-World-News fill. That is TRUE by construction (personal_score
+    contributed nothing to the pick) and it is the principal's own 2026-08-02
+    string, reused verbatim here so the class has ONE spelling org-wide (the
+    markdown edition's §5.7 line and the rank CLI compose from the same
+    constant). NO hedging vocabulary exists in this component, by construction:
+    a mechanism that fired IS the reason."""
+    threads, topics, writers, writer_unnamed = _reason_classes(
+        slot, followed_writers)
+    segs: List[Tuple[List[str], str, bool]] = []
+    if threads:
+        segs.append((threads, labels.WHY_THREAD_ONE if len(threads) == 1
+                     else labels.WHY_THREAD_MANY, False))
+        if topics:
+            segs.append((topics, labels.WHY_ALSO_TOPIC_ONE if len(topics) == 1
+                         else labels.WHY_ALSO_TOPIC_MANY, True))
+    elif topics:
+        segs.append((topics, labels.WHY_TOPIC_ONE if len(topics) == 1
+                     else labels.WHY_TOPIC_MANY, False))
+    if writers:
+        segs.append((writers, labels.WHY_FOLLOWED_WRITER if len(writers) == 1
+                     else labels.WHY_WRITER_MANY, False))
+    elif writer_unnamed:
+        # The class words lead when no outlet name resolves — its own
+        # sentence-initial constant, never a render-time capitalisation.
+        segs.append(([], labels.WHY_WRITER_LED if not segs
+                     else labels.WHY_FOLLOWED_WRITER, False))
+    if not segs:
+        segs.append(([], labels.WHY_WORLD_NEWS, False))
+    return segs
 
 
-def _why_chosen_html(slot: Dict,
-                     followed_writers: Optional[set] = None) -> str:
-    """The why-chosen line as front-page markup. The world-impact form keeps
-    the visual prominence the old override note had (it is still the "this is
-    off your map" signal); the Related-to form reads as quiet furniture."""
-    prefix, subject = _why_chosen_parts(slot, followed_writers)
-    cls = ("why-chosen why-chosen--world"
-           if prefix == labels.WHY_CHOSEN_BECAUSE else "why-chosen")
-    return (f'<p class="{cls}"><span class="why-label">{_e(prefix)}</span> '
-            f'{_e(subject)}</p>')
+def _slot_has_mechanism_record(slot) -> bool:
+    """THE NO-FABRICATION LADDER'S FIRST RUNG — ONE predicate, all four reason
+    mounts (gate R-1, 2026-08-24).
+
+    A slot carries a mechanism RECORD iff it is a dict that CARRIES the
+    mechanism keys: `matched_tags` or `matched_memory` PRESENT. Presence, not
+    truth. Keys present but EMPTY is exactly the shape a genuine world pick has
+    — the ranker looked, matched nothing personal, and chose on world impact —
+    so that slot still fills "Important World News", lawfully. Keys ABSENT means
+    no ranker record reached this render at all (a slot that did not persist, a
+    slot list shorter than the story list, a foreign shape), and there the line
+    is ABSENT — never a guessed or generic reason.
+
+    WHY THIS LIVES AT THE MOUNTS AND NOT IN THE COMPOSER: the composer's
+    never-empty contract is pinned and load-bearing (every real slot gets a
+    line; no silent blanks). Nothing about the composition changes — the mounts
+    simply decline to CALL it when there is no record to compose from.
+
+    The `slot or {}` in _collect_deep_views and the `else {}` in
+    _render_briefing_body deliberately STAY: other consumers of those degrades
+    want a dict, and `{}` is precisely a dict with no mechanism keys, which this
+    predicate reads correctly.
+
+    THE FOUR MOUNTS: the card's trailing furniture and the strip's smeta clause
+    (both in _render_story), the analyst deep view, and the quick-tier deep
+    view. Before this, the analyst mount's rung was falsy-only — a truthy
+    mechanism-less slot walked straight past it — and the other three had no
+    rung at all, so one degraded edition claimed a world pick on Today's cards,
+    Today's strips, AND the quick deep view."""
+    return isinstance(slot, dict) and ("matched_tags" in slot
+                                       or "matched_memory" in slot)
+
+
+def _reason_line_text(slot: Dict,
+                      followed_writers: Optional[set] = None) -> str:
+    """The reason line as PLAIN text, no terminal period — the strip smeta's
+    register (a mono clause line, joined by middle dots, no sentence stop).
+    Reasons take no accent there: in a one-register machine line the words alone
+    carry the class."""
+    out = []
+    for names, words, words_first in _reason_segments(slot, followed_writers):
+        if not names:
+            out.append(words)
+        elif words_first:
+            out.append(f'{words} {", ".join(names)}')
+        else:
+            out.append(f'{", ".join(names)} — {words}')
+    return " · ".join(out)
+
+
+def _reason_line_html(slot: Dict,
+                      followed_writers: Optional[set] = None) -> str:
+    """The reason line as card / deep-view markup: a SENTENCE (the trailing
+    furniture register), names in .why-name — accent + weight, INLINE, no fill,
+    no border, no container (the chip ban). Meaning is never carried by colour
+    or weight alone: the class words state it in text on every fill.
+
+    The terminal stop is added only when the composed line does not already end
+    in one, so a class word and a name ending in a period ('U.S.') both come out
+    right without slicing anyone's text."""
+    out = []
+    for names, words, words_first in _reason_segments(slot, followed_writers):
+        rendered = ", ".join(f'<span class="why-name">{_e(n)}</span>'
+                             for n in names)
+        if not names:
+            out.append(_e(words))
+        elif words_first:
+            out.append(f'{_e(words)} {rendered}')
+        else:
+            out.append(f'{rendered} — {_e(words)}')
+    line = " · ".join(out)
+    return line if line.endswith((".", "!", "?")) else line + "."
 
 
 def _render_story(i: int, st: Dict, slot: Dict, tier: str,
@@ -1860,23 +1996,26 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
         parts.append(f'<p class="brief-slug{second}" aria-hidden="true">'
                      f'{_e(labels.IN_BRIEF)}</p>')
 
-    # THE WHY-CHOSEN LINE (NL-134 F1 + F3) — above the title, on EVERY story and
-    # every tier, where the override callout used to sit: the "why am I seeing
-    # this" answer arrives before the story, which is NL-117's whole point.
+    # THE REASON LINE'S PLACEMENT MOVED HERE — mockup-v13, PASSED 2026-08-24.
     #
-    # It REPLACES the override note. That block read the slot's stored
-    # `override_label` (a prose prefix + the ranker's one-sentence reason) and
-    # then appended `world_impact_reason`, THE SAME TEXT, in a <span
-    # class="reason"> with no separator between them. The principal's fresh1
-    # specimen (2026-08-02) read "…energy prices.Pause in potential…".
+    # It used to render at THIS POINT, above the title, as the NL-134 F1/F3
+    # why-chosen line ("Related to: …" / "Chosen because: …"). The passed
+    # artifact renders NO line above the headline: the reason is the TRAILING
+    # meta-line furniture at the bottom of the story block (card), the smeta's
+    # final clause (strip), and the same sentence again in the deep view
+    # (superset). Both placements were argued in the 2026-07-31 round's F2 and
+    # both cite NL-117 — the mockup is the later ruling and it is the artifact
+    # he passed, so it wins. ONE line, ONE mount per surface: nothing above the
+    # headline, nothing duplicated below it.
     #
-    # NL-138 (his ruling ④, same day) finished the job F1 started: the ranker's
-    # prose reason is gone from the pipeline entirely — not written, not
-    # stored, not rendered anywhere, including the deep view that briefly held
-    # it. Both fields this comment used to name are deleted from RankedSlot.
-    # This line is now the ONLY answer any surface gives to "why am I seeing
-    # this", which is what "just once" was always supposed to mean.
-    parts.append(_why_chosen_html(slot, followed_writers))
+    # (The override note this line originally replaced is still dead. NL-138
+    # deleted the ranker's prose reason from the pipeline entirely — not
+    # written, not stored, not rendered anywhere — so the reason line remains
+    # the ONLY answer any surface gives to "why am I seeing this".)
+    #
+    # The card's composition itself now happens BELOW the strip early-return —
+    # the strip has its own compact form and never read this value, so
+    # computing it here was a composition per strip that was thrown away.
 
     # NL-68 item 6: the visible "The Lead" kicker DIES — scale + placement carry
     # the hierarchy. NL-68 item 8: the title itself is the deep-view door.
@@ -1917,7 +2056,17 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
         # follow mount.
         if st.get("lede"):
             parts.append(f'<p class="sum">{_e(st["lede"])}</p>')
-        parts.append(_strip_smeta(slot, stamp))
+        # mockup-v13 R2: the strip's reason is the smeta's final clause, plain
+        # (no accent) — one register, the words carrying the class. MOUNT 2 OF 4
+        # of the ladder's first rung (gate R-1): the body path degrades a
+        # missing slot to `{}` itself, so an edition whose slots did not persist
+        # claimed a world pick right here in the machine line. No record, no
+        # clause — and _strip_smeta drops an empty reason on its own, so the
+        # line degrades to stamp + corroboration rather than to a dangling dot.
+        parts.append(_strip_smeta(
+            slot, stamp,
+            _e(_reason_line_text(slot, followed_writers))
+            if _slot_has_mechanism_record(slot) else ""))
         # NL-143 item 2a — HIS 2026-08-07 DIRECTIVE: the quick tier is
         # followable. The strip branch used to return here, so an In-Brief item
         # was the one story tier a reader could not follow at all.
@@ -1940,6 +2089,19 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
             parts.append(f'<p class="strip-follow">{follow}</p>')
         parts.append("</article>")
         return "".join(parts)
+
+    # THE CARD'S REASON LINE, composed here — BELOW the strip return, because
+    # the strip carries its own compact form (above) and never read this value.
+    # Its ruled MOUNT is the trailing furniture at the bottom of this function;
+    # the placement comment above the headline records why nothing renders
+    # there any more.
+    #
+    # MOUNT 1 OF 4 of the ladder's first rung (gate R-1). _render_briefing_body
+    # degrades a missing slot to `{}` before it ever reaches this function, so
+    # the same degraded edition that claimed a world pick in the strip's smeta
+    # claimed one here too, in the lead card's furniture. No record, no line.
+    reason_html = (_reason_line_html(slot, followed_writers)
+                   if _slot_has_mechanism_record(slot) else "")
 
     deck_bits: List[str] = []
     if follow:
@@ -1966,19 +2128,44 @@ def _render_story(i: int, st: Dict, slot: Dict, tier: str,
     if entry_link:
         parts.append(f'<p class="story-more">{entry_link}</p>')
 
-    # Corroboration furniture — CODE-OWNED, from the slot (never prose).
-    # NL-134 F3: the "Here for: …" clause is GONE from this line. The why-chosen
-    # line above the headline is now the story's ONE reason display, and the
-    # principal's spec says the reason is shown JUST that way — a second clause
-    # restating the same answer in a second vocabulary is the duplication class
-    # F1 exists to kill. What remains here is corroboration, which the
-    # why-chosen line never carried. _here_for itself is untouched and still
-    # serves the deep view and generate.py's markdown meta-line.
+    # THE TRAILING FURNITURE — corroboration, then THE REASON LINE, as TWO
+    # SIBLING PARAGRAPHS in the same quiet register. HIS OPTION (b), ruled
+    # 2026-08-25 (gate R-5, flag 3).
+    #
+    # mockup-v13 R1 drew them as ONE paragraph:
+    #   "Corroborated in 3 fetched sources — CNBC, FT, NPR. <A> — a topic you
+    #    follow."
+    # At the artifact's ~120-character `[specimen]` that reads as one quiet
+    # line, and the build shipped it that way. His own edition's card furniture
+    # measures 390 characters, so in the tree the reason arrived as the TAIL OF
+    # A LONG SOURCE LIST — buried, not quiet. That was new information about a
+    # detail the artifact could not show, so the build flagged rather than
+    # silently decided it, and he took (b): keep the ruled POSITION (still the
+    # last thing in the story block, below the deep-view entry) and give the
+    # reason its own <p>. (a) was a separator inside the one paragraph, (c) was
+    # moving the line elsewhere — (b) is the one that costs one line of code and
+    # moves nothing the mockup ruled.
+    #
+    # Corroboration and the reason are different facts; the reason is never
+    # restated anywhere else on this card (single-rendering law), which is what
+    # the F1/F3 duplication kill was always about — and two siblings are still
+    # ONE rendering.
+    #
+    # DEGRADE, and both halves are independent now: corroboration mounts only
+    # when it HAS content (a slot with no label and no outlets no longer emits
+    # the bare "." this line once did — the bare-dot precedent), and the reason
+    # mounts only when the slot carries a mechanism record (the ladder's first
+    # rung — see _slot_has_mechanism_record). Either can be absent whole;
+    # neither leaves a fragment behind.
     outlets = slot.get("outlets") or []
     meta = slot.get("corroboration_label", "")
     if outlets:
         meta += f' — {", ".join(outlets)}'
-    parts.append(f'<p class="furniture">{_e(meta)}.</p>')
+    meta = meta.strip()
+    if meta:
+        parts.append(f'<p class="furniture">{_e(meta)}.</p>')
+    if reason_html:
+        parts.append(f'<p class="furniture">{reason_html}</p>')
 
     parts.append("</article>")
     return "".join(parts)
@@ -2017,9 +2204,13 @@ def _here_for(slot: Dict) -> str:
     that dedupe into _selection_names, shared with the why-chosen line, so the
     two surfaces can never disagree about what the reader matched.
 
-    FRONT-PAGE NOTE (NL-134 F3): Today's story cards no longer render this
-    line — the why-chosen line replaced it there. This remains the deep view's
-    rationale and generate.py's markdown meta-line."""
+    RENDER STATUS, TRUTHED 2026-08-24 (NL-117/NL-121): NOTHING in this module
+    renders this any more. NL-134 F3 took it off Today's cards; the reason line
+    took the quick-tier deep view's "Here for: …" sentence (the last site) when
+    mockup-v13 passed. generate.py's markdown meta-line still says "Here for:",
+    but it composes that string ITSELF — it has never called this function — and
+    the markdown/§5.7-validated lane is out of this increment's scope. Kept, not
+    deleted: see _selection_names' note."""
     matches = ", ".join(_selection_names(slot))
     if matches:
         return matches
@@ -3325,9 +3516,10 @@ def _render_briefing_body(con: sqlite3.Connection, row, entry: Optional[Dict],
     # RECOGNITION (is this story's own title a live follow), `held` decides
     # whether a stored MARK still describes something the reader follows.
     held = _held_topics_lower(con)
-    # NL-134 F3: resolved ONCE per edition, not once per story — the why-chosen
+    # NL-134 F3: resolved ONCE per edition, not once per story — the reason
     # line needs outlet names to credit a followed writer, and the slot only
-    # carries a bool.
+    # carries a bool. (_collect_deep_views reads it once per edition too, for
+    # the deep mounts of the same line.)
     followed_writers = _followed_writer_outlets()
 
     # BUG-35: one dedup set per EDITION — a same-thread arc line renders under
@@ -5022,7 +5214,8 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       date: str, back_label: Optional[str] = None,
                       return_view: str = "view-today", con=None,
                       slot: Optional[Dict] = None,
-                      story: Optional[Dict] = None) -> str:
+                      story: Optional[Dict] = None,
+                      followed_writers: Optional[set] = None) -> str:
     """The reader rendering — v6-as-edited is the spec. One artifact, two
     renderings (§5.3): this template never re-composes, never re-ledes;
     'cited' never 'verified'; notes_for_writer never renders. NL-11: back-link
@@ -5069,6 +5262,21 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
     prose_block = _deep_today_prose(story or {}, date)
     if prose_block:
         out.append(prose_block)
+
+    # THE REASON LINE — deep mount (NL-117 §6 superset law; mockup-v13 R3).
+    # Verbatim the sentence the card carries, in the same trailing-furniture
+    # register, directly under the Today prose: the deep view always contains at
+    # least the card's content. NO RECORD = NO LINE — the ladder's first rung
+    # (no mechanism data on the slot, so nothing honest to say), never a guessed
+    # or generic reason.
+    #
+    # MOUNT 3 OF 4 (gate R-1). This rung shipped as `if slot:`, which asks about
+    # TRUTHINESS and not about a record: a truthy-but-mechanism-less slot — a
+    # foreign shape, a half-written row — walked past it and took the world
+    # fill. The predicate asks the question the ladder actually asks.
+    if _slot_has_mechanism_record(slot):
+        out.append(f'<p class="furniture">'
+                   f'{_reason_line_html(slot, followed_writers)}</p>')
 
     # NL-63 item 5: the "story so far" timeline — deterministic from the ledger.
     # v8-M1 item 3 (2026-07-17): it RELOCATES from under the title block to
@@ -5321,7 +5529,8 @@ def _sources_context_source_rows(con, slot: Dict) -> List[str]:
 def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                                  slot: Dict, con, date: str,
                                  back_label: Optional[str] = None,
-                                 return_view: str = "view-today") -> str:
+                                 return_view: str = "view-today",
+                                 followed_writers: Optional[set] = None) -> str:
     """NL-66(b) ruled option (b): the In-Brief (quick-tier) deep view — a $0
     sources-and-context surface built ENTIRELY from what already exists for the
     slot, honestly labeled. It is NOT the analyst tier: no generation, no model
@@ -5370,7 +5579,26 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
     if threads:
         ctx.append('<p class="sc-threads">Tracked threads: '
                    f'{_e(", ".join(threads))}</p>')
-    ctx.append(f'<p class="sc-herefor">Here for: {_e(_here_for(slot))}.</p>')
+    # THE REASON LINE — quick-tier deep mount (superset law). It REPLACES the
+    # "Here for: …" sentence that stood here: same answer, the ruled grammar,
+    # one spelling across card / strip / both deep views (no per-surface synonym
+    # drift). The structured rows above it are deliberately kept — they are the
+    # STRUCTURED provenance NL-138 named when it deleted the model's prose
+    # reason ("matched topics, tracked threads, and the Here-for rationale"),
+    # and this is the record surface, not a card.
+    #
+    # MOUNT 4 OF 4 of the ladder's first rung, and the one the gate found first
+    # (F-1). This append had NO rung at all, and _collect_deep_views feeds this
+    # view `slot or {}` — so a quick story whose slot did not persist rendered
+    # "Important World News.", a world-class CLAIM indistinguishable from a real
+    # world pick. (The pre-NL-117 bytes said "world-impact selection (no tag or
+    # thread match)" here — an honest process disclosure, which is why replacing
+    # it with the ruled class words made this a fabrication-class fix and not
+    # parity carried forward.) No record, no paragraph: an empty <p> is still a
+    # mount, so the append itself is what gets skipped.
+    if _slot_has_mechanism_record(slot):
+        ctx.append(f'<p class="sc-reason">'
+                   f'{_reason_line_html(slot, followed_writers)}</p>')
     # NL-138 (principal's ruling ④, DECISIONS 2026-08-02): the WHY_FULL_REASON
     # block is DELETED. NL-134 F3 had parked the ranker's full prose reason
     # here — off the front page but preserved, labeled, as provenance. His
@@ -5430,6 +5658,11 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
     briefs: Dict[int, Dict] = {}
     sections: List[str] = []
     from . import analysis as analysis_mod
+    # Read ONCE per edition, not once per deep view (the same discipline
+    # _render_briefing_body already applies): sources.yaml is parsed to NAME a
+    # followed writer in the reason line, and every deep view in this loop wants
+    # the same answer.
+    followed_writers = _followed_writer_outlets()
     stories_probe, _ = _stories_for(row, entry)
     slots = _slots_for(row)
     tiers = (entry or {}).get("tiers") or []
@@ -5468,12 +5701,13 @@ def _collect_deep_views(con: sqlite3.Connection, row, entry: Optional[Dict],
             sections.append(_render_deep_view(
                 f"{slug_prefix}story-{i}", st.get("headline", ""), doc,
                 row["date"], back_label=back_label, return_view=return_view,
-                con=con, slot=slot, story=st))
+                con=con, slot=slot, story=st,
+                followed_writers=followed_writers))
         elif tier == "quick":
             sections.append(_render_sources_context_view(
                 f"{slug_prefix}story-{i}", st.get("headline", ""), st,
                 slot or {}, con, row["date"], back_label=back_label,
-                return_view=return_view))
+                return_view=return_view, followed_writers=followed_writers))
     return briefs, sections
 
 
