@@ -445,6 +445,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  slot {s['slot']} ({s['tier']}): {s['outcome']} — "
                   f"{s['detail'][:100]} (fetch {s['fetch_ok']}/{s['fetch_attempted']},"
                   f" sonar: {s['sonar'][:40]}, ${s['cost_usd']:.4f})")
+            # NL-127: the DEEPEN row, printed only where the lane fired. Reads
+            # as "pages/sockets over URLs considered", then the prose it bought
+            # and the tier refusals it recorded — the two numbers his 2026-08-24
+            # ruling is about.
+            d = s.get("deepen")
+            if d:
+                print(f"    deepen: {d['ok']}/{d['attempted']} fetched of "
+                      f"{d['considered']} Sonar URLs · {d['chars']} chars · "
+                      f"{d['excluded']} tier-excluded")
         for w in report["warnings"]:
             print(f"  ⚠ {w}")
         if report["derating"]:

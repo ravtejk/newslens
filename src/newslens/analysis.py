@@ -411,6 +411,7 @@ def fetch_cluster_articles(
     robots: Optional[RobotsCache] = None,
     fetch: FetchFn = net.fetch_bytes,
     sleep: Callable[[float], None] = time.sleep,
+    already_networked: bool = False,
 ) -> List[FetchRecord]:
     """Fetch a cluster's linked articles: items are dicts with url /
     source_name / tier (the caller reads them off source_items). Sequential
@@ -418,11 +419,17 @@ def fetch_cluster_articles(
     the host's stated Crawl-delay when one exists, clamped to
     [POLITE_DELAY_S, CRAWL_DELAY_CEILING_S] (tier exclusions cost no delay;
     a cached robots denial still pays the delay — over-polite by design,
-    never under). Duplicate URLs are fetched once."""
+    never under). Duplicate URLs are fetched once.
+
+    `already_networked` (NL-127): the caller has ALREADY opened a socket in this
+    story's run, so the first attempt here pays its delay too. DEEPEN runs a
+    second pass over the same story moments after the cluster pass; without this
+    the two passes would be polite within themselves and rude at the seam. The
+    default is the historical behaviour and every existing caller keeps it."""
     robots = robots or RobotsCache(fetch=fetch)
     records: List[FetchRecord] = []
     seen: set = set()
-    did_network = False
+    did_network = bool(already_networked)
     for item in items:
         url = (item.get("url") or "").strip()
         if not url or url in seen:
@@ -1333,6 +1340,14 @@ class StoryAnalysis:
     # identity, and a report that re-derived the name from a slot number would
     # name whichever story holds that slot at read time.
     story_title: str = ""
+    # NL-127 charter rider: ONE ROW PER SONAR URL DEEPEN considered, with the
+    # outcome and its detail. Production's `header.fetch = {ok, attempted}` is
+    # an aggregate that drops per-URL reasons — the gap that forced the
+    # 2026-08-24 Bucket-B mini to re-measure failures that had already been
+    # observed once. Empty on every story DEEPEN did not fire on, which is a
+    # different fact from "fired and found nothing" (`deepen_stats` reads the
+    # ledger; a run that never fired has no stats line at all).
+    deepen_ledger: List[Dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1383,8 +1398,7 @@ def build_source_map(fetch_records: List[FetchRecord],
                             "published_at": it.get("published_at") or "",
                             "text": it.get("raw_excerpt") or ""}
         n += 1
-    cluster_urls = fetched_urls | {(it.get("url") or "").strip()
-                                    for it in cluster_items}
+    cluster_urls = cluster_url_set(fetch_records, cluster_items)
     n = 1
     for res in sonar_results:
         url = (res.get("url") or "").strip()
@@ -1401,7 +1415,16 @@ def build_source_map(fetch_records: List[FetchRecord],
                             # the Search API returns a `date` per result and we
                             # discarded it; kept now as a dateline (item 2)
                             "published_at": _iso_day(res.get("date")),
-                            "text": res.get("snippet") or res.get("title") or ""}
+                            "text": res.get("snippet") or res.get("title") or "",
+                            # NL-127: this key's text is a FETCHED PAGE, not the
+                            # ≤303-char vendor locator. `kind` deliberately does
+                            # NOT move — it is a reader-facing label AND an
+                            # exact-match discriminator at server.py:4693/5278,
+                            # and it renders on every source-map line inside the
+                            # prompt's margin. The flag is a separate field, so
+                            # it reaches the reader (the deep view's source row)
+                            # and the receipts without touching either.
+                            "deepened": bool(res.get("deepened"))}
         n += 1
     n = 1
     for pb in prior_briefings:
@@ -1425,6 +1448,20 @@ def build_source_map(fetch_records: List[FetchRecord],
             sources[key]["outlet_id"] = oid
             sources[key]["outlet_keys"] = list(keys)
     return sources
+
+
+def cluster_url_set(fetch_records: List[FetchRecord],
+                    cluster_items: List[Dict]) -> set:
+    """Every URL this story's CLUSTER already accounts for — the set the R-mint
+    above dedupes against, so one article can never wear two keys.
+
+    Factored out for NL-127: DEEPEN has to know the same set BEFORE
+    `build_source_map` runs (fetching a URL whose R key will never be minted
+    buys a page nothing can cite), and two copies of this expression would drift
+    the day one of them learns something the other does not.
+    """
+    return ({r.url for r in fetch_records if r.outcome == OK and r.text}
+            | {(it.get("url") or "").strip() for it in cluster_items})
 
 
 def _outlet_of(url: str) -> str:
@@ -2036,6 +2073,11 @@ def _persisted_source_row(key: str, s: Dict) -> Dict:
     row = {"key": key, "outlet": s["outlet"], "title": title,
            "url": s["url"], "retrieved_at": s["retrieved_at"],
            "kind": s["kind"]}
+    # NL-127: the reader's half of DEEPEN. Additive, and present only on a row
+    # that was actually deepened, so no historical row's meaning moves and no
+    # `kind` comparison anywhere downstream changes shape.
+    if s.get("deepened"):
+        row["deepened"] = True
     if title.endswith(DEGRADE_TITLE_SUFFIX):
         row["title"] = title[:-len(DEGRADE_TITLE_SUFFIX)]
         row["record_status"] = DEGRADE_RECORD_STATUS
@@ -3106,6 +3148,498 @@ def _sonar_verify(key: str, story_title: str, claims: List[str]) -> Tuple[List[D
     return kept, cost, f"ok — {len(kept)} results{note}"
 
 
+# ===========================================================================
+# NL-127 DEEPEN — the R# lane (principal's ruling 2026-08-24)
+# ===========================================================================
+#
+# WHAT THIS IS, and what it deliberately is NOT.
+#
+# The ratified 2026-07-31 design said DEEPEN would "fetch full text of URLs the
+# corpus already holds but never fetched", over the CLUSTER rows. The 2026-08-14
+# scout falsified that premise against this file: `_cluster_items_for_slot`
+# returns every `item_ids` entry and `fetch_cluster_articles` walks all of them,
+# so the pipeline already ATTEMPTS every cluster URL it holds. That stage is
+# DEAD and is not built here.
+#
+# The genuinely never-fetched pool is the R# rows minted below by
+# `build_source_map`: a Sonar `search_results` entry reaches the analyst as its
+# ≤303-char vendor SNIPPET and nothing has ever opened the page. Measured on the
+# principal's own DB (mode=ro, editions ≥ 2026-08-01): 322 R# rows over 80
+# distinct hosts, mean text 279 chars, and the long tail — independent.co.uk,
+# kyivindependent.com, elpais, jpost, themoscowtimes, wsj — is outlets his feed
+# set does not carry at all. That is the "stop discarding paid answers" rider,
+# and it is the ONLY surviving lane. His ruling 2026-08-24 (DECISIONS, item 2)
+# authorized exactly it.
+#
+# THE TIER LAW IS HIS, VERBATIM: "Sonar-result fetches obey the SAME outlet-tier
+# law as cluster fetches". That is why the refusal below is not a new rule but a
+# call into `fetch_article`, which returns TIER_EXCLUDED with the 2026-07-06
+# ruling named in its own detail string. A Reuters/NYT/AP/Wikipedia/Bloomberg/
+# WaPo/FT/Economist R# row is refused by the same line that refuses a cluster
+# item, and the refusal is RECORDED (see the ledger) so "they stayed
+# unfetchable" is a receipt rather than a claim.
+#
+# WHAT THE ROW COSTS: $0 in model spend — no seat, no Sonar, no prompt. One
+# network GET per surviving URL, single attempt. Bucket-B measured 34 in-run
+# retries rescuing 0 outcomes (research/2026-08-24--nl127-bucketB.md), so there
+# is no retry ladder here and building one would be building against measurement.
+#
+# WHY IT CANNOT MOVE THE PROMPT BOUND, which is a MONEY guard (NL-133/139/142).
+# DEEPEN replaces one field — an R key's `text` — and nothing else. It does not
+# touch the R title (NL-139's vendor clamp), the R outlet (a URL host inside
+# NL-142's label budget), or the `kind` string (rendered on every source-map
+# line AND compared by exact equality at server.py:4693/5278). `text` reaches
+# the prompt only through `render_material`, which water-fills the whole block
+# into MATERIAL_BUDGET_CHARS — the property `SONAR_SNIPPET_MAX_CHARS` is already
+# derived from ("no snippet of any length can add one rendered char past that").
+# The deepened text is clamped to that same constant on substitution, so the
+# HELD/PERSISTED bound is unchanged too. `brief_bound_chars` is therefore
+# byte-identical with DEEPEN on and off, and the 105 chars of margin slack the
+# scout measured — the slack his [:9] ruling declined to spend — is not touched.
+
+DEEPEN_ARM_ON = "on"
+DEEPEN_ARM_OFF = "off"
+# NOT an env var (none may land without his checkpoint) and not config: a module
+# constant the pins monkeypatch, so both arms are exercised at $0. Same form as
+# FETCH_SKIP_ARM above, for the same reason.
+#
+# THIS LANE SHIPS INERT (gate ruling R-1, 2026-08-24), on NL-151's precedent at
+# :1165 above — "that is why NL-151 shipped OFF" — which is the directly
+# on-point case: a built, pinned, measured lane landed OFF and was armed later
+# by his own explicit word. The arm is HIS fork and nobody else's, because
+# armed-at-commit means the committed bytes open live network GETs on his very
+# next generate before he has spoken. OFF is not a stub: `deepen_sonar_results`
+# returns at `deepen_armed()` before it reads a single result, which is why the
+# OFF arm is byte-identical to the pre-NL-127 tree (proven twice by independent
+# three-world probes, QA + gate §A.4). Arming it is THIS ONE LINE plus one
+# suite leg. Every pin that exercises the lane arms itself explicitly (the
+# `armed` fixture in tests/test_nl127_deepen.py), so this default is the
+# shipped default in every test that does not ask for the other one.
+DEEPEN_ARM = DEEPEN_ARM_OFF
+
+# Network attempts per fired story. Bucket-B's OK fetches ran 1,254–19,368 chars
+# (median ~3,300), so three pages is ~10k chars of prose against a story that
+# fired only because it holds under 14,400 — enough to fill the deficit, not
+# enough to displace the cluster's own reporting. Wall clock ~3s/attempt plus
+# 1s politeness, with a rare one-off 15s robots tarpit per hostile host.
+DEEPEN_MAX_URLS = 3
+# THE DEFICIT DENOMINATOR IS DERIVED, not chosen: below the material budget the
+# block cannot be filled with real prose at all, so 8 vendor stubs are occupying
+# room a page could hold; above it the budget is already oversubscribed and a
+# new full text only displaces reporting we already have.
+DEEPEN_TEXT_FLOOR = MATERIAL_BUDGET_CHARS
+# IMPORTANCE = the depth tier, which IS the editorial judgement the ranker
+# already made and the one value `analyze_story` is handed. A tier absent here
+# scores 0 and can never fire (today `analyze_story` only ever runs at
+# full/medium; L3 could one day analyse In-Brief stories, and this is the guard
+# that keeps DEEPEN out of that tier until someone rules it in).
+DEEPEN_TIER_WEIGHT = {"full": 1.0, "medium": 0.5}
+# THE ONE CALIBRATED CONSTANT IN THIS BLOCK — disclosed as such. The charter
+# says "importance x deficit trigger WITH REAL GATING (the experiment's encoding
+# reduces to deficit-only — don't repeat it)". Real gating means each conjunct
+# must be able to block a story the other would pass, and it is checked against
+# HIS corpus, not against intuition. At 0.40 a `full` story fires on deficit
+# ≥ 0.40 (holding < 14,400 chars) and a `medium` story needs ≥ 0.80 (holding
+# < 4,800). Measured on editions 2026-08-01..24 (42 briefs, analysis_retrieval,
+# mode=ro), the separating pair is real and adjacent:
+#   2026-08-03 slot 1 full   held 10,202  deficit 0.575  -> FIRES
+#   2026-08-06 slot 3 medium held  9,989  deficit 0.584  -> DOES NOT
+# Two all-but-identical deficits, opposite verdicts, decided by importance
+# alone: that is the property the experiment's encoding lacked. The deficit
+# conjunct bites in the other direction on the same corpus (2026-08-01 slot 1,
+# full, held 38,200 -> 0.0 -> does not fire). Firing rate over the window:
+# 3/14 full-tier and 4/28 medium-tier stories, ~0.5 stories per edition.
+DEEPEN_TRIGGER = 0.40
+
+# Non-network dispositions, kept OUTSIDE the `OUTCOMES` vocabulary on purpose:
+# that tuple is the fetch layer's closed contract and `fetch_stats` counts over
+# it. These three name decisions taken BEFORE the fetch layer is asked, and they
+# only ever appear in the DEEPEN ledger.
+DEEPEN_SKIP_HELD = "skipped-already-held"
+DEEPEN_SKIP_SHAPE = "skipped-url-shape"
+DEEPEN_SKIP_BUDGET = "skipped-url-budget"
+
+# The tier an R# host resolves to when no source in sources.yaml claims it —
+# the SAME default `_cluster_items_for_slot` applies to an unrecognised cluster
+# outlet (`tier_by_outlet.get(r["outlet"], "full")`). Stated as a constant
+# because it is the load-bearing half of "the same outlet-tier law": most Sonar
+# results are outlets he does not subscribe to, and an allowlist reading would
+# have reduced the fetchable pool from ~224 rows to ~76 — nearly all of them on
+# the hosts Bucket-B measured as deterministically dead.
+DEEPEN_UNKNOWN_TIER = "full"
+
+# Public-suffix guard for `_registrable`. Without it `feeds.bbci.co.uk` and
+# `independent.co.uk` both collapse to "co.uk" and one outlet inherits the
+# other's tier. It is NOT a complete PSL, and here is what that actually costs,
+# stated as the machine behaves rather than as the first draft of this comment
+# claimed (it said an unlisted suffix "fails to shorten, the host stays whole";
+# QA falsified that against the function itself, 2026-08-24 F-6):
+#
+#   `_registrable("feeds.dawn.com.pk")` -> "com.pk"
+#
+# An UNLISTED multi-part suffix DOES shorten — to the two-label tail, which is
+# the suffix itself. `outlet_tiers_by_host`'s guard below rejects only LISTED
+# suffixes, so a restricted source whose feed sits on one of these mints a
+# SUFFIX-WIDE index key ("com.pk") carrying that source's tier and label, and
+# the tripwire stays mute because a host was, technically, derived.
+#
+# The direction of that failure is OVER-BLOCK plus MISLABEL, never escape:
+# every `*.com.pk` host inherits the restricted tier and reads in the ledger
+# under the restricted outlet's name. The dangerous direction is CLOSED — a
+# restricted host under that suffix still matches the suffix-wide key and is
+# still refused. There is no live specimen (0 rows in the measured window), so
+# per gate R-3 the guard line itself rides the next tier-index-touching batch
+# rather than invalidating this ship's taken receipts; this comment is here so
+# nobody re-derives the false version from it.
+#
+# The one direction that would be unsafe (a restricted-tier source that no host
+# can be derived for AT ALL) is reported by `outlet_tiers_by_host` rather than
+# absorbed.
+_MULTI_LABEL_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "co.kr", "co.in", "co.nz",
+    "co.za", "co.il", "com.au", "net.au", "org.au", "com.br", "com.cn",
+    "com.hk", "com.mx", "com.sg", "com.tr", "com.tw", "com.ar",
+})
+
+# HOST COMPLETION FOR HIS HOSTLESS OUTLETS — the one hand-written table here,
+# and it is scoped so it cannot become policy of its own. A `reference_only`
+# source needs no `rss_url` (config.py:157), so his four — Associated Press,
+# Reuters, The New York Times, Wikipedia — reach this module as a NAME and
+# nothing else, while their R# rows arrive as hosts (89 of 322 rows in the
+# measured window: reuters.com 66, nytimes.com 11, apnews.com 6,
+# en.wikipedia.org 6). Without this mapping those rows resolve to
+# DEEPEN_UNKNOWN_TIER and his ruling's own parenthetical ("the ~76
+# reference_only/headline_only rows stay unfetchable") is breached on the first
+# run. Keyed by the NAME AS HE WROTE IT: delete the source from sources.yaml and
+# the entry goes inert, so this is host completion for outlets he lists, never
+# an independent block list. Every other restricted source he has carries a feed
+# URL and is derived, not tabled.
+_HOSTLESS_SOURCE_HOSTS = {
+    "associated press": ("apnews.com",),
+    "reuters": ("reuters.com",),
+    "the new york times": ("nytimes.com",),
+    "wikipedia": ("wikipedia.org",),
+}
+
+# ALIAS COMPLETION FOR HIS RESTRICTED OUTLETS (gate ruling R-2, 2026-08-24,
+# closing QA's F-5). A restricted outlet reached through its OWN official
+# shortener or alternate registrable breaches his 2026-07-06 tier ruling by the
+# back door: the shared opener follows redirects, so `https://reut.rs/xyz`
+# lands on reuters.com after the tier decision has already been taken on the
+# string "reut.rs" — which no source claims, so it resolves to
+# DEEPEN_UNKNOWN_TIER and is fetched. QA confirmed all eight of these resolve
+# FETCHABLE against the pre-fix bytes; the base rate is 0 of 634 all-time R#
+# URLs (Sonar returns canonical URLs), so this is a LATENT class, not a live
+# one — but the URL shapes are vendor-controlled, not ours, and a vendor can
+# start emitting them any morning without telling us.
+#
+# SAME PROPERTY AS THE TABLE ABOVE, deliberately: keyed by THE NAME AS HE WROTE
+# IT, so deleting the source from sources.yaml makes the row inert. This is
+# host completion for outlets HE lists, never a deny table of our own — no new
+# vocabulary and no new refusal path. The rows merge into the same `hosts` list
+# the derived and hostless hosts use, so the refusal that fires is the EXISTING
+# one: `fetch_article` returning TIER_EXCLUDED with the 2026-07-06 ruling in
+# its own detail string, no socket opened.
+#
+# He carries TWO Bloomberg rows and TWO Washington Post rows, so each alias is
+# keyed under BOTH names: the alias then stays live while either row survives
+# and goes inert only when the outlet leaves his file entirely — which is the
+# same moment its canonical host stops being restricted.
+#
+# `on.ft.com` needs no row: the Financial Times carries a feed on `ft.com`, so
+# `_registrable("on.ft.com")` -> "ft.com" already matches the derived key.
+_ALIAS_SOURCE_HOSTS = {
+    "the new york times": ("nyti.ms", "nyt.com"),
+    "associated press": ("apne.ws", "ap.org"),
+    "reuters": ("reut.rs",),
+    "bloomberg markets": ("bloom.bg",),
+    "bloomberg politics": ("bloom.bg",),
+    "washington post — world": ("wapo.st",),
+    "washington post — business": ("wapo.st",),
+    "the economist": ("econ.st",),
+}
+
+# Prose-extractability prefilter (Bucket-B, 2026-08-24). A page in one of these
+# forms carries caption text, not an article: measured 113–482 chars against the
+# 700-char MIN_EXTRACT_CHARS floor, deterministic across a spaced retry, and
+# 12 of the 58 sampled URLs (21%) were this class. Skipping them costs zero
+# prose and saves a GET.
+#
+# NOT `discovery.url_reject_reason`, and the reason is specific: that predicate
+# asks "is this URL NEWS?" and deliberately RESCUES a dated live blog or video
+# page (`_DATED_FORMAT_SEGMENTS` + `_DATED_PATH`), because a dated Guardian live
+# blog is real coverage worth citing. This predicate asks a different question —
+# "will an HTML extractor find prose here?" — and for that the date is
+# irrelevant: the scout's marquee specimen is a DATED Al Jazeera
+# `/video/newsfeed/2026/7/26/...` page holding 116 chars. Two questions, two
+# predicates. Its HOST rules are reused verbatim, because "youtube.com is a
+# platform page" is the same fact in both directions (9 youtube.com + 2
+# facebook.com rows in the measured window).
+_DEEPEN_PROSE_LESS_SEGMENTS = frozenset({
+    "video", "videos", "video-clips", "videoclips", "liveblog", "live-blog",
+    "live-news", "live-updates", "gallery", "galleries", "photos", "photo",
+    "podcast", "podcasts", "audio", "watch", "listen",
+})
+
+
+def deepen_armed() -> bool:
+    """Is the NL-127 DEEPEN lane live? One reader, so the trigger, the ledger
+    and the pins can never disagree about whether it is on."""
+    return DEEPEN_ARM != DEEPEN_ARM_OFF
+
+
+def _registrable(host: str) -> str:
+    """The site-identity form of a hostname: the registrable domain under a
+    guarded public suffix, lowercased, port and trailing dot stripped.
+
+    Feed hosts and article hosts are rarely the same string —
+    `feeds.bloomberg.com` vs `bloomberg.com`, `rss.cnn.com` vs `cnn.com`,
+    `search.cnbc.com` vs `cnbc.com` — and Bloomberg is `headline_only`, so an
+    exact-host index would leak the two outlets his ruling names first.
+    """
+    host = (host or "").strip().lower().split(":")[0].strip(".")
+    labels = [l for l in host.split(".") if l]
+    if len(labels) < 2:
+        return host
+    if ".".join(labels[-2:]) in _MULTI_LABEL_SUFFIXES:
+        return ".".join(labels[-3:]) if len(labels) >= 3 else host
+    return ".".join(labels[-2:])
+
+
+def outlet_tiers_by_host(cfg) -> Tuple[Dict[str, Tuple[str, str]], List[str]]:
+    """host -> (tier, outlet name), plus the names of restricted-tier sources
+    no host could be derived for.
+
+    THE SECOND RETURN VALUE IS THE TRIPWIRE, and it is why this function hands
+    back two things instead of one. The failure mode that would break his ruling
+    quietly is a `reference_only`/`headline_only` source whose host this index
+    cannot produce: its R# rows would fall through to DEEPEN_UNKNOWN_TIER and be
+    fetched. Today the list is empty by measurement (his 11 restricted sources:
+    7 carry feed URLs, 4 are in `_HOSTLESS_SOURCE_HOSTS`) — so it is reported as
+    a run WARNING rather than absorbed, and it goes non-empty the moment he adds
+    a hostless restricted outlet this module has never seen.
+
+    MOST RESTRICTIVE WINS on a shared host: the decision this index serves is
+    binary (`tier_allows_fetch`), so if any source on a host is outside the
+    fetch tiers the host is outside them.
+    """
+    by_host: Dict[str, Tuple[str, str]] = {}
+    unresolved: List[str] = []
+    for s in (getattr(cfg, "sources", None) or []):
+        name = (getattr(s, "name", "") or "").strip()
+        tier = getattr(s, "tier", "") or ""
+        hosts: List[str] = []
+        rss_url = getattr(s, "rss_url", None)
+        if rss_url:
+            reg = _registrable(urlparse(rss_url).netloc)
+            if "." in reg and reg not in _MULTI_LABEL_SUFFIXES:
+                hosts.append(reg)
+        hosts.extend(_HOSTLESS_SOURCE_HOSTS.get(name.casefold(), ()))
+        if not hosts:
+            if not tier_allows_fetch(tier):
+                unresolved.append(name or "(unnamed source)")
+            continue
+        # Aliases merge AFTER the tripwire check, never before it: an alias must
+        # be able to ADD a host to an outlet that already resolved, and must
+        # never be able to SILENCE the "no host could be derived" warning by
+        # resolving an outlet whose canonical host is still missing. Same list,
+        # same `by_host` write, same refusal downstream.
+        hosts.extend(_ALIAS_SOURCE_HOSTS.get(name.casefold(), ()))
+        for h in hosts:
+            prev = by_host.get(h)
+            if prev is None or (tier_allows_fetch(prev[0])
+                                and not tier_allows_fetch(tier)):
+                by_host[h] = (tier, name)
+    return by_host, unresolved
+
+
+def tier_for_url(url: str, by_host: Dict[str, Tuple[str, str]]) -> Tuple[str, str]:
+    """(tier, outlet label) for a Sonar result URL under HIS tier law.
+
+    Exact host first, then the registrable domain, then the unknown default —
+    the same default an unrecognised cluster outlet gets. The label is the
+    outlet's own name when he lists it (so the ledger reads "Reuters", not
+    "reuters.com") and the bare host otherwise.
+    """
+    host = _outlet_of(url)
+    if not host:
+        return "", ""
+    for candidate in (host, _registrable(host)):
+        hit = by_host.get(candidate)
+        if hit is not None:
+            return hit
+    return DEEPEN_UNKNOWN_TIER, host
+
+
+def prose_unlikely(url: str) -> str:
+    """"" if this URL may be worth a GET; else the reason it is not.
+
+    Pure, offline, deterministic — no network, no HEAD, no date rescue.
+    """
+    from . import discovery
+    parsed = urlparse(url or "")
+    host = _outlet_of(url)
+    if not host:
+        return ""
+    root = _registrable(host)
+    if host in discovery._SOCIAL_HOSTS or root in discovery._SOCIAL_HOSTS:
+        return "social-post"
+    if host in discovery._AV_HOSTS or root in discovery._AV_HOSTS:
+        return "audio-video-page"
+    segments = [s for s in (parsed.path or "").lower().split("/") if s]
+    for seg in segments:
+        if seg in _DEEPEN_PROSE_LESS_SEGMENTS:
+            return f"prose-less page form (/{seg}/)"
+    return ""
+
+
+def deepen_deficit(held_chars: int) -> float:
+    """How far this story's CLUSTER full text falls short of the material
+    budget, normalised to [0, 1]. 0 = the budget is already coverable with
+    reporting we fetched ourselves; 1 = nothing was extracted at all."""
+    if DEEPEN_TEXT_FLOOR <= 0:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - (max(0, held_chars) / DEEPEN_TEXT_FLOOR)))
+
+
+def deepen_score(tier: str, held_chars: int) -> float:
+    """importance x deficit. See DEEPEN_TRIGGER for the measured gating proof."""
+    return DEEPEN_TIER_WEIGHT.get(tier, 0.0) * deepen_deficit(held_chars)
+
+
+def deepen_sonar_results(
+    sonar_results: List[Dict],
+    tier: str,
+    held_chars: int,
+    cfg,
+    cluster_urls: Optional[set] = None,
+    robots: Optional[RobotsCache] = None,
+    fetch: FetchFn = net.fetch_bytes,
+    sleep: Callable[[float], None] = time.sleep,
+    already_networked: bool = False,
+) -> Tuple[List[Dict], List[Dict], List[str]]:
+    """Turn ≤303-char Sonar locators into pages, under his tier law.
+
+    Returns (results, ledger, warnings). `results` is a NEW list — the input
+    dicts are never mutated — in which a rescued entry's `snippet` is the
+    fetched article text; every other entry is passed through unchanged, so
+    `len(sonar_results)` (which the slot-3 demotion rule reads) is invariant.
+
+    `ledger` is the charter rider: ONE ROW PER URL considered, carrying the
+    outcome and its detail. Production persists only `header.fetch =
+    {ok, attempted}` and drops per-URL reasons, which is precisely why the
+    Bucket-B mini had to re-measure failures that had already happened.
+    """
+    passthrough = [dict(r) for r in (sonar_results or [])]
+    if not passthrough or not deepen_armed():
+        return passthrough, [], []
+    if deepen_score(tier, held_chars) < DEEPEN_TRIGGER:
+        return passthrough, [], []
+
+    by_host, unresolved = outlet_tiers_by_host(cfg)
+    warnings: List[str] = []
+    if unresolved:
+        warnings.append(
+            "deepen: no host could be derived for restricted source(s) "
+            + ", ".join(sorted(unresolved))
+            + " — their Sonar results would be fetched under the unknown-outlet "
+            "default, which the 2026-08-24 tier ruling forbids")
+
+    held = cluster_urls or set()
+    # Rows are keyed by Sonar RANK so the ledger reads in the order the vendor
+    # ranked its answers — which is also the order the fetch budget is spent in,
+    # and therefore the order a reader needs to audit "why not this one".
+    rows: Dict[int, Dict] = {}
+    plan: List[Tuple[int, Dict]] = []      # (index into passthrough, item)
+    budget = DEEPEN_MAX_URLS
+    for i, res in enumerate(passthrough):
+        url = (res.get("url") or "").strip()
+        if not url:
+            continue                        # never citable; already dropped upstream
+        row = {"url": url, "rank": i + 1, "outlet": "", "outcome": "",
+               "detail": "", "chars": 0, "elapsed_s": 0.0}
+        rows[i] = row
+        if url in held:
+            # `build_source_map` mints no R key for these — the cluster key wins
+            # — so fetching one would buy a page nothing can cite.
+            row.update(outcome=DEEPEN_SKIP_HELD,
+                       detail="the cluster already holds this URL")
+            continue
+        shape = prose_unlikely(url)
+        if shape:
+            row.update(outcome=DEEPEN_SKIP_SHAPE, detail=shape)
+            continue
+        url_tier, label = tier_for_url(url, by_host)
+        row["outlet"] = label
+        if tier_allows_fetch(url_tier):
+            if budget <= 0:
+                row.update(outcome=DEEPEN_SKIP_BUDGET,
+                           detail=f"past DEEPEN_MAX_URLS={DEEPEN_MAX_URLS} "
+                                  "for this story (Sonar rank order)")
+                continue
+            budget -= 1
+        # Tier-excluded URLs are NOT filtered out here and do not spend budget:
+        # they go through `fetch_article`, which refuses them without opening a
+        # socket and writes the 2026-07-06 ruling into its own detail string.
+        # That refusal IS the receipt his ruling asked for.
+        plan.append((i, {"url": url, "source_name": label, "tier": url_tier}))
+
+    if plan:
+        records = fetch_cluster_articles(
+            [item for _, item in plan], robots=robots, fetch=fetch, sleep=sleep,
+            already_networked=already_networked)
+        by_url = {r.url: r for r in records}
+        for i, item in plan:
+            rec = by_url.get(item["url"])
+            if rec is None:                 # unreachable today (dedupe upstream)
+                continue
+            rows[i].update(outcome=rec.outcome, detail=rec.detail,
+                           chars=rec.chars, elapsed_s=rec.elapsed_s)
+            if rec.outcome == OK and rec.text:
+                # ONE FIELD MOVES. The clamp is the same constant the vendor
+                # snippet already carried, so what we HOLD and PERSIST keeps its
+                # bound, and what we RENDER was never bounded by it anyway.
+                passthrough[i]["snippet"] = rec.text[:SONAR_SNIPPET_MAX_CHARS]
+                passthrough[i]["deepened"] = True
+                rows[i]["chars"] = len(passthrough[i]["snippet"])
+    return passthrough, [rows[i] for i in sorted(rows)], warnings
+
+
+def deepen_stats(ledger: List[Dict]) -> Dict[str, int]:
+    """Counts over a DEEPEN ledger. `ok` = pages that yielded prose.
+
+    `attempted` COUNTS FETCH-LAYER OUTCOME ROWS, NOT SOCKETS — truthed here
+    after QA falsified the original "sockets opened" wording (2026-08-24, F-7).
+    The split it really makes is between decisions taken BEFORE the fetch layer
+    is asked (tier refusals and the DEEPEN_SKIP_* dispositions, excluded) and
+    rows the fetch layer itself returned (counted). Those are not the same set:
+    `fetch_cluster_articles` at :438 turns a non-http(s) URL into an ERROR
+    record with `attempted=False` and NO socket, and ERROR is in the tuple
+    below, so such a row reads as "attempted" here. Measured, not reasoned —
+    one `ftp://` URL on an unrecognised host yields
+    `{"considered": 4, "attempted": 3, "ok": 0, ...}` with exactly one
+    robots.txt GET on the whole ledger.
+
+    That URL also SPENDS A BUDGET SLOT: the budget is decremented at :3580 on
+    the tier verdict, which is taken before the scheme is ever inspected, so a
+    garbage-scheme result on an unknown host costs one of DEEPEN_MAX_URLS.
+    Base rate is zero — Sonar returns http(s) — and per gate R-4 the mechanics
+    ride a later touch rather than this ship.
+    """
+    attempted = sum(1 for r in ledger
+                    if r.get("outcome") in (OK, ROBOTS_DENIED, EMPTY, ERROR,
+                                            PAYWALL_SUSPECTED))
+    return {
+        "considered": len(ledger),
+        "attempted": attempted,
+        "ok": sum(1 for r in ledger if r.get("outcome") == OK),
+        "excluded": sum(1 for r in ledger
+                        if r.get("outcome") == TIER_EXCLUDED),
+        "chars": sum(int(r.get("chars") or 0) for r in ledger
+                     if r.get("outcome") == OK),
+    }
+
+
 def _cluster_items_for_slot(con: sqlite3.Connection, slot: Dict,
                             cfg) -> List[Dict]:
     ids = slot.get("item_ids") or []
@@ -3132,7 +3666,16 @@ def persist_brief(con: sqlite3.Connection, date: str, slot: int, tier: str,
     """Returns the brief row id. Retrieved material persists alongside
     (analysis_retrieval, fix-loop item 11): hand-traces — including the
     day-14 protocol's — must never depend on re-fetching a page that can
-    change or rot. ~15-40KB per brief at one-reader scale."""
+    change or rot.
+
+    SIZE, truthed 2026-08-24 (QA F-12): ~15-40KB per brief was measured on
+    briefs whose R# rows carry the vendor's <=303-char Sonar locator. A brief
+    the NL-127 DEEPEN lane FIRED on persists the fetched PAGES instead — QA
+    measured 1.2k-19k chars each, at most DEEPEN_MAX_URLS (3) per story — so a
+    deepened brief runs materially larger than that range. It is still bounded:
+    each substituted page is clamped to SONAR_SNIPPET_MAX_CHARS on the way in
+    (:3602), so the ceiling is the vendor snippet bound, not the page's own.
+    """
     doc = {"header": header, "brief": brief}
     with con:
         cur = con.execute(
@@ -3404,7 +3947,13 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
     sonar = sonar or _sonar_verify
 
     items = _cluster_items_for_slot(con, slot, cfg)
-    records = fetch_cluster_articles(items, fetch=fetch, sleep=sleep) if items else []
+    # NL-127: the robots cache is built HERE, not inside the cluster fetch, so
+    # DEEPEN's second pass over the same story reuses this story's verdicts
+    # instead of re-asking every host. It is the difference between paying NPR's
+    # measured 15.17s robots tarpit once and paying it twice.
+    robots = RobotsCache(fetch=fetch)
+    records = fetch_cluster_articles(items, robots=robots, fetch=fetch,
+                                     sleep=sleep) if items else []
     sa.fetch_attempted = sum(1 for r in records if r.attempted)
     sa.fetch_ok = sum(1 for r in records if r.outcome == OK)
 
@@ -3606,6 +4155,34 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         sa.shadow_usd += s_cost
         remaining_usd -= s_cost
 
+    # NL-127 DEEPEN — the R# lane, HIS RULING 2026-08-24. $0 in model spend; one
+    # GET per surviving URL, single attempt (Bucket-B: 34 retries rescued 0).
+    #
+    # PLACEMENT. Below rung 1, because DEEPEN's subject is the answers Sonar just
+    # returned and there is nothing to deepen before they exist — a skipped or
+    # empty Sonar leaves `sonar_results == []` and the call is a no-op by its own
+    # first line. Above `build_source_map`, because the R# key's `text` IS the
+    # thing DEEPEN changes and the map is where that key is minted; deepening
+    # after the map would mean rewriting a key the corpus and the material block
+    # have already been built from.
+    #
+    # WHAT IT CANNOT REACH FROM HERE, deliberately. `sa.fetch_ok` and
+    # `sa.fetch_attempted` were computed above the gates and are NOT recomputed:
+    # Gates A and B, the clause-4 systemic-failure verdict and the slot-3
+    # demotion all read those two counters, and a DEEPEN success quietly raising
+    # `fetch_ok` would move a reader-visible tier decision from a lane the
+    # principal never ruled on. DEEPEN's own counters live in their own ledger.
+    # `len(sonar_results)` is likewise invariant — the deepen call returns a list
+    # of the same length — so the `< 2` conjunct below decides exactly what it
+    # decided before.
+    held_chars = sum(r.chars for r in records if r.outcome == OK)
+    sonar_results, sa.deepen_ledger, deepen_warnings = deepen_sonar_results(
+        sonar_results, tier=tier, held_chars=held_chars, cfg=cfg,
+        cluster_urls=cluster_url_set(records, items), robots=robots,
+        fetch=fetch, sleep=sleep,
+        already_networked=bool(sa.fetch_attempted))
+    sa.warnings.extend(deepen_warnings)
+
     # NL-63 item 3: thread-scoped P-material. When this slot's threads carry a
     # record, P becomes the thread's OWN prior coverage (dated ledger + state),
     # replacing the two generic 4KB narrative dumps — the fix for Content's
@@ -3760,6 +4337,14 @@ def analyze_story(con: sqlite3.Connection, date: str, slot_no: int,
         "degraded": degraded,
         "model": ANALYSIS_MODEL,
     }
+    # NL-127 charter rider — the per-URL receipts, persisted BESIDE the aggregate
+    # rather than instead of it. `header.fetch` keeps the meaning every historical
+    # brief_json row carries; this key appears only on a brief whose story DEEPEN
+    # actually fired on, so no row's shape moves for a story it did not. No
+    # schema field and no migration: `analysis_briefs.brief_json` is a document.
+    if sa.deepen_ledger:
+        header["deepen"] = {"stats": deepen_stats(sa.deepen_ledger),
+                            "urls": sa.deepen_ledger}
     try:
         clean, warnings = validate_brief(raw, sources, tier, corpus,
                                          briefing_date=date)
@@ -4138,7 +4723,13 @@ def run_analysis(date: Optional[str] = None, con=None, env: Optional[dict] = Non
                 # the run's record can say WHICH prioritized story lost its
                 # full text without re-deriving a name from a slot number.
                 "story_title": sa.story_title,
-                "sonar": sa.sonar_status})
+                "sonar": sa.sonar_status,
+                # NL-127: the DEEPEN row in the RUN REPORT — the surface the
+                # principal reads after a generate. `null` on a story DEEPEN did
+                # not fire on ("never asked" is a different fact from "asked and
+                # got nothing"); the per-URL ledger rides the brief_json header.
+                "deepen": (deepen_stats(sa.deepen_ledger)
+                           if sa.deepen_ledger else None)})
             report["warnings"].extend(sa.warnings)
             if sa.fetch_attempted and not sa.fetch_ok:
                 report["warnings"].append(

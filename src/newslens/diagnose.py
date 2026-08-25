@@ -428,6 +428,20 @@ def run_diagnose(now_utc: Optional[datetime] = None) -> str:
             push(f"  extraction: {ok}/{att} attempted fetches ok "
                  f"({ok/att:.0%}) — the week-1 readout; <30% brings the "
                  "dep decision forward (pre-registered)")
+        # NL-127 DEEPEN — the R# lane's longitudinal readout. Absent until the
+        # lane has fired once, so a corpus of pre-NL-127 entries renders exactly
+        # as it did (`deepen` is null on a story the trigger did not fire on,
+        # and missing entirely on every historical row).
+        deeps = [s["deepen"] for s in stories if s.get("deepen")]
+        if deeps:
+            d_att = sum(d.get("attempted", 0) for d in deeps)
+            d_ok = sum(d.get("ok", 0) for d in deeps)
+            push(f"  deepen (R# lane): fired on {len(deeps)}/{len(stories)} "
+                 f"stories · {d_ok}/{d_att} Sonar URLs yielded prose"
+                 + (f" ({d_ok/d_att:.0%})" if d_att else "")
+                 + f" · {sum(d.get('chars', 0) for d in deeps)} chars bought at "
+                 f"$0 · {sum(d.get('excluded', 0) for d in deeps)} tier-excluded "
+                 "(2026-07-06 boundaries, never fetched)")
         cost = sum(e.get("total_usd") or 0 for e in analysis_entries)
         push(f"  analysis cost: ${cost:.4f} across {len(analysis_entries)} run(s)")
         der = sum(1 for e in analysis_entries if e.get("derating"))

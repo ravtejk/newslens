@@ -5218,6 +5218,13 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
                       "retrieved": "retrieved, via Sonar",
                       "prior-briefing": "prior NewsLens edition"}.get(
                           kind, kind)
+        # NL-127: a DEEPENed R row was read as a PAGE, not as the ≤303-char
+        # locator the vendor returned, and the reader is told which. The `kind`
+        # itself does not move — it is the discriminator `compute_prov_display`
+        # and `_cites_outlet_suffix` compare by equality — so this is a suffix on
+        # the LABEL only, and it appears on no row that was not deepened.
+        if s.get("deepened"):
+            kind_label += " — full text"
         # NL-58: a prior-edition source says WHICH edition and links to it
         # (openEdition — the same in-place open as the arc line; the href is
         # the no-JS fallback). Real prior-briefing rows carry an empty url and
