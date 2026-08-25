@@ -874,29 +874,30 @@ def test_the_off_arm_opens_no_socket_and_changes_no_byte(monkeypatch):
     assert out == given
 
 
-def test_the_lane_ships_inert():
-    """THE SHIPPED DEFAULT, pinned as a fact about the committed bytes (gate
-    R-1, 2026-08-24). This test takes no `armed` fixture — that is the point:
-    it reads the module constant as his tree carries it. NL-151 shipped OFF and
-    was armed later by his explicit word; DEEPEN does the same, so nothing in
-    this lane opens a socket on his next generate until he says so.
+def test_the_lane_runs_armed_on_his_word():
+    """THE SHIPPED DEFAULT, pinned as a fact about the committed bytes. Shipped
+    OFF at b5fcde5 per gate R-1 (the NL-151 ship-inert precedent), then ARMED
+    2026-08-25 by his explicit word ("arm deepen", DECISIONS same date) — the
+    exact sequence the precedent prescribes. This test still takes no `armed`
+    fixture — it reads the module constant as his tree carries it. Pre-flip,
+    the OFF form of this pin went red on the armed bytes (transcribed in the
+    arm commit's records); if the line ever moves again, this pin says so."""
+    assert analysis.DEEPEN_ARM == analysis.DEEPEN_ARM_ON
+    assert analysis.deepen_armed() is True
 
-    Arming is one line — `DEEPEN_ARM = DEEPEN_ARM_ON` at analysis.py:3218 —
-    plus one suite leg. If that line moves, this pin is what says so out loud."""
-    assert analysis.DEEPEN_ARM == analysis.DEEPEN_ARM_OFF
-    assert analysis.deepen_armed() is False
 
-
-def test_the_shipped_default_opens_no_socket_without_any_monkeypatch():
-    """§G's other half, and the one that matters for HIS morning: with NOTHING
-    patched — the module exactly as committed — a story that would otherwise
-    fire the lane produces no ledger, no warning and no socket."""
+def test_the_shipped_default_runs_the_lane_without_any_monkeypatch():
+    """§G's other half, re-aimed at the ARMED default (his 2026-08-25 word):
+    with NOTHING patched — the module exactly as committed — a story that
+    qualifies now RUNS the lane. The fetch seam is still the spy (the suite
+    stays hermetic; no real socket here), but the lane must reach it: calls
+    made, ledger written. The OFF form of this pin went red on the armed
+    bytes before this re-aim (transcribed in the arm commit's records)."""
     spy = FetchSpy()
     given = results("https://kyivindependent.com/a")
     out, ledger, warns = deepen(given, tier="full", held=0, fetch=spy)
-    assert spy.calls == []
-    assert (ledger, warns) == ([], [])
-    assert out == given
+    assert spy.calls != []
+    assert ledger != []
 
 
 # ===========================================================================

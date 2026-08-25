@@ -3215,7 +3215,11 @@ DEEPEN_ARM_OFF = "off"
 # suite leg. Every pin that exercises the lane arms itself explicitly (the
 # `armed` fixture in tests/test_nl127_deepen.py), so this default is the
 # shipped default in every test that does not ask for the other one.
-DEEPEN_ARM = DEEPEN_ARM_OFF
+# ARMED 2026-08-25 on his word ("arm deepen", DECISIONS same date) — the one
+# line the inert ship was built for. From this commit his generates open ~2
+# real $0 GETs/edition on trigger-firing stories (honest UA, robots-honored,
+# single attempt, receipts in the brief header + generation_log + deep view).
+DEEPEN_ARM = DEEPEN_ARM_ON
 
 # Network attempts per fired story. Bucket-B's OK fetches ran 1,254–19,368 chars
 # (median ~3,300), so three pages is ~10k chars of prose against a story that
