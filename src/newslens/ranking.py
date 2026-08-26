@@ -1476,6 +1476,30 @@ def _call_llm_validated(
             last_error = f"malformed LLM output ({exc})"
             next_prompt = prompt + "\n\n" + RETRY_CORRECTION
         except Exception as exc:  # timeout / connection — network-shaped
+            # NL-160 — THE AUTH CARVE-OUT. Everything else this arm catches is
+            # plausibly transient, which is what earns it a retry. An un-authed
+            # `claude -p` is not: attempt 2 re-sends the same bytes to the same
+            # expired session and fails identically one backoff later. This is
+            # the site that actually bit — all five 2026-08-24 failure rows are
+            # the `rank` seat, each burning ~35-41s on two doomed attempts.
+            if isinstance(exc, llm.SubscriptionAuthError):
+                auth_err = RankingError(
+                    f"the rank seat cannot authenticate: {exc} — no briefing "
+                    "row was written, and no retry was attempted because this "
+                    "failure class cannot succeed on one (this failure is logged)"
+                )
+                # THE LEDGER MUST SURVIVE THIS RAISE TOO (NL-160 gate R-6).
+                # Leaving the loop early skips the post-loop stamping twenty
+                # lines below, and run_rank reads the ledger OFF THE EXCEPTION
+                # (`getattr(exc, "llm_attempts", None)` at the log_failed_run
+                # call) — so an attempt 1 that BILLED before the session expired
+                # mid-run would vanish from ranking_runs.meta, against this
+                # function's own docstring ("On total failure the raised
+                # RankingError carries the ledger as `.llm_attempts`"). Same
+                # line, same reason, as the post-loop stamping: run 28 spent
+                # real money and logged token_usage NULL.
+                auth_err.llm_attempts = cost_sink or []
+                raise auth_err from exc
             last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
         if attempt == 1:
             time.sleep(backoff)

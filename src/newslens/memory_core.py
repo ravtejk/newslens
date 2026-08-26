@@ -1217,6 +1217,21 @@ def validate_arc_line(arc_line: str, state_text: str,
     return text, warnings
 
 
+# NL-160 — THE TWO MARKERS THE RECORD IS READ BY. Every arc outcome this module
+# reaches lands in a state_rewrite `detail` string, and from there in
+# generation_log.jsonl; the doctor's live arc-continuity check (doctor.py) counts
+# editions by looking for exactly these two substrings.
+#
+# THEY ARE CONSTANTS SO THE READER CANNOT GO BLIND SILENTLY. Retyping the phrases
+# in the detector would mean a future reword here leaves the doctor reporting a
+# healthy streak forever — a monitor that says "fine" because it stopped
+# recognising the thing it watches, which is the 2026-08-24 defect class exactly
+# (the doctor passed green through an outage it had no probe for). One string,
+# one writer, one reader.
+ARC_AUTHORED_MARK = "arc line authored"
+ARC_OMITTED_MARK = "arc omitted this edition (absence, §B)"
+
+
 # The ONE corrected retry (the ranking/script house pattern — a focused
 # correction turn, not a blind re-POST). Code-level correction constant like
 # ranking.RETRY_CORRECTION; the retry keeps the ACCEPTED state and re-asks ONLY
@@ -1312,7 +1327,7 @@ def _author_arc_line(raw, state_text: str, anchor_iso: str, chat, openai_key: st
         # miss worth a warn — no retry (the paid retry stays reserved for the
         # garbage case), never a block.
         return "", ("model authored no arc_line for an arc-eligible thread — "
-                    "arc omitted this edition (absence, §B)"), 0.0, 0.0
+                    f"{ARC_OMITTED_MARK}"), 0.0, 0.0
     try:
         arc, _w = validate_arc_line(candidate, state_text, anchor_iso)
         return arc, "", 0.0, 0.0
@@ -1350,8 +1365,8 @@ def _author_arc_line(raw, state_text: str, anchor_iso: str, chat, openai_key: st
         # attempt-1 text; the retry text rides only when the model actually
         # returned one (transport failure / non-string leaves cand2 None).
         detail = (f"arc line rejected ({first_reason}); corrected retry did not "
-                  f"recover ({type(second).__name__}: {second}) — arc omitted "
-                  f"this edition (absence, §B); "
+                  f"recover ({type(second).__name__}: {second}) — "
+                  f"{ARC_OMITTED_MARK}; "
                   f"attempt-1 candidate: {_fmt_arc_candidate(candidate)}")
         if isinstance(cand2, str) and cand2.strip():
             detail += f"; retry candidate: {_fmt_arc_candidate(cand2)}"
@@ -1443,6 +1458,15 @@ def _default_state_chat(key: str, prompt: str) -> Tuple[Dict, float, float]:
             return json.loads(choice["message"]["content"]), total, total_shadow
         except Exception as exc:  # noqa: BLE001 — one retry for the whole class
             last = exc
+            # NL-160 — THE AUTH CARVE-OUT, and `break` is load-bearing here.
+            # Falling out of the loop keeps the BUG-32 block below on the path,
+            # so a first attempt that billed before the session expired still
+            # rides its spend out on the exception; a `raise` from inside the
+            # loop would skip that stamping and re-open the money-honesty hole.
+            # What is skipped is only attempt 2, which cannot authenticate when
+            # attempt 1 could not.
+            if isinstance(exc, llm.SubscriptionAuthError):
+                break
             if attempt == 1:
                 time.sleep(1.0)
     # BUG-32: both attempts may have billed real usage before failing (e.g. the
@@ -1607,7 +1631,7 @@ def rewrite_state(con: sqlite3.Connection, thread_id: int, topic: str,
         detail = ("; ".join(warnings) if warnings else
                   f"{len(_sentences(clean))} sentence(s), {len(cites)} edition cite(s)")
         if arc_line:
-            detail += "; arc line authored"
+            detail += f"; {ARC_AUTHORED_MARK}"
         elif arc_warn:
             detail += f"; {arc_warn}"
         res.detail = detail

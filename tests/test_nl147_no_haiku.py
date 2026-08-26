@@ -51,6 +51,7 @@ guard is testing the test. Both rewrites are in section 2.
 from __future__ import annotations
 
 import dataclasses
+from types import SimpleNamespace
 
 import pytest
 
@@ -248,12 +249,30 @@ def _doctor_surfaces(tmp_path):
     surfaces = {
         "anthropic-key (keyless)": doctor.check_anthropic_key({}),
         "llm lanes": doctor.check_llm_lanes(sandbox_bin_env()),
-        "subscription probe design": doctor.check_subscription_lane(
-            {"NEWSLENS_CLAUDE_BIN": bin_path,
-             "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE": "1"}),
+        # NL-160: the probe FIRES now, so this surface is rendered with the live
+        # seam stubbed. Not merely tidiness — spawning a child to read prose is
+        # how a suite drifts toward doing the very thing the opt-in exists to
+        # gate. The seam's own behaviour is pinned in the B3 QA file.
+        "subscription probe (opt-in, seam stubbed)": _with_probe_stubbed(
+            lambda: doctor.check_subscription_lane(
+                {"NEWSLENS_CLAUDE_BIN": bin_path,
+                 "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE": "1"})),
     }
     return {label: [r.text.replace(bin_path, "<claude>") for r in results]
             for label, results in surfaces.items()}
+
+
+def _with_probe_stubbed(render):
+    """Render a doctor surface with the live `claude -p` seam replaced. No
+    monkeypatch fixture here on purpose: `_doctor_surfaces` is called from
+    helpers that do not take one, and the swap is restored in a finally."""
+    real = doctor._run_auth_probe
+    doctor._run_auth_probe = lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout='{"type": "result", "is_error": false}', stderr="")
+    try:
+        return render()
+    finally:
+        doctor._run_auth_probe = real
 
 
 def test_the_doctor_names_no_haiku_model_on_any_surface(tmp_path, no_network):
@@ -300,11 +319,22 @@ def test_the_doctor_reads_its_seat_map_off_the_table(model, cheapest, tmp_path,
         "the lane-map summary did not follow the seat table — it is hand-typed "
         "prose again, and it will go stale the next time a seat moves")
 
-    probe = " ".join(r.text for r in doctor.check_subscription_lane(
+    # NL-160 RE-AIM, and it strengthens this pin rather than relaxing it. The
+    # probe used to PRINT a recommended command, so the only thing available to
+    # assert was its prose. It now FIRES, so the model is an argv element in a
+    # real invocation — assert the seam was actually called with the derived
+    # model. Prose can go stale quietly; an argv cannot.
+    called = []
+    monkeypatch.setattr(doctor, "_run_auth_probe",
+                        lambda bin_path, m: called.append(m) or SimpleNamespace(
+                            returncode=0, stdout='{"is_error": false}',
+                            stderr=""))
+    doctor.check_subscription_lane(
         {"NEWSLENS_CLAUDE_BIN": _claude_stub(tmp_path),
-         "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE": "1"}))
-    assert f"--model {cheapest}" in probe, (
-        "the auth-probe design named a model the seat table does not carry")
+         "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE": "1"})
+    assert called == [cheapest], (
+        "the auth probe fired with a model the seat table does not carry — "
+        f"called {called!r}, seat table says {cheapest!r}")
     assert no_network == []
 
 

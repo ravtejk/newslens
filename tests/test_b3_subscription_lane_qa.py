@@ -1117,12 +1117,20 @@ def test_doctor_subscription_section_missing_binary_fails_naming_both_fixes(
 
 def test_doctor_subscription_section_spawns_only_version_never_p(
         tmp_path, monkeypatch):
-    """The no-spend law, mechanically: every subprocess the section runs is
-    `<bin> --version` — never `-p` (a -p invocation would spend subscription
-    quota). The probe flag prints its design as a WARN and STILL does not
-    fire. Recorder delegates to the real run so the section's version parse
-    is exercised against a live child (the scripted stub, never the real
-    CLI)."""
+    """The no-spend law, mechanically: on the DEFAULT path every subprocess the
+    section runs is `<bin> --version` — never `-p` (a -p invocation would spend
+    subscription quota). Recorder delegates to the real run so the section's
+    version parse is exercised against a live child (the scripted stub, never
+    the real CLI).
+
+    RE-AIMED AT NL-160, and the re-aim makes the pin stronger, not weaker. Its
+    old wording — "the probe flag prints its design as a WARN and STILL does not
+    fire" — pinned an UNBUILT feature: it asserted that the doctor could not see
+    auth state, and it passed happily through the whole 2026-08-24 outage that
+    blindness caused. The law it was really protecting is "the DEFAULT doctor
+    never spends"; that law is unchanged and pinned here and (structurally) in
+    the seam test below. What moved is only that the opt-in now fires, which the
+    principal ruled on 2026-08-24."""
     stub = make_scripted_stub(tmp_path / "shim", [{}],
                               version="2.1.212 (QA doctor stub)")
     spawned = []
@@ -1139,15 +1147,137 @@ def test_doctor_subscription_section_spawns_only_version_never_p(
     assert statuses[0] == doctor.INFO and "resolved via env" in results[0].text
     assert doctor.PASS in statuses                 # 2.1.212 >= the effort floor
     assert any("auth NOT probed" in r.text for r in results)
-    # probe flag: designed, printed, NOT fired
-    results2 = doctor.check_subscription_lane(
-        dict(env, NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE="1"))
-    assert any(r.status == doctor.WARN and "NOT fired" in r.text
-               for r in results2)
+    # Render the DEFAULT section a second time: still no -p, still no spend.
+    doctor.check_subscription_lane(dict(env))
     for argv in spawned:
         assert argv[1:] == ["--version"], argv
         assert "-p" not in argv
     assert len(spawned) == 2                       # one per section render
+
+
+def test_doctor_probe_is_the_only_door_a_live_call_leaves_by(
+        tmp_path, monkeypatch):
+    """NL-160 — THE DEFAULT-PATH GUARANTEE, structural rather than textual.
+
+    `_run_auth_probe` is the single named seam a live `claude -p` can leave this
+    process through. Replace it with a recorder and assert it is never reached
+    without the opt-in — the no-spend-by-default claim proven at the one door,
+    not inferred from argv strings at every call site."""
+    stub = make_scripted_stub(tmp_path / "shim", [{}],
+                              version="2.1.212 (QA doctor stub)")
+    fired = []
+
+    def recorder(*a, **k):
+        fired.append(a)
+        return SimpleNamespace(
+            returncode=0, stdout='{"type": "result", "is_error": false}',
+            stderr="")
+
+    monkeypatch.setattr(doctor, "_run_auth_probe", recorder)
+    env = {"NEWSLENS_CLAUDE_BIN": str(stub)}
+
+    # Every falsy / near-miss spelling of the opt-in leaves the door shut.
+    # STRICT "1" after .strip() is the house rule (config's opt-in precedent).
+    for value in (None, "", "0", "true", "yes", "on", "01", "  "):
+        probe_env = dict(env)
+        if value is not None:
+            probe_env["NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE"] = value
+        results = doctor.check_subscription_lane(probe_env)
+        assert fired == [], f"the live probe fired on flag={value!r}"
+        assert any("auth NOT probed" in r.text for r in results)
+
+    # ...and a whitespace-padded "1" opens it, exactly like the lane's twin.
+    doctor.check_subscription_lane(
+        dict(env, NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=" 1 "))
+    assert len(fired) == 1, "the opt-in did not reach the live seam"
+
+
+@pytest.mark.parametrize("returncode,stdout,expect_status,expect_text", [
+    # Authed: exit 0, envelope without is_error.
+    (0, json.dumps({"type": "result", "is_error": False, "result": "ok"}),
+     doctor.PASS, "LOGGED IN"),
+    # THE 2026-08-24 CLASS: auth failure reported on STDOUT, exit 1.
+    (1, json.dumps({"type": "result", "is_error": True,
+                    "result": "Failed to authenticate: OAuth session expired."}),
+     doctor.FAIL, "NOT authenticated"),
+    # is_error with exit 0 — the other arm, same verdict.
+    (0, json.dumps({"type": "result", "is_error": True,
+                    "result": "Invalid API key - please run claude login"}),
+     doctor.FAIL, "NOT authenticated"),
+    # A failure that is NOT auth proves neither login nor its absence.
+    (1, json.dumps({"type": "result", "is_error": True,
+                    "result": "disk quota exceeded"}),
+     doctor.WARN, "inconclusive"),
+])
+def test_doctor_probe_verdicts(returncode, stdout, expect_status, expect_text,
+                               tmp_path, monkeypatch):
+    """NL-160 — the fired probe's verdicts. BORN RED at 9107699, where the only
+    reachable outcome was a WARN saying the probe had NOT been fired.
+
+    The FAIL rows are the ones that matter: that envelope is what the CLI
+    actually returned on 2026-08-24 (is_error on stdout, stderr empty) — the
+    outage this batch exists for, on a machine the doctor called healthy."""
+    stub = make_scripted_stub(tmp_path / "shim", [{}],
+                              version="2.1.212 (QA doctor stub)")
+    proc = SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+    monkeypatch.setattr(doctor, "_run_auth_probe", lambda *a, **k: proc)
+    results = doctor.check_subscription_lane(
+        {"NEWSLENS_CLAUDE_BIN": str(stub),
+         "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE": "1"})
+    line = next(r for r in results if "auth probe" in r.text)
+    assert line.status == expect_status, line.text
+    assert expect_text in line.text, line.text
+
+
+def test_doctor_probe_reports_a_seam_that_could_not_run(tmp_path, monkeypatch):
+    """A probe that raises (timeout / OSError) is a FAIL carrying the reason —
+    never an exception out of the doctor, and never a silent pass. The seats
+    would hit the same wall, so the doctor says so."""
+    stub = make_scripted_stub(tmp_path / "shim", [{}],
+                              version="2.1.212 (QA doctor stub)")
+
+    def boom(*a, **k):
+        raise doctor.subprocess.TimeoutExpired(cmd="claude", timeout=60)
+
+    monkeypatch.setattr(doctor, "_run_auth_probe", boom)
+    results = doctor.check_subscription_lane(
+        {"NEWSLENS_CLAUDE_BIN": str(stub),
+         "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE": "1"})
+    line = next(r for r in results if "auth probe" in r.text)
+    assert line.status == doctor.FAIL
+    assert "could not run" in line.text and "TimeoutExpired" in line.text
+
+
+def test_doctor_probe_child_inherits_the_lanes_own_no_api_key_guarantee(
+        monkeypatch):
+    """NL-160 — the $0 guarantee, pinned at the seam itself.
+
+    The probe is an auth check on the SUBSCRIPTION lane. If ANTHROPIC_API_KEY
+    reached the child, `claude -p` could answer over the metered API and turn a
+    free health check into a billed call. The seam is built from the lane's own
+    `_subscription_env`, so the key is stripped — this proves that wiring rather
+    than trusting the comment, and it is the pin that bites if a future edit
+    retypes the child env inline."""
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"] = list(args)
+        seen["env"] = dict(kwargs.get("env") or {})
+        seen["input"] = kwargs.get("input")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-never-ride")
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+    doctor._run_auth_probe("/fake/claude", "claude-sonnet-5")
+
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
+    assert not any("sk-ant-should-never-ride" in v
+                   for v in seen["env"].values())
+    assert seen["input"] == "ok", "the probe must send a 1-token prompt"
+    # Built from the LANE's constants, never retyped here.
+    flags = list(llm._SUBSCRIPTION_BASE_FLAGS)
+    assert seen["args"][1:1 + len(flags)] == flags
+    assert seen["args"][-2:] == ["--model", "claude-sonnet-5"]
 
 
 def test_doctor_subscription_section_no_sub_seats_is_info_no_spawn(

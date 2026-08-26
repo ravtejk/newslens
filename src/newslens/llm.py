@@ -786,6 +786,154 @@ class LaneUnavailable(RuntimeError):
     Fail-loud by ruling — the message names the exact fix."""
 
 
+class SubscriptionAuthError(RuntimeError):
+    """The `claude -p` CLI reported an AUTH-class failure: the logged-in session
+    is expired, absent, or rejected (NL-160, from the 2026-08-24 outage).
+
+    A RuntimeError SUBCLASS on purpose. Every existing caller catches this lane's
+    failures as transport-shaped (`except Exception`, or RuntimeError) and must go
+    on catching this one unchanged — the subclass adds no new escape, it adds a
+    QUESTION the callers' retry loops can now ask. Because this is the one
+    transport failure a retry can never fix: re-sending the same bytes to the same
+    un-authed CLI fails identically, one backoff later. Measured on the record —
+    five interactive generates on 2026-08-24, each burning ~35-41s on two doomed
+    attempts, every one of them already lost at attempt 1."""
+
+
+# The auth-class markers, matched case-insensitively against the CLI's own failure
+# text. Deliberately SHORT and specific: this predicate decides whether a failure
+# is retried at all, so a loose marker ("error", "failed") would quietly disarm
+# the one-retry law for the whole transport class — the expensive direction of the
+# drift. "Failed to authenticate: OAuth session expired" is the string measured
+# live on 2026-08-24; the rest are the CLI's neighbouring auth phrasings.
+_AUTH_FAILURE_MARKERS: Tuple[str, ...] = (
+    "failed to authenticate",
+    "oauth session expired",
+    "oauth token expired",
+    "session expired",
+    "not logged in",
+    "please log in",
+    "claude login",
+    "authentication_error",
+    "invalid api key",
+    "unauthorized",
+)
+
+# The fix, in the failure's own message. An auth failure is the one lane error the
+# principal can clear himself in ten seconds, and the message is where he will be
+# standing when he needs to know that.
+AUTH_FIX_HINT = (
+    "the logged-in `claude` session is expired or absent, so a retry cannot help "
+    "— run `claude` once interactively to log in (SETUP.md), or flip the seat to "
+    "its api fall-over (NEWSLENS_LANE_<SEAT>=api, needs ANTHROPIC_API_KEY)"
+)
+
+
+# WHERE a failure detail was read from — and the source is not decoration, it
+# decides whether that text is allowed to answer the auth question at all
+# (NL-160 gate R-5). The envelope and stderr are the CLI's own diagnostic
+# channels: text there is the CLI SPEAKING ABOUT ITSELF. Raw stdout is the
+# fallback for a CLI that produced neither, so it is where a TRUNCATED envelope's
+# model PROSE lands — and prose about, say, unauthorized access to a network is
+# ordinary vocabulary for a news product. Classifying that as an auth failure
+# would take away the retry the one-retry law owes a genuinely transient crash:
+# the expensive direction of this rule's drift, and the reason the classifier's
+# input is narrowed rather than its marker list.
+DETAIL_FROM_ENVELOPE = "envelope"
+DETAIL_FROM_STDERR = "stderr"
+DETAIL_FROM_STDOUT = "stdout"
+DETAIL_FROM_NOTHING = "none"
+
+# The only two sources the classifier may read. The other two stay MESSAGE-ONLY:
+# they are still printed verbatim (an honest detail beats a blank — that is the
+# whole of defect ①), they simply never decide whether a retry happens.
+_CLASSIFIABLE_DETAIL_SOURCES: Tuple[str, ...] = (DETAIL_FROM_ENVELOPE,
+                                                 DETAIL_FROM_STDERR)
+
+
+def is_auth_failure_text(text: str) -> bool:
+    """Does this CLI failure text name an AUTH-class failure?
+
+    ONE implementation, two readers (the single-validator rule): the transport
+    below reaches its raise through this table, and the doctor's live probe
+    reaches its verdict through the same one. Two copies of it would drift, and
+    the drift that matters is a doctor reporting "logged in" about a machine
+    whose pipeline cannot authenticate — which is exactly the 2026-08-24 failure
+    (the doctor ran green through the whole outage).
+
+    TEXT ONLY — this predicate does not know where the text came from, so it is
+    not the WHOLE rule either reader acts on: both call `is_auth_failure_detail`,
+    which adds the source restriction above. Kept public and separate because the
+    marker table is the half worth testing and mutating on its own."""
+    low = (text or "").lower()
+    return any(marker in low for marker in _AUTH_FAILURE_MARKERS)
+
+
+def is_auth_failure_detail(detail: str, source: str) -> bool:
+    """The auth question as the transport and the doctor are ALLOWED to ask it:
+    the marker table, but only against text the CLI itself wrote (NL-160 gate
+    R-5).
+
+    The accepted residual, stated so a future reader does not "fix" it: a CLI
+    that reported an auth rejection ONLY as bare non-JSON stdout would fall
+    through to one wasted retry — the pre-NL-160 status quo, and the detail it
+    prints is still honest. That is the cheap direction. The direction this
+    guard closes is the expensive one."""
+    return (source in _CLASSIFIABLE_DETAIL_SOURCES
+            and is_auth_failure_text(detail))
+
+
+def subscription_failure_parts(stdout: str, stderr: str,
+                               limit: int = 200) -> Tuple[str, str]:
+    """(detail, source) — THE ONE WALKER over a failed `claude -p`'s output.
+
+    `claude -p --output-format json` reports its OWN failures on STDOUT, inside
+    the result envelope ({"type":"result","is_error":true,"result":"Failed to
+    authenticate: ..."}), and leaves stderr EMPTY. So interpolating stderr alone —
+    which is what this lane did until NL-160 — prints a BLANK for the
+    production-likeliest failure there is. On the record five times over
+    (generation_log.jsonl, 2026-08-24): "claude -p (rank) exited 1:  — no briefing
+    row was written", the diagnosis sitting unread in the envelope the whole time.
+
+    Order: the envelope's own text, then stderr, then raw stdout, then an explicit
+    statement that there was nothing to read. Never a blank — a failure message
+    that says nothing is the defect this function exists to close.
+
+    SOURCE RIDES WITH THE TEXT, and one function returns both, because the
+    alternative is a second envelope parser somewhere else asking "was that the
+    envelope?" — and two walkers over the same bytes is how a classifier and a
+    message start disagreeing about what the CLI said."""
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        payload = None
+    if isinstance(payload, dict):
+        for field in ("result", "error", "message"):
+            value = payload.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:limit], DETAIL_FROM_ENVELOPE
+            # {"error": {"message": ...}} — the API-shaped nesting.
+            if isinstance(value, dict):
+                inner = value.get("message")
+                if isinstance(inner, str) and inner.strip():
+                    return inner.strip()[:limit], DETAIL_FROM_ENVELOPE
+    for raw, source in (((stderr or "").strip(), DETAIL_FROM_STDERR),
+                        ((stdout or "").strip(), DETAIL_FROM_STDOUT)):
+        if raw:
+            return raw[:limit], source
+    return "no output on stdout or stderr", DETAIL_FROM_NOTHING
+
+
+def subscription_failure_detail(stdout: str, stderr: str,
+                                limit: int = 200) -> str:
+    """The detail alone — `subscription_failure_parts` without the source.
+
+    A one-line delegation, NOT a second reader: every caller that only prints
+    the text keeps its old signature, and no second copy of the walk exists to
+    drift from the first."""
+    return subscription_failure_parts(stdout, stderr, limit)[0]
+
+
 # ---------------------------------------------------------------------------
 # OpenAI provider (the only lane registered in B1)
 # ---------------------------------------------------------------------------
@@ -1526,7 +1674,10 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
     cwd is a fresh empty scratch dir removed after the call; the env is the
     stripped allowlist. is_error / non-zero exit / non-JSON stdout are
     transport-shaped (RuntimeError -> the caller retries the ORIGINAL bytes
-    once, same law as a 5xx); a timeout SIGKILLs the child (subprocess.run) and
+    once, same law as a 5xx) — EXCEPT the auth class, which raises the
+    SubscriptionAuthError subclass so the callers' retry loops can decline a
+    second attempt that provably cannot succeed (NL-160); a timeout SIGKILLs the
+    child (subprocess.run) and
     surfaces as TimeoutError (also transport-shaped). LaneRequest.api_key /
     .url (the openai offline-test seam) are IGNORED — this lane owns its own
     auth (the logged-in CLI) and never makes an HTTP call of its own."""
@@ -1579,10 +1730,17 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"claude -p ({cfg.seat}) exited {proc.returncode}: "
-            f"{(proc.stderr or '').strip()[:200]}"
-        )
+        # NL-160: read the ENVELOPE, not just stderr. The CLI puts its own
+        # diagnosis on stdout and leaves stderr empty, so the old stderr-only
+        # interpolation printed a blank on the failure class that actually fires.
+        # The SOURCE rides along because only the CLI's own channels (envelope,
+        # stderr) may decide the auth question — see is_auth_failure_detail.
+        detail, detail_source = subscription_failure_parts(proc.stdout,
+                                                           proc.stderr)
+        message = f"claude -p ({cfg.seat}) exited {proc.returncode}: {detail}"
+        if is_auth_failure_detail(detail, detail_source):
+            raise SubscriptionAuthError(f"{message} — {AUTH_FIX_HINT}")
+        raise RuntimeError(message)
     try:
         payload = json.loads(proc.stdout)
     except (ValueError, TypeError) as exc:
@@ -1591,10 +1749,23 @@ def _subscription_provider(req: LaneRequest) -> LaneResponse:
             f"({proc.stdout[:120]!r})"
         ) from exc
     if not isinstance(payload, dict) or payload.get("is_error"):
-        raise RuntimeError(
-            f"claude -p ({cfg.seat}) reported an error result: "
-            f"{str(payload.get('result') if isinstance(payload, dict) else payload)[:200]}"
-        )
+        if isinstance(payload, dict):
+            detail = str(payload.get("result"))[:200]
+            detail_source = DETAIL_FROM_ENVELOPE
+        else:
+            # Valid JSON that is NOT the result envelope (a bare string, a list)
+            # is not the CLI diagnosing itself — it is raw stdout that happened
+            # to parse. Message-only, same rule as unparseable stdout.
+            detail = str(payload)[:200]
+            detail_source = DETAIL_FROM_STDOUT
+        message = f"claude -p ({cfg.seat}) reported an error result: {detail}"
+        # NL-160: the SAME classification as the non-zero-exit arm above. An
+        # auth failure the CLI chooses to report with exit 0 + is_error=true is
+        # the same un-retryable failure; which arm catches it is the CLI's
+        # business, not a reason to retry one and not the other.
+        if is_auth_failure_detail(detail, detail_source):
+            raise SubscriptionAuthError(f"{message} — {AUTH_FIX_HINT}")
+        raise RuntimeError(message)
     result = payload.get("result") or ""
     # DEF-A (2026-07-17): on json_mode requests, extract the JSON object from the
     # `claude -p` agentic-harness output (fenced / preambled / verbose prose) so

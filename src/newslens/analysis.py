@@ -3007,6 +3007,15 @@ def call_analysis_model(key: str, prompt: str) -> Tuple[Dict, float, float]:
                         total_charged, total_shadow)
             except Exception as exc:  # noqa: BLE001 — one retry for the whole class
                 last = exc
+                # NL-160 — THE AUTH CARVE-OUT. `break`, not `raise`: this loop's
+                # contract is that the caller sees the ORIGINAL exception via
+                # `raise last` below, and breaking keeps every post-loop step on
+                # the path (its memory_core twin stamps accrued spend onto the
+                # exception there — escaping the loop by `raise` would silently
+                # drop it). All this changes is that attempt 2, which cannot
+                # succeed against an expired session, never runs.
+                if isinstance(exc, llm.SubscriptionAuthError):
+                    break
                 if attempt == 1:
                     time.sleep(1.0)
         raise last

@@ -826,6 +826,18 @@ def call_llm(key: str, prompt: str, step: str, max_tokens: int,
             except Exception as exc:  # timeout / connection — network-shaped
                 # transport, not the model's doing: the retry re-sends ORIGINAL
                 # bytes (next_prompt stays `prompt` — no correction).
+                # NL-160 — THE AUTH CARVE-OUT (the ranking.py twin). Re-sending
+                # ORIGINAL bytes is exactly the wrong move for an expired
+                # session: identical bytes, identical CLI, identical failure one
+                # backoff later. The editor/script/writer steps all sit on the
+                # subscription lane, so this arm can carry it.
+                if isinstance(exc, llm.SubscriptionAuthError):
+                    raise GenerateError(
+                        f"{step} cannot authenticate: {exc} — nothing was "
+                        "written, and no retry was attempted because this "
+                        "failure class cannot succeed on one (this failure is "
+                        "logged)"
+                    ) from exc
                 last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
             if attempt == 1:
                 time.sleep(backoff)

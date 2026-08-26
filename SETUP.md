@@ -109,11 +109,28 @@ default path:
    default just works. Set `NEWSLENS_CLAUDE_BIN=/full/path/to/claude` in `.env`
    only if you install it elsewhere.
 4. **Verify:** `scripts/doctor` prints a "Subscription lane (claude -p)" section
-   — which binary resolved, the CLI version, and an "auth NOT probed" note. The
-   doctor does **not** spend your quota; to confirm you're logged in, either run
-   `claude` interactively once, or opt into the documented live probe with
-   `NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1` (it prints the recommended one-token
-   probe shape and reminds you it would spend quota — it still does not fire).
+   — which binary resolved, the CLI version, and an "auth NOT probed" note. By
+   default the doctor does **not** spend your quota, and it is worth knowing
+   exactly what that costs you: the binary and version checks both pass on a
+   machine whose CLI is *logged out*, so a green section is not proof of login.
+
+   To actually prove login, fire the live probe:
+
+   ```
+   NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1 scripts/doctor
+   ```
+
+   It sends one 1-token prompt (`ok`) through the same flags and the same
+   stripped child env the real lane uses, and reports one of three things:
+   **logged in** (costs a single token of quota), **NOT authenticated** (costs
+   nothing — there is no session to bill — and prints the fix), or
+   **inconclusive** (the call failed for something that is not an auth
+   rejection, so login state is still unproven). `ANTHROPIC_API_KEY` is stripped
+   from the probe's child process, so this check can never quietly become a
+   metered API call.
+
+   Worth running whenever generates start failing: an expired login is what took
+   the pipeline down on 2026-08-24, and it now says so by name.
 
 ### 2c-alt. ANTHROPIC_API_KEY (the API fall-over credential)
 

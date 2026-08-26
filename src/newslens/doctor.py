@@ -59,6 +59,12 @@ PERPLEXITY_TIMEOUT_S = 20
 # runs (rank/editor/script send no effort), but effort-bearing seats can't map.
 CLAUDE_VERSION_FLOOR = (2, 1, 205)
 CLAUDE_VERSION_TIMEOUT_S = 10
+# NL-160: the OPT-IN live auth probe's own window. Wider than --version because
+# this one pays CLI startup + the agentic harness (the same tax that forced the
+# lane's separate timeout_sub_s), and far tighter than any seat's, because the
+# probe's whole prompt is the word "ok". An auth REJECTION comes back in about a
+# second — the window is sized for the healthy case, not the failing one.
+CLAUDE_PROBE_TIMEOUT_S = 60
 FEED_TIMEOUT_S = 15  # WaPo's feeds measured 8-10s in the M2 sweep — headroom
 USER_AGENT = "NewsLens-doctor/0.1 (personal prototype; one-user health check)"
 
@@ -1303,6 +1309,46 @@ def _parse_claude_version(text: str) -> Tuple[int, ...]:
     return tuple(int(g) for g in m.groups()) if m else ()
 
 
+def _run_auth_probe(bin_path: str, model: str) -> subprocess.CompletedProcess:
+    """THE LIVE HALF of the opt-in auth probe (NL-160) — the only place in the
+    doctor that starts a real model call.
+
+    A NAMED module-level seam rather than an inline `subprocess.run`, and the name
+    is the point: this is the single door a live `claude -p` can leave this
+    process through, so it is the single door a test patches to exercise the
+    verdict logic without spawning, and the single door a reader must audit to
+    believe "the default doctor never spends".
+
+    THE CHILD IS THE LANE'S OWN CHILD. Same base flags, same env allowlist, built
+    from `llm`'s constants rather than retyped here — so the probe proves what the
+    pipeline will actually do, and inherits the lane's guarantees rather than
+    approximating them. The one that matters most: `_subscription_env` strips
+    ANTHROPIC_API_KEY, so a machine that happens to carry an API key cannot turn
+    this $0 subscription auth check into a metered API call. Retyping the flags
+    here would be a second copy of a money-shaped rule — the exact defect class
+    `llm.is_auth_failure_detail` (and the single walker it reads) exists as one
+    implementation to avoid.
+
+    Cost: the prompt is the word "ok". A rejection spends nothing at all (there is
+    no session to bill); a success spends a single token of subscription quota,
+    which is why the probe stays opt-in."""
+    scratch = tempfile.mkdtemp(prefix="newslens-doctor-probe-")
+    try:
+        return subprocess.run(
+            [bin_path, *llm._SUBSCRIPTION_BASE_FLAGS, "--model", model],
+            input="ok",
+            cwd=scratch,
+            # os.environ, not the doctor's `env` mapping: the CLI finds its own
+            # subscription auth through HOME, which lives in the process env and
+            # not in .env. The allowlist is what makes that safe.
+            env=llm._subscription_env(dict(os.environ)),
+            capture_output=True, text=True, timeout=CLAUDE_PROBE_TIMEOUT_S,
+        )
+    finally:
+        import shutil
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
     """The `claude -p` subscription lane (B3): binary resolution + version, for
     the seats that resolve to the subscription lane under the current config
@@ -1314,8 +1360,11 @@ def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
     fix (those seats can't run their default lane). `claude --version` is
     recorded (read-only: no prompt, no spend) and checked against the effort
     floor. The AUTH state is NOT probed by default: a real `claude -p` ping
-    SPENDS the principal's subscription quota, so it is opt-in only (see the
-    NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE design note below), never auto-fired."""
+    SPENDS the principal's subscription quota, so it is opt-in only
+    (NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1), never auto-fired. NL-160 built that
+    probe — it was designed-and-printed until then, which is why this whole
+    section ran GREEN through the 2026-08-24 outage: binary and version both
+    pass on a machine whose CLI is logged out."""
     sub_seats = sorted(
         name for name in llm.SEATS
         if llm.resolve_seat(name, env).lane == "subscription"
@@ -1388,29 +1437,222 @@ def check_subscription_lane(env: Dict[str, str]) -> List[Result]:
         out.append(Result(FAIL, f"claude --version failed ({type(exc).__name__}: "
                                 f"{exc}) — the CLI at {bin_path} is present but "
                                 "not runnable; re-install or fix permissions"))
-    # The OPTIONAL live auth probe — DESIGNED, not fired. A real `claude -p`
-    # single-token ping is the only way to prove the CLI is LOGGED IN (the
-    # binary + version pass without auth), but it SPENDS subscription quota, so
-    # it is opt-in and skippable, never part of the default run.
+    # The OPTIONAL live auth probe — BUILT AND FIRED since NL-160 (principal
+    # ruling 2026-08-24, item 2). It stays opt-in for the same reason it always
+    # was (a success spends a token of subscription quota), but "designed, not
+    # fired" was itself the 2026-08-24 defect: the binary+version checks above
+    # pass without auth, so the doctor ran GREEN through an outage that killed
+    # five straight generates. A health check that cannot see the thing that
+    # broke is not a health check.
     if (env.get("NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE") or "").strip() == "1":
-        out.append(Result(
-            WARN,
-            "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1 requested a LIVE probe — this "
-            "would spend subscription quota. The recommended shape: one "
-            f"`claude -p --output-format json --model {_probe_model()}` with a "
-            "1-token prompt ('ok') on stdin, is_error=false => authed. NOT "
-            "fired here — the live smoke is the principal's to run manually "
-            "(SETUP.md), so the default doctor never spends. Unset the flag.",
-        ))
+        model = _probe_model()
+        try:
+            proc = _run_auth_probe(bin_path, model)
+        except Exception as exc:  # noqa: BLE001 — timeout / OSError, both visible
+            out.append(Result(
+                FAIL,
+                f"the live auth probe could not run ({type(exc).__name__}: "
+                f"{exc}) — the CLI at {bin_path} did not answer a 1-token "
+                f"`claude -p` within {CLAUDE_PROBE_TIMEOUT_S}s; the "
+                "subscription seats would hit the same wall",
+            ))
+        else:
+            # NL-160 gate R-5: the doctor's verdict rides the SAME source
+            # restriction as the transport's raise. A probe whose only output
+            # was unparseable stdout still gets that text PRINTED, but it may
+            # not be read as an auth rejection — one rule, two readers,
+            # including the half of the rule that says which text counts.
+            detail, detail_source = llm.subscription_failure_parts(
+                proc.stdout, proc.stderr)
+            try:
+                payload = json.loads(proc.stdout)
+            except (ValueError, TypeError):
+                payload = None
+            authed = (proc.returncode == 0 and isinstance(payload, dict)
+                      and not payload.get("is_error"))
+            if authed:
+                out.append(Result(
+                    PASS,
+                    f"live auth probe: `claude -p` answered on {model} — the "
+                    "CLI is LOGGED IN and the subscription seats can run "
+                    "(cost: one token of quota)",
+                ))
+            elif llm.is_auth_failure_detail(detail, detail_source):
+                # THE 2026-08-24 CLASS, now nameable by the doctor. Same
+                # predicate the transport raises on — one rule, two readers.
+                out.append(Result(
+                    FAIL,
+                    f"live auth probe: the CLI is NOT authenticated — {detail}. "
+                    f"{llm.AUTH_FIX_HINT}",
+                ))
+            else:
+                # Honest third verdict. The probe failed for something that is
+                # not an auth rejection, so it proves neither login nor its
+                # absence — say that rather than guess in either direction.
+                out.append(Result(
+                    WARN,
+                    f"live auth probe was inconclusive (exit {proc.returncode}): "
+                    f"{detail} — this is not an auth rejection, so login state "
+                    "is still unproven",
+                ))
     else:
         out.append(Result(
             INFO,
             "auth NOT probed (a live `claude -p` ping spends subscription "
             "quota) — the binary+version pass above does not prove the CLI is "
             "logged in; run `claude` once interactively to confirm login "
-            "(SETUP.md). Opt into the probe design with "
-            "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1",
+            "(SETUP.md). Fire the live probe with "
+            "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1 — it costs one token when "
+            "you are logged in and nothing at all when you are not",
         ))
+    return out
+
+
+# NL-160 (routed here by the NL-105 gate, R-4). How long a blank run has to get
+# before the doctor says something. The NL-105 SUITE bound is stricter — no two
+# consecutive editions may both go blank — but that pin replays a FROZEN corpus,
+# and this line reads the living record, where one quiet edition is ordinary and
+# a run is the signal. Three is chosen to sit far below the failure it exists to
+# catch (the real drought ran TWELVE editions, 2026-07-24 to 2026-08-14, while 49
+# synthetic pins stayed green) and far above ordinary noise.
+ARC_DROUGHT_WARN_RUN = 3
+
+# How many recent eligible editions the ratio is reported over.
+ARC_RECENT_EDITIONS = 12
+
+
+def _arc_editions_from_log(rows: List[Dict]) -> List[Tuple[str, bool]]:
+    """(edition_date, carried_an_arc) for every ARC-ELIGIBLE edition in `rows`,
+    oldest first.
+
+    ELIGIBLE means the edition actually reached the arc author — some thread of
+    its produced an arc outcome, authored or omitted. Editions with no eligible
+    thread are EXCLUDED rather than counted as blank: a day whose threads did not
+    move is not a day the arc machinery failed, and counting it would make the
+    detector cry drought over quiet news. (That is the same population the NL-105
+    streak pin speaks for — "consecutive among editions that produced arc
+    candidates".)
+
+    Keyed on memory_core's own marker constants, never on retyped prose."""
+    from . import memory_core
+    per: Dict[str, List[int]] = {}
+    for row in rows:
+        mem = row.get("memory") if isinstance(row, dict) else None
+        if not isinstance(mem, dict):
+            continue
+        rewrites = mem.get("state_rewrites")
+        date = row.get("date")
+        if not isinstance(rewrites, list) or not isinstance(date, str):
+            continue
+        for rw in rewrites:
+            detail = str(rw.get("detail") or "") if isinstance(rw, dict) else ""
+            if memory_core.ARC_AUTHORED_MARK in detail:
+                per.setdefault(date, [0, 0])[0] += 1
+            elif memory_core.ARC_OMITTED_MARK in detail:
+                per.setdefault(date, [0, 0])[1] += 1
+    return [(date, per[date][0] > 0) for date in sorted(per)]
+
+
+def check_arc_continuity() -> List[Result]:
+    """THE LIVE ARC-DROUGHT DETECTOR (NL-160, from the NL-105 gate's R-4).
+
+    Why it lives in the doctor and not the suite. The NL-105 streak pin is real,
+    but its corpus is FROZEN: it proves the validator would not re-create the
+    drought that already happened, and it cannot move for a drought that starts
+    tomorrow. A detector that reads the living record cannot sit in the hermetic
+    suite either (the v7-M1 sandbox law — the suite never touches real data). So
+    the honest place for it is here, where reading real state is the whole job.
+
+    $0 and offline by construction: JSON-lines file reads, no DB, no network,
+    no model call. It reports what the record says and never repairs it.
+
+    IT READS `generate.log_segments()`, NOT the live file (NL-160 gate R-7/F-9).
+    That function is the house's documented reading order — "everything that
+    wants the whole history" — and it is documented in the very module this
+    detector reads. A reader wired to `log_file()` alone is born ROTATION-BLIND:
+    after the first NL-154 cut, a drought that straddles the boundary is counted
+    only from the cut forward, and a drought-detector that shortens droughts is
+    the failure it exists to catch, wearing the monitor's own uniform. The
+    segments are disjoint by construction, so concatenating them counts nothing
+    twice (see generate.log_segments).
+
+    `errors="replace"` (gate R-2, the diagnose._entries / NL-149 F-1
+    precedent): generation_log details are full of em-dashes and §, and an
+    append-only log a crash interrupts will one day end mid-multibyte-sequence.
+    Decoding strictly turns that tail into a UnicodeDecodeError that only OSError
+    would have to catch — and since run_doctor builds EVERY section before it
+    prints anything, the whole doctor would die with zero output at precisely the
+    moment a crashed generate is why it is being run. Replacing costs the torn
+    line, which then dies at json.loads and is COUNTED in `skipped`."""
+    from . import generate
+    live = generate.log_file()
+    segments = [p for p in generate.log_segments() if p.exists()]
+    if not segments:
+        return [Result(INFO, "no generation log yet — arc continuity has "
+                             "nothing to read (this is a fresh install)")]
+    rows: List[Dict] = []
+    skipped = 0
+    for segment in segments:
+        try:
+            with segment.open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        # A torn tail line is expected on an append-only log
+                        # that a crash can interrupt; count it rather than fail
+                        # the check.
+                        skipped += 1
+                        continue
+                    if isinstance(row, dict):
+                        rows.append(row)
+        except OSError as exc:
+            return [Result(WARN, f"could not read {segment.name} ({exc}) — arc "
+                                 "continuity unknown")]
+
+    editions = _arc_editions_from_log(rows)
+    if not editions:
+        return [Result(INFO, "no arc-eligible edition on record yet — the arc "
+                             "line needs a thread with a prior covered edition")]
+
+    recent = editions[-ARC_RECENT_EDITIONS:]
+    carried = sum(1 for _, ok in recent if ok)
+    blank_run: List[str] = []
+    for date, ok in reversed(editions):
+        if ok:
+            break
+        blank_run.append(date)
+    blank_run.reverse()
+
+    out: List[Result] = []
+    headline = (f"{carried} of the last {len(recent)} arc-eligible editions "
+                f"carried a continuity line")
+    if len(blank_run) >= ARC_DROUGHT_WARN_RUN:
+        out.append(Result(
+            WARN,
+            f"arc DROUGHT: {len(blank_run)} consecutive eligible editions have "
+            f"served no continuity line ({blank_run[0]} to {blank_run[-1]}) — "
+            f"{headline}. The deep views are running without the memory moat's "
+            "reader-visible line; check the arc rejections in "
+            f"{live.name} (state_rewrites[].detail) before it goes another week",
+        ))
+    elif blank_run:
+        out.append(Result(
+            PASS,
+            f"{headline} — the most recent {len(blank_run)} eligible "
+            f"edition(s) served none, below the {ARC_DROUGHT_WARN_RUN}-edition "
+            "drought line",
+        ))
+    else:
+        out.append(Result(
+            PASS, f"{headline} — the most recent eligible edition served one"))
+    if skipped:
+        out.append(Result(WARN, f"{skipped} unparseable line(s) in the "
+                                f"{live.name} record were skipped — the arc "
+                                "counts above are over the readable rows only"))
     return out
 
 
@@ -1558,6 +1800,7 @@ def run_doctor() -> int:
     sections.append(("LLM lanes", check_llm_lanes(env)))
     sections.append(("Subscription lane (claude -p)", check_subscription_lane(env)))
     sections.append(("Scheduled generation", check_schedule(env)))   # NL-146
+    sections.append(("Arc continuity", check_arc_continuity()))      # NL-160
     sections.append(("Cost", cost_estimate()))
 
     tally = {PASS: 0, FAIL: 0, WARN: 0, INFO: 0}

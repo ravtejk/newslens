@@ -341,6 +341,17 @@ def resolve_altitude(thread: ThreadInput, *, api_key: str = "",
                     f"altitude resolution timed out for {thread.topic!r} "
                     f"(interactive, one window): {last_error}") from exc
         except Exception as exc:  # noqa: BLE001 — transport-shaped: retry ORIGINAL
+            # NL-160 — THE AUTH CARVE-OUT. This resolver seat is on the
+            # subscription lane too, and the arm directly above already
+            # establishes the principle for the interactive path: a second window
+            # the reader waits through, for an outcome that cannot change, is a
+            # cost with no upside. An expired session is that case exactly.
+            if isinstance(exc, llm.SubscriptionAuthError):
+                raise AltitudeError(
+                    f"altitude resolution for {thread.topic!r} cannot "
+                    f"authenticate: {exc} — no retry was attempted because this "
+                    "failure class cannot succeed on one"
+                ) from exc
             last_error = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
         if attempt == 1:
             time.sleep(backoff)

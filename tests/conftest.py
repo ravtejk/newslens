@@ -682,6 +682,15 @@ SCRUBBED_ENV_VARS = [
     # ask for it. Tests wanting the unpaused path pass it in an explicit env
     # dict (see tests/test_discovery.py::OPT_IN).
     "NEWSLENS_DISCOVERY_ENABLED",
+    # NL-160: the doctor's LIVE auth probe opt-in. Same law as the discovery
+    # opt-in directly above — an ambient `export
+    # NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE=1` in the shell the suite runs from
+    # would arm a real `claude -p` spawn inside any test that reaches
+    # check_subscription_lane. Harmless TODAY only because NEWSLENS_CLAUDE_BIN
+    # is redirected to the conftest stub, i.e. one env pin away from spending;
+    # a flag that arms a spend path is scrubbed on its own merits, not on a
+    # neighbour's guarantee.
+    "NEWSLENS_DOCTOR_SUBSCRIPTION_PROBE",
     "OPENAI_API_KEY",
     "PERPLEXITY_API_KEY",
     "GNEWS_API_KEY",
