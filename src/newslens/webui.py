@@ -886,15 +886,25 @@ POPUPS = """
   <div class="popup-card">
     <h3 id="popup-add-topic-title">Add topic — <span id="add-topic-name"></span></h3>
     <!-- NL-103 row 16 (A5): topic everywhere in reader copy; the config names
-         behind it never render. -->
-    <p style="font-size:0.85rem;color:var(--ink-soft);margin:0 0 1rem;">Add this as a broad topic or a specific one?</p>
+         behind it never render.
+         NL-150 (ruled 2026-08-24): the level QUESTION died here, and the two
+         rung buttons with it — they were the question in button form. It asked
+         the reader to answer in broad/specific, words DECISIONS 2026-07-28 §2
+         had already killed as reader vocabulary (the live violation
+         test_stage0_c1_vocabulary.py flagged rather than swept), and it asked
+         something the catalog already knows (server._inferred_level). Nothing
+         replaces the sentence: the title says what the act is, and a line
+         explaining why it no longer asks would be the interface talking about
+         itself. The CARD stays — it is the only surface that renders a
+         topic-add refusal (NL-103 FIX-2's §3 refusal-loud floor) — and its
+         primary button is now the bare act-verb, the house pattern every other
+         popup on this page already uses (Save / Follow / Delete). -->
     <!-- NL-103 FIX-2: refusals announce (§3's refusal-loud floor). polite
          matches the house pattern used elsewhere for status regions. -->
     <p class="popup-status err" id="add-topic-status" aria-live="polite"></p>
     <div class="popup-actions">
       <button class="cta-outline" onclick="closePopup('popup-add-topic')">Cancel</button>
-      <button class="cta-outline" onclick="addTopic('broad')">Add as broad</button>
-      <button class="cta-quiet" onclick="addTopic('specific')">Add as specific</button>
+      <button class="cta-quiet" onclick="addTopic()">Add</button>
     </div>
   </div>
 </div>
@@ -2082,8 +2092,13 @@ function openAddTopic(name) {
   document.getElementById('add-topic-status').classList.remove('showing');
   openPopup('popup-add-topic');
 }
-function addTopic(level) {
-  api('/api/topic/add', {name: pendingTopic, level: level}, function (d) {
+/* NL-150 (ruled 2026-08-24): no level on the wire. The catalog owns the split
+   and the server reads it (server._inferred_level); a level chosen here would
+   be a second copy of that vocabulary on a surface that cannot see the catalog
+   file, which is the exact drift catalog.py was made the sole reader to
+   prevent. One act, one argument: the name the reader picked. */
+function addTopic() {
+  api('/api/topic/add', {name: pendingTopic}, function (d) {
     if (d.ok) { closePopup('popup-add-topic'); reloadPreservingView(); }
     else {
       var s = document.getElementById('add-topic-status');

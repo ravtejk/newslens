@@ -514,16 +514,31 @@ def test_story_combobox_no_js_degrade_cannot_submit_free_text():
 # ===========================================================================
 
 def test_topic_suggestions_hostile_shapes_never_crash_or_resurface():
-    """Malformed latest-edition JSON -> [] (and no resurfacing of older
-    editions' tags THROUGH the malformed latest); non-dict/nameless tag
-    entries skipped; followed topics excluded case-insensitively; duplicate
-    tags deduped keeping the first spelling; empty DB -> []."""
+    """Malformed latest-edition JSON -> nothing from the EDITION leg (and no
+    resurfacing of older editions' tags THROUGH the malformed latest); non-dict
+    /nameless tag entries skipped; followed topics excluded case-insensitively;
+    duplicate tags deduped keeping the first spelling; empty DB -> nothing from
+    the edition leg.
+
+    NL-150 (2026-08-25): the offer is now the CATALOG union the edition leg,
+    so the old bare `== []` assertions would only be measuring the catalog's
+    presence. Every assertion below is therefore taken on the edition leg ALONE
+    — `got - catalog` — which is the surface these hammers were aimed at, and
+    which keeps every tooth: crash-freedom, no-resurfacing, the case-blind
+    exclusion, the dedupe, and the hostile-shape skips."""
     from types import SimpleNamespace
+    from newslens import catalog
+    cat_names = set(catalog.load().names())
+
+    def edition_leg(con, cfg):
+        """What the offer holds beyond the catalog's own vocabulary."""
+        return {o["v"] for o in server._topic_suggestions(con, cfg)} - cat_names
+
     cfg = SimpleNamespace(interests_broad=["ai regulation"],
                           interests_granular=[], sources=[],
                           followed_analyst_sources=[])
     con = _con()
-    assert server._topic_suggestions(con, cfg) == []          # no editions at all
+    assert edition_leg(con, cfg) == set()       # no editions at all
     with con:
         con.execute("INSERT INTO briefings (date, story_slots) VALUES (?, ?)",
                     ("2026-07-01", json.dumps([
@@ -532,8 +547,8 @@ def test_topic_suggestions_hostile_shapes_never_crash_or_resurface():
         # the hostile latest shape that CAN exist is valid-JSON-wrong-type:
         con.execute("INSERT INTO briefings (date, story_slots) VALUES (?, ?)",
                     ("2026-07-14", json.dumps({"hostile": "not a list"})))
-    # wrong-type latest -> [] and the OLD edition's tag must NOT leak through
-    assert server._topic_suggestions(con, cfg) == []
+    # wrong-type latest -> nothing, and the OLD edition's tag must NOT leak
+    assert edition_leg(con, cfg) == set()
     with con:
         con.execute("DELETE FROM briefings WHERE date = '2026-07-14'")
         con.execute("INSERT INTO briefings (date, story_slots) VALUES (?, ?)",
@@ -548,7 +563,50 @@ def test_topic_suggestions_hostile_shapes_never_crash_or_resurface():
                         ]}])))
     got = server._topic_suggestions(con, cfg)
     con.close()
-    assert got == [{"v": "Grid Storage", "l": "Grid Storage"}]
+    # exactly one survivor from the edition leg, in the FIRST spelling seen
+    assert [o for o in got if o["v"] not in cat_names] == \
+        [{"v": "Grid Storage", "l": "Grid Storage"}]
+    # the whole offer stays sorted case-blind, catalog and edition interleaved
+    assert [o["v"] for o in got] == sorted((o["v"] for o in got), key=str.lower)
+
+
+def test_a_cross_leg_case_collision_takes_the_catalog_spelling():
+    """FIX-3 (gate R-3, 2026-08-25). The two legs can name the SAME topic in
+    different casings — a matched tag is free text off the ranker, the catalog
+    is org-authored — and the precedence was probe-verified but unpinned.
+
+    The rule and its reason: the catalog spelling wins, because
+    `catalog.canonical` is what gets written to sources.yaml (catalog.py:89-91),
+    so an offer row spelled any other way would hand the reader a value the
+    write door will not use. Within the edition leg, first-spelling-wins is
+    unchanged — pinned by the test above; this pins the CROSS-leg case, which
+    is decided earlier, by the catalog leg having already claimed the key.
+
+    MUTATION-PROVEN (born green — the precedence shipped with the batch; this
+    pin is the receipt that it is guarded, not that it is new). BITE: the
+    edition leg's `if key not in followed and key not in names` relaxed to
+    `if key not in followed`, so a later edition spelling overwrites the
+    catalog's — planted in a copy, executed artifact asserted, transcribed:
+
+        E       AssertionError: assert ['MEDICAID'] == ['Medicaid']
+        E         At index 0 diff: 'MEDICAID' != 'Medicaid'
+        FAILED …::test_a_cross_leg_case_collision_takes_the_catalog_spelling
+        FAILED …::test_topic_suggestions_hostile_shapes_never_crash_or_resurface
+        2 failed, 84 passed         (the four batch files)
+    """
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(interests_broad=[], interests_granular=[],
+                          sources=[], followed_analyst_sources=[])
+    con = _con()
+    with con:
+        con.execute("INSERT INTO briefings (date, story_slots) VALUES (?, ?)",
+                    ("2026-07-15", json.dumps([{
+                        "slot": "1",
+                        "matched_tags": [{"name": "MEDICAID"}]}])))
+    got = server._topic_suggestions(con, cfg)
+    con.close()
+    rows = [o["v"] for o in got if o["v"].lower() == "medicaid"]
+    assert rows == ["Medicaid"]          # one row, in the catalog's spelling
 
 
 # ===========================================================================

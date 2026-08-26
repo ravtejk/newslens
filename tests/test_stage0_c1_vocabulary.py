@@ -21,12 +21,42 @@ TWO TIERS, AND THE SCOPE IS DELIBERATE:
   the term ruling was product-wide, not page-local.
 
 WHAT THIS FILE DELIBERATELY DOES NOT ASSERT, and why it is in the build report
-rather than silently absent: the SHIPPED settings popup still says "Add this as
-a broad topic or a specific one?" with buttons "Add as broad" / "Add as
-specific" (webui.POPUPS) — the dead rung vocabulary, live, on a reader surface
-C1 does not own. Widening tier 1 to that surface would redden the suite on copy
-this milestone was not dispatched to change. It is flagged for the principal as
-a finding, not hidden by a narrow grep.
+rather than silently absent.
+
+THE POPUP HALF IS CLOSED (NL-150, 2026-08-25). This flag used to read "the
+SHIPPED settings popup still says 'Add this as a broad topic or a specific
+one?' with buttons 'Add as broad' / 'Add as specific'". The 2026-08-24 ruling
+killed the ask and both rung buttons; `test_nl150_topics_surface.py` now pins
+their absence from `webui.POPUPS` and sweeps the whole add-topic card for all
+three dead words. That surface is no longer a live violation and no longer
+needs a flag.
+
+WHAT SURVIVES — the residue this flag now points at, six strings, all measured
+live in the bytes named:
+
+  1-2. the token GROUP HEADERS "Broad (N)" / "Specific (N)"  server.py:4111-4114
+  3-4. the empty notes "No broad topics yet" / "No specific
+       topics yet"                                           server.py:4124-4125
+  5.   “Didn’t add it — your sources file has no section
+       for {level} topics.”                                  server.py:1330-1331
+  6.   “Didn’t add it — {name} is already in your
+       {level} topics.”                                      server.py:1336-1337
+
+They are now INCOHERENT, not merely off-register: with the ask dead the reader
+is never shown a level, so copy naming one references a choice that no longer
+exists. 5 and 6 are ruled copy in their own right (NL-103 FIX-2, gate
+2026-07-26, which made topic-add refusals reader-facing and loud) — a reword
+here would mint unruled reader copy, which is exactly the half-fix the C1 gate
+refused on 2026-07-30 when it declined a button reword.
+
+CHARTERED HOME: **NL-123**, the rung-vocabulary lane (C1 gate 2026-07-30, Row
+B). It was filed as a three-member lane — the popup ask, the two buttons, and
+`topic_add`'s level-bearing refusals; the first two members were discharged by
+NL-150's kill, the refusals are members 5-6 above, and the NL-150 gate
+(2026-08-25, R-2) added the four Following-page strings and the topic-removal
+warn-arm copy to the same Content-Lead visit. Widening tier 1 to these lines
+before that visit would redden the suite on copy no ruling has replaced yet.
+Flagged for the principal as a finding, not hidden by a narrow grep.
 """
 
 from __future__ import annotations

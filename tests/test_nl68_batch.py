@@ -407,14 +407,28 @@ def test_topic_suggestions_are_scoped_to_the_latest_edition():
     assert "Old Deleted Topic" not in sugg               # old-only -> not resurfaced
 
 
-def test_broad_specific_picker_is_still_offered():
-    """The broad/specific picker STAYS — it is the standing Fable taxonomy
-    contract (config keeps interests_broad/granular; the ranker weights topic
-    1.0 / domain 0.5). The Opus-line kill (DECISIONS 2026-07-08) is NOT imported
-    to this line (2026-07-09). FLAGGED for the principal in the report."""
-    assert "Add as broad" in webui.POPUPS
-    assert "Add as specific" in webui.POPUPS
-    assert "addTopic('broad')" in webui.POPUPS and "addTopic('specific')" in webui.POPUPS
+def test_the_broad_specific_ASK_is_dead_but_the_taxonomy_is_not():
+    """SUPERSEDED 2026-08-25 (NL-150). This test used to pin the OPPOSITE — the
+    broad/specific picker "STAYS ... the Opus-line kill (DECISIONS 2026-07-08)
+    is NOT imported to this line (2026-07-09)", flagged for the principal in
+    every report since. On 2026-08-24 the Fable line ruled its own kill, and the
+    ruling is precise about which half dies: the ASK dies, the yaml semantics
+    survives. Both halves are pinned here.
+
+    The taxonomy leg is the load-bearing one — a kill that took the levels with
+    it would silently reweight every half-weight interest in his file."""
+    from newslens import catalog
+    # the ASK is dead on the reader surface
+    assert "Add as broad" not in webui.POPUPS
+    assert "Add as specific" not in webui.POPUPS
+    assert "addTopic('broad')" not in webui.POPUPS
+    assert "addTopic('specific')" not in webui.POPUPS
+    # the TAXONOMY is untouched: two levels, two yaml keys, two editor spellings
+    assert catalog.LEVEL_TO_YAML_KEY == {"domain": "broad", "topic": "granular"}
+    assert catalog.LEVEL_TO_EDITOR_LEVEL == {"domain": "broad", "topic": "specific"}
+    # and the write door still routes each level to its own group, unasked
+    assert server._inferred_level("Public Health") == "broad"      # a domain
+    assert server._inferred_level("Medicaid") == "specific"        # a topic
 
 
 # ===========================================================================

@@ -183,8 +183,18 @@ def test_row8_note_explainer_states_the_two_facts():
 
 
 def test_row16_interest_is_dead_topic_everywhere():
-    assert "Add this as a broad topic or a specific one?" in webui.POPUPS
+    """Row 16 (A5): the reader-facing noun is `topic`, never `interest`.
+
+    NL-150 (2026-08-25): the sentence this used to quote — "Add this as a broad
+    topic or a specific one?" — was killed by the 2026-08-24 ruling, so the pin
+    moves to what still renders on the same card. Row 16's own law is unchanged
+    and now has MORE bite, not less: `interest` is dead across the whole popup
+    set, and the surviving add-topic copy is checked for it directly."""
+    assert "Add this as a broad topic or a specific one?" not in webui.POPUPS   # killed
     assert "broad interest" not in webui.POPUPS
+    assert "interest" not in webui.POPUPS.lower()      # row 16, product-wide noun
+    card = webui.POPUPS.split('id="popup-add-topic"')[1].split("</div>\n</div>")[0]
+    assert "Add topic" in card                          # the class noun survives
 
 
 def test_row10_one_writer_lookup_string_refusal_class():

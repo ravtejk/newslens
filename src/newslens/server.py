@@ -1225,7 +1225,96 @@ def _bad_name(name: str) -> str:
     return ""
 
 
-def topic_add(name: str, level: str) -> Tuple[bool, str]:
+def _inferred_level(name: str) -> str:
+    """The editor level for `name` when the caller did not name one.
+
+    NL-150 (ruled 2026-08-24, DECISIONS "THE SLATE RULED" item 5) — THE PROMPT
+    DIES. "Add this as a broad topic or a specific one?" asked the reader to
+    answer in vocabulary that DECISIONS 2026-07-28 §2 had already killed as
+    reader words (broad/granular/specific are dead rungs; the popup was the
+    known live violation test_stage0_c1_vocabulary.py flagged rather than
+    swept). It also asked a question the product can answer better than the
+    reader can: the catalog already carries every name's level.
+
+    So the rule, and it is NOT a new taxonomy — it is the map that has governed
+    the Commissioning's writes since NL-116 (`catalog.LEVEL_TO_EDITOR_LEVEL`,
+    applied at commissioning.py's write step), reused verbatim:
+
+        a catalog DOMAIN name  -> broad     (half weight — the domain IS the
+                                             broad signal, inferred from the
+                                             name matching one, never asked)
+        a catalog TOPIC name   -> specific  (full weight)
+        anything else          -> specific  (full weight, the ruled default)
+
+    Off-catalog defaulting to FULL weight is deliberate: a name the catalog
+    does not carry is one the reader typed or one coverage matched, and
+    half-weighting a signal that specific because we lack a taxonomy entry for
+    it would be the machine's ignorance charged to the reader. sources.yaml
+    stays hand-editable for anyone who wants the half-weight group.
+
+    A catalog that will not load answers the default rather than refusing the
+    add: the reader's act does not depend on a data file they never see.
+
+    FIX-4 (2026-08-25) moved the lookup itself one function down, into
+    `_catalog_write_identity`, so the SPELLING and the LEVEL this door writes
+    come from one read of the catalog rather than two. The rule above and the
+    degrade below it are unchanged; this is now the name for its second half."""
+    return _catalog_write_identity(name)[1]
+
+
+def _catalog_write_identity(name: str) -> Tuple[str, str]:
+    """(the spelling to WRITE, the level to write it at) for `name`.
+
+    NL-150 FIX-4 (gate ruling R-3, 2026-08-25). catalog.py states this door's
+    contract in its own words — `canonical`: "What gets WRITTEN to sources.yaml
+    is always this, never the bytes the client sent"; `resolve`: "the one
+    lookup the write door uses, so an unknown name and a mis-cased known name
+    cannot take different paths." The Commissioning door honoured it and this
+    one did not: `topic_add` wrote the posted bytes, and the client posts the
+    READER's casing whenever they type a suggestion instead of clicking it
+    (webui.suggestSubmit matches case-blind, then sends what is in the input).
+    So "medicaid" typed at the Following page minted a second spelling of a
+    catalog name in the file he hand-edits. Closed by mechanism, not by
+    documenting the asymmetry.
+
+    ONE lookup answers both of this door's questions — how to spell it, and
+    (when the caller named no level) which group it belongs in — so the two
+    answers cannot come from different reads of the file.
+
+    Off-catalog names are returned VERBATIM: canonicalisation is a catalog
+    lookup, never a title-caser, and a name the catalog does not carry is the
+    reader's own vocabulary. A catalog that will not load returns them verbatim
+    too and grades itself to the operator's terminal — the spelling is a
+    nicety, the reader's act is not, and this door must never mint a new closed
+    door out of a broken data file (the house pattern `_topic_suggestions` and
+    the inference above already use for this error; the Commissioning's
+    loud-refusal on the same error is the deliberate NL-116 asymmetry)."""
+    try:
+        hit = catalog.load().resolve(name)
+    except catalog.CatalogError as exc:
+        print(f"topic add: {exc}", flush=True)
+        return name, "specific"
+    if hit is None:
+        return name, "specific"
+    canonical, level = hit
+    return canonical, catalog.LEVEL_TO_EDITOR_LEVEL.get(level, "specific")
+
+
+def topic_add(name: str, level: str = "") -> Tuple[bool, str]:
+    # NL-150: an absent level is LAWFUL and infers (the killed prompt was the
+    # only thing that ever supplied one from the reader's side). An explicit
+    # level still wins untouched — the Commissioning derives its own from the
+    # same catalog and passes it, and that call site is unchanged.
+    #
+    # FIX-4: the SPELLING is the catalog's for a name it carries, whatever
+    # casing arrived (see _catalog_write_identity). `_bad_name` below still
+    # judges the name that will actually be written, and cannot be widened by
+    # this: a catalog name is load-validated against the same unwritable set
+    # (catalog._UNWRITABLE, `_check_name`), and a name carrying one of those
+    # characters is in no catalog to be resolved against.
+    name, inferred = _catalog_write_identity(name)
+    if not level:
+        level = inferred
     if level not in ("broad", "specific"):
         return False, "level must be broad or specific"
     bad = _bad_name(name)
@@ -3654,21 +3743,52 @@ def _topic_suggestions(con: sqlite3.Connection, cfg) -> List[Dict]:
     Topics combobox is now suggestions-only (like story follows), so only a
     name offered here can be added — free-typing a new topic no longer acts.
 
-    Flagged (NL-17/18): matched_tags are structurally a subset of your followed
-    vocabulary, so in steady state this is empty — a real 'topics to discover'
-    add-source is the skeleton-catalog work, not a suggestion off past editions.
+    NL-150 (2026-08-25) — THE CATALOG JOINS THE OFFER, and that closes his
+    08-12 re-add bug. The flag two paragraphs down was the diagnosis all along:
+    matched_tags is validated against `tag_levels`, which ranking.py builds from
+    cfg.interests_broad + cfg.interests_granular, so a matched tag is a SUBSET
+    of the followed vocabulary BY CONSTRUCTION. Subtract followed and the offer
+    is empty in steady state — and since this box is rendered suggest_only, an
+    empty offer is a CLOSED DOOR: nothing could be added at all, and a topic you
+    had just removed could be re-added only in the window before the next
+    generate, and only if that edition had matched it. Removable but not
+    re-addable, exactly as reported.
+
+    The fix is the one this docstring already named ("the skeleton-catalog
+    work"): NL-116 shipped that catalog as a data file on 2026-07-28 and this
+    surface was never wired to it. So the offer is now the UNION —
+
+        the catalog's whole vocabulary (the org-authored names, both levels)
+        + the latest edition's matched tags (the only re-add route an
+          OFF-catalog name has, so the old leg is widened, never replaced)
+        - everything already followed
+
+    Catalog spelling wins a case-collision because `catalog.canonical` is what
+    gets written to sources.yaml; within the edition leg the first spelling
+    still wins, as before. A catalog that will not load degrades to the old
+    edition-only offer rather than taking the Following page down with it.
     Topics carry no secondary line."""
     followed = {t.lower() for t in cfg.interests_broad} \
         | {t.lower() for t in cfg.interests_granular}
+    names: Dict[str, str] = {}
+    try:
+        for name in catalog.load().names():
+            key = name.lower()
+            if key not in followed:
+                names.setdefault(key, name)
+    except catalog.CatalogError as exc:
+        # Loud to the operator, silent to the reader: the edition leg below
+        # still has something to offer, and a half-offer beats a 500 on a page
+        # whose other half (the followed tokens) is perfectly readable.
+        print(f"topic suggestions: {exc}", flush=True)
     row = con.execute("SELECT story_slots FROM briefings"
                       " ORDER BY date DESC LIMIT 1").fetchone()
-    if row is None:
-        return []
-    try:
-        slots = json.loads(row["story_slots"] or "[]")
-    except (ValueError, TypeError):
-        return []
-    names: Dict[str, str] = {}
+    slots = []
+    if row is not None:
+        try:
+            slots = json.loads(row["story_slots"] or "[]")
+        except (ValueError, TypeError):
+            slots = []
     for s in slots if isinstance(slots, list) else []:
         for tg in s.get("matched_tags") or []:
             if not (isinstance(tg, dict) and tg.get("name")):
@@ -6895,6 +7015,10 @@ class Handler(BaseHTTPRequestHandler):
             lambda con: {"ok": memory.set_note(con, topic, note)}))
 
     def _api_topic_add(self, body: Dict) -> None:
+        # NL-150: `level` is now OPTIONAL on the wire. The client stopped
+        # sending one when the level prompt died; an absent level infers from
+        # the catalog (topic_add -> _inferred_level). A level that IS sent is
+        # still honoured, so nothing that posts one breaks.
         name = str(body.get("name") or "").strip()
         level = str(body.get("level") or "").strip()
         if not name:
