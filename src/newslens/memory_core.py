@@ -935,21 +935,67 @@ def latest_state(con: sqlite3.Connection, thread_id: int,
     return dict(row) if row else None
 
 
+_ABBR_DOT = "∙"                   # the protect sentinel: a period that isn't one
 _ABBR_PROTECT = (("U.S.A.", "U∙S∙A∙"), ("U.S.", "U∙S∙"),
                  ("U.N.", "U∙N∙"), ("U.K.", "U∙K∙"),
                  ("E.U.", "E∙U∙"))
 
+# NL-165 ② (2026-08-27): the SECOND abbreviation class — a label or month
+# abbreviation whose period is followed by a NUMERAL. "goal No. 1", "on Aug. 1".
+# The table is evidence-driven, not speculative: HEAD's splitter was run over
+# every thread_state row in the principal's own DB and every fragment whose
+# successor began with a digit was counted. The whole census was 15 breaks from
+# exactly three tokens — 'Aug.' x8, 'No.' x4, 'Jul.' x3 — and ZERO fragments in
+# that corpus legitimately begin with a digit, so the numeral lookahead has no
+# false-positive surface there. Jul/Aug are simply the months the corpus covers;
+# the rest of _MONTH_ABBR is included because the calendar, not the defect, is
+# what kept them out, and 'Sept' because the write law's own cite parser lists
+# it as a form readers produce.
+#
+# The lookahead is the whole discipline. This is NOT a tokenizer and must not
+# grow into one: a genuine sentence really can end on "No." and it still ends
+# there, because nothing follows it but a capital letter.
+#
+# "May" is deliberately EXCLUDED from the month list. It is the one month nobody
+# abbreviates — "May. 12" is not a date form anyone writes — while "…closed in
+# May. 12 firms followed" is a perfectly ordinary sentence boundary. Including it
+# would buy zero true positives and be the table's only real false-positive
+# surface, so the one month that needs no protection does not get it.
+_NUMERALED_ABBR = (("No", "Nos", "Sept")
+                   + tuple(m for m in _MONTH_ABBR if m != "May"))
+_NUMERALED_ABBR_RE = re.compile(
+    r"\b(?:" + "|".join(_NUMERALED_ABBR) + r")\.(?=\s*\d)")
+
 
 def _sentences(text: str) -> List[str]:
     """Sentence split that survives domain abbreviations — 'U.S.' / 'U.N.' are
-    not sentence ends. Protect them, split on real terminators, restore."""
+    not sentence ends, and neither is the period in 'No. 1' or 'Aug. 1'.
+    Protect them, split on real terminators, restore.
+
+    The numeraled class (NL-165 ②) was found in production, not in review: the
+    08-26 run logged two threads with a no-dated-cite violation against a
+    sentence TRUNCATED at 'goal No.' — the checker was reading half a sentence
+    — and counted both paragraphs at 6 sentences against the 5-cap on the
+    strength of the same phantom break. Both harms are counting artifacts; the
+    fix corrects the count and the checked span and changes no severity.
+    Severity classes are unchanged; verdicts are not everywhere — this same
+    splitter backs validate_arc_line's §E one-sentence HARD reject, where
+    correcting the count moved three production-corpus verdicts, all lenient,
+    zero PASS→reject (measured; pinned in test_nl105_arc_prong_drop.py)."""
     t = text or ""
     for a, b in _ABBR_PROTECT:
         t = t.replace(a, b)
+    t = _NUMERALED_ABBR_RE.sub(lambda m: m.group(0)[:-1] + _ABBR_DOT, t)
     out = []
     for s in re.split(r"(?<=[.!?])\s+", t.strip()):
         for a, b in _ABBR_PROTECT:
             s = s.replace(b, a)
+        # The regex-protected class restores generically — every sentinel the
+        # protect pass put in play stands for a period. Disclosed bound: a
+        # literal U+2219 already present in the INPUT is rewritten to '.' too
+        # (zero occurrences in the swept corpus; accepted rather than growing
+        # tokenizer machinery — see the discipline note above).
+        s = s.replace(_ABBR_DOT, ".")
         if s.strip():
             out.append(s.strip())
     return out

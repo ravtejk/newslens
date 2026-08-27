@@ -28,7 +28,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from newslens import db, server
+from newslens import db, generate, server
 
 # STAGE-0 C1: /api/generate now refuses a profile with NO topics (SEAM 2's
 # belt — a run started there can only die in run_rank's CLI refusal). These
@@ -192,31 +192,39 @@ def test_item2_no_freetext_topic_or_thread_surface_remains(tmp_paths):
 
 
 # ==========================================================================
-# item 3 — _here_for dedupe (the NL-68 exhibit)
+# item 3 — the 'Here for' dedupe (the NL-68 exhibit)
+#
+# RE-AIMED 2026-08-27 (NL-165 ③, gate R-2's chartered hygiene boundary). These
+# four pins were written against server._here_for, which had rendered nothing
+# since NL-117/121 and has now been retired. They are NOT retired with it: the
+# same law is live at generate.here_for_text, which the markdown lane and
+# moat_battery's colophon both read, so every assertion below is carried over
+# BYTE-FOR-BYTE and now guards a surface the reader actually receives — which is
+# more than it guarded on the day it was written.
 # ==========================================================================
 def test_item3_here_for_dedupes_tag_and_same_named_thread():
     slot = {"matched_tags": [{"name": "Strait of Hormuz"}],
             "matched_memory": ["Strait of Hormuz"]}
-    assert server._here_for(slot) == "Strait of Hormuz"
+    assert generate.here_for_text(slot) == "Strait of Hormuz"
 
 
 def test_item3_here_for_dedup_is_case_insensitive():
     slot = {"matched_tags": [{"name": "Strait of Hormuz"}],
             "matched_memory": ["strait of hormuz"]}
-    assert server._here_for(slot) == "Strait of Hormuz"
+    assert generate.here_for_text(slot) == "Strait of Hormuz"
 
 
 def test_item3_here_for_tags_first_keeps_distinct_drops_only_dupes():
     slot = {"matched_tags": [{"name": "AI regulation"}],
             "matched_memory": ["Chips", "AI regulation"]}
-    assert server._here_for(slot) == "AI regulation, Chips"
+    assert generate.here_for_text(slot) == "AI regulation, Chips"
 
 
 def test_item3_here_for_distinct_and_fallbacks_unchanged():
-    assert server._here_for(
+    assert generate.here_for_text(
         {"matched_tags": [{"name": "AI regulation"}], "matched_memory": []}
     ) == "AI regulation"
-    assert server._here_for({"override": True}) == \
+    assert generate.here_for_text({"override": True}) == \
         "editor's override — see note above"
-    assert server._here_for({}) == \
+    assert generate.here_for_text({}) == \
         "world-impact selection (no tag or thread match)"

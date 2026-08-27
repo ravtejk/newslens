@@ -1799,38 +1799,19 @@ def _strip_smeta(slot: Dict, stamp_inner: str, reason: str = "") -> str:
     return f'<p class="smeta">{" · ".join(bits)}</p>'
 
 
-def _selection_names(slot: Dict) -> List[str]:
-    """The followed things this slot matched — tag names first, then tracked
-    threads; order-preserving, case-insensitively deduped, empties dropped.
-
-    Extracted from _here_for (NL-134 F3) so the why-chosen line and the 'Here
-    for' rationale cannot drift apart. The NL-68 exhibit ('Strait of Hormuz,
-    Strait of Hormuz' — a tag and a tracked thread of the same name doubling the
-    line) must stay dead on BOTH surfaces, and ONE dedupe is how that stays
-    true. Behaviour is byte-identical to the code this replaced.
-
-    RENDER STATUS, TRUTHED 2026-08-24 (NL-117/NL-121): this function and
-    _here_for below now have NO render site in this module. The reason line's
-    ruled grammar states the CLASS in words, which a merged tags+threads list
-    cannot carry, so the live composition is _reason_classes/_reason_segments —
-    and the collision case resolves the other way there (threads outrank tags,
-    because the thread fill carries the delta obligation). Both are LEFT IN
-    PLACE rather than deleted: their pins are QA's, they encode the dedupe law
-    of record, and retiring them is a call routed to the gate, not one an
-    implementer makes while moving a reader surface."""
-    ordered: List[str] = []
-    seen: set = set()
-    tag_names = [t.get("name", "") for t in slot.get("matched_tags") or []
-                 if isinstance(t, dict)]
-    for name in tag_names + list(slot.get("matched_memory") or []):
-        if not name:
-            continue
-        key = name.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        ordered.append(name)
-    return ordered
+# RETIRED 2026-08-27 (NL-165 ③): `_selection_names` and `_here_for` stood here
+# and rendered nothing. NL-134 F3 took the merged list off Today's cards and the
+# NL-117/121 reason line took the quick-tier deep view's "Here for: …" sentence,
+# the last site; from 2026-08-24 their own docstrings said so. They survived on
+# the gate's R-2 ruling, which chartered retirement to "the NEXT HYGIENE
+# BOUNDARY" — this batch.
+#
+# The dedupe law they encoded is NOT retired with them. It moved to
+# generate.selection_names / generate.here_for_text, where the markdown lane and
+# moat_battery now read it too — a live door where there had been only a museum
+# one — and QA's pins were re-aimed at that door rather than deleted. The
+# class-split resolution of the same exhibit is _reason_classes, below, which is
+# live and untouched.
 
 
 def _followed_writer_outlets() -> set:
@@ -1855,12 +1836,13 @@ def _reason_classes(slot: Dict, followed_writers: Optional[set] = None
     """The slot's selecting mechanisms, SPLIT BY CLASS:
     (threads, topics, writer_outlets, writer_unnamed).
 
-    This is _selection_names' dedupe law with the classes kept apart, because
-    the ruled grammar states the class in words and a merged list cannot. Two
-    deliberate differences from _selection_names, both from the 2026-07-31
-    round's own text:
+    This is generate.selection_names' dedupe law with the classes kept apart,
+    because the ruled grammar states the class in words and a merged list
+    cannot. (That is the law's live address as of NL-165 ③, 2026-08-27; it was
+    server._selection_names here until the dead shims were retired.) Two
+    deliberate differences from it, both from the 2026-07-31 round's own text:
 
-    * THREADS OUTRANK TOPICS on a name collision. _selection_names puts tags
+    * THREADS OUTRANK TOPICS on a name collision. selection_names puts tags
       first and drops the same-named thread (the NL-68 'Strait of Hormuz,
       Strait of Hormuz' exhibit). Here the same exhibit resolves the other way:
       "thread fill wins the class seat (it carries the delta obligation)". The
@@ -2278,34 +2260,6 @@ def _still_tracking_line(slot: Dict) -> str:
         body += f' — {_e(note)}'
     body += f'. {_e(labels.STILL_TRACKING_NO_DATE)}'
     return f'<p class="st-line">{body}</p>'
-
-
-def _here_for(slot: Dict) -> str:
-    """The 'Here for' rationale — CODE-OWNED, from the slot (never prose). One
-    source of truth shared by Today's meta-footnote and NL-66(b)'s sources-&-
-    context view: matched tags + tracked threads, else the editor's override,
-    else the world-impact fallback.
-
-    NL-68 exhibit ('Strait of Hormuz, Strait of Hormuz'): a tag and a tracked
-    thread of the same name doubled the line. Dedupe case-insensitively and
-    order-preserving — tags first, then threads; a thread that only repeats a
-    tag name (any case) is dropped. Empty names are dropped too. NL-134 F3 moved
-    that dedupe into _selection_names, shared with the why-chosen line, so the
-    two surfaces can never disagree about what the reader matched.
-
-    RENDER STATUS, TRUTHED 2026-08-24 (NL-117/NL-121): NOTHING in this module
-    renders this any more. NL-134 F3 took it off Today's cards; the reason line
-    took the quick-tier deep view's "Here for: …" sentence (the last site) when
-    mockup-v13 passed. generate.py's markdown meta-line still says "Here for:",
-    but it composes that string ITSELF — it has never called this function — and
-    the markdown/§5.7-validated lane is out of this increment's scope. Kept, not
-    deleted: see _selection_names' note."""
-    matches = ", ".join(_selection_names(slot))
-    if matches:
-        return matches
-    if slot.get("override"):
-        return "editor's override — see note above"
-    return "world-impact selection (no tag or thread match)"
 
 
 # NL-17-M1c: _altitude_options is DELETED. THE ASK IS DEAD (his 07-25 ruling
@@ -5657,7 +5611,8 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
     call, and no 'cited, not verified' analyst trust footer — surfacing that
     line here would misrepresent an unanalyzed item as analyzed. It shows the
     slot summary, the source list (item_ids -> source_items), the matched
-    tags/threads, and the 'Here for' rationale. Missing inputs render an honest
+    tags/threads, and the ruled reason line (it replaced the 'Here for'
+    sentence here — NL-117/121). Missing inputs render an honest
     empty state (the NL-11 missing-input class), never a fabricated source."""
     back_label = labels.BACK_TO_TODAY if back_label is None else back_label
     out = [f'<section id="view-deep-{story_anchor}" class="view">']
@@ -5687,8 +5642,10 @@ def _render_sources_context_view(story_anchor: str, headline: str, st: Dict,
                    f'<h2 class="deep-section-label">{_e(labels.IN_BRIEF)}</h2>'
                    f'<p>{_e(summary)}</p></div>')
 
-    # why-you're-seeing-this — matched topics, tracked threads, and the shared
-    # 'Here for' rationale (the same code path as Today's meta-footnote)
+    # why-you're-seeing-this — matched topics, tracked threads, then the ruled
+    # REASON LINE (below). The 'Here for' sentence that stood here and the
+    # Today's-meta-footnote code path it shared are BOTH gone (NL-117/121;
+    # NL-134 F3); the markdown lane is the merged rationale's surviving surface.
     tags = [t.get("name", "") for t in slot.get("matched_tags") or []
             if isinstance(t, dict) and t.get("name")]
     threads = [m for m in slot.get("matched_memory") or [] if m]

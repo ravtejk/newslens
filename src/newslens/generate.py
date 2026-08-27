@@ -2076,6 +2076,63 @@ def _render_protect_block(callback_tags: List) -> str:
     return "\n".join(lines)
 
 
+def selection_names(slot: Dict) -> List[str]:
+    """The followed things this slot matched — tag names first, then tracked
+    threads; order-preserving, case-insensitively deduped, empties dropped.
+
+    THE NL-68 DEDUPE LAW, and now its only implementation. The exhibit is a tag
+    and a tracked thread of the SAME name doubling the line ("Strait of Hormuz,
+    Strait of Hormuz"); the law says that must stay dead on every surface that
+    merges the two lists.
+
+    MOVED HERE from server._selection_names by NL-165 ① (2026-08-27) because the
+    law was only half-kept: the web lane called it, the markdown lane composed
+    the same merge by hand and never deduped, so the doubling shipped in every
+    edition that had a twin — data/briefings/2026-08-26.md line 43 and
+    2026-08-24.md line 32 are the specimens the batch was chartered on. Behaviour
+    is byte-identical to the server code this replaces; only the address changed,
+    and it changed DOWNWARD in the import graph (server imports generate, never
+    the reverse) so both lanes and moat_battery can reach one function instead of
+    keeping three copies honest by memory.
+
+    Not to be confused with server._reason_classes, which is deliberately a
+    DIFFERENT resolution of the same exhibit: it keeps the classes apart and lets
+    the THREAD win the collision, because the reason line states the class in
+    words and the thread fill carries the delta obligation (2026-07-31 round §6).
+    Both kill the doubling; only the surviving class differs."""
+    ordered: List[str] = []
+    seen: set = set()
+    tag_names = [t.get("name", "") for t in slot.get("matched_tags") or []
+                 if isinstance(t, dict)]
+    for name in tag_names + list(slot.get("matched_memory") or []):
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(name)
+    return ordered
+
+
+def here_for_text(slot: Dict) -> str:
+    """The 'Here for' rationale — CODE-OWNED, from the slot (never prose):
+    matched tags + tracked threads through the dedupe law, else the editor's
+    override, else the world-impact fallback.
+
+    ONE composition, read by the §5.7 markdown meta line below and by
+    moat_battery's prose-first colophon. Those were separate literal copies
+    until NL-165 ①; the battery's T1 arm compares prose against sectioned and
+    calls the colophon furniture that "rides both forms, byte-identical", which
+    a second copy can only keep true by luck."""
+    matches = ", ".join(selection_names(slot))
+    if matches:
+        return matches
+    if slot.get("override"):
+        return "editor's override — see note above"
+    return "world-impact selection (no tag or thread match)"
+
+
 def assemble_narrative(
     date: str, variant: str, stories: List[Dict], inputs: Dict
 ) -> str:
@@ -2111,18 +2168,13 @@ def assemble_narrative(
                 watch_label = st.get("watch_label") or "Watch for"
                 parts.append(f"**{watch_label}:** {st['watch_for']}")
                 parts.append("")
-        matches = ", ".join(
-            [t["name"] for t in slot.get("matched_tags", [])]
-            + slot.get("matched_memory", [])
-        )
-        # Latent bug found by the cold-start sample: no-match is not the same
-        # as override — never point at a label that isn't there.
-        if matches:
-            here_for = matches
-        elif slot.get("override"):
-            here_for = "editor's override — see note above"
-        else:
-            here_for = "world-impact selection (no tag or thread match)"
+        # NL-165 ①: this merge used to be composed here, RAW — no dedupe — so a
+        # tag and a tracked thread of the same name doubled the name on this
+        # lane every edition while the web lane deduped. One call now, through
+        # the law itself; the no-match/override branches it also carries are the
+        # cold-start fix (no-match is not the same as override — never point at
+        # a label that isn't there) and are unchanged.
+        here_for = here_for_text(slot)
         meta_line = slot.get("corroboration_label", "")
         outlets = slot.get("outlets") or []
         outlet_names = f" — {', '.join(outlets)}" if outlets else ""

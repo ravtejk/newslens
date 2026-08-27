@@ -40,7 +40,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from newslens import db, paths, server
+from newslens import db, generate, paths, server
 
 # STAGE-0 C1: /api/generate now refuses a profile with NO topics (SEAM 2's
 # belt — a run started there can only die in run_rank's CLI refusal). These
@@ -306,18 +306,26 @@ def test_zero_mock_fresh_path_real_stamp_real_recheck(tmp_paths, monkeypatch):
 
 
 # ==========================================================================
-# _here_for — the edges the implementer's file skips, and the twin site
+# 'Here for' — the edges the implementer's file skips, and the twin site
+#
+# RE-AIMED 2026-08-27 (NL-165 ③): server._here_for is retired; the law is live
+# at generate.here_for_text and these assertions carry over unchanged. Worth
+# noting what that move did to THIS file specifically — the malformed-entry pin
+# below described a tolerance the markdown lane never had. Until NL-165 ① that
+# lane indexed `t["name"]` unguarded, so the very slot shape pinned here raised
+# KeyError and took the whole edition render down. The pin now covers the lane
+# that could actually be hurt by the case it describes.
 # ==========================================================================
 def test_here_for_thread_only_names_survive():
     slot = {"matched_tags": [], "matched_memory": ["Hormuz Grain Corridor"]}
-    assert server._here_for(slot) == "Hormuz Grain Corridor"
+    assert generate.here_for_text(slot) == "Hormuz Grain Corridor"
 
 
 def test_here_for_empty_and_malformed_entries_drop():
     slot = {"matched_tags": [{"name": ""}, {"nope": 1}, "not-a-dict",
                              {"name": "Real Tag"}],
             "matched_memory": ["", "Real Thread"]}
-    assert server._here_for(slot) == "Real Tag, Real Thread"
+    assert generate.here_for_text(slot) == "Real Tag, Real Thread"
 
 
 def test_here_for_multiple_dupes_and_order_preserved():
@@ -325,7 +333,7 @@ def test_here_for_multiple_dupes_and_order_preserved():
             "matched_memory": ["beta", "Gamma", "ALPHA", "Gamma"]}
     # tags first in their order; threads add only genuinely new names; the
     # first-seen casing wins
-    assert server._here_for(slot) == "Alpha, Beta, Gamma"
+    assert generate.here_for_text(slot) == "Alpha, Beta, Gamma"
 
 
 def test_writer_add_without_feed_url_400s_the_boundarys_basis(ui):

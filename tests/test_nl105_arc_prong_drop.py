@@ -65,9 +65,31 @@ _N_CANDIDATES = sum(len(s["candidates"]) for s in _SPECIMENS)
 # The measured shape of the corpus on the LANDED bytes. Exact numbers, so any
 # later change to the validator flips these CONSCIOUSLY instead of drifting:
 # a rule that renders fewer real lines has to say so here.
-_EXPECT_CANDIDATES_ACCEPTED = 54        # of 84
-_EXPECT_SPECIMENS_RENDERING = 32        # of 42 thread-editions
-_EXPECT_SILENT_EDITIONS = ["2026-08-06", "2026-08-12"]
+#
+# MOVED 2026-08-27 by NL-165 ② — the first conscious flip this block was built
+# for, and it moves in the generous direction. That batch fixed a sentence
+# splitter that broke on a numeraled abbreviation ("goal No. 1", "on Aug. 1"),
+# and _sentences is SHARED: the same false break that inflated a state
+# paragraph's sentence count was hard-REJECTING arc candidates that are one
+# sentence, on §E's one-sentence rule. Measured HEAD (30c689e) vs fixed over the
+# whole corpus — three verdicts moved and no others:
+#
+#   2026-08-01  Ukraine War            cand 0   SENT -> PASS
+#   2026-08-06  Ukraine War            cand 1   SENT -> PASS
+#   2026-08-11  Fed rate-cut policy    cand 1   SENT -> F1-RUN
+#
+# ZERO candidates went PASS -> reject. The third is not a loss: that line was
+# always a state-text paste and now says so. The mechanism is CHECK ORDERING,
+# not sentence repair: §E's sentence count runs before §F.1 in
+# validate_arc_line, so at HEAD the false split killed the line as SENT and the
+# run check never executed. arc_overlap_trips reads the WHOLE text via
+# _arc_word_seq (_sentences is not in that path) and already trips on HEAD
+# bytes (gate probe, 30c689e: overlap=True). And 2026-08-06
+# leaves the silent list — a real edition that served no continuity line at all,
+# blank for a reason that was never one of the contract's rules.
+_EXPECT_CANDIDATES_ACCEPTED = 56        # of 84 (54 before NL-165 ②)
+_EXPECT_SPECIMENS_RENDERING = 34        # of 42 thread-editions (32 before)
+_EXPECT_SILENT_EDITIONS = ["2026-08-12"]   # was ["2026-08-06", "2026-08-12"]
 _EXPECT_RUN_SHARING = 11                # candidates that paste a 6-word run
 
 
@@ -205,12 +227,20 @@ def test_no_streak_of_editions_goes_silently_arcless():
 
 def test_every_silent_edition_is_explained_by_a_surviving_rule():
     """BORN RED — silence is lawful only when a rule with teeth caused it.
-    Two editions still serve no arc, and neither is the tripwire's doing:
-    2026-08-06 (two ANCHOR misses, one over the 35-word cap, one multi-sentence)
-    and 2026-08-12 (four over the cap). Both are the model missing a structural
-    rule it is capable of hitting — the §E cap is the binding constraint now,
-    which is why the prompt's arc_line schema line restates it. At 699586a this
-    is red: the silence was §F.1's, in every edition."""
+    At 699586a this is red: the silence was §F.1's, in every edition.
+
+    ONE edition still serves no arc, and it is not the tripwire's doing:
+    2026-08-12 (four candidates over the 35-word cap). The §E cap is the binding
+    constraint now, which is why the prompt's arc_line schema line restates it.
+
+    2026-08-06 LEFT this list on 2026-08-27 (NL-165 ②) and the reason is worth
+    keeping: its four candidates were two ANCHOR misses, one over the cap, and
+    one "multi-sentence" — except that last one was a single sentence reading
+    "By Aug. 1, Russia's barrages had killed nine in Kyiv…", and the splitter was
+    counting the period in "Aug. 1" as a full stop. That edition was blank
+    because of a tokenizer bug, not because of a rule. It renders now. The
+    lesson this file was written to teach — that a contract can be fully pinned
+    and still be wrong about the world — applied to the pins themselves."""
     per_edition = _by_edition()
     silent = sorted(e for e in per_edition if "PASS" not in per_edition[e])
     assert silent == _EXPECT_SILENT_EDITIONS, (
@@ -274,12 +304,25 @@ def test_the_survivors_still_have_teeth_on_the_corpus():
     pins above and be worth nothing; this is the other side of that bound.
     (The exact accepted/rejected split is pinned by
     test_the_production_corpus_renders_again — deliberately not restated here,
-    so this pin stays true on both sides of the drop.)"""
+    so this pin stays true on both sides of the drop.)
+
+    SENT LEFT THE REQUIRED SET on 2026-08-27 (NL-165 ②), and the honest reading
+    is that it never belonged there on this corpus. Every SENT rejection the
+    record ever logged was the splitter miscounting a numeraled abbreviation —
+    all three of them, enumerated at the top of this file. No production
+    candidate has ever been rejected for genuinely running to two sentences. The
+    §E one-sentence rule still has teeth; they are exercised by the invented
+    multi-sentence strings in test_arc_line.py, which is the right place for a
+    rule the real model does not break. Requiring it to bite HERE would be
+    requiring a bug to stay."""
     tags = [v for s in _SPECIMENS for v in _verdicts(s)]
     rejected = [t for t in tags if t != "PASS"]
     assert set(rejected) <= {"ANCHOR", "CAP", "SENT", "BAN", "F1-RUN"}, (
         f"an unclassified rejection appeared: {set(rejected)}")
-    assert {"CAP", "ANCHOR", "SENT"} <= set(rejected)
+    assert {"CAP", "ANCHOR"} <= set(rejected)
+    assert "SENT" not in set(rejected), (
+        "a sentence-count rejection reappeared on production text — the "
+        f"NL-165 splitter fix may have regressed: {set(rejected)}")
 
 
 # ===========================================================================

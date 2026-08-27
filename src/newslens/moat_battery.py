@@ -318,8 +318,12 @@ def render_prose_first(date: str, stories: List[Dict], inputs: Dict) -> str:
             if text:
                 parts.append(text)
                 parts.append("")
-        # Class 2: the colophon — built by the SAME code path as the sectioned
-        # render so parity is structural, not remembered.
+        # Class 2: the colophon. Its 'Here for' rationale reads the SAME code
+        # path as the sectioned render (generate.here_for_text — structural
+        # since NL-165 (1)); the f-string shell around it remains a literal
+        # twin of generate.py's, held byte-equal by the NL-165 parity pin
+        # (remembered — and the pin is the memory; gate MUT-C: one dropped
+        # byte goes red).
         parts.append(_colophon_line(st, slot, inputs))
         parts.append("")
 
@@ -331,16 +335,16 @@ def render_prose_first(date: str, stories: List[Dict], inputs: Dict) -> str:
 
 
 def _colophon_line(st: Dict, slot: Dict, inputs: Dict) -> str:
-    """The per-story epistemic colophon, verbatim in both forms (§5.7)."""
-    matches = ", ".join(
-        [t["name"] for t in slot.get("matched_tags", [])]
-        + slot.get("matched_memory", []))
-    if matches:
-        here_for = matches
-    elif slot.get("override"):
-        here_for = "editor's override — see note above"
-    else:
-        here_for = "world-impact selection (no tag or thread match)"
+    """The per-story epistemic colophon, verbatim in both forms (§5.7).
+
+    NL-165 ①: the 'Here for' clause reads generate.here_for_text — the SAME
+    function the sectioned arm reaches through assemble_narrative — instead of
+    the hand-copied merge that stood here. The old copy made this docstring's
+    own parity claim (below, at the call site: "built by the SAME code path as
+    the sectioned render") true only by coincidence, and the NL-68 twin was
+    exactly the input that broke the coincidence: deduped in one arm, doubled in
+    the other, which is a FURNITURE difference inside a FORM comparison."""
+    here_for = generate.here_for_text(slot)
     meta_line = slot.get("corroboration_label", "")
     outlets = slot.get("outlets") or []
     outlet_names = f" — {', '.join(outlets)}" if outlets else ""

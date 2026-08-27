@@ -393,13 +393,18 @@ def test_f3_the_nl68_dedupe_holds_on_the_new_surface_too(tmp_paths):
     surfaces.
 
     RE-PINNED 2026-08-24: the class-worded grammar resolves the collision the
-    OTHER way from _selection_names — the THREAD wins the class seat, because
+    OTHER way from selection_names — the THREAD wins the class seat, because
     the thread fill is the one that carries the continuity/delta obligation
     (2026-07-31 round §6, mixed-match rule). One name, one class, one
-    appearance, on both surfaces; only the surviving class differs."""
+    appearance, on both surfaces; only the surviving class differs.
+
+    RE-AIMED 2026-08-27 (NL-165 ③): "BOTH surfaces" now means the reason line
+    and the MARKDOWN lane, which is what the phrase was always supposed to mean
+    — the merged-list half moved to generate.here_for_text when the dead server
+    shim was retired, and it is read by an artifact the principal opens."""
     sl = {"matched_tags": [{"name": "Strait of Hormuz", "level": "specific"}],
           "matched_memory": ["strait of hormuz"]}
-    assert server._here_for(sl) == "Strait of Hormuz"
+    assert generate.here_for_text(sl) == "Strait of Hormuz"
     assert server._reason_line_text(sl).lower().count("strait of hormuz") == 1
     # Same exhibit, both names in the record's own casing: the thread's
     # spelling is what renders, because the thread is what the line names.
@@ -412,16 +417,23 @@ def test_f3_the_nl68_dedupe_holds_on_the_new_surface_too(tmp_paths):
 def test_f3_carried_invariant_here_for_is_unchanged_for_its_own_surfaces(
         tmp_paths):
     """CARRIED-INVARIANT (born-green): F3 took the "Here for" clause off the
-    front page only. _here_for itself keeps every branch it had — but since the
+    front page only. The rationale keeps every branch it had — but since the
     NL-117/121 increment (2026-08-24) NO HTML surface calls it: the deep views
-    render the name-led reason line and generate.py's markdown lane composes
-    its meta-line locally. This pin now guards the dedupe law-of-record only;
-    retirement chartered to the next hygiene boundary (gate R-2, truthed FIX-3)."""
-    assert server._here_for({"matched_tags": [{"name": "AI regulation"}],
-                             "matched_memory": []}) == "AI regulation"
-    assert server._here_for({"override": True}) == \
+    render the name-led reason line and generate.py's markdown lane composed its
+    meta-line locally.
+
+    RE-AIMED 2026-08-27 — this is the pin gate R-2 named. The retirement it was
+    waiting on happened (NL-165 ③) and it went the way the charter's CAUTION
+    asked: the shim is gone, the pin is not. "Generate.py composes its meta-line
+    locally" was the sentence that mattered — that local composition WAS the
+    NL-68 violation, and closing it gave this pin a live surface to hold. It now
+    guards the branches of the rationale the markdown lane actually renders,
+    rather than a law-of-record with no reader."""
+    assert generate.here_for_text({"matched_tags": [{"name": "AI regulation"}],
+                                   "matched_memory": []}) == "AI regulation"
+    assert generate.here_for_text({"override": True}) == \
         "editor's override — see note above"
-    assert server._here_for({}) == \
+    assert generate.here_for_text({}) == \
         "world-impact selection (no tag or thread match)"
 
 
@@ -464,7 +476,8 @@ def test_f3_writer_credit_absorbs_a_same_named_tag_or_thread(tmp_paths):
     line — 'Stratechery, Stratechery (a writer you follow)' (gate probe
     receipt, both exact-case and case-variant). The credit form carries the
     name; the bare name folds into it, case-insensitively, per
-    _selection_names' own dedupe convention."""
+    selection_names' own dedupe convention (live at generate.selection_names
+    since NL-165 ③)."""
     sl = slot(tags=({"name": "Stratechery", "level": "specific"},),
               followed=True, outlets=("Stratechery",))
     assert server._reason_line_text(sl, {"Stratechery"}) == \

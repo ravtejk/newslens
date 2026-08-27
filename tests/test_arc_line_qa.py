@@ -112,18 +112,34 @@ def test_one_sentence_check_survives_protected_abbreviations():
     assert V(line2, _STATE, "2026-07-05")[0] == line2
 
 
-def test_PIN_dotted_month_and_honorific_false_reject_as_two_sentences():
-    """PIN of a known false-reject residual (safe direction — retry, then
-    absence; never a shipped bad line): _MONTH_DAY_RE accepts 'Jul. 5' as an
-    anchor form, but _sentences splits on the dot, so the SAME line rejects as
-    two sentences — the two checks disagree about dotted months. Honorifics
-    ('Mr.') split identically. Documented, not fixed here: extending
-    _ABBR_PROTECT is shared-surface (validate_state's sentence cap counts with
-    the same splitter) and belongs to its own change if the cost ever shows up
-    on real editions."""
-    with pytest.raises(R, match="sentence"):
-        V("As of Jul. 5 fees were the dispute; a war has since broken out.",
-          _STATE, "2026-07-05")
+def test_PIN_dotted_month_HALF_RESOLVED_honorific_residual_remains():
+    """WAS a pin of a known false-reject residual in BOTH halves. The dotted
+    month half is now fixed; the honorific half remains a documented residual.
+
+    The original note stated the trigger precisely, so it is quoted rather than
+    paraphrased: "_MONTH_DAY_RE accepts 'Jul. 5' as an anchor form, but
+    _sentences splits on the dot, so the SAME line rejects as two sentences —
+    the two checks disagree about dotted months … Documented, not fixed here:
+    extending _ABBR_PROTECT is shared-surface (validate_state's sentence cap
+    counts with the same splitter) and belongs to its own change if the cost
+    ever shows up on real editions."
+
+    Both conditions came due on 2026-08-27. The cost showed up on real editions
+    — the 08-26 run logged two threads warned against sentences truncated at
+    'goal No.', and replaying the production arc corpus found the same break
+    hard-rejecting real candidates and leaving 2026-08-06 with no continuity
+    line at all — and NL-165 ② is the own change it was deferred to. The fix is
+    the narrow one this docstring implied: an abbreviation followed by a NUMERAL.
+
+    So the dotted month validates now and the honorific still does not: 'Mr.' is
+    followed by a name, not a digit. That asymmetry is deliberate, not an
+    oversight. 'Mr.' before a capitalised word is genuinely ambiguous with a
+    sentence end in a way 'Jul. 5' is not; the safe direction here is
+    retry-then-absence rather than a shipped bad line; and the corpus census
+    that justified the numeraled class found ZERO honorific breaks to justify
+    this one. It stays pinned as a residual so that it stays a decision."""
+    line = "As of Jul. 5 fees were the dispute; a war has since broken out."
+    assert V(line, _STATE, "2026-07-05")[0] == line
     with pytest.raises(R, match="sentence"):
         V("On Jul 5 Mr. Araghchi still negotiated; talks have since collapsed.",
           _STATE, "2026-07-05")
