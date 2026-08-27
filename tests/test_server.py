@@ -568,9 +568,15 @@ def test_surgery_on_comments_only_file_fails_without_writing(tmp_paths):
     paths.SOURCES_FILE.write_text(text, encoding="utf-8")
     ok, msg = server.topic_add("anything", "broad")
     # NL-103 FIX-2 RE-PIN: the locate failure is a reader-facing refusal now —
-    # it names the reader's own level, not `interests.granular in sources.yaml`.
+    # it names the reader's own group, not `interests.granular in sources.yaml`.
+    # NL-123 RE-AIM (slate line 5, ruled 2026-08-27): the group's reader noun is
+    # `areas`, not the rung word `broad`. The rung died as reader vocabulary on
+    # 2026-07-28 and NL-150 killed the last surface that showed one, so the old
+    # sentence named a choice the reader is never offered. The assertion moves
+    # to the new ruled string; what it PINS — a reader-facing refusal, and a
+    # file left byte-identical — is unchanged.
     assert not ok and msg == ("Didn’t add it — your sources file has no "
-                              "section for broad topics.")
+                              "areas section.")
     assert paths.SOURCES_FILE.read_text(encoding="utf-8") == text
 
 
@@ -1468,11 +1474,20 @@ def test_verbs_preserve_view_through_one_reload_mechanism():
     # NL-68 item 10 (DECISIONS 2026-07-16): addStory (free-text) is GONE, replaced
     # by followStory (suggestions-only), which reloads with the fold-expand flag
     # reloadPreservingView(true) — so the assertion matches the call prefix.
+    #
+    # NL-123 RE-AIM (2026-08-27): `removeToken` stopped being a mutating verb.
+    # The warn-arm split it into a DISPATCHER (which may open a confirm card and
+    # return without acting) and `doRemoveToken`, which is the verb that issues
+    # the request and therefore owes the reload. The law is untouched — it moved
+    # one function down — so the mutating-verb list follows it rather than being
+    # relaxed. `removeToken` keeps the no-raw-bounce half below, since a
+    # dispatcher must not reload either.
     for fn in ("saveNote", "followStory", "addTopic", "addWriter",
-               "deleteThread", "threadAction", "generateAgain", "removeToken"):
+               "deleteThread", "threadAction", "generateAgain", "doRemoveToken"):
         region = js.split("function " + fn, 1)[1].split("\nfunction ", 1)[0]
         assert "location.reload()" not in region, fn
         assert "reloadPreservingView(" in region, fn
     # removeToken re-fetches (count refresh), never the old silent in-place hide:
     remove_region = js.split("function removeToken", 1)[1].split("\nfunction ", 1)[0]
     assert "style.display = 'none'" not in remove_region
+    assert "location.reload()" not in remove_region

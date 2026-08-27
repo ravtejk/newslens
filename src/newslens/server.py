@@ -1321,20 +1321,42 @@ def topic_add(name: str, level: str = "") -> Tuple[bool, str]:
     if bad:
         return False, bad
     yaml_level = "broad" if level == "broad" else "granular"
+    # NL-123 slate lines 5-6 (Content Lead, ruled 2026-08-27): the READER's
+    # noun for the group. The rung words died as reader vocabulary on
+    # 2026-07-28 (DECISIONS §2), and NL-150 killed the last surface that ever
+    # showed one — so copy naming a level referenced a choice the reader is
+    # never offered and cannot make. Not merely off-register: incoherent.
+    #
+    # "Area" is REUSED, not minted: it is already the shipped reader word for a
+    # catalog DOMAIN (labels.COMMISSION_COV_ONE/MANY, "…sources cover this
+    # area."), and interests.broad is exactly where the catalog routes its
+    # domains (catalog.LEVEL_TO_EDITOR_LEVEL). One vocabulary, already blessed.
+    #
+    # Written as the same binary expression `yaml_level` uses, one line above,
+    # so the two mappings cannot drift apart — and total by construction, since
+    # the guard above admits only the two levels.
+    reader_group = "areas" if level == "broad" else "topics"
 
     def mutate(lines):
         start, end = _find_interest_list(lines, yaml_level)
         if start < 0:
             # NL-103 FIX-2: reader-rendered refusal — no config path, no
-            # filename, and it names the reader's level, never `yaml_level`.
-            return False, (f"Didn’t add it — your sources file has no section "
-                           f"for {level} topics."), lines
+            # filename. NL-123: and no rung word. Naming the sources FILE
+            # survives the rewrite deliberately — it is the site of the fact,
+            # not a prescribed remedy. The hand-edit escape is real and this
+            # sentence does not teach it; a refusal that drafts the reader into
+            # config surgery as the expected next act is a different sentence.
+            return False, (f"Didn’t add it — your sources file has no "
+                           f"{reader_group} section."), lines
         _open_empty_flow_list(lines, start - 1, yaml_level)
         existing = {ln.strip()[1:].split("#")[0].strip().lower()
                     for ln in lines[start:end] if ln.strip().startswith("-")}
         if name.lower() in existing:
+            # The collision is structurally group-local (the scan above reads
+            # only the target group's lines), so naming the group keeps the old
+            # sentence's full information at no cost in truth.
             return False, (f"Didn’t add it — {name} is already in your "
-                           f"{level} topics."), lines
+                           f"{reader_group}."), lines
         insert_at = end
         while insert_at > start and not lines[insert_at - 1].strip():
             insert_at -= 1
@@ -4033,6 +4055,41 @@ def _following_threads_subview(g: Dict[str, List[Dict]],
     return "".join(out)
 
 
+def _off_catalog_interests(cfg) -> set:
+    """Lowercased interest names the catalog does not carry (NL-123 slate 7).
+
+    THE ASYMMETRY IS THE DESIGN, not a half-measure. A catalog name is
+    re-addable forever — the offer is catalog ∪ latest-edition leg (NL-150) —
+    so removing one is verified-and-correct, and verified-and-correct is
+    SILENT. An off-catalog name has only the edition leg, and typed free-text
+    adds died on 2026-07-17 (suggestions-only): once the latest edition stops
+    mentioning it, the UI cannot put it back at all. That removal is the
+    uncertain act, so it is the only one that gets a confirm. Warning on both
+    would be alarmism and would bury the few names that matter.
+
+    Decided statelessly AT RENDER through the same case-blind `resolve` the
+    write door uses (`_catalog_write_identity`), so a hand-edited `medicaid`
+    reads as on-catalog here exactly as it does there. No new state and no new
+    column: off-catalog membership is a fact about the catalog file, which
+    changes without this row changing, and a stored flag would go stale silent.
+
+    A catalog that will not load degrades to NO warns — loud to the operator,
+    silent to the reader, and today's behaviour exactly preserved. Warning over
+    names we cannot classify would be a guess wearing a warning's clothes, and
+    refusing to render would mint the closed door NL-150 exists to have killed.
+    Its own load rather than one shared with `_topic_suggestions`, deliberately:
+    each degrade then stands alone, and one broken file cannot take out two
+    behaviours through a single arm."""
+    try:
+        cat = catalog.load()
+    except catalog.CatalogError as exc:
+        print(f"following tokens: {exc}", flush=True)
+        return set()
+    return {n.lower()
+            for n in list(cfg.interests_broad) + list(cfg.interests_granular)
+            if cat.resolve(n) is None}
+
+
 def _render_following(con: sqlite3.Connection) -> str:
     g = _following_rows(con)
     cfg = config.load_sources()
@@ -4042,10 +4099,17 @@ def _render_following(con: sqlite3.Connection) -> str:
         _story_follow_suggestions(con), suggest_only=True)
     threads_html = _following_threads_subview(g, story_suggest)
 
-    def token(name: str, kind: str, label: Optional[str] = None) -> str:
+    def token(name: str, kind: str, label: Optional[str] = None,
+              warn: bool = False) -> str:
+        # NL-123 slate 7: `warn` arms the house confirm card client-side. It
+        # rides the onclick as a render-time literal rather than a data-
+        # attribute the client re-derives, because the catalog is the only
+        # thing that can answer the question and the client cannot see it.
+        # Writers never warn — they have their own removal story.
         return (f'<span class="token">{_e(label or name)}'
                 f'<button class="token-remove" aria-label="Remove {_e(label or name)}"'
-                f' onclick="removeToken({_e(_js_str(kind))}, {_e(_js_str(name))}, this)">×</button></span>')
+                f' onclick="removeToken({_e(_js_str(kind))}, {_e(_js_str(name))},'
+                f' this, {"true" if warn else "false"})">×</button></span>')
 
     # NL-11: the shared house-styled suggestion component (replaces the native
     # datalist). Excludes already-followed topics; keyboard-accessible; no-JS
@@ -4062,21 +4126,33 @@ def _render_following(con: sqlite3.Connection) -> str:
                         "Search topics", _topic_suggestions(con, cfg),
                         suggest_only=True),
     ]
-    for group, label in ((cfg.interests_broad, "Broad"),
-                         (cfg.interests_granular, "Specific")):
+    # NL-123 slate 1-2: `Broad`/`Specific` become `Areas`/`Topics`. The rung
+    # adjectives were the last reader-facing survivors of a vocabulary
+    # DECISIONS 2026-07-28 §2 killed, kept alive here only because no ruled
+    # replacement existed until the 2026-08-27 slate. "Area" is the catalog's
+    # own shipped reader word for a DOMAIN (labels.COMMISSION_COV_ONE/MANY) and
+    # interests_broad is where the catalog routes domains — same map as
+    # topic_add's `reader_group`, same source.
+    off_catalog = _off_catalog_interests(cfg)
+    for group, label in ((cfg.interests_broad, "Areas"),
+                         (cfg.interests_granular, "Topics")):
         topics.append(f'<div class="token-group"><p class="token-group-name">'
                       f'{label} ({len(group)})</p><div class="token-list">')
-        topics.extend(token(n, "topic") for n in group)
+        topics.extend(token(n, "topic", warn=n.lower() in off_catalog)
+                      for n in group)
         if not group:
             # NL-103 row 20: bare "Nothing yet" DIED here. The only adjacent
-            # text is the group name ("Broad (0)"), a <p> with no heading
-            # semantics and no aria linkage — no programmatic section context —
-            # so the class noun rides in-string. It carries the group adjective
-            # too (the register's own row-16 vocabulary): under "Broad (0)" a
-            # flat "No topics yet" would read as "no topics at all" for a reader
-            # who has specific ones, which is not what IS.
-            topics.append(f'<p class="empty-note">No {label.lower()} topics '
-                          f'yet</p>')
+            # text is the group name, a <p> with no heading semantics and no
+            # aria linkage — no programmatic section context — so the class
+            # noun rides in-string. Row 20 ALSO put the group adjective here,
+            # because under "Broad (0)" a flat "No topics yet" would read as
+            # "no topics at all" to a reader who has specific ones. NL-123
+            # RETIRES that workaround instead of carrying it: the two groups no
+            # longer share a noun, so "No areas yet" under "Areas (0)" cannot
+            # be misread as the other group. The note is now the plain class
+            # noun, which is what row 20 wanted before the rung words forced
+            # the adjective.
+            topics.append(f'<p class="empty-note">No {label.lower()} yet</p>')
         topics.append("</div></div>")
 
     # NL-68 item 14: the "Suggestions recall writers the system already knows…"
@@ -6955,7 +7031,60 @@ class Handler(BaseHTTPRequestHandler):
         if not topic:
             return self._send_json({"ok": False, "error": "topic required"}, 400)
         def act(con):
-            ok, msg = memory.delete_thread(con, topic)
+            # NL-162-B (charter option B "refuse with reason", ruled
+            # 2026-08-24; copy ruled 2026-08-27). Four FKs into memory(id)
+            # carry no cascade — thread_deltas / thread_state / watch_items /
+            # thread_closures — so a thread that ever recorded one of those is
+            # undeletable and `delete_thread`'s DELETE raises IntegrityError
+            # from inside its own transaction.
+            #
+            # THAT IS NOT CHANGED HERE, and it is not a bug to route around:
+            # those rows are dated facts and the record keeps them. NO schema,
+            # NO cascade — the scope tripwire
+            # (test_the_other_four_memory_fks_still_block_delete) measures the
+            # raise and stays green on untouched bytes. What changes is the
+            # SILENCE: at HEAD this walked into do_POST's generic arm and
+            # answered 500 / "FOREIGN KEY constraint failed", which the client
+            # discarded entirely — the reader saw the popup close, the page
+            # reload, and the thread still sitting there.
+            #
+            # Caught HERE, at the route, precisely BECAUSE the layer below is
+            # where the raise is pinned. The answer is an ordinary refusal in
+            # the shape every other verb on this handler already returns.
+            #
+            # STATED BOUND (the arm is bare on purpose, and this is why it is
+            # honest): IntegrityError has exactly one reachable source on this
+            # path. `delete_thread` runs two statements — `append_tombstone`,
+            # whose only constraints are NOT NULLs this call site always fills
+            # and CHECKs on `kind`/`actor` that append_tombstone validates in
+            # Python first (ValueError, not IntegrityError), with no UNIQUE and
+            # no FK on memory_tombstones; and the DELETE, whose children in the
+            # DEPLOYED schema number FIVE, not four — enumerated exactly,
+            # because this comment IS this arm's re-open tripwire:
+            #   thread_deltas (0010) · thread_state (0010) · watch_items (0013)
+            #     · thread_closures (0015) — the four NO ACTION legs named
+            #     above. These block, and their raise is what this arm answers.
+            #   thread_baselines (0017, its FK recreated ON DELETE CASCADE by
+            #     0027) — the fifth. It does NOT block: it cascades, deletes
+            #     clean, and never reaches this catch. Its append-only BEFORE
+            #     DELETE trigger IS IntegrityError-class, and stands aside for
+            #     this one cascade only — by 0027's guard (`WHEN EXISTS (SELECT
+            #     1 FROM memory WHERE id = OLD.thread_id)`, false during a
+            #     cascade because SQLite has already removed the parent row)
+            #     plus that ordering. A DIRECT delete of a baseline row still
+            #     ABORTs, and would reach this arm wearing the refusal sentence.
+            # A wider integrity failure would have to be minted by a future
+            # migration, and would then arrive wearing this sentence — so a
+            # migration that adds a constraint to either table, or any change to
+            # 0027's WHEN guard, re-opens this arm.
+            #
+            # The tombstone rides in the SAME transaction as the DELETE, so the
+            # rollback this catch lands on top of leaves no deletion record
+            # behind: there is nothing to undo here, only something to say.
+            try:
+                ok, msg = memory.delete_thread(con, topic)
+            except sqlite3.IntegrityError:
+                return {"ok": False, "error": labels.THREAD_DELETE_BLOCKED}
             return {"ok": ok} if ok else {"ok": False, "error": msg}
         self._send_json(self._with_memory(act))
 

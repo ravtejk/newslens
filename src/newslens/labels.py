@@ -657,6 +657,31 @@ COMMISSION_PARTIAL_REFUSAL = (
     "Didn’t generate — only {topics} saved, so nothing was started.")
 COMMISSION_LIST_AND = " and "
 
+# --- NL-162-B: the thread delete that is refused, and now says so -----------
+# RULED COPY (Content Lead slate 2026-08-27, §5 Job 4). Four foreign keys into
+# memory(id) carry no cascade — thread_deltas / thread_state / watch_items /
+# thread_closures — so a thread that ever recorded one of those cannot be
+# deleted. Until now the surface LIED BY SILENCE: the server 500'd with
+# "FOREIGN KEY constraint failed" and the client discarded the response, so the
+# popup closed, the page reloaded, the thread was still there, and no words
+# were ever spoken.
+#
+# Register: the frame states what did NOT happen; the why is reader-world
+# (dated facts, recorded, kept — no tables, no "references", no schema); the
+# kept record is the FEATURE, indicative and unapologetic (ADR-0013's posture),
+# never an error the product is confessing to.
+#
+# The second sentence is a NON-EFFECT sentence, licensed under §4 row 8 (the
+# edit-note precedent, webui POPUPS) because the false assumption it kills is
+# both likely and costly: delete is only OFFERED on already-dismissed threads
+# (memory.delete_thread's dismissed-only gate), so the reader's actual goal —
+# stop tracking this — is already achieved. Refusing without saying so invites
+# them to go fight the refusal for a result they already have.
+THREAD_DELETE_BLOCKED = (
+    "Didn’t delete it — this thread carries dated facts recorded from your "
+    "editions, and the record keeps them. It stays dismissed; nothing new is "
+    "tracked.")
+
 # --- The source pack's counted clauses (Commissioning act 2) -----------------
 # Assembled by commissioning.source_pack_sentence from the reader's OWN file —
 # every number is counted, never typed, and a clause whose count is zero is

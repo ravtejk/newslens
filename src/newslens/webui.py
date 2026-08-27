@@ -953,12 +953,49 @@ POPUPS = """
   <div class="popup-card">
     <h3 id="popup-delete-title">Delete “<span id="delete-topic-name"></span>”?</h3>
     <p style="font-size:0.88rem;color:var(--ink-soft);margin:0 0 1.25rem;">This removes it permanently from your list. Past editions that mentioned it are unaffected.</p>
+    <!-- NL-162-B: THE MOUNT the refusal needed to exist at all. This card had
+         no status element, so `deleteThread()` had nowhere to put an answer
+         and (consequently) discarded it — an FK-blocked thread closed the
+         popup, reloaded the page, and said nothing. (No population count here:
+         it is live data, it drifts, and an undated count in a comment rots into
+         false record.) House pattern, same as
+         add-topic: popup-status err, aria-live polite. The body above STAYS —
+         it is still true; this line speaks only when the act is refused. -->
+    <p class="popup-status err" id="delete-thread-status" aria-live="polite"></p>
     <div class="popup-actions">
       <button class="cta-outline" onclick="closePopup('popup-delete-confirm')">Cancel</button>
       <!-- NL-103 row 5: ink, never danger — the inline background override is
            gone and .cta-quiet is already the ink button. The confirm's grammar
            carries the weight; color is never the channel. -->
       <button class="cta-quiet" onclick="deleteThread()">Delete</button>
+    </div>
+  </div>
+</div>
+<!-- NL-123 slate 7 (ruled 2026-08-27) — the warn-arm confirm for removing an
+     OFF-CATALOG topic. Same house idiom as every card above (scrim + card +
+     title-with-name + one fact + Cancel + act verb): no new component, no new
+     CSS, and no third dialog form.
+
+     IT FIRES ONLY OFF-CATALOG. A catalog name is re-addable forever (the offer
+     is catalog ∪ latest-edition leg, NL-150), so removing one is
+     verified-and-correct — and verified-and-correct is silent. The server
+     resolves each name against the catalog at render time and stamps the
+     answer on the token's onclick; the client cannot see the catalog file and
+     never guesses.
+
+     ONE sentence of body, deliberately: a warn that runs two reads as a
+     lecture. It is exact rather than complete — "won't come back on its own"
+     is true because typed free-text adds died on 2026-07-17 and the edition
+     leg is latest-only (NL-68 item-12 scoping). The hand-edit escape into
+     sources.yaml exists and is NOT taught here: a warn that names config
+     surgery as the expected next act is a different sentence. -->
+<div class="popup-scrim" id="popup-remove-topic" role="dialog" aria-modal="true" aria-labelledby="popup-remove-topic-title">
+  <div class="popup-card">
+    <h3 id="popup-remove-topic-title">Remove “<span id="remove-topic-name"></span>”?</h3>
+    <p style="font-size:0.88rem;color:var(--ink-soft);margin:0 0 1.25rem;">Once removed, <span id="remove-topic-name-body"></span> is suggested again only while the latest edition still mentions it — after that, it won’t come back on its own.</p>
+    <div class="popup-actions">
+      <button class="cta-outline" onclick="closePopup('popup-remove-topic')">Cancel</button>
+      <button class="cta-quiet" onclick="confirmRemoveTopic()">Remove</button>
     </div>
   </div>
 </div>
@@ -2138,16 +2175,61 @@ var deleteTopic = null;
 function openDeleteConfirm(topicName) {
   deleteTopic = topicName;
   document.getElementById('delete-topic-name').textContent = topicName;
+  document.getElementById('delete-thread-status').classList.remove('showing');
   openPopup('popup-delete-confirm');
 }
+/* NL-162-B: this callback used to take NO argument — it closed the popup and
+   reloaded unconditionally, which is why a refused delete was invisible. It
+   now branches, and the refusal arm deliberately does NEITHER: a reload would
+   flash the sentence and destroy it, and closing the popup would take the only
+   surface carrying it. The card stays open with the reason on it until the
+   reader dismisses it themselves. */
 function deleteThread() {
-  api('/api/thread/delete', {topic: deleteTopic},
-      function () { closePopup('popup-delete-confirm'); reloadPreservingView(); });
+  api('/api/thread/delete', {topic: deleteTopic}, function (d) {
+    if (d && d.ok) { closePopup('popup-delete-confirm'); reloadPreservingView(); }
+    else {
+      var s = document.getElementById('delete-thread-status');
+      /* NO FALLBACK SENTENCE HERE, deliberately (NL-123 law: an unruled reader
+         string may not stand). This arm is provably unreachable with a falsy
+         `error`: the route's own refusals always carry one, and api()'s catch
+         manufactures {ok:false, error:String(e)} on transport/parse failure —
+         so a sentence written here would render to no one, and would be minted
+         copy no slate ruled. Whether a RULED generic delete-failure fallback
+         should exist is routed to the Content Lead's next copy batch. */
+      s.textContent = (d && d.error) || '';
+      s.classList.add('showing');
+    }
+  });
 }
 function threadAction(action, topic) {
   api('/api/' + action, {topic: topic}, function () { reloadPreservingView(); });
 }
-function removeToken(kind, name, el) {
+var pendingRemove = null;
+/* NL-123 slate 7: `warn` is the server's render-time answer to "is this name
+   off-catalog?" (server._off_catalog_interests). Off-catalog gets the house
+   confirm card; everything else keeps the silent-instant removal it has always
+   had, because a catalog name is re-addable forever and warning on it would be
+   alarmism. The flag is never derived here — the client cannot see the catalog
+   file, and a second copy of that vocabulary on this surface is exactly the
+   drift catalog.py was made the sole reader to prevent. */
+function removeToken(kind, name, el, warn) {
+  if (warn) {
+    pendingRemove = {kind: kind, name: name};
+    document.getElementById('remove-topic-name').textContent = name;
+    document.getElementById('remove-topic-name-body').textContent = name;
+    openPopup('popup-remove-topic');
+    return;
+  }
+  doRemoveToken(kind, name);
+}
+function confirmRemoveTopic() {
+  if (!pendingRemove) return;
+  var p = pendingRemove;
+  pendingRemove = null;
+  closePopup('popup-remove-topic');
+  doRemoveToken(p.kind, p.name);
+}
+function doRemoveToken(kind, name) {
   /* NL-11: remove then reload so the followed COUNT in the group header
      updates (the old in-place hide left the count stale) — and the reload
      preserves the Following view + sub-view + scroll. */

@@ -253,9 +253,17 @@ def test_row20_empty_states_name_their_class():
     con = _con()
     page, _ = server.build_page(con)
     con.close()
+    # NL-123 RE-AIM (slate lines 3-4, ruled 2026-08-27). Row 20's LAW is
+    # unchanged and this pin still enforces exactly it — every empty state names
+    # its class in-string. What moved is the class NOUN: the two topic groups
+    # are `Areas`/`Topics` now. Row 20 had put the rung ADJECTIVE in these two
+    # strings as a workaround (a flat "No topics yet" under `Broad (0)` would
+    # read as "no topics at all"); distinct nouns retire the workaround, so the
+    # strings get shorter while naming their class MORE exactly. The other three
+    # sites are untouched.
     assert "No threads yet" in page                # Following → Threads
-    assert "No broad topics yet" in page           # Following → Topics (Broad)
-    assert "No specific topics yet" in page        # Following → Topics (Specific)
+    assert "No areas yet" in page                  # Following → Topics (Areas)
+    assert "No topics yet" in page                 # Following → Topics (Topics)
     assert "No writers yet" in page                # Following → Writers
     assert "No edition yet" in page                # Settings → Today's edition
     # Gate FIX-5 (QA-2): LOCATE the two licensed bare "Nothing yet"s, then count.
@@ -295,15 +303,20 @@ def test_fix2_both_popup_statuses_announce():
 
 
 def test_fix2_topic_refusals_are_register_form(replica):
+    """NL-123 RE-AIM (slate lines 5-6, ruled 2026-08-27). FIX-2's law is
+    unchanged — these strings are reader copy and bind to §3's refusal rule — and
+    the re-ruled forms satisfy it BETTER: the rung word `broad` was internal
+    vocabulary the reader is never shown (DECISIONS 2026-07-28 §2), which the
+    original FIX-2 pass could not fix because no ruled replacement existed. The
+    group is now named with the catalog's own shipped reader noun."""
     ok, msg = server.topic_add("economy", "broad")            # already present
     assert not ok
-    assert msg == "Didn’t add it — economy is already in your broad topics."
+    assert msg == "Didn’t add it — economy is already in your areas."
 
     paths.SOURCES_FILE.write_text("# just comments\n", encoding="utf-8")
     ok, msg = server.topic_add("anything", "broad")           # no section
     assert not ok
-    assert msg == ("Didn’t add it — your sources file has no section for "
-                   "broad topics.")
+    assert msg == "Didn’t add it — your sources file has no areas section."
 
 
 def test_fix2_writer_refusals_are_register_form(replica):
