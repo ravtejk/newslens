@@ -306,6 +306,13 @@ def render_prose_first(date: str, stories: List[Dict], inputs: Dict) -> str:
             # {reason} to fill. Conformance is preserved by reading the SAME
             # constant assemble_narrative reads, which is why this render did
             # not need re-deriving — only the call shape changed.
+            # NL-166 (2026-08-27) RE-CHECKED, unchanged by the format split:
+            # the split moved which PROMPT gets which instruction; this render
+            # reads a constant, not a prompt. What did move is the weight this
+            # line carries — it is now the written edition's only override
+            # disclosure on both forms (the prose that used to double it is
+            # gone), so the conformance pair is still exact and now matters
+            # more, not less.
             parts.append(generate.OVERRIDE_TEXT_LABEL)
             parts.append("")
         parts.append(f"**{st['headline']}**")

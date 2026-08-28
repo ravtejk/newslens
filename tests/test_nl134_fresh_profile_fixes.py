@@ -504,14 +504,28 @@ def test_f2a_first_briefing_override_line_forbids_reader_history_claims(
     assert "Make NO claim about what the reader normally reads" in prompt
 
 
-def test_f2a_established_reader_keeps_the_acknowledgement_legal(tmp_paths):
-    """BORN RED on c3778c9 (the "no supplied phrasing" clause is new). The
-    principal's complaint was the FALSE history claim and the verbatim crutch —
-    acknowledging off-interest inclusion stays legal on a non-first edition."""
+def test_f2a_established_reader_arm_now_forbids_the_prose_acknowledgement(
+        tmp_paths):
+    """REVERSED BY NL-166 (2026-08-27) — recorded, not quietly rewritten.
+
+    WAS (this pin, NL-134 F2(a)): "acknowledging off-interest inclusion stays
+    legal on a non-first edition". NL-134's complaint was the FALSE history
+    claim and the verbatim crutch; it left the acknowledgment legal rather
+    than ruling that print owed one.
+
+    NOW: his format law (DECISIONS 2026-08-27, "HIS FORMAT LAW (fourth
+    sitting)") plus his specimen complaint ("I dont like the weird long form
+    way the 'chosen for' is being explained in the briefing, and how its part
+    of the prose/narrative of the story") make the in-prose acknowledgment a
+    doubling of a disclosure the printed label already pays once.
+
+    WHAT THIS PIN STILL GUARDS, unchanged: an established reader takes the
+    ESTABLISHED arm, never the cold-start one."""
     prompt = generate.build_narrative_prompt(
         DATE, "A", inputs_for([slot(1, override=True)], continuity="ok"))
-    assert "your lede may acknowledge naturally" in prompt
-    assert "no supplied phrasing to copy" in prompt
+    assert "ALREADY MADE" in prompt                  # the established arm
+    assert "do NOT acknowledge" in prompt
+    assert "may acknowledge" not in prompt
     assert "THIS IS THE READER'S FIRST BRIEFING" not in prompt
 
 
@@ -524,8 +538,12 @@ def test_f2a_corrupt_continuity_is_not_a_first_edition(tmp_paths):
     prompt = generate.build_narrative_prompt(
         DATE, "A", inputs_for([slot(1, override=True)], continuity="corrupt"))
     assert "THIS IS THE READER'S FIRST BRIEFING" not in prompt
-    assert "your lede may acknowledge naturally" in prompt
-    assert "no supplied phrasing to copy" in prompt   # the established arm
+    # NL-166 re-points the DISCRIMINATOR only: the established arm's text
+    # changed (the prose acknowledgment is now forbidden, not licensed), so
+    # the string that identifies the arm changed with it. What this pin
+    # asserts — that 'corrupt' takes the established arm — is untouched.
+    assert "ALREADY MADE" in prompt                   # the established arm
+    assert "do NOT acknowledge" in prompt
 
 
 def test_f2a_carried_invariant_cold_start_line_is_override_scoped(tmp_paths):
@@ -570,11 +588,18 @@ def test_f2b_no_variant_supplies_the_quotable_override_phrase(fname):
 def test_f2b_both_variants_instruct_by_shape_instead(fname):
     """BORN RED on c3778c9. The replacement teaches the move without handing
     over a phrase, and names the cold-start case in the file the principal
-    edits — the prompts stay plain and principal-editable."""
+    edits — the prompts stay plain and principal-editable.
+
+    NL-166 (2026-08-27) RETIRES TWO OF THE THREE ASSERTIONS, and says why
+    rather than deleting them quietly: "in YOUR OWN WORDS" and "no phrase to
+    copy" shaped an in-prose acknowledgment that his format law abolishes.
+    There is no sentence left to shape, so there is no phrase to withhold —
+    the guidance instructs by PROHIBITION now. The third assertion is the one
+    that outlived the license (the cold-start case is still named in the file
+    the principal edits) and it stays, joined by the new prohibition."""
     text = (paths.PROMPTS_DIR / fname).read_text(encoding="utf-8")
-    assert "in YOUR OWN WORDS" in text
-    assert "no phrase to copy" in text
     assert "FIRST briefing" in text
+    assert "do NOT\n  acknowledge, explain, or allude to that" in text
 
 
 @pytest.mark.parametrize("fname", _VARIANTS)
@@ -582,9 +607,13 @@ def test_f2b_rewritten_guidance_stays_above_the_cache_sentinel(fname):
     """BORN RED on c3778c9 — the anchor text is new there. The INVARIANT is
     old (ADR-0016 §6: the law sits in the cached system prefix); this pin asks
     whether the REWRITTEN guidance still precedes the split sentinel, which
-    only the post-diff files can answer."""
+    only the post-diff files can answer.
+
+    NL-166 RE-ANCHORS the pin — the guidance was rewritten again, in place, so
+    the anchor string moved with it. The INVARIANT it guards is untouched:
+    this law sits in the cached system prefix, above the per-run tags block."""
     text = (paths.PROMPTS_DIR / fname).read_text(encoding="utf-8")
-    at = text.find("in YOUR OWN WORDS")
+    at = text.find("THE PIPELINE'S LABEL CARRIES IT")
     sentinel = text.find(generate._NARRATIVE_CACHE_SENTINEL)
     assert at != -1 and sentinel != -1
     assert at < sentinel, "the override guidance drifted below the sentinel"

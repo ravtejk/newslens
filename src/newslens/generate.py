@@ -275,6 +275,15 @@ VARIANT_A_PARITY = 0
 #   spoken-disclosure validator at validate_script) are re-pointed in the same
 #   diff, and `_override_reason` — the helper that unwrapped the stored prose —
 #   is deleted.
+#
+#   NL-166 (2026-08-27) — WHAT MOVED UNDER THIS CONSTANT, stated because the
+#   ground did move even though the line did not: this label is now the
+#   WRITTEN edition's ONLY override disclosure. Under his format law the
+#   article's prompts (writer note + editor block) are forbidden to restate it
+#   in prose, so a regression that stopped rendering this line would no longer
+#   leave a spoken-style sentence behind as an accidental backstop — it would
+#   silently drop the disclosure from print altogether. The three consumers
+#   above are unchanged; only the prose that used to double it is gone.
 OVERRIDE_TEXT_LABEL = f"**{labels.WHY_CHOSEN_BECAUSE}** {labels.WHY_WORLD_NEWS}"
 WINDOW_LINE = (
     "Generated {timestamp}. Covers items fetched {start} → {end}. NewsLens "
@@ -1367,10 +1376,22 @@ def build_narrative_prompt(date: str, variant: str, inputs: Dict) -> str:
                 "own label)"
             )
         elif s.get("override"):
+            # ‼ NL-166 SCOPE CALL, disclosed — this REVERSES the posture
+            # NL-134 F2(a) left standing ("acknowledging off-interest
+            # inclusion stays legal on a non-first edition"). It is reversed
+            # on his own later and more specific words (2026-08-27): "I dont
+            # like the weird long form way the 'chosen for' is being explained
+            # in the briefing, and how its part of the prose/narrative of the
+            # story." NL-134 kept the acknowledgment legal while fixing a
+            # FALSE-HISTORY claim; it never ruled that print owed one. The
+            # label above the headline pays the disclosure once, which is all
+            # NL-134's just-once spec allows. Reverting is this one hunk plus
+            # the matching bullet in both narrative templates.
             lines.append(
-                "OVERRIDE STORY — outside the reader's tags (the pipeline "
-                "renders its own label; your lede may acknowledge naturally, "
-                "in your own words — no supplied phrasing to copy)"
+                "OVERRIDE STORY — outside the reader's tags. The pipeline "
+                "renders its own label above your text, so the disclosure is "
+                "ALREADY MADE: do NOT acknowledge, explain, or allude to it "
+                "in your prose. Introduce the story on its own merits"
             )
         for rv in s.get("revived_threads", []):
             if rv.get("last_covered"):
@@ -1556,6 +1577,28 @@ def validate_narrative_payload(
                         f"story {n}: revival date {date_needed!r} missing from "
                         "the lede's first two sentences (mandatory disclosure)"
                     )
+        # NL-166 — THE ARTICLE-SIDE ANTI-RESTATEMENT CHECK. WARN-GRADE, and
+        # deliberately so: after the format split the writer is FORBIDDEN and
+        # the editor is TOLD TO CUT an in-prose override disclosure, but a
+        # model's obedience to a new instruction is not knowable until his next
+        # override edition fires. A hard reject on a model echo would be NEW
+        # SEVERITY (a run-killing gate his rulings never asked for), so this
+        # observes instead of enforcing — it turns "we'll see next time" into a
+        # line in the run report.
+        #
+        # NARROW ON PURPOSE: the ruled phrase, on an OVERRIDE story only. It
+        # would have caught his 08-27 specimen ("…carried here as important
+        # world news though it matches none of your usual threads") verbatim.
+        if slot.get("override"):
+            _prose = " ".join(str(out.get(f) or "") for f in
+                              ("lede", "why_it_matters", "my_read", "watch_for"))
+            if labels.WHY_WORLD_NEWS.lower() in _prose.lower():
+                warnings.append(
+                    f"story {n}: the override disclosure is restated in the "
+                    f"article's prose ({labels.WHY_WORLD_NEWS!r}) — the label "
+                    "above the headline already carries it, and this edition "
+                    "owes it once (NL-166 format law; review)"
+                )
         # Single-source: outlet named in lede prose (writer-owned warning).
         # Token-level match: display names like "BBC News — World" are
         # legitimately spoken as "the BBC" (M5 live finding).
@@ -2342,11 +2385,49 @@ def build_analysis_facts_block(inputs: Dict) -> str:
     return "\n".join(lines)
 
 
-def build_labels_block(inputs: Dict, covered: Optional[set] = None) -> str:
+# ‼ NL-166 — THE SPLIT POINT. HIS FORMAT LAW, VERBATIM (principal, 2026-08-27):
+#
+#     "The written article is different from the voice script by design -
+#      those are consumed in two different formats, dont conflate them."
+#
+# ONE block used to feed BOTH prompts — the script (build_script_prompt) and
+# the article's editor pass (build_editor_prompt). That is how a PERFORMATIVE
+# spoken instruction ("say it was chosen as important world news… must be
+# spoken"), written for the format where prose is a disclosure's only carrier,
+# reached the prompt that writes print: his 08-27 edition disclosed the
+# override TWICE on the text surface — once in the ruled label above the
+# headline, once woven into the story's first paragraph. NL-134's just-once
+# spec forbids the second.
+#
+# THE CLASSIFICATION THE LAW ORDERS, applied per line below:
+#   * a FACT both formats need  ->  shared, emitted identically
+#   * a PERFORMATIVE say-it/speak-this instruction  ->  AUDIO ONLY
+#   * an ear/print REGISTER word  ->  written for the format that reads it
+# Sharing is the default for facts and the EXCEPTION for instructions.
+#
+# NAMING, disclosed: the charter calls this a "lane" split. `lane` is already
+# taken in this module for the BILLING/TRANSPORT lane (cfg.lane == "api",
+# NEWSLENS_LANE_EDITOR), so the parameter is `fmt` — his own word for it ("two
+# different formats"), and it collides with nothing.
+FORMAT_SCRIPT = "script"      # the spoken digest — audio, no label furniture
+FORMAT_ARTICLE = "article"    # the written edition — the label carries it
+
+
+def build_labels_block(inputs: Dict, covered: Optional[set] = None, *,
+                       fmt: str) -> str:
     # covered (script path, principal 2026-07-14): the digest covers only the top
     # slots, so it is fed labels for the COVERED stories only — a mandatory spoken
     # disclosure (override, revival) belongs to a story the episode actually
-    # airs. covered=None (editor path) = every slot, unchanged.
+    # airs. covered=None (article path) = every slot, unchanged.
+    #
+    # `fmt` is REQUIRED and has no default ON PURPOSE: the defect this split
+    # closes was a caller silently inheriting the other format's instructions.
+    # An unknown format is a hard failure, never a quiet fallback.
+    if fmt not in (FORMAT_SCRIPT, FORMAT_ARTICLE):
+        raise ValueError(
+            f"build_labels_block: unknown format {fmt!r} — expected "
+            f"{FORMAT_SCRIPT!r} or {FORMAT_ARTICLE!r}")
+    script = fmt == FORMAT_SCRIPT
     lines = []
     for s in inputs["slots"]:
         n = s["slot"]
@@ -2358,22 +2439,56 @@ def build_labels_block(inputs: Dict, covered: Optional[set] = None) -> str:
             # tag-form vocabulary the text edition and the front page carry —
             # named here as the phrase the validator will look for, so the
             # instruction and the check can never drift.
-            lines.append(
-                f"story {n}: OVERRIDE — this story matched none of the "
-                f"reader's topics or threads; say it was chosen as "
-                f"{labels.WHY_WORLD_NEWS.lower()}. The phrase "
-                f"'{labels.WHY_WORLD_NEWS.lower()}' must be spoken; the rest "
-                f"of the sentence is yours"
-            )
+            #
+            # NL-166: that whole instruction is AUDIO-ONLY. Audio has no label
+            # furniture, so speech is the only place the disclosure can be
+            # paid; print pays it in OVERRIDE_TEXT_LABEL above the headline.
+            if script:
+                lines.append(
+                    f"story {n}: OVERRIDE — this story matched none of the "
+                    f"reader's topics or threads; say it was chosen as "
+                    f"{labels.WHY_WORLD_NEWS.lower()}. The phrase "
+                    f"'{labels.WHY_WORLD_NEWS.lower()}' must be spoken; the "
+                    f"rest of the sentence is yours"
+                )
+            else:
+                # The article's half: the FACT (this story is an override) plus
+                # the prohibition his ruling orders. It deliberately supplies
+                # NO phrase to copy — NL-134 F2(b)'s lesson is that a quoted
+                # example becomes the template, and here the example would be
+                # the very restatement being banned.
+                lines.append(
+                    f"story {n}: OVERRIDE — this story matched none of the "
+                    f"reader's topics or threads. The edition renders its own "
+                    f"'chosen because' label above this story's headline, so "
+                    f"this is ALREADY DISCLOSED on this surface: do NOT "
+                    f"restate, paraphrase, or explain it anywhere in the "
+                    f"story's prose. If the draft carries such a sentence, "
+                    f"cut it"
+                )
         if s.get("corroboration_count") == 1 and s.get("outlets"):
+            # SHARED FACT — the outlet name is a specific both formats owe.
             lines.append(f"story {n}: SINGLE-SOURCE — outlet: {s['outlets'][0]}")
         for rv in s.get("revived_threads", []):
             if rv.get("last_covered"):
+                # SPLIT BY REGISTER, not by presence: "say the date" is
+                # performative (audio), but the DATE is a fact the article owes
+                # HARD — validate_narrative_payload RAISES when the lede's
+                # first two sentences lose it. Strip the whole line from the
+                # article format and the editor stops knowing it is protected.
                 lines.append(
-                    f"story {n}: REVIVAL — say the date: last covered {rv['last_covered']}"
+                    f"story {n}: REVIVAL — say the date: last covered "
+                    f"{rv['last_covered']}" if script else
+                    f"story {n}: REVIVAL — last covered {rv['last_covered']}"
                 )
+        # Same fact, in the register its format is read in. "for the ear" was
+        # audio vocabulary handed to print at HEAD — the say-it line's own
+        # conflation class, one line down. The article form matches the
+        # writer's existing note (`corroboration: …`) rather than minting one.
         lines.append(
-            f"story {n}: corroboration for the ear: {s.get('corroboration_label', '')}"
+            f"story {n}: corroboration for the ear: "
+            f"{s.get('corroboration_label', '')}" if script else
+            f"story {n}: corroboration: {s.get('corroboration_label', '')}"
         )
     lines.append("corrections flagged upstream: none this run")
     return "\n".join(lines)
@@ -2503,8 +2618,25 @@ def build_script_prompt(date: str, variant: str, narrative: str, inputs: Dict) -
         spoken_date=human,
         epistemic_rule=epistemic,
         continuity_license=_continuity_license_block(inputs),
-        labels_block=build_labels_block(inputs, covered),
+        labels_block=build_labels_block(inputs, covered, fmt=FORMAT_SCRIPT),
         narrative_text=narrative,
+    )
+
+
+def build_editor_prompt(inputs: Dict, protect_block: str,
+                        draft_payload: Dict) -> str:
+    """The article's editor prompt — NAMED (NL-166), like its script twin.
+
+    It was assembled inline inside the run body, which is why nothing could
+    pin which labels block it received; the format split's whole acceptance
+    criterion lives at this call site, so the call site is now testable
+    without a run. Behaviour is unchanged apart from `fmt=FORMAT_ARTICLE`."""
+    template = (paths.PROMPTS_DIR / PROMPT_EDITOR).read_text(encoding="utf-8")
+    return template.format(
+        labels_block=build_labels_block(inputs, fmt=FORMAT_ARTICLE),
+        analysis_facts_block=build_analysis_facts_block(inputs),
+        protect_block=protect_block,
+        draft_json=json.dumps(draft_payload, ensure_ascii=False),
     )
 
 
@@ -2713,6 +2845,16 @@ def validate_script(
             #   what moved is which words satisfy it. build_labels_block hands
             #   the writer this exact phrase, so instruction and check read the
             #   same constant.
+            #
+            #   NL-166 (2026-08-27) TRUTHS ONE WORD OF THAT: the block hands
+            #   the phrase to the SCRIPT FORMAT only (fmt=FORMAT_SCRIPT). The
+            #   article's block carries a do-not-restate instruction instead,
+            #   because print pays this disclosure in OVERRIDE_TEXT_LABEL. The
+            #   check below is UNTOUCHED by that split and still binds every
+            #   aired override — it is the audio format's half of the same
+            #   §5.7 contract, and no validator asks the article's prose for
+            #   the phrase (validate_narrative_payload's only hard disclosure
+            #   is the revival DATE).
             if labels.WHY_WORLD_NEWS.lower() not in low:
                 hard.append(
                     f"story {n}: spoken override missing its "
@@ -4826,13 +4968,7 @@ def _run_generate_body(
             f"A9 preserve: callback matcher skipped ({type(exc).__name__}: {exc}) "
             "— nothing pinned this edition")
     try:
-        e_template = (paths.PROMPTS_DIR / PROMPT_EDITOR).read_text(encoding="utf-8")
-        e_prompt = e_template.format(
-            labels_block=build_labels_block(inputs),
-            analysis_facts_block=build_analysis_facts_block(inputs),
-            protect_block=_protect_block,
-            draft_json=json.dumps(draft_payload, ensure_ascii=False),
-        )
+        e_prompt = build_editor_prompt(inputs, _protect_block, draft_payload)
         est_e = _est_cost(e_prompt, EDITOR_MAX_TOKENS, "editor")
         # SCOPE NOTE, disclosed rather than silent (fix-loop item 7): this gate's
         # GenerateError is caught below and DEGRADES the run to the unedited

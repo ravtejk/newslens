@@ -841,7 +841,10 @@ def test_uncovered_story_disclosure_is_scoped_out_of_the_episode():
     inputs = _inputs_for(slots)
     covered = generate.script_covered_slots(inputs)
     assert 6 not in covered
-    labels = generate.build_labels_block(inputs, covered=covered)
+    # NL-166: `fmt` names the format explicitly (the coverage contract has
+    # always been the SCRIPT's — "not fed to the ear" is the assertion below).
+    labels = generate.build_labels_block(
+        inputs, covered=covered, fmt=generate.FORMAT_SCRIPT)
     assert "story 6" not in labels                   # uncovered -> not fed to the ear
     script = ("It's Sunday, July 5. Here's what matters today. "
               + "The covered stories carry real substance today. " * 90
@@ -1615,18 +1618,26 @@ def test_call_llm_truncation_named_and_retried(llm_http):
 
 # --- misc pins -------------------------------------------------------------------------------
 
-def test_labels_block_carries_the_corrections_placeholder():
+@pytest.mark.parametrize("fmt", ["script", "article"])
+def test_labels_block_carries_the_corrections_placeholder(fmt):
     """§5.9 #4: no upstream correction flag exists yet — pin the placeholder
-    line until M6+ wires the real flag."""
+    line until M6+ wires the real flag.
+
+    NL-166: the placeholder and the single-source fact are SHARED — they ride
+    both formats identically — so this pin now runs on both."""
     slots = [slot(1, override=True), slot(2, corroboration_count=1, outlets=("Solo",))]
-    block = generate.build_labels_block(_inputs_for(slots))
+    block = generate.build_labels_block(_inputs_for(slots), fmt=fmt)
     assert block.splitlines()[-1] == "corrections flagged upstream: none this run"
     # NL-138: the block names the phrase the validator checks, not a prose
-    # reason to paraphrase.
+    # reason to paraphrase. NL-166 scopes that naming to the SCRIPT format —
+    # the article's half is pinned in test_nl166_format_split.py.
     assert "story 1: OVERRIDE" in block
-    assert labels.WHY_WORLD_NEWS.lower() in block.lower()
     assert "reason:" not in block.lower()
     assert "story 2: SINGLE-SOURCE — outlet: Solo" in block
+    if fmt == generate.FORMAT_SCRIPT:
+        assert labels.WHY_WORLD_NEWS.lower() in block.lower()
+    else:
+        assert labels.WHY_WORLD_NEWS.lower() not in block.lower()
 
 
 def test_date_spoken_forms_ordinals():
@@ -2299,3 +2310,31 @@ def test_draft_stories_forensics_in_ok_log_entries(migrated_con, fake_model):
     )
     assert entry["draft_stories"] == draft["stories"]     # pre-edit forensics
     assert entry["stories"][0]["why_it_matters"] == "Tighter."  # the final text
+
+
+def test_the_run_bodys_own_editor_prompt_is_article_formatted(
+        migrated_con, fake_model):
+    """NL-166 STRUCTURAL TOOTH (QA proposal, proven both directions in the QA
+    report): pins the EXECUTED run body's editor prompt, not the builder.
+    Catches both (a) build_editor_prompt re-routed to FORMAT_SCRIPT (the
+    build's M-1 — also caught by the builder pin) and (b) the run body
+    re-inlining the template assembly around build_editor_prompt (the HEAD
+    shape back again), which the builder-level pin cannot see."""
+    slots = [slot(1, override=True, corroboration_count=1, outlets=("Solo",))]
+    seed_briefing(migrated_con, A_DAY, slots)
+    fake_model.narrative = stories_payload(slots)
+    fake_model.script = compliant_script(slots)
+    run(migrated_con, date=A_DAY, refresh=False)
+    json_calls = [c for c in fake_model.calls if c["json_mode"]]
+    assert len(json_calls) >= 2, "narrative + editor calls expected"
+    e_prompt = json_calls[1]["prompt"]
+    assert "do NOT restate" in e_prompt
+    assert "must be spoken" not in e_prompt, (
+        "the RUN BODY handed the editor the audio lane's speak-this "
+        "instruction — the 08-27 defect, at the integration edge")
+    assert labels.WHY_WORLD_NEWS.lower() not in e_prompt.lower()
+    assert "for the ear" not in e_prompt
+    s_prompts = [c["prompt"] for c in fake_model.calls if not c["json_mode"]]
+    assert any("must be spoken" in p for p in s_prompts), (
+        "the run body's SCRIPT prompt lost the say-it instruction — the "
+        "mirror of the 08-27 defect (the article block reaching the ear)")

@@ -237,8 +237,15 @@ def test_the_writers_labels_block_names_the_phrase_the_validator_checks():
     """Instruction and check read the same constant, so they cannot drift into
     a retry loop the writer has no way to satisfy.
 
-    BORN RED at 38141a3: the block emits 'OVERRIDE — reason: <prose>'."""
-    block = generate.build_labels_block({"slots": [override_slot_dict()]})
+    BORN RED at 38141a3: the block emits 'OVERRIDE — reason: <prose>'.
+
+    NL-166 (2026-08-27) SCOPES THIS PIN, and weakens nothing: the validator it
+    names is validate_script, so the block that must name its phrase is the
+    SCRIPT format's. The assertions are unchanged — only the format the call
+    asks for is now explicit. The article format's half (it must NOT name the
+    phrase) is pinned in test_nl166_format_split.py."""
+    block = generate.build_labels_block({"slots": [override_slot_dict()]},
+                                        fmt=generate.FORMAT_SCRIPT)
     assert labels.WHY_WORLD_NEWS.lower() in block.lower()
     assert "reason:" not in block.lower()
 
@@ -355,7 +362,13 @@ def test_the_cold_start_override_arm_survives_intact():
          "threads": [], "prior_ctx": {}, "continuity_status": "continuous",
          "window_meta": {}, "corroboration": {}})
     assert "READER'S FIRST BRIEFING" not in warm
-    assert "no supplied phrasing to copy" in warm
+    # NL-166 (2026-08-27) re-points the ESTABLISHED-ARM DISCRIMINATOR only:
+    # that arm no longer licenses an in-prose acknowledgment ("no supplied
+    # phrasing to copy" described the license), it forbids one. What this pin
+    # asserts — a warm reader takes the established arm, and NL-138's batch
+    # left both arms carrying no prose reason — is unchanged.
+    assert "ALREADY MADE" in warm
+    assert "reason" not in warm.split("OVERRIDE STORY —")[1].split("\n")[0]
 
 
 # ---------------------------------------------------------------------------

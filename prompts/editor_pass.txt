@@ -69,7 +69,11 @@ OUTPUT — the SAME JSON shape you received, nothing else:
 {{"stories": [...]}} — same story count, same order, same tier per story,
 same fields per tier. Edited text in the fields.
 
-=== LABEL DATA (context; a source of ALREADY-PRESENT specifics) ===
+=== LABEL DATA — THIS EDITION IS THE WRITTEN ARTICLE, NOT THE SPOKEN SCRIPT ===
+Context: a source of ALREADY-PRESENT specifics, AND the per-story disclosure
+rules for the written format. Where a line below tells you a disclosure is
+already made by the edition's own furniture, obey it: the article prints
+labels above its stories and owes each disclosure exactly once.
 {labels_block}
 
 TIER SHAPE (P3.1, principal ruling; NL-63 M2 amended contract; RECONCILED with
