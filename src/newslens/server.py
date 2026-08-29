@@ -29,6 +29,7 @@ Architecture (ADR-0010):
 from __future__ import annotations
 
 import calendar
+import contextvars
 import json
 import os
 import re
@@ -36,6 +37,7 @@ import sqlite3
 import subprocess
 import threading
 import wave
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,6 +54,49 @@ from . import (analysis, catalog, commissioning, config, db, entities, events,
 
 DEFAULT_PORT = 8484
 DEVELOPING_WINDOW_DAYS = 7  # dot = thread picked up within this many days
+
+# ---------------------------------------------------------------------------
+# THE READ-PURE RENDER SEAM (NL-163 Stage-A M1; eng adjudication Q7, DECISIONS
+# 2026-08-29 ②) — binding, and narrow on purpose.
+#
+# WHAT IT IS FOR. `editionbundle` mints a frozen, self-contained edition
+# document for the phone surface. That surface is READ-PURE by ruling: every
+# follow VERB mutates the Mac-bound memory DB, and a hosted write path would be
+# a general inbound command channel — the thing Rook's Stage-B vocabulary pin
+# forbids before Stage B exists. Inert verbs are worse (the no-dead-buttons
+# law), so the verbs are WITHHELD and the follow FURNITURE stays: reason lines,
+# the tracked-ongoing marker, the "Nth entry on this thread · Updated" stamp,
+# the In-Brief smeta. State renders; acts do not.
+#
+# WHY A ContextVar AND NOT A MODULE GLOBAL. A generate can run INSIDE this
+# process, on GEN_JOB's background thread, while HTTP handler threads render
+# the founder's live page. A plain global flipped by the mint would strip the
+# follow controls out of a page some other thread is serving at that instant.
+# A ContextVar is per-thread (each thread starts from a fresh copy of the
+# default context), so the mint's read-pure window cannot leak into a concurrent
+# render. The default is False, so nothing about `newslens serve` moves.
+#
+# The guarded sites are enumerated by grep, never by memory:
+#     grep -n "read_pure()" src/newslens/server.py
+_READ_PURE = contextvars.ContextVar("newslens_read_pure", default=False)
+
+
+def read_pure() -> bool:
+    """True while this thread is rendering a read-pure (bundle) document."""
+    return _READ_PURE.get()
+
+
+@contextmanager
+def read_pure_render():
+    """Render read-pure for the duration of the block. Restores on the way out,
+    including on a raise — a mint failure must never leave a serve thread's
+    context flipped."""
+    token = _READ_PURE.set(True)
+    try:
+        yield
+    finally:
+        _READ_PURE.reset(token)
+
 
 # ---------------------------------------------------------------------------
 # Background generation job (one at a time; the UI polls /api/status)
@@ -779,6 +824,19 @@ def _edition_bar(row) -> str:
             f'{_player_extra_controls("episode-player")}</div>')
 
 
+def _dispatch_strip_html(hm: str) -> str:
+    """The assembled-time strip line, in ONE place.
+
+    The phone bundle renders its own masthead (no edition bar, an offline slot
+    the Mac has no use for) but the strip's GRAMMAR is the same sentence on
+    both surfaces, and it was written out twice — so a re-pin of the wording
+    here would have left the bundle's copy behind, silently, exactly the drift
+    the bundle module avoids for tokens and the phone scale by consuming them
+    rather than copying. `editionbundle._masthead_html` already consumes `_e`,
+    `_dateline_html` and `_utc_hm` from here; this is the fourth."""
+    return f'<p class="dispatch-strip">Edition assembled {_e(hm)} UTC</p>'
+
+
 def _masthead(row, date_str: str) -> str:
     """The full Today ceremony, fixed order (§4): wordmark → dateline →
     [signature] → dispatch strip → edition bar. The SIGNATURE (the kind-of-
@@ -791,7 +849,7 @@ def _masthead(row, date_str: str) -> str:
     if row is not None:
         hm = _utc_hm(row["generated_at"])
         if hm:
-            parts.append(f'<p class="dispatch-strip">Edition assembled {_e(hm)} UTC</p>')
+            parts.append(_dispatch_strip_html(hm))
         parts.append(_edition_bar(row))
     parts.append('</header>')
     return "".join(parts)
@@ -2584,6 +2642,13 @@ def _follow_control(st: Dict, slot: Dict, marks: List[str],
         return _tracked_marker_html(
             marks, slot_id=slot_id, mount="card", story_topic=topic,
             headline=headline, date=date)
+    # READ-PURE (NL-163 M1): the card's follow VERB is withheld. Everything
+    # above this line is furniture and still renders — the tracked-ongoing
+    # marker is a bare <span> stating follow STATE, which is exactly what Q7
+    # preserves. Below it are the resting picker and the committed door, both
+    # of which either mutate the memory DB or open an act surface that does.
+    if read_pure():
+        return ""
     date_attr = f' data-briefing-date={_e_attr(date)}' if date else ""
     origin_attr = f' data-origin={_e_attr(headline)}' if headline else ""
     # R1 (fix loop 2): the card's canonical STORY topic. Once committed, data-topic
@@ -2979,7 +3044,16 @@ def _back_link(label: str, onclick: str) -> str:
         # `aria-label="Back to "` — a nameless link, the exact failure this
         # derivation exists to prevent. Fail loudly at the re-pin instead.
         raise ValueError(f"back label must name a destination: {label!r}")
-    return (f'<a class="deep-back" href="#" aria-label="Back to {_e(dest)}" '
+    # NL-163 M1 — the phone addendum §6 names its own back copy ("← Back to
+    # today's edition"), which already CONTAINS the "Back to" the derivation
+    # prefixes; deriving on top would name the link "Back to Back to today's
+    # edition". So a label that already opens with the prefix IS its own
+    # accessible name. WCAG 2.5.3 label-in-name still holds by construction —
+    # containment is exact, it is just the identity case — and every existing
+    # label ("← Today", "← Archive", "← This edition", "← Following") takes the
+    # derivation byte-for-byte unchanged.
+    aria = dest if dest.startswith("Back to ") else f"Back to {dest}"
+    return (f'<a class="deep-back" href="#" aria-label="{_e(aria)}" '
             f'onclick="{onclick}">{_e(label)}</a>')
 
 
@@ -5124,7 +5198,13 @@ def _deep_timeline_html(con, slot: Optional[Dict], date: str,
         for e in rows:
             d = e["edition_date"]
             hd = memory_core.human_date(d)
-            if _is_calendar_date(d) and d in have_edition:
+            # READ-PURE (NL-163 M1): the bundle is ONE edition. `openEdition`
+            # fetches another one from the Mac server, which the bundle has no
+            # door to — so the date renders as the plain span the else arm
+            # already defines. The FACT (this thread moved on that date) is
+            # unchanged; only the door is absent, which is the no-dead-links
+            # law rather than a loss of furniture.
+            if _is_calendar_date(d) and d in have_edition and not read_pure():
                 date_html = (
                     f'<a class="tl-date-link" href={_e_attr("/?date=" + d)} '
                     f'onclick="return openEdition(\'{_e(d)}\', event)">{_e(hd)}</a>')
@@ -5348,6 +5428,12 @@ def _deep_follow_line(con, slot: Optional[Dict], headline: str, date: str,
                     marks, slot_id=f"follow-deep-{story_anchor}", mount="deep",
                     story_topic=subject, headline=headline, date=date)
                 + "</div>")
+    # READ-PURE (NL-163 M1): same rule as the card, one surface further in. The
+    # tracked marker above is state and survives; the management mount below is
+    # the deep view's ACTS home (resting picker, Unfollow, "Instead:") and is
+    # withheld whole. Nothing is left dead — the mount renders no node at all.
+    if read_pure():
+        return ""
     alt = origin_row or (_follow_altitude_row(con, subject) if followed else {})
     committed = (origin_row.get("topic") if origin_row else subject) or subject
     # FIX LOOP 1: the deep view is the OTHER management surface ruling ② carved
@@ -5593,9 +5679,14 @@ def _render_deep_view(story_anchor: str, headline: str, doc: Dict,
         # never a live dead-end edition link.
         if kind == "prior-briefing" and _is_calendar_date(ed_date):
             title = f"NewsLens — {_e(_human_date(ed_date))} edition"
-            link = (f'<a href={_e_attr("/?date=" + ed_date)} '
-                    f'onclick="return openEdition(\'{_e(ed_date)}\', event)">'
-                    f'{title}</a>')
+            # READ-PURE (NL-163 M1): the human title is kept — replacing the
+            # machine title ("briefing 2026-07-06") is the point of this branch
+            # and a bundle reader deserves it too — but the door is dropped,
+            # because the bundle carries one edition and has nothing to open.
+            link = title if read_pure() else (
+                f'<a href={_e_attr("/?date=" + ed_date)} '
+                f'onclick="return openEdition(\'{_e(ed_date)}\', event)">'
+                f'{title}</a>')
         else:
             title = _e(s.get("title", "") or "(untitled)")
             link = (f'<a href={_e_attr(s["url"])}>{title}</a>' if s.get("url")

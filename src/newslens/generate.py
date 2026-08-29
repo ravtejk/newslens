@@ -465,6 +465,10 @@ class GenReport:
     steps: List[Dict] = field(default_factory=list)   # per-step token costs
     warnings: List[str] = field(default_factory=list)
     artifact_path: str = ""
+    # NL-163 Stage-A M1: the frozen phone document minted at the publish seam.
+    # Empty on a sample (samples never mint), and empty when the mint failed —
+    # a failure is CONTAINED and appears in `warnings`, never as a raise.
+    bundle_path: str = ""
     ingest_summary: str = ""
     continuity_status: str = "none"   # ok | none | corrupt
     analysis_usd: float = 0.0          # M9-M3: the analysis stage's spend (CHARGED)
@@ -5569,7 +5573,12 @@ def _run_generate_body(
                        no_threads=no_threads)
     )
     close_stage_timeline(report)          # NL-149 item 2 (see the failed arm)
-    log_generation({
+    # NL-163 M1: the entry is NAMED before it is logged, so the bundle mint
+    # below can be handed the very object the log records. It is the same dict
+    # it always was — the alternative was for the mint to read
+    # generation_log.jsonl back off disk, which would give this edition two
+    # sources of truth for a fact the process is already holding.
+    log_entry = {
         "date": date, "variant": report.variant, "sample": report.sample,
         "no_threads": no_threads,
         "status": "ok",
@@ -5608,5 +5617,50 @@ def _run_generate_body(
         "total_usd": round(sum(s.get("usd") or 0 for s in report.steps), 6),
         "stage_timeline": report.stage_timeline,   # NL-149 item 2
         "elapsed_s": report.run_elapsed_s,
-    })
+    }
+    log_generation(log_entry)
+    # --- NL-163 Stage-A M1: MINT THE EDITION BUNDLE -------------------------
+    #
+    # THE PLACE IS THE POINT. Here, and not earlier, because the log entry must
+    # already exist (a bundle referencing a run with no record would be an
+    # orphan of exactly the class M1 gate F reordered the delta ledger to
+    # avoid). Here, and not later, because every one of the edition's five live
+    # sources is still in this process's hands: the briefings row is committed,
+    # the memory/follow state is what it was at publication, sources.yaml is
+    # the file this run read, and the log entry is the object above. Rendered
+    # anywhere else, the document would carry a LATER world's follow state and
+    # call it frozen at publish.
+    #
+    # SAMPLES NEVER MINT. A sample is explicitly not the briefing of record
+    # (write_artifact stamps it so), it never persists a row, and a phone
+    # surface that could show one would be showing a comparison variant as the
+    # morning's edition.
+    #
+    # CONTAINED, on the :5485 post-publish precedent. The edition is ALREADY
+    # PUBLISHED and logged by the time control reaches here. A mint failure is
+    # a missing convenience artifact, never a failed edition: it warns in the
+    # run's own words, the local `.md`, the database and the log are all
+    # already written, and the next edition mints normally. The bundle is
+    # rebuildable for TODAY (re-running would archive and rewrite a published
+    # edition, so the honest recovery is tomorrow's run, not a re-generate) —
+    # which is precisely why crashing here would be the wrong trade.
+    #
+    # DISCLOSED LIMIT of that ordering: the log entry is already SERIALISED by
+    # the time this warning is appended, so a mint failure reaches the run's
+    # output and `report.warnings` but NOT `generation_log.jsonl`. Reversing it
+    # would put the bundle ahead of the record it describes, which is the worse
+    # of the two. A cold-forensics reader looking for missing bundles compares
+    # `data/briefings/*.phone.json` against the log's dates.
+    if not report.sample:
+        try:
+            from . import editionbundle
+            report.bundle_path = str(editionbundle.mint(con, date, log_entry))
+        except Exception as exc:      # noqa: BLE001 — post-publish containment
+            report.warnings.append(
+                f"phone bundle: NOT minted for this edition ({exc}) — the "
+                "edition is PUBLISHED and unaffected (database, briefing file "
+                "and run log are all written). The phone surface will not "
+                "carry this date; it is not reconstructed later because a "
+                "rebuild would render a later day's follow state and stamp it "
+                "frozen at publish")
     return report

@@ -204,6 +204,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     serve_p.add_argument("--port", type=int, default=8484,
                          help="port to bind on localhost (default 8484)")
 
+    # NL-163 Stage-A M1 — THE FROZEN EDITION. Read-only by construction: it
+    # opens an artifact the publish seam already wrote and never builds one,
+    # because a bundle built after the fact would render TODAY's follow state
+    # and label it frozen at publish.
+    bundle_p = sub.add_parser(
+        "bundle",
+        help="the frozen phone edition minted at publish — show it or open it "
+             "in a browser (read-only; never reconstructs a missing one)")
+    bundle_p.add_argument(
+        "--date", default=None, metavar="YYYY-MM-DD",
+        help="which edition (default: the most recent one that HAS a bundle — "
+             "which is not necessarily the most recent edition)")
+    bundle_p.add_argument(
+        "--open", action="store_true", dest="open_browser",
+        help="extract the document to a temporary file and open it in your "
+             "browser")
+
     # NL-146 — SCHEDULED GENERATION. Four subcommands and no `install`: the org
     # never installs the launchd agent (dispatch 2026-08-13, law), so what ships
     # is a renderer, an instruction printer, an honest status readout, and the
@@ -474,6 +491,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         from . import server
 
         return server.serve(port=args.port)
+
+    if args.command == "bundle":
+        return _bundle_command(args)
 
     if args.command == "schedule":
         from . import config, generate, schedule
@@ -866,6 +886,69 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser.error(f"unknown command: {args.command}")  # unreachable; argparse guards
     return 2
+
+
+def _bundle_command(args) -> int:
+    """`newslens bundle [--date YYYY-MM-DD] [--open]` — the frozen edition.
+
+    READ-ONLY, and that is a design property rather than an omission. The
+    bundle is minted once, at the publish seam, while the edition's five live
+    sources are still in the generate's hands. This verb can therefore only
+    ever SHOW one. If a date has no bundle it says so and stops: reconstructing
+    it here would render today's follow state, today's thread names and today's
+    reason lines into a document stamped frozen-at-publish, which is a lie a
+    reader has no way to detect. Editions published before this milestone
+    simply have none, and the archive fills one morning at a time.
+    """
+    import tempfile
+    import webbrowser
+
+    from . import editionbundle
+
+    date = args.date
+    if date is None:
+        date = editionbundle.latest_date()
+        if date is None:
+            print("no frozen editions yet — the next generate mints the first "
+                  "one (they are not built retroactively; see "
+                  "`newslens bundle --date <a published date>` for why)",
+                  file=sys.stderr)
+            return 1
+    try:
+        bundle = editionbundle.load(date)
+    except editionbundle.BundleError as exc:
+        print(f"bundle: {exc}", file=sys.stderr)
+        return 1
+
+    path = editionbundle.bundle_path(date)
+    meta = bundle.get("meta") or {}
+    tiers = meta.get("tier_counts") or {}
+    print(f"edition {bundle.get('edition_date')} · variant "
+          f"{bundle.get('variant') or '—'} · generated "
+          f"{bundle.get('generated_at') or '—'}")
+    print(f"  bundle v{bundle.get('bundle_version')} · "
+          f"{meta.get('story_count')} stories "
+          f"({', '.join(f'{k} {v}' for k, v in sorted(tiers.items())) or 'no tiers recorded'})"
+          f" · arc {'present' if meta.get('arc_present') else 'none'}"
+          f" · audio {'yes' if bundle.get('audio') else 'none'}")
+    print(f"  sha256 {bundle.get('content_sha256')}")
+    print(f"  {len(bundle.get('html') or '')} chars of document · {path}")
+
+    if not args.open_browser:
+        print("  (pass --open to read it in your browser)")
+        return 0
+
+    # A TEMP COPY, never the artifact itself: the .json is the durable record
+    # and the push client's source, and handing a browser a file it might be
+    # asked to save over is not a trade worth making for one convenience.
+    with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=f"-newslens-{date}.html",
+            delete=False) as fh:
+        fh.write(bundle["html"])
+        tmp = fh.name
+    print(f"  opening {tmp}")
+    webbrowser.open(f"file://{tmp}")
+    return 0
 
 
 def _discovery_clean_command(args) -> int:

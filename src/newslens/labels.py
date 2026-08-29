@@ -380,6 +380,19 @@ STALENESS_REFUSAL = (
 BACK_TO_TODAY = "← Today"
 BACK_TO_EDITION = "← This edition"
 BACK_TO_ARCHIVE = "← Archive"
+# NL-163 Stage-A M1 — THE PHONE BACK LABEL, and why it is a second constant
+# rather than a re-pin of BACK_TO_TODAY. The phone addendum §6 (binding on the
+# standalone surface, and ruling over DIRECTION-v5 on phone-only matters) names
+# this copy verbatim: standalone mode has NO browser back button, so the back
+# affordance reads as a whole destination rather than a bare word. The Mac
+# surface keeps NL-103 row 17's bare destination — two surfaces, two ratified
+# registers, and neither silently overwrites the other. server._back_link
+# treats a label that already opens with "Back to" as its own accessible name
+# (see the note there). The apostrophe is TYPOGRAPHIC: the addendum prints it
+# straight in markdown prose, but reader copy in this table ships curly and
+# test_nl17_m1c_follow_surface::test_f1_live_reader_copy_uses_typographic_apostrophes
+# is the tooth that says so — it caught this constant on its first suite run.
+BACK_TO_TODAYS_EDITION = "← Back to today’s edition"
 
 # --- Archive (§14 step-back redesign; supersedes the §8 list-primary law) -----
 # NL-103 row 20: KEPT bare. This one renders as the immediate next sibling of
