@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{#- STATE 3 (no edition yet this morning), carrying STATE 5's grammar in the
+    generate slot — his as-drawn ruling on open flag 3: remote generate is not
+    wired in Stage A, so the secondary renders the §8 unreachable line instead
+    of a control that would do nothing.
+
+    Reading is the PRIMARY act (NL-153): "Read last generated edition" is the
+    ink block — and it renders only when there IS one. On day one this paper is
+    honestly empty (the no-seeding ruling: nothing is reconstructed), so the
+    CTA, the "still readable above" clause and the archive note all disappear
+    rather than describe editions that do not exist. -#}
+{% block title %} — Nothing for today yet{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="masthead">
+    <p class="wordmark">NewsLens</p>
+    {% include "_dateline.html" %}
+    {% include "_sectionline.html" %}
+  </header>
+
+  <div class="state-panel">
+    <h2>Nothing for today yet</h2>
+    <p>No edition has been generated for today.</p>
+    {% if latest %}
+      <a class="cta-quiet" href="/editions/{{ latest }}">Read last generated edition</a>
+    {% endif %}
+    <p class="unreach">The press can’t be reached from here.</p>
+    {% if latest %}
+      <p class="unreach-why">Editions are generated on the machine that runs this
+        paper; it isn’t answering right now. {{ latest_day }}’s edition is still
+        readable above, and today’s will appear when the press next pushes.</p>
+    {% else %}
+      <p class="unreach-why">Editions are generated on the machine that runs this
+        paper; it isn’t answering right now. Today’s edition will appear when the
+        press next pushes.</p>
+    {% endif %}
+    {% if archive_count > 1 %}
+      <p class="empty-note">Earlier editions are in your <a href="/archive">Archive</a>.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

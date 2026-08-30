@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{#- An authenticated account with no paper mapped to it (NEWSLENS_USER_STREAMS
+    has no entry). This is an OPERATOR state, not a reader state: one account
+    reads one paper, and there is no picker — a different account is a
+    different paper (adjudication Q5). Machine-register, and it says whose
+    hands fix it without naming a person. -#}
+{% block title %} — No paper on this account{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="masthead">
+    <p class="wordmark">NewsLens</p>
+  </header>
+  <div class="state-panel">
+    <h2>No paper on this account</h2>
+    <p>This account is signed in but no edition stream is assigned to it. The
+      paper’s operator assigns one; nothing here can be read until then.</p>
+  </div>
+</div>
+{% endblock %}

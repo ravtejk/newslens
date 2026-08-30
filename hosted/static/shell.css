@@ -1,0 +1,113 @@
+/* ==========================================================================
+   THE SHELL PAGES — login, no-edition, archive, 404.
+   NL-163 Stage-A M2. The layout law is the approved mockup
+   (design/mockup-phone-v1.html) and DIRECTION-phone-addendum §§1-11.
+
+   NOT AN EDITION'S STYLESHEET. An edition arrives frozen from the Mac with its
+   own CSS baked in (the bundle consumes webui's stylesheet at mint time); this
+   file dresses only the states the service itself renders.
+
+   NO HEX EVER APPEARS HERE. Every colour is a var() from tokens.css, which is
+   generated from webui.TOKENS and drift-pinned by the suite — that is the
+   whole reason this file may exist beside the paper's own stylesheet.
+   ========================================================================== */
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--font-sans); font-size: 1rem; line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: calc(1.5rem + env(safe-area-inset-bottom)); }
+a { color: var(--terra); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { color: var(--terra-deep); }
+button { font-family: var(--font-sans); }
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: 3px solid var(--terra-deep); outline-offset: 2px; border-radius: 2px; }
+.skip-link { position: absolute; left: -9999px; top: 0; background: var(--ink);
+  color: var(--paper); padding: 0.5rem 1rem; z-index: 50; }
+.skip-link:focus { left: 0.5rem; top: 0.5rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* §5 safe areas: the horizontal gutters ABSORB the insets; nothing sits under
+   the notch. Capped at 430px so a desk preview stays the phone product. */
+.page { max-width: 430px; margin: 0 auto;
+  padding-left: calc(1.15rem + env(safe-area-inset-left));
+  padding-right: calc(1.15rem + env(safe-area-inset-right)); }
+
+/* ---- Masthead ceremony, phone scale (§3, ratified) --------------------- */
+.masthead { padding-top: calc(1.6rem + env(safe-area-inset-top)); }
+.wordmark { font-family: var(--font-display); font-size: 0.9rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint);
+  margin: 0 0 1.2rem; }
+.dateline { font-family: var(--font-display); font-weight: 700; font-size: 2.6rem;
+  line-height: 1.02; letter-spacing: -0.015em; margin: 0 0 0.5rem; }
+.dateline .dl-num { color: var(--terra); }
+.dateline .dl-year { font-size: 1.1rem; font-weight: 400; color: var(--ink-faint);
+  letter-spacing: 0; }
+.page-title { font-family: var(--font-display); font-weight: 700; font-size: 2.1rem;
+  line-height: 1.1; letter-spacing: -0.015em; margin: 0 0 0.5rem; }
+.section-line { position: sticky; top: 0; background: var(--paper); z-index: 10;
+  border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule);
+  padding: 0.45rem 0; margin-top: 1.1rem; font-size: 0.9rem; white-space: nowrap; }
+.section-line a { text-decoration: none; color: var(--ink-soft); margin-right: 1.1rem;
+  display: inline-block; padding: 0.35rem 0; }   /* F-5 coarse-pointer box */
+.section-line a[aria-current="page"] { color: var(--ink); font-weight: 700; }
+
+/* ---- State panel (no-edition · unreachable · 404) --------------------- */
+.state-panel { background: var(--surface); border-radius: var(--radius);
+  padding: 1.5rem 1.3rem; margin-top: 1.4rem; }
+.state-panel h2 { font-family: var(--font-display); font-size: 1.15rem; margin: 0 0 0.6rem; }
+.state-panel p { font-size: 0.9rem; color: var(--ink-soft); margin: 0 0 1rem; }
+/* --paper, NOT --bg, and the difference is a bug this walk caught in dark mode.
+   `--bg: var(--paper)` is declared once on :root, so it resolves ONCE, at :root
+   — and `body.dark` redefines `--paper` without redefining `--bg`. In dark
+   mode --ink and --bg therefore hold the SAME light value, and this button
+   rendered paper-on-paper: an invisible label on a visible block. --paper is
+   redefined by the dark class, so it inverts.
+   The same latent defect exists on the SHIPPED Mac surface (webui.py:40 vs
+   :460, plus :615/:621/:653) — reported, deliberately not fixed here: that is
+   his surface, and §10 leaves the designed dark register open. */
+.cta-quiet { display: block; width: 100%; background: var(--ink); color: var(--paper);
+  font-size: 0.95rem; border: none; padding: 0.85rem 1.1rem; border-radius: var(--radius);
+  cursor: pointer; text-align: center; text-decoration: none; font-weight: 700; }
+a.cta-quiet { color: var(--paper); }
+.empty-note { font-size: 0.85rem; color: var(--ink-faint); font-style: italic;
+  margin: 1rem 0 0; }
+/* Unreachability is a FACT, not a fault: stated in ink. --danger stays
+   machine-failure text only (§8), which on this surface means the login
+   failed-attempt line and nothing else. */
+.unreach { font-size: 0.95rem; color: var(--ink); margin: 0.9rem 0 0; }
+.unreach-why { font-size: 0.85rem; color: var(--ink-faint); margin: 0.2rem 0 0; }
+
+/* ---- Archive: dates only, hairline rows ------------------------------- */
+.archive-list { list-style: none; margin: 1.4rem 0 0; padding: 0; }
+.archive-list li { border-bottom: 1px solid var(--rule); padding: 0.9rem 0;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 0.8rem; }
+.archive-list li > * { min-width: 0; }
+.archive-list a { font-family: var(--font-display); font-size: 1.15rem;
+  font-weight: 700; color: var(--ink); text-decoration: none; }
+.archive-date { font-family: var(--font-mono); font-size: 0.72rem;
+  letter-spacing: 0.06em; color: var(--ink-faint); }
+
+/* ---- Login (§9): a masthead page with one quiet field ----------------- */
+.login-wrap { padding-top: calc(4rem + env(safe-area-inset-top)); }
+.login-word { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); margin: 0 0 0.4rem; }
+.login-sub { font-family: var(--font-display); font-size: 1.1rem; color: var(--ink-soft);
+  margin: 0 0 2.2rem; }
+.login-field { margin: 0 0 1.1rem; }
+.login-field label { display: block; font-size: 0.78rem; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint);
+  margin-bottom: 0.35rem; }
+.login-field input { width: 100%; font-size: 1.05rem; font-family: var(--font-sans);
+  color: var(--ink); background: var(--surface); border: 1px solid var(--rule);
+  border-radius: var(--radius); padding: 0.8rem 0.9rem; }
+.login-alt { margin: 1.1rem 0 0; font-size: 0.88rem; text-align: center; }
+.login-alt button { background: none; border: none; padding: 0.6rem; color: var(--terra);
+  font-size: 0.88rem; cursor: pointer; }
+/* The one scoped --danger extension (§8): one quiet inline line on a failed
+   attempt. No banner, no shake. M3 fills it; M2 never shows it. */
+.error-text { font-size: 0.85rem; color: var(--danger); margin: 0 0 1rem; }
+.login-stay { font-size: 0.8rem; font-style: italic; color: var(--ink-faint);
+  text-align: center; margin: 2rem 0 0; }
+.login-stay--operator { margin-top: 0.4rem; }

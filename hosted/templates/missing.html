@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{#- 404. The fl-refusal grammar: the fact in ink, the why quiet, and the way
+    back on the page (§6 — standalone mode has no browser back button, so a
+    view reachable only by chrome is a build BLOCK). Never --danger: a wrong
+    address is not a machine failure. -#}
+{% block title %} — Nothing at this address{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="masthead">
+    <p class="wordmark">NewsLens</p>
+    {% include "_sectionline.html" %}
+  </header>
+  <div class="state-panel">
+    <h2>Nothing at this address</h2>
+    <p>This paper has no page here. Its editions are dated, and the archive
+      lists every one it holds.</p>
+    <a class="cta-quiet" href="/">Back to today’s edition</a>
+  </div>
+</div>
+{% endblock %}

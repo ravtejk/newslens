@@ -221,6 +221,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="extract the document to a temporary file and open it in your "
              "browser")
 
+    # NL-163 Stage-A M2 — THE MANUAL PUSH. The generate delivers on its own at
+    # the publish seam; this is the retry after a dead host or a laptop that
+    # was closed. It sends the artifact ON DISK — never a rebuild, for the same
+    # reason `bundle` refuses to reconstruct one.
+    push_p = sub.add_parser(
+        "push",
+        help="send a frozen edition to the paper's host (the retry path; a "
+             "generate pushes automatically when a host is configured)")
+    push_p.add_argument(
+        "--date", default=None, metavar="YYYY-MM-DD",
+        help="which edition (default: the most recent one that HAS a bundle)")
+
     # NL-146 — SCHEDULED GENERATION. Four subcommands and no `install`: the org
     # never installs the launchd agent (dispatch 2026-08-13, law), so what ships
     # is a renderer, an instruction printer, an honest status readout, and the
@@ -494,6 +506,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "bundle":
         return _bundle_command(args)
+
+    if args.command == "push":
+        return _push_command(args)
 
     if args.command == "schedule":
         from . import config, generate, schedule
@@ -949,6 +964,56 @@ def _bundle_command(args) -> int:
     print(f"  opening {tmp}")
     webbrowser.open(f"file://{tmp}")
     return 0
+
+
+def _push_command(args) -> int:
+    """`newslens push [--date YYYY-MM-DD]` — deliver a frozen edition.
+
+    THE RETRY PATH (adjudication Q4: "durable retry = the local artifact +
+    `newslens push [--date]`"). Everything it needs is already on disk, which
+    is why a dead host at 6am costs nothing but a later command: the artifact
+    IS the queue.
+
+    Read-only on the Mac's side — it loads a document and sends it. It cannot
+    build one, for the same reason `bundle` cannot."""
+    from . import editionbundle, pushclient
+
+    date = args.date
+    if date is None:
+        date = editionbundle.latest_date()
+        if date is None:
+            print("no frozen editions yet — the next generate mints the first "
+                  "one, and pushes it if a host is configured", file=sys.stderr)
+            return 1
+
+    url, _token = pushclient.config()
+    try:
+        result = pushclient.push_date(date)
+    except (pushclient.PushError, editionbundle.BundleError) as exc:
+        print(f"push: {exc}", file=sys.stderr)
+        return 1
+
+    host = pushclient._host_of(url) or "the host"
+    if result.ok:
+        # `unchanged` is a success with a different sentence: the host already
+        # holds this exact document, byte for byte. Saying "sent" would hide
+        # the fact that nothing moved.
+        landed = result.payload.get("pushed_at") or "—"
+        if result.detail == "unchanged":
+            print(f"push: {host} already holds {date} unchanged "
+                  f"(sha {result.payload.get('content_sha256', '')[:12]}…, "
+                  f"landed {landed})")
+        else:
+            print(f"push: {date} {result.detail} at {host} "
+                  f"({result.payload.get('bytes', 0)} bytes, "
+                  f"pushed_at {landed})")
+        return 0
+
+    print(f"push: {host} did not take {date} — "
+          f"{result.status or 'no answer'}: {result.detail}", file=sys.stderr)
+    print(f"  the artifact is unharmed at {editionbundle.bundle_path(date)}; "
+          "re-run this command when the host is back", file=sys.stderr)
+    return 1
 
 
 def _discovery_clean_command(args) -> int:

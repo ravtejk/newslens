@@ -1022,7 +1022,8 @@ def test_a_sample_never_mints(con, monkeypatch):
     report = generate.GenReport(date=DATE, variant="A", sample=True)
     exec(compile(_mount_block(), "<mount>", "exec"),
          {"report": report, "con": con, "date": DATE, "log_entry": ENTRY,
-          "editionbundle": editionbundle, "__name__": "mount"})
+          "editionbundle": editionbundle, "pushclient": _NoPush,
+          "__name__": "mount"})
     assert calls == [], f"a sample reached the mint ({len(calls)} call(s))"
     assert report.bundle_path == ""
     assert report.warnings == []
@@ -1032,7 +1033,8 @@ def test_a_sample_never_mints(con, monkeypatch):
     control = generate.GenReport(date=DATE, variant="A", sample=False)
     exec(compile(_mount_block(), "<mount>", "exec"),
          {"report": control, "con": con, "date": DATE, "log_entry": ENTRY,
-          "editionbundle": editionbundle, "__name__": "mount"})
+          "editionbundle": editionbundle, "pushclient": _NoPush,
+          "__name__": "mount"})
     assert len(calls) == 1, "the control must prove the mount can mint"
 
 
@@ -1057,7 +1059,8 @@ def test_a_raising_mint_costs_the_artifact_and_never_the_edition(con,
     src = _mount_block()
     exec(compile(src, "<mount>", "exec"),
          {"report": report, "con": con, "date": DATE, "log_entry": ENTRY,
-          "editionbundle": editionbundle, "__name__": "mount"})
+          "editionbundle": editionbundle, "pushclient": _NoPush,
+          "__name__": "mount"})
 
     assert report.bundle_path == ""
     assert len(report.warnings) == 1
@@ -1067,6 +1070,21 @@ def test_a_raising_mint_costs_the_artifact_and_never_the_edition(con,
     assert "not reconstructed later" in warn
     # the edition's own artifacts are untouched by the failure
     assert server._briefing_row(con, DATE) is not None
+
+
+class _NoPush:
+    """A push client that delivers nothing.
+
+    NL-163 M2: the publish-seam mount grew a SECOND half — the push — inside
+    the same `if not report.sample:` guard. These M1 tests execute the real
+    mount block, so they must hand it a push client; the one they hand it does
+    nothing, because what they pin is the mint. The push's own containment,
+    its sample behaviour and its warning text are pinned in
+    test_nl163_hosted.py, against this same extracted block."""
+
+    @staticmethod
+    def push_after_publish(date, **kw):
+        return None
 
 
 def _mount_block() -> str:
@@ -1082,7 +1100,11 @@ def _mount_block() -> str:
                       "            from . import editionbundle")
     end = src.index("    return report", start)
     block = textwrap.dedent(src[start:end])
-    return block.replace("from . import editionbundle", "pass")
+    # BOTH module imports are neutralised and both modules are injected by the
+    # caller instead: what the block is under test for is its control flow, and
+    # a relative import has no package to resolve against inside an exec.
+    return (block.replace("from . import editionbundle", "pass")
+                 .replace("from . import pushclient", "pass"))
 
 
 def test_the_mount_block_extraction_actually_found_the_mount():
@@ -1091,6 +1113,12 @@ def test_the_mount_block_extraction_actually_found_the_mount():
     assert "editionbundle.mint(con, date, log_entry)" in block
     assert "except Exception as exc:" in block
     assert "report.warnings.append" in block
+    # NL-163 M2 — the second half. If the push mount is ever deleted, or moved
+    # out of the publish seam, this extraction stops finding it and every test
+    # that executes the block says so, instead of passing over a mount that no
+    # longer delivers anything.
+    assert "pushclient.push_after_publish(date)" in block
+    assert "if report.bundle_path:" in block
 
 
 def test_the_report_carries_the_bundle_path_on_success(con, monkeypatch):
@@ -1098,7 +1126,8 @@ def test_the_report_carries_the_bundle_path_on_success(con, monkeypatch):
     report = generate.GenReport(date=DATE, variant="A", sample=False)
     exec(compile(_mount_block(), "<mount>", "exec"),
          {"report": report, "con": con, "date": DATE, "log_entry": ENTRY,
-          "editionbundle": editionbundle, "__name__": "mount"})
+          "editionbundle": editionbundle, "pushclient": _NoPush,
+          "__name__": "mount"})
     assert report.warnings == []
     assert report.bundle_path.endswith(f"{DATE}.phone.json")
     assert editionbundle.load(DATE)["edition_date"] == DATE

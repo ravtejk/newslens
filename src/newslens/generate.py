@@ -5663,4 +5663,23 @@ def _run_generate_body(
                 "carry this date; it is not reconstructed later because a "
                 "rebuild would render a later day's follow state and stamp it "
                 "frozen at publish")
+        # NL-163 M2: THE PUSH, at the same seam and under the same containment.
+        # It runs only when the mint above produced an artifact — there is
+        # nothing to deliver otherwise — and only when a host is configured
+        # (`NEWSLENS_PUSH_URL` + `NEWSLENS_PUSH_TOKEN`); an unconfigured Mac is
+        # a legitimate state, not a warning, and the doctor is where that fact
+        # belongs. A failed delivery costs one warning line: the edition is
+        # already published, the frozen artifact is already on disk, and
+        # `newslens push --date <d>` re-sends it byte for byte.
+        if report.bundle_path:
+            try:
+                from . import pushclient
+                note = pushclient.push_after_publish(date)
+                if note:
+                    report.warnings.append(note)
+            except Exception as exc:  # noqa: BLE001 — post-publish containment
+                report.warnings.append(
+                    f"phone push: NOT delivered for this edition ({exc}) — the "
+                    "edition is PUBLISHED and unaffected; the frozen artifact "
+                    f"is on disk and `newslens push --date {date}` re-sends it")
     return report

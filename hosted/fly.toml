@@ -1,0 +1,61 @@
+# NewsLens hosted reader — Fly.io configuration. SHIPS DARK.
+#
+# The org never deploys (loopback-only law): this file exists so the deploy is
+# the principal's one command after the NL-33 human review, not a research
+# project. Every value here is a default he can change; the app name and the
+# region are placeholders he replaces.
+#
+#   fly launch --no-deploy --copy-config     # claims the app name
+#   fly volumes create newslens_data --size 1 --region <his region>
+#   fly secrets set NEWSLENS_PUSH_TOKENS='{"main":"<sha256 of the token>"}'
+#   fly secrets set NEWSLENS_USER_STREAMS='{"<user id>":"main"}'
+#   fly deploy
+#
+# SECRETS ARE NEVER IN THIS FILE. `fly secrets set` puts them in the platform's
+# store; this file is committed to a PUBLIC remote.
+
+app = "newslens-paper"        # placeholder — his to name
+primary_region = "iad"        # placeholder — nearest to the reader
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NEWSLENS_HOSTED_DATA = "/data"
+  # The paper's day boundary in minutes from UTC — it decides only one thing:
+  # whether the newest edition counts as "today's" when the reader opens the
+  # app. Leave 0 (UTC) or set the press's own offset (US/Pacific = -420).
+  NEWSLENS_DAY_OFFSET_MINUTES = "0"
+
+[[mounts]]
+  source = "newslens_data"
+  destination = "/data"
+  # Editions are files and the ledger is one SQLite database, both on this
+  # volume. Losing it is a NON-EVENT: every edition is re-pushable from the
+  # Mac's own artifacts (`newslens push --date`), which is why the storage
+  # story is a volume and not a managed database.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+  # A phone opening the paper at 6am is the first request of the day; suspend
+  # keeps the bill at cents and the wake is under a second.
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 40
+
+[[http_service.checks]]
+  grace_period = "5s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

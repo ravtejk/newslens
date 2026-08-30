@@ -1,0 +1,20 @@
+# The hosted reader's dependencies — NOT the product tree's.
+#
+# The product tree (src/newslens) stays three-dependency stdlib-pure: it runs
+# on the principal's machine, where every install is friction. This deployable
+# is a different machine with a different threat model, and it is the one
+# surface that faces the internet — so it takes the server that is documented
+# for production rather than a hand-rolled one (adjudication Q2; Python's own
+# http.server docs disclaim production use, and a hand-parsed HTTP surface is
+# reviewer-hours nobody should pay for).
+#
+# PyJWT and cryptography are M3's (pinned-RS256 session verification against a
+# cached JWKS). They are listed NOW, unused, on purpose: one dependency story
+# for the reviewer to read rather than a second one arriving with the lock.
+
+flask>=3.0,<4          # the routes: ~10 of them, all in app.py
+gunicorn>=21.2,<24     # the production server the Dockerfile runs
+
+# --- M3 (the lock), listed early so the dependency story is one story --------
+PyJWT>=2.8,<3          # verify the session token, algorithm pinned to RS256
+cryptography>=42       # PyJWT's RS256 backend (JWKS public-key parsing)

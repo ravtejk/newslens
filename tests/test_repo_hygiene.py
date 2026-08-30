@@ -67,6 +67,13 @@ def test_env_example_has_exactly_the_spec_vars_with_no_secret_values():
         # Non-secret guard defaults, exactly as spec §D documents them:
         "BUDGET_CAP_USD_PER_RUN": "1.50",  # B4 raise 2026-07-16 (0.25 at M9)
         "GENERATE_HOUR_LOCAL": "6",
+        # NL-163 Stage-A M2 (2026-08-29): where this machine delivers the
+        # frozen edition, and the token that authorises it. Both blank —
+        # OPTIONAL, and both-or-neither (the doctor FAILs a half-configured
+        # push). The URL is not secret-shaped; the TOKEN is, which is why it
+        # ships empty here and why the host stores only its sha256.
+        "NEWSLENS_PUSH_URL": "",
+        "NEWSLENS_PUSH_TOKEN": "",
     }
 
 

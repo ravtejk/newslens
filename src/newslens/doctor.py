@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -1521,6 +1522,43 @@ ARC_DROUGHT_WARN_RUN = 3
 ARC_RECENT_EDITIONS = 12
 
 
+def _log_rows() -> Tuple[List[Dict], int, Optional[str], int]:
+    """Every readable row of the generation record, oldest segment first.
+
+    (rows, torn_lines, unreadable_segment_or_None, segment_count). Extracted
+    from `check_arc_continuity` when the NL-163 M2 delivery probe became a
+    second reader of the same record — two loops over an append-only log is
+    exactly how two checks start disagreeing about what it says.
+
+    IT READS `generate.log_segments()`, NOT the live file: a reader wired to
+    the live file alone is born rotation-blind (NL-160 gate R-7/F-9), and the
+    segments are disjoint by construction so nothing is counted twice.
+    `errors="replace"` because a crash-interrupted line will one day end
+    mid-multibyte-sequence, and a doctor that dies on it dies exactly when it
+    is most needed; the replaced line then fails json.loads and is COUNTED."""
+    from . import generate
+    segments = [p for p in generate.log_segments() if p.exists()]
+    rows: List[Dict] = []
+    skipped = 0
+    for segment in segments:
+        try:
+            with segment.open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        skipped += 1
+                        continue
+                    if isinstance(row, dict):
+                        rows.append(row)
+        except OSError as exc:
+            return rows, skipped, f"{segment.name} ({exc})", len(segments)
+    return rows, skipped, None, len(segments)
+
+
 def _arc_editions_from_log(rows: List[Dict]) -> List[Tuple[str, bool]]:
     """(edition_date, carried_an_arc) for every ARC-ELIGIBLE edition in `rows`,
     oldest first.
@@ -1586,32 +1624,13 @@ def check_arc_continuity() -> List[Result]:
     line, which then dies at json.loads and is COUNTED in `skipped`."""
     from . import generate
     live = generate.log_file()
-    segments = [p for p in generate.log_segments() if p.exists()]
-    if not segments:
+    rows, skipped, unreadable, segment_count = _log_rows()
+    if not segment_count:
         return [Result(INFO, "no generation log yet — arc continuity has "
                              "nothing to read (this is a fresh install)")]
-    rows: List[Dict] = []
-    skipped = 0
-    for segment in segments:
-        try:
-            with segment.open(encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except ValueError:
-                        # A torn tail line is expected on an append-only log
-                        # that a crash can interrupt; count it rather than fail
-                        # the check.
-                        skipped += 1
-                        continue
-                    if isinstance(row, dict):
-                        rows.append(row)
-        except OSError as exc:
-            return [Result(WARN, f"could not read {segment.name} ({exc}) — arc "
-                                 "continuity unknown")]
+    if unreadable:
+        return [Result(WARN, f"could not read {unreadable} — arc "
+                             "continuity unknown")]
 
     editions = _arc_editions_from_log(rows)
     if not editions:
@@ -1653,6 +1672,159 @@ def check_arc_continuity() -> List[Result]:
         out.append(Result(WARN, f"{skipped} unparseable line(s) in the "
                                 f"{live.name} record were skipped — the arc "
                                 "counts above are over the readable rows only"))
+    return out
+
+
+# NL-163 M2. How far back the artifact census looks. Long enough that a hole
+# is visible for more than a day, short enough that a fixed old gap does not
+# nag forever.
+BUNDLE_CENSUS_EDITIONS = 14
+
+
+def _published_dates(rows: List[Dict]) -> List[str]:
+    """Edition dates that were actually PUBLISHED, oldest first.
+
+    Samples are excluded because a sample is explicitly not the briefing of
+    record and never mints (generate's mount) — counting one would make the
+    census demand an artifact the code refuses to write. Failed runs are
+    excluded for the same reason: nothing was published to freeze."""
+    dates = []
+    for row in rows:
+        if row.get("sample"):
+            continue
+        if row.get("status") not in (None, "ok"):
+            continue
+        date = row.get("date")
+        if isinstance(date, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            dates.append(date)
+    return sorted(set(dates))
+
+
+def check_phone_delivery(env: Dict[str, str]) -> List[Result]:
+    """NL-163 Stage-A: does the phone actually have the paper?
+
+    TWO INSTRUMENTS, both stat-only (M1 gate rider R-A, and the doctor's own
+    honesty bound — it reads files, it does not probe other machines):
+
+      1. ARTIFACT PRESENCE vs THE LOG. A mint failure is contained at the
+         publish seam and warns in the run's output, which is gone by the next
+         morning; the log entry is already serialised when that warning is
+         written, so the record does NOT carry it. The cold-forensics
+         comparison the mount's own comment names — `data/briefings/*.phone.json`
+         against the log's dates — is therefore the only durable detector, and
+         this makes it a standing one.
+      2. PUSH AGE. The last delivery this machine recorded, against the newest
+         frozen edition it holds. NEVER A LIVENESS CLAIM: no request is made
+         from here, so this says "nothing has been delivered since X", never
+         "the host is up" or "the host still has it".
+    """
+    from . import editionbundle, pushclient
+
+    out: List[Result] = []
+
+    # -- 1. the census -----------------------------------------------------
+    bundles = editionbundle.available_dates()
+    rows, skipped, unreadable, segment_count = _log_rows()
+    published = _published_dates(rows)
+    if unreadable:
+        out.append(Result(WARN, f"could not read {unreadable} — the frozen-"
+                                "edition census is unknown for this run"))
+    elif not segment_count or not published:
+        out.append(Result(INFO, "no published editions on record yet — nothing "
+                                "to freeze for the phone"))
+    elif not bundles:
+        out.append(Result(
+            INFO,
+            f"no frozen phone editions on disk yet ({len(published)} published "
+            "editions on record) — the next generate mints the first. Editions "
+            "published before the bundle existed are NOT reconstructed: a "
+            "rebuild would render today's follow state and stamp it "
+            "frozen-at-publish"))
+    else:
+        # Only the era in which artifacts exist can be missing one. Everything
+        # before the first bundle is the honest pre-NL-163 archive.
+        era = [d for d in published if d >= bundles[0]][-BUNDLE_CENSUS_EDITIONS:]
+        missing = [d for d in era if d not in set(bundles)]
+        if missing:
+            out.append(Result(
+                WARN,
+                f"{len(missing)} of the last {len(era)} published editions have "
+                f"NO frozen artifact ({', '.join(missing)}) — the mint failed "
+                "at those publishes and the phone will never carry those dates "
+                "(they are not rebuilt) — the run that failed said so at the "
+                "time, in a 'phone bundle: NOT minted' warning the record does "
+                "not keep"))
+        else:
+            out.append(Result(
+                PASS,
+                f"every one of the last {len(era)} published editions has a "
+                f"frozen artifact ({bundles[-1]} newest, {len(bundles)} on disk)"))
+    if skipped:
+        out.append(Result(WARN, f"{skipped} unparseable line(s) in the "
+                                "generation record were skipped — the census "
+                                "above is over the readable rows only"))
+
+    # -- 2. the push -------------------------------------------------------
+    url, token = pushclient.config(env)
+    if not url and not token:
+        out.append(Result(
+            INFO,
+            f"phone push not configured ({pushclient.URL_VAR} and "
+            f"{pushclient.TOKEN_VAR} unset) — editions are frozen locally and "
+            "delivered nowhere. `newslens bundle --open` reads them on this "
+            "machine; the hosted paper is what the variables turn on"))
+        return out
+    if not url or not token:
+        out.append(Result(
+            FAIL,
+            f"phone push is half-configured — "
+            f"{pushclient.URL_VAR if not url else pushclient.TOKEN_VAR} is "
+            "missing. Set both in .env or neither"))
+        return out
+    try:
+        pushclient.endpoint(url, "2026-01-01")
+    except pushclient.PushError as exc:
+        out.append(Result(FAIL, f"{pushclient.URL_VAR} is not a stream "
+                                f"endpoint — {exc}"))
+        return out
+    host = pushclient._host_of(url)
+    out.append(Result(PASS, f"phone push configured → {host} (the token is set; "
+                            "the host stores only its sha256)"))
+
+    state = pushclient.read_state()
+    success, attempt = state.get("last_success"), state.get("last_attempt")
+    newest = bundles[-1] if bundles else None
+    if not isinstance(success, dict):
+        out.append(Result(
+            WARN,
+            "no successful push has been recorded on this machine" +
+            (f" — {newest} is frozen and undelivered; `newslens push` sends it"
+             if newest else " (nothing frozen to send yet)")))
+    else:
+        delivered, when = success.get("date"), (success.get("host_pushed_at")
+                                                or success.get("at") or "—")
+        if newest and delivered != newest:
+            out.append(Result(
+                WARN,
+                f"the newest frozen edition ({newest}) has NOT been delivered — "
+                f"the last recorded delivery was {delivered} at {when}. "
+                f"`newslens push` re-sends the artifact"))
+        else:
+            out.append(Result(
+                PASS,
+                f"last delivery recorded: {delivered} (host receipt {when}) — "
+                "this is a local record of a push this machine made, not a "
+                "probe: whether the host still holds it is not visible from here"))
+    if isinstance(attempt, dict) and attempt.get("status") == "failed":
+        # A failure AFTER the last success is the shape that matters: it means
+        # the most recent thing that happened was a paper that did not land.
+        if not isinstance(success, dict) or str(attempt.get("at") or "") > str(
+                success.get("at") or ""):
+            out.append(Result(
+                WARN,
+                f"the last push attempt FAILED ({attempt.get('date')}, "
+                f"{attempt.get('http_status') or 'no answer'}): "
+                f"{str(attempt.get('detail') or '')[:160]}"))
     return out
 
 
@@ -1801,6 +1973,7 @@ def run_doctor() -> int:
     sections.append(("Subscription lane (claude -p)", check_subscription_lane(env)))
     sections.append(("Scheduled generation", check_schedule(env)))   # NL-146
     sections.append(("Arc continuity", check_arc_continuity()))      # NL-160
+    sections.append(("Phone edition & delivery", check_phone_delivery(env)))  # NL-163
     sections.append(("Cost", cost_estimate()))
 
     tally = {PASS: 0, FAIL: 0, WARN: 0, INFO: 0}

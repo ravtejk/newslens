@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""NewsLens hosted-asset generator (NL-163 Stage-A M2).
+
+Thin on purpose (scripts/doctor's pattern): bootstraps sys.path so it runs from
+a fresh clone, then hands off to newslens.hostedassets, where the suite can
+reach it.
+
+Regenerates every DERIVED file under hosted/static/ — tokens.css, the PWA
+manifest, and the icon-C PNGs — from the paper's own palette (webui.TOKENS).
+The hosted service is a separate deployable that must not import newslens, so
+this script is how the palette crosses the tree line; a stale artifact is a
+suite failure, never a silent second copy of the hexes.
+
+    scripts/gen-hosted-assets
+"""
+
+import sys
+from pathlib import Path
+
+PROTOTYPE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROTOTYPE_ROOT / "src"))
+
+from newslens.hostedassets import main  # noqa: E402  (path bootstrap first)
+
+if __name__ == "__main__":
+    sys.exit(main())

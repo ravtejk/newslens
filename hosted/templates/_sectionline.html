@@ -1,0 +1,11 @@
+{#- §4's one navigation: sticky, in-flow, one line tall, no tab bar under it.
+
+    TWO DESTINATIONS, NOT THREE. The mockup draws Today · Following · Archive;
+    Following is a Mac surface (follow state lives in the memory database this
+    service deliberately cannot see — read-pure, adjudication Q7), so a third
+    link here would open nothing. The law that decides it is no-dead-buttons;
+    the divergence from the drawing is on the record. -#}
+<nav class="section-line" aria-label="Sections">
+  <a href="/"{% if current == 'today' %} aria-current="page"{% endif %}>Today</a>
+  <a href="/archive"{% if current == 'archive' %} aria-current="page"{% endif %}>Archive</a>
+</nav>

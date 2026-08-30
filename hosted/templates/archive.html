@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{#- THE ARCHIVE — dates only.
+
+    What it lists is exactly the bundles this stream holds: an edition
+    published before the bundle existed is not here and is never reconstructed
+    (the no-seeding ruling — a reconstruction would render today's follow state
+    and stamp it frozen-at-publish). So on day one this page is EMPTY, and that
+    is the true thing to say.
+
+    Addendum §2: cal-stamps do not survive the shrink. The furniture is a
+    hairline-separated list, one date per row, in the sans register. -#}
+{% block title %} — Archive{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="masthead">
+    <p class="wordmark">NewsLens</p>
+    <h1 class="page-title">Archive</h1>
+    {% include "_sectionline.html" %}
+  </header>
+
+  {% if entries %}
+    <ul class="archive-list">
+      {% for entry in entries %}
+        <li><a href="/editions/{{ entry.date }}">{{ entry.label }}</a>
+            <span class="archive-date">{{ entry.date }}</span></li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    {#- COPY FLAG (standing copy batch): the day-one archive line is minted
+        here in the quiet register. Nothing in the mockup draws this state. -#}
+    <p class="empty-note">No editions have been pushed to this paper yet. The
+      archive fills one morning at a time.</p>
+  {% endif %}
+</div>
+{% endblock %}

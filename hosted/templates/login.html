@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %} — Sign in{% endblock %}
+{#- STATE 1, the approved mockup's login, AS DRAWN (his pass 2026-08-29 resolved
+    flags 2-4 as-drawn: this sub-line and this operator line are ruled copy).
+
+    A masthead page, not an auth form (addendum §9): wordmark, one serif line,
+    one field. Passkey-first with the password arm behind a quiet text link; no
+    self-serve signup and no "Forgot password?" email theater — recovery runs
+    through the paper's operator, said once.
+
+    PROTOTYPE: faked — THE ONLY FAKED SEAM IN THIS SERVICE. Nothing here posts
+    anywhere: M2 is the reader and the receiver, M3 is the lock (adjudication
+    §Q8's milestone cut, and the auth PLAN is the principal's ruling at that
+    checkpoint). The buttons below are inert by construction, not by accident,
+    and this template is where M3's vendor flow arms. -#}
+{% block body %}
+<div class="page login-wrap">
+  <p class="login-word">NewsLens</p>
+  <p class="login-sub">Sign in to read the edition.</p>
+
+  <div id="login-passkey">
+    <div class="login-field">
+      <label for="li-email">Email</label>
+      <input id="li-email" type="email" autocomplete="username webauthn"
+             placeholder="you@example.com">
+    </div>
+    <button class="cta-quiet" type="button" data-login-arm="passkey">Continue with passkey</button>
+    <p class="login-alt"><button type="button" data-login-show="password">Use a password instead</button></p>
+  </div>
+
+  <div id="login-password" hidden>
+    <div class="login-field">
+      <label for="li-email2">Email</label>
+      <input id="li-email2" type="email" autocomplete="username">
+    </div>
+    <div class="login-field">
+      <label for="li-pw">Password</label>
+      <input id="li-pw" type="password" autocomplete="current-password">
+    </div>
+    <button class="cta-quiet" type="button" data-login-arm="password">Sign in</button>
+    <p class="login-alt"><button type="button" data-login-show="passkey">Use a passkey instead</button></p>
+  </div>
+
+  <p class="login-stay">You’ll stay signed in on this phone.</p>
+  <p class="login-stay login-stay--operator">Accounts are created by the paper’s operator — there is no signup.</p>
+</div>
+{% endblock %}

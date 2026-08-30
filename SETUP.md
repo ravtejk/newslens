@@ -375,6 +375,50 @@ launchctl bootout gui/$UID/com.newslens.generate
 rm ~/Library/LaunchAgents/com.newslens.generate.plist
 ```
 
+## 6. The phone — delivering the edition (NL-163 Stage A)
+
+Every publish now freezes the edition into one self-contained document at
+`data/briefings/<date>.phone.json`. You can read it on this machine with no
+setup at all:
+
+```bash
+newslens bundle --open        # the newest frozen edition, in your browser
+```
+
+**Delivery is optional and off until you fill two variables.** They turn on the
+push to the paper's host — the hosted reader your phone opens.
+`hosted/DEPLOY.md` is that host's runbook, and it ships dark: nothing is
+deployed until you deploy it.
+
+| Variable | What it is | Where it comes from |
+|---|---|---|
+| `NEWSLENS_PUSH_URL` | the stream endpoint, e.g. `https://<your host>/api/streams/main` | your host's address once deployed; the URL names the stream |
+| `NEWSLENS_PUSH_TOKEN` | the secret authorising this Mac to publish that stream | you mint it — below |
+
+Mint the token, and the digest the host stores:
+
+```bash
+python3 -c "import secrets;print(secrets.token_urlsafe(32))"          # the token -> .env
+python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" <token>
+```
+
+The **token** goes in your `.env`; the **digest** goes on the host
+(`fly secrets set NEWSLENS_PUSH_TOKENS='{"main":"<digest>"}'`). The host can
+check a token and can never reveal one; rotating is the same two commands.
+
+Set both or neither — a half-configured push is a doctor `✗`. Once they are
+set, every generate delivers the edition right after it publishes:
+
+```bash
+newslens push                 # re-send the newest frozen edition
+newslens push --date 2026-08-29
+newslens doctor               # "Phone edition & delivery": what is frozen, what landed
+```
+
+**A failed delivery never costs you an edition.** The push runs after the
+edition is published, logged and frozen; if the host is unreachable you get one
+warning line and the artifact stays on disk, ready for `newslens push`.
+
 ## Troubleshooting
 
 - **`newslens schedule status` says the agent file is present but nothing ever

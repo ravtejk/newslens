@@ -17,6 +17,15 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",        # QA-owned test suite (tests/)
+    # NL-163 Stage-A M2 (2026-08-29) — a DEV dependency, not a runtime one.
+    # The hosted reader (hosted/) is a separate deployable with its own
+    # requirements.txt; the product package still imports nothing but the three
+    # runtime deps above, and nothing in src/newslens imports flask. It is
+    # listed here because the hosted service's tests are part of this ONE
+    # suite: tests/test_nl163_hosted.py importorskips flask so a dev without it
+    # still runs green, and a suite that skips those nodes on every machine
+    # would be enforcement-dead. `pip install -e '.[dev]'` is how a dev gets it.
+    "flask>=3.0",
 ]
 
 [project.scripts]

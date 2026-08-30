@@ -1,0 +1,34 @@
+{#- The shell pages' frame. NOT the edition: an edition arrives frozen from the
+    Mac and is served as it was minted (hosted/app.py::_serve_edition). These
+    are the states an edition cannot render because they are states of the
+    SERVICE — no edition today, no session, nothing at this address.
+
+    Every colour here is a var() from the generated tokens.css. The layout law
+    is the approved mockup's (mockup-phone-v1.html) and the addendum's §5
+    standalone frame. -#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+{% if theme_light %}<meta name="theme-color" media="(prefers-color-scheme: light)" content="{{ theme_light }}">{% endif %}
+{% if theme_dark %}<meta name="theme-color" media="(prefers-color-scheme: dark)" content="{{ theme_dark }}">{% endif %}
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="NewsLens">
+<title>NewsLens{% block title %}{% endblock %}</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/shell.css">
+</head>
+<body>
+<script src="/static/boot.js"></script>
+<a class="skip-link" href="#main">Skip to the page</a>
+<main id="main" tabindex="-1">
+{% block body %}{% endblock %}
+</main>
+<script src="/static/shell.js" defer></script>
+</body>
+</html>
