@@ -74,6 +74,20 @@ def test_env_example_has_exactly_the_spec_vars_with_no_secret_values():
         # ships empty here and why the host stores only its sha256.
         "NEWSLENS_PUSH_URL": "",
         "NEWSLENS_PUSH_TOKEN": "",
+        # NL-163 Stage-A M3 (2026-08-31): THE OPERATOR'S HALF of the phone
+        # door — the only vendor credentials this product has anywhere. They
+        # live on THIS machine and are read by one command
+        # (`newslens phone-account`). The paper's HOST holds a public token and
+        # a key URL and nothing else, which is why the host-side names are
+        # documented in .env.example's PROSE but are not entries here: setting
+        # them on this machine does nothing at all, and an entry would invite
+        # somebody to try.
+        #
+        # STYTCH_PROJECT_ID is not secret-shaped (it appears in the login
+        # page's own HTML); STYTCH_SECRET is, which is why both ship empty and
+        # why the doctor reports them by NAME and length only.
+        "STYTCH_PROJECT_ID": "",
+        "STYTCH_SECRET": "",
     }
 
 

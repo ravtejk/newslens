@@ -425,11 +425,22 @@ def test_the_ledger_never_logs_a_read_for_furniture(client, store, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_without_a_session_every_reading_route_goes_to_the_login_page(tmp_path):
+    """M2's contract, EXTENDED BY M3 and disclosed: the redirect now carries
+    the page the visitor wanted.
+
+    Why the extension exists rather than a cosmetic tidy: the vendor's session
+    JWT expires every five minutes by design, so an ordinary reader opening
+    yesterday's edition can arrive at the door mid-journey. Without a return
+    path the silent refresh would land them on the front page — a paper that
+    quietly changes which page you asked for. `/` still redirects bare,
+    because `/` is where the login page goes by default."""
     client = hosted_app.create_app(
         env_for(tmp_path, NEWSLENS_DEV_NO_AUTH=None)).test_client()
-    for path in ("/", f"/editions/{TODAY}", "/archive"):
+    assert client.get("/").headers["Location"] == "/login"
+    for path in (f"/editions/{TODAY}", "/archive"):
         resp = client.get(path)
-        assert resp.status_code == 302 and resp.headers["Location"] == "/login"
+        assert resp.status_code == 302
+        assert resp.headers["Location"] == f"/login?next={path}"
 
 
 def test_the_cache_and_the_shell_are_never_auth_gated(tmp_path):

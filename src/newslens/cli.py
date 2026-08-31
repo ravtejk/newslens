@@ -233,6 +233,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--date", default=None, metavar="YYYY-MM-DD",
         help="which edition (default: the most recent one that HAS a bundle)")
 
+    # NL-163 Stage-A M3 — THE OPERATOR'S HAND. Accounts are created here, on
+    # this machine, by the person holding the vendor secret; the paper's host
+    # has no code path that could create one (§9: there is no signup).
+    acct_p = sub.add_parser(
+        "phone-account",
+        help="create a reader's account with the paper's operator credentials "
+             "(this machine only — the host never holds the vendor secret)")
+    acct_sub = acct_p.add_subparsers(dest="account_cmd", required=True)
+    acct_create = acct_sub.add_parser(
+        "create",
+        help="create ONE account and print the exact host mapping row for it. "
+             "Prints the request and sends nothing unless you add --commit")
+    acct_create.add_argument("email", help="the reader's email address")
+    acct_create.add_argument(
+        "--stream", required=True, metavar="SLUG",
+        help="which paper this account reads (the host's folder name; one "
+             "account reads one paper, so this is not a preference)")
+    acct_create.add_argument(
+        "--commit", action="store_true",
+        help="actually create the account. Without this the command is a dry "
+             "run: it prints the call it would make and sends nothing")
+    acct_sub.add_parser(
+        "jwks",
+        help="print this project's public key set, for pinning into the host's "
+             "NEWSLENS_STYTCH_JWKS (read-only, no spend)")
+
     # NL-146 — SCHEDULED GENERATION. Four subcommands and no `install`: the org
     # never installs the launchd agent (dispatch 2026-08-13, law), so what ships
     # is a renderer, an instruction printer, an honest status readout, and the
@@ -509,6 +535,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "push":
         return _push_command(args)
+
+    if args.command == "phone-account":
+        return _phone_account_command(args)
 
     if args.command == "schedule":
         from . import config, generate, schedule
@@ -963,6 +992,60 @@ def _bundle_command(args) -> int:
         tmp = fh.name
     print(f"  opening {tmp}")
     webbrowser.open(f"file://{tmp}")
+    return 0
+
+
+def _phone_account_command(args) -> int:
+    """`newslens phone-account …` — the operator's hand (NL-163 M3).
+
+    DRY RUN IS THE DEFAULT (team/ENGINEERING.md: anything that acts externally
+    ships behind a dry-run flag that defaults to on). Creating an account is an
+    external act on a third party's system.
+
+    THE PASSWORD IS PRINTED ONCE AND STORED NOWHERE. Not in the log, not in
+    .env, not in the database — this terminal is the only place it will ever
+    exist, and if it is lost the operator creates the account again. That is
+    the honest shape of a paper with no password-reset email."""
+    from . import config, phoneaccount
+
+    config.load_env()
+
+    try:
+        if args.account_cmd == "jwks":
+            result = phoneaccount.jwks()
+            print(f"# {result['url']}  ({result['environment']}; "
+                  f"kid{'s' if len(result['kids']) != 1 else ''}: "
+                  f"{', '.join(str(k) for k in result['kids'])})")
+            print("# Paste as ONE line into the host's environment:")
+            print(f"NEWSLENS_STYTCH_JWKS={result['jwks']}")
+            return 0
+
+        result = phoneaccount.create(args.email, args.stream,
+                                     commit=bool(args.commit))
+    except phoneaccount.AccountError as exc:
+        print(f"phone-account: {exc}", file=sys.stderr)
+        return 1
+
+    if not result["committed"]:
+        print(f"DRY RUN — nothing was sent ({result['environment']} project).")
+        print(f"  would call : {result['method']} {result['url']}")
+        print(f"  with fields: {', '.join(result['fields'])} "
+              "(the password is generated here and shown once)")
+        print(f"  for        : {result['email']} → stream "
+              f"{result['stream']!r}")
+        print("\nRun it again with --commit to create the account.")
+        return 0
+
+    print(f"Account created ({result['environment']} project).")
+    print(f"  email    : {result['email']}")
+    print(f"  user id  : {result['user_id']}")
+    print(f"  password : {result['password']}")
+    print("             ^ shown ONCE and stored nowhere. Give it to the "
+          "reader by hand; there is no reset email.")
+    print("\nAdd this reader to the host's map, then redeploy or restart it:")
+    print(f"  NEWSLENS_USER_STREAMS={result['env_row']}")
+    print("  (merge it into the existing map if the host already serves "
+          "another reader — one account, one paper.)")
     return 0
 
 

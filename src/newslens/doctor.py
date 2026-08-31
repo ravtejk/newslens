@@ -1828,6 +1828,127 @@ def check_phone_delivery(env: Dict[str, str]) -> List[Result]:
     return out
 
 
+def check_phone_auth(env: Dict[str, str]) -> List[Result]:
+    """NL-163 M3 — is the paper's door configured, and on which side?
+
+    THE SPLIT THIS SECTION EXISTS TO MAKE VISIBLE (the principal's ruling
+    2026-08-31): the operator's vendor SECRET lives here, on this machine, and
+    is used by exactly one command; the paper's HOST holds only a public token
+    and a key URL. Two machines, two halves — and a section that confused them
+    would be the fastest route to a secret on a rented box.
+
+    NAMES ONLY. No value out of `.env` is ever printed: presence, shape and
+    length are the whole of what this reports.
+
+    THE LIVE PROBE IS OPT-IN (`NEWSLENS_DOCTOR_PHONE_AUTH_PROBE=1`) — the
+    NL-160 subscription-probe pattern. It fetches the project's PUBLIC KEY SET
+    and nothing else: read-only, no user touched, no sign-in attempted, and
+    structurally incapable of a metered call (there is no endpoint reachable
+    from here that bills a monthly active user). Off by default because a
+    health check that phones a third party on every run is a health check that
+    fails on their bad afternoon.
+    """
+    from . import phoneaccount
+
+    out: List[Result] = []
+    project_id = (env.get(phoneaccount.PROJECT_ID_VAR) or "").strip()
+    secret = (env.get(phoneaccount.SECRET_VAR) or "").strip()
+
+    if not project_id and not secret:
+        return [Result(
+            INFO,
+            "phone sign-in is not configured on this machine yet — "
+            f"{phoneaccount.PROJECT_ID_VAR} and {phoneaccount.SECRET_VAR} are "
+            "unset. They are the OPERATOR's half (creating readers' accounts); "
+            "the paper's host never holds them. SETUP.md, 'The phone door'")]
+
+    where = None
+    if not project_id:
+        out.append(Result(
+            FAIL,
+            f"{phoneaccount.SECRET_VAR} is set but {phoneaccount.PROJECT_ID_VAR} "
+            "is not — a secret alone cannot say which project it belongs to, so "
+            "`newslens phone-account` refuses. Copy the project id from the "
+            "vendor dashboard's API Keys page"))
+    else:
+        try:
+            where = phoneaccount.environment_for(project_id)
+            out.append(Result(
+                PASS,
+                f"{phoneaccount.PROJECT_ID_VAR} present and well-formed "
+                f"({where} project) — `newslens phone-account create` would "
+                f"call {phoneaccount.API_HOSTS[where]}"))
+        except phoneaccount.AccountError as exc:
+            out.append(Result(FAIL, f"{phoneaccount.PROJECT_ID_VAR}: {exc}"))
+
+    if not secret:
+        out.append(Result(
+            WARN,
+            f"{phoneaccount.SECRET_VAR} is not set — accounts cannot be created "
+            "from here. `newslens phone-account create` still runs as a dry run "
+            "and prints the call it would make"))
+    else:
+        out.append(Result(
+            PASS,
+            f"{phoneaccount.SECRET_VAR} present ({len(secret)} characters) — "
+            "never printed, never logged, and never sent to the paper's host"))
+
+    if where == "test":
+        out.append(Result(
+            WARN,
+            "this is the vendor's TEST project — accounts created here do not "
+            "exist for a live paper. Flip to the live project before the "
+            "acceptance morning; SETUP.md step 1 is the kill-check that settles "
+            "whether passkeys are available there at all"))
+
+    # The runbook's own drift check: the host-side names are documented, or the
+    # deploy step is a guess.
+    try:
+        documented = (paths.PROJECT_ROOT / ".env.example").read_text(
+            encoding="utf-8")
+    except OSError:
+        documented = ""
+    undocumented = [name for name in
+                    ("NEWSLENS_STYTCH_PROJECT_ID", "NEWSLENS_STYTCH_PUBLIC_TOKEN",
+                     "NEWSLENS_STYTCH_JWKS_URL", "NEWSLENS_USER_STREAMS")
+                    if name not in documented]
+    if undocumented:
+        out.append(Result(
+            WARN,
+            f"the host-side names {', '.join(undocumented)} are missing from "
+            ".env.example — the deploy runbook would be a guess"))
+
+    if str(env.get("NEWSLENS_DOCTOR_PHONE_AUTH_PROBE", "")).strip().lower() not in (
+            "1", "true", "yes"):
+        out.append(Result(
+            INFO,
+            "live key-set probe not run (set NEWSLENS_DOCTOR_PHONE_AUTH_PROBE=1 "
+            "to fetch this project's public keys — read-only, $0, no user "
+            "touched, no metered call possible)"))
+        return out
+
+    if not (project_id and secret and where):
+        out.append(Result(WARN, "live key-set probe skipped — the credentials "
+                                "above are incomplete"))
+        return out
+    try:
+        result = phoneaccount.jwks(env)
+    except phoneaccount.AccountError as exc:
+        out.append(Result(
+            FAIL,
+            f"live key-set probe FAILED: {exc}. Without a readable key set the "
+            "paper's host cannot verify one session — pin the keys into the "
+            "host's NEWSLENS_STYTCH_JWKS instead (`newslens phone-account "
+            "jwks`)"))
+        return out
+    out.append(Result(
+        PASS,
+        f"live key-set probe OK: {len(result['kids'])} signing key(s) at "
+        f"{result['url']} — the host verifies sessions against these and "
+        "reaches no other vendor endpoint"))
+    return out
+
+
 def check_llm_lanes(env: Dict[str, str]) -> List[Result]:
     """The provider-seam lane map: one line per seat showing the resolved
     provider/model/lane + per-seat price, plus fallback state. Standing shape
@@ -1974,6 +2095,7 @@ def run_doctor() -> int:
     sections.append(("Scheduled generation", check_schedule(env)))   # NL-146
     sections.append(("Arc continuity", check_arc_continuity()))      # NL-160
     sections.append(("Phone edition & delivery", check_phone_delivery(env)))  # NL-163
+    sections.append(("Phone sign-in", check_phone_auth(env)))                 # NL-163 M3
     sections.append(("Cost", cost_estimate()))
 
     tally = {PASS: 0, FAIL: 0, WARN: 0, INFO: 0}

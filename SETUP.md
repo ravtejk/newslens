@@ -419,6 +419,130 @@ newslens doctor               # "Phone edition & delivery": what is frozen, what
 edition is published, logged and frozen; if the host is unreachable you get one
 warning line and the artifact stays on disk, ready for `newslens push`.
 
+## 7. The phone door — sign-in (NL-163 Stage A M3)
+
+The reader is a door and a shelf. This section is the door. Work it in order:
+**step 1 decides whether the rest of it is even the right plan.**
+
+### Step 1 — the kill-check (before anything else)
+
+The vendor choice rests on one claim nobody could verify without an account:
+that **passkeys work on the free tier in a LIVE project**, not only a test one.
+The spike receipted it from the pricing page and vendor writing, never from a
+per-feature matrix naming passkeys + free + live-mode in one sentence
+(`research/2026-08-29--nl163-auth-spike.md`, falsifier 1).
+
+So:
+
+1. Create a free Stytch **Consumer Authentication** project.
+2. Flip it to **Live**. Note whether a card is required — that detail is also
+   unverified.
+3. On the dashboard's **Frontend SDK** page, enable the SDK and enable
+   **WebAuthn** under authentication products.
+4. Look at whether passkeys are actually available in that live project.
+
+**If passkeys are gated on the live free tier, stop and say so.** The fallback
+is on record — Clerk Pro at ~$25/mo — and the code does not care: the host
+verifies a session JWT against a JWKS URL, which is the same four facts for
+either vendor. Changing vendor is changing environment variables, not
+rewriting the lock (`hosted/sessionauth.py` says so in its own header).
+
+### Step 2 — the keys, and which machine each half goes on
+
+There are two halves and they must not meet.
+
+| Half | Lives on | Names |
+|---|---|---|
+| **Operator** — creates readers' accounts | **this Mac**, in `.env` | `STYTCH_PROJECT_ID`, `STYTCH_SECRET` |
+| **Host** — verifies sessions, serves the paper | **the server**, via `fly secrets set` | `NEWSLENS_STYTCH_PROJECT_ID`, `NEWSLENS_STYTCH_PUBLIC_TOKEN`, `NEWSLENS_USER_STREAMS` |
+
+**The host never holds the secret.** It cannot create an account, cannot mint a
+session and cannot revoke one. All it can do is check a signature against a
+public key — which is what makes putting it on a rented box a small decision
+rather than a large one.
+
+Put the operator half in `.env` here (`.env.example` describes every name), then:
+
+```bash
+newslens doctor          # "Phone sign-in" — names only, never a value
+```
+
+### Step 3 — create a reader's account
+
+```bash
+newslens phone-account create you@example.com --stream main            # dry run
+newslens phone-account create you@example.com --stream main --commit   # for real
+```
+
+The dry run prints the call it would make and sends nothing. It is the default
+because creating an account acts on somebody else's system.
+
+The `--commit` run prints three things: the **user id**, a generated **password
+shown exactly once**, and the exact **`NEWSLENS_USER_STREAMS` row** for the
+host. Nothing writes that password down — not the log, not `.env`, not the
+database. Put it in your password manager as you read it; if you lose it,
+create the account again. That is the honest shape of a paper with no
+password-reset email.
+
+### Step 4 — tell the host who reads what
+
+```bash
+fly secrets set NEWSLENS_STYTCH_PROJECT_ID='project-live-…' \
+                NEWSLENS_STYTCH_PUBLIC_TOKEN='public-token-live-…' \
+                NEWSLENS_USER_STREAMS='{"user-live-…":"main"}'
+```
+
+One account reads one paper. There is no picker and no signup page: an account
+that is not in this map signs in and is told, in plain words, that it has no
+paper — an operator mistake with an honest screen, not a prompt.
+
+Optional, and worth it if you would rather the reading path never touch a third
+party at all:
+
+```bash
+newslens phone-account jwks       # prints NEWSLENS_STYTCH_JWKS=… as one line
+```
+
+Set that on the host and it verifies sessions against keys you pinned yourself.
+The cost is a re-paste when the vendor rotates keys (roughly every 6 months;
+they serve both keys for a month, so the window is wide).
+
+### Step 5 — the door, checked
+
+```bash
+NEWSLENS_DOCTOR_PHONE_AUTH_PROBE=1 newslens doctor
+```
+
+The probe fetches the project's **public keys** and nothing else: read-only,
+$0, no user touched, and no endpoint reachable from it that could bill a
+monthly active user. Opt-in, because a health check that phones a third party
+on every run fails on their bad afternoon rather than yours.
+
+### What sign-in looks like, and the one thing it does not do yet
+
+Passkey first (Face ID), password behind the quiet link, and **credentials are
+asked once per device**: the session lasts up to 366 days and every successful
+sign-in extends it.
+
+The vendor's session proof itself expires every five minutes, by their design.
+You will never see that: when it lapses, the sign-in page silently exchanges
+your long-lived session for a fresh proof and puts you back on the page you
+asked for. What it means in practice is that **the door needs the network**.
+The **cache never does** — a dead session, an expired proof and a plane at
+30,000 feet all leave the last edition on your phone exactly where it was.
+
+**What M3 does not do: enrol a passkey.** A passkey is bound to a domain, and
+the domain is yours to choose at deploy time, so enrolment belongs after the
+host has its real address. Two consequences worth knowing now:
+
+- the first sign-in on a new device is the **password** one;
+- the vendor requires a **verified email or phone** before a passkey can be
+  registered at all, and `POST /v1/passwords` does not verify one. Their docs
+  name magic links, OTP and OAuth as the factors that do. Which one this paper
+  uses is an open question at the M3 checkpoint — deliberately asked rather
+  than guessed, because the answer adds a step to a ceremony that was drawn
+  with two.
+
 ## Troubleshooting
 
 - **`newslens schedule status` says the agent file is present but nothing ever

@@ -26,6 +26,16 @@ dev = [
     # still runs green, and a suite that skips those nodes on every machine
     # would be enforcement-dead. `pip install -e '.[dev]'` is how a dev gets it.
     "flask>=3.0",
+    # NL-163 Stage-A M3 (2026-08-31) — same reasoning as flask, one milestone
+    # later. The lock verifies session JWTs locally (hosted/sessionauth.py) and
+    # its acceptance tests MINT their own RS256 keypair and JWKS, so the whole
+    # attack matrix (wrong kid, wrong issuer, wrong audience, expired,
+    # alg:none, HS256 confusion, foreign signer) runs with no vendor account
+    # and no socket. Without these two installed those nodes importorskip, and
+    # an attack matrix that skips is not evidence of anything. Both are already
+    # in hosted/requirements.txt; src/newslens imports neither.
+    "PyJWT>=2.8",
+    "cryptography>=42",
 ]
 
 [project.scripts]

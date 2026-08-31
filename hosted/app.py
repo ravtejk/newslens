@@ -18,11 +18,12 @@ account is a different paper. No picker, no in-shell identity, no founder
 strings anywhere in this file — the register is "the paper" and "the paper's
 operator".
 
-AUTH IS STUBBED IN THIS MILESTONE, and the stub is the one marked seam:
-`NEWSLENS_DEV_NO_AUTH=1` bypasses the session check and REFUSES TO BOOT on any
-non-loopback bind (the reviewer's condition — see `dev_bypass_guard`). M3 wires
-the managed vendor behind `current_user()`; the login page below renders the
-approved masthead and posts nowhere.
+AUTH IS REAL FROM M3 (the principal's ruling 2026-08-31, "Lets do c" —
+Stytch): `current_user()` verifies a session JWT LOCALLY against a cached
+JWKS (hosted/sessionauth.py), and THIS SERVICE HOLDS NO VENDOR SECRET. The
+development bypass survives unchanged in posture — `NEWSLENS_DEV_NO_AUTH=1`
+still refuses to boot on any non-loopback bind and is still refused per
+request from any non-loopback caller (see `dev_bypass_guard`).
 """
 
 from __future__ import annotations
@@ -37,12 +38,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from flask import (Flask, Response, abort, jsonify, redirect, render_template,
                    request, send_from_directory)
 
-from . import hoststore
+from . import hoststore, sessionauth
 from .hoststore import HostStore, StoreError, valid_date, valid_stream
+from .sessionauth import SessionConfig, SessionInvalid, SessionVerifier
 
 # 10MB (adjudication Q4). Renegotiated when audio joins the envelope; a real
 # edition measures ~150KB today, so this is three orders of headroom and still
@@ -50,8 +53,62 @@ from .hoststore import HostStore, StoreError, valid_date, valid_stream
 MAX_BUNDLE_BYTES = 10 * 1024 * 1024
 
 # PROTOTYPE: faked — the ONLY faked seam in this service (team/ENGINEERING.md
-# "what's faked" list). Real session verification is M3's; see DEPLOY.md.
+# "what's faked" list). It exists so the local loop can drive every state
+# without a vendor account; real session verification is live beside it.
 DEV_NO_AUTH_VAR = "NEWSLENS_DEV_NO_AUTH"
+
+# THE SESSION COOKIE. HttpOnly (no script on any page can read it — including
+# the login page's own, including a vendor's), Secure wherever the connection
+# is not a plaintext loopback one, SameSite=Lax (it must survive the top-level
+# navigation back from /login, and Lax is the tightest value that does).
+#
+# THE COOKIE'S LIFETIME IS NOT THE SESSION'S LIFETIME, and the distinction is
+# the §9 law's whole mechanism: the cookie holds a vendor JWT that expires in
+# five minutes by the vendor's design, while the cookie itself lives ≥90 days
+# so the DEVICE stays enrolled. When the JWT inside has expired, the login
+# page silently exchanges the long-lived vendor session for a fresh one — the
+# reader types nothing. Credentials once per device (addendum §9), by the only
+# arrangement that holds it without this box holding a vendor secret.
+SESSION_COOKIE = "nl_session"
+# 366 days — the vendor's own documented session maximum
+# (`session_duration_minutes` max 527,040), so the cookie never dies before the
+# session it carries. The ratified law asks for ≥90 rolling; this is 4×.
+SESSION_COOKIE_MAX_AGE = 366 * 24 * 60 * 60
+
+# A same-origin custom header is required on the session POST. A cross-site
+# form or image cannot set one without a CORS preflight, and this service
+# answers no preflight — so a hostile page cannot log a reader into the
+# attacker's account (session fixation) or out of their own.
+SESSION_REQUEST_HEADER = "X-NewsLens-Session"
+
+# Content-Security-Policy. `unsafe-inline` for scripts is not laxness: a frozen
+# edition carries its own inline boot script and its own inline stylesheet by
+# construction (that is what "one self-contained document" means), and hashing
+# them would put a second copy of the bundle's bytes in this file. What the
+# policy DOES pin is the thing M3 must pin — SCRIPT ORIGINS. Only the login
+# page may reach the vendor; every other route, the served edition above all,
+# admits no third-party script at all.
+_CSP_COMMON = (
+    "default-src 'self'; "
+    # SPELLED OUT rather than left to the fallback chain. A worker's script is
+    # governed by `worker-src`, which falls back through `child-src` to
+    # `script-src` — and `script-src` on the login route names the vendor. The
+    # offline morning is too important to rest on which fallback a browser
+    # implements: the service worker is same-origin, always, on every route.
+    "worker-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self' data:; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'none'; "
+    "object-src 'none'")
+CSP_READER = ("script-src 'self' 'unsafe-inline'; connect-src 'self'; "
+              + _CSP_COMMON)
+CSP_LOGIN = (f"script-src 'self' 'unsafe-inline' {sessionauth.SDK_ORIGIN}; "
+             f"connect-src 'self' {sessionauth.VENDOR_API_ORIGIN}; "
+             f"frame-src 'self' {sessionauth.VENDOR_API_ORIGIN}; "
+             + _CSP_COMMON)
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]", "0177.0.0.1"}
 # Signals that say "this process is on a platform, not on somebody's laptop".
@@ -176,6 +233,9 @@ class Config:
         self.dev_no_auth = str(env.get(DEV_NO_AUTH_VAR, "")).strip().lower() in (
             "1", "true", "yes")
         self.dev_user = env.get("NEWSLENS_DEV_USER") or ""
+        # The lock's four facts + the public token. No secret is read here,
+        # and there is no env var this service accepts that could carry one.
+        self.session = SessionConfig(env)
         self.max_bytes = int(env.get("NEWSLENS_MAX_BUNDLE_BYTES")
                              or MAX_BUNDLE_BYTES)
         # The paper's day boundary, in minutes from UTC. Only "is the latest
@@ -251,32 +311,58 @@ def augment_edition(html: str, island: Dict) -> str:
 # The app
 # ---------------------------------------------------------------------------
 
-def create_app(env: Dict[str, str] = None, host: str = None) -> Flask:
+def create_app(env: Dict[str, str] = None, host: str = None,
+               jwks_fetcher=None) -> Flask:
     dev_bypass_guard(env, host=host)
     app = Flask(__name__)
     cfg = Config(env)
     store = HostStore(cfg.data_dir)
+    # ONE verifier per app: the key cache is shared by every worker thread and
+    # takes its own lock, so a busy morning fetches the JWKS once, not once per
+    # request. `jwks_fetcher` is the F1 test seam — the suite hands in a
+    # fixture key set and NO SOCKET IS EVER OPENED under test.
+    verifier = SessionVerifier(cfg.session, fetcher=jwks_fetcher)
     app.config["NEWSLENS"] = cfg
     app.config["NEWSLENS_STORE"] = store
+    app.config["NEWSLENS_VERIFIER"] = verifier
     app.config["MAX_CONTENT_LENGTH"] = cfg.max_bytes + 1024
 
-    # -- auth (STUBBED — M3 wires the vendor behind this one function) -----
+    # -- auth --------------------------------------------------------------
 
     def current_user() -> Optional[str]:
         """The signed-in reader, or None.
 
-        M2 has no session verification: the login page renders and posts
-        nowhere, and this returns a user only under the marked dev bypass.
-        M3 replaces the body with pinned-RS256 verification against a cached
-        JWKS — the route code above it does not change, which is the point of
-        the seam."""
-        if not cfg.dev_no_auth:
+        THE WHOLE OF THE LOCK IS HERE: one cookie, verified locally against a
+        cached public key. No vendor round trip on the reading path, no vendor
+        secret in this process, and no route below has to know which vendor it
+        is — which is what makes the recorded falsifier (if live-mode passkeys
+        turn out gated, Clerk re-enters) a configuration change.
+
+        A REFUSAL IS NOT SWALLOWED: it becomes a logged reason and a redirect
+        to the login page, which is the visible failure path the caller can
+        act on. The reason never reaches the reader — a refusal that names the
+        failed check teaches an attacker which check to defeat next."""
+        if cfg.dev_no_auth:
+            # PROTOTYPE: faked — the marked dev seam, posture unchanged from
+            # M2 (loopback-only at boot AND per request).
+            if cfg.dev_user:
+                return cfg.dev_user
+            if len(cfg.user_streams) == 1:
+                return next(iter(cfg.user_streams))
             return None
-        if cfg.dev_user:
-            return cfg.dev_user
-        if len(cfg.user_streams) == 1:
-            return next(iter(cfg.user_streams))
-        return None
+        token = request.cookies.get(SESSION_COOKIE)
+        if not token:
+            return None
+        try:
+            return verifier.user_id(token)
+        except SessionInvalid as exc:
+            # INFO, not warning, and the difference from the exchange below is
+            # deliberate: this fires every time the vendor's five-minute proof
+            # lapses, which is the ordinary rhythm of a reader who left the app
+            # open — routine, not diagnostic. The VISIBLE failure path is the
+            # redirect the caller gets, not this line.
+            app.logger.info("session refused: %s", exc)
+            return None
 
     def reader() -> Tuple[Optional[str], Optional[str]]:
         """(user, stream). A user with no stream mapped is not a reader —
@@ -289,6 +375,38 @@ def create_app(env: Dict[str, str] = None, host: str = None) -> Flask:
 
     def _no_store(resp: Response) -> Response:
         resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    def _to_login() -> Response:
+        """Send an unauthenticated visitor to the door, remembering WHICH page
+        they wanted.
+
+        The return path is what makes a five-minute JWT invisible: the login
+        page silently refreshes the session and puts the reader back where they
+        were. `/` carries no parameter at all, because `/` is where the login
+        page goes by default — a bare redirect is the common case and stays
+        bare."""
+        target = _safe_next(request.full_path if request.query_string
+                            else request.path)
+        return redirect("/login" if target == "/" else
+                        "/login?next=" + quote(target, safe="/?=&-_.~"))
+
+    @app.after_request
+    def _security_headers(resp: Response) -> Response:
+        """THE VENDOR SCRIPT PIN, enforced by the browser rather than promised
+        by a comment (adjudication Q3 / charter item 2: "their JS loaded ONLY
+        on the login page, never on the reader; pin that").
+
+        The login route's policy names the vendor's script origin. EVERY other
+        route — the served edition first among them — sends a policy with no
+        third-party origin in it at all, so a vendor script tag that ever leaks
+        into an edition is refused by the browser, not by our good intentions.
+        """
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            CSP_LOGIN if request.path == "/login" else CSP_READER)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
         return resp
 
     # -- the bypass's request-time backstop --------------------------------
@@ -370,7 +488,7 @@ def create_app(env: Dict[str, str] = None, host: str = None) -> Flask:
     def home():
         user, stream = reader()
         if not user:
-            return redirect("/login")
+            return _to_login()
         if not stream:
             return _shell("nostream.html"), 403
         latest = store.latest(stream)
@@ -393,7 +511,7 @@ def create_app(env: Dict[str, str] = None, host: str = None) -> Flask:
             abort(404)
         user, stream = reader()
         if not user:
-            return redirect("/login")
+            return _to_login()
         if not stream:
             return _shell("nostream.html"), 403
         kind = "today" if date == store.latest(stream) else "archive"
@@ -403,7 +521,7 @@ def create_app(env: Dict[str, str] = None, host: str = None) -> Flask:
     def archive():
         user, stream = reader()
         if not user:
-            return redirect("/login")
+            return _to_login()
         if not stream:
             return _shell("nostream.html"), 403
         dates = list(reversed(store.dates(stream)))
@@ -412,10 +530,80 @@ def create_app(env: Dict[str, str] = None, host: str = None) -> Flask:
 
     @app.route("/login")
     def login():
-        # The masthead page (addendum §9, mockup state 1) — as drawn, and
-        # wired to nothing: M3 arms the vendor flow. No self-serve signup, no
-        # password-reset theater; recovery runs through the paper's operator.
-        return _shell("login.html")
+        """The masthead page (addendum §9, mockup state 1) — as drawn, now
+        ARMED. No self-serve signup, no password-reset theater; recovery runs
+        through the paper's operator, said once.
+
+        THE PAGE IS NEVER AUTH-GATED and never no-store: it is the one door,
+        and a reader whose session has just expired must be able to reach it
+        with no session at all. Everything the ceremony needs is public — a
+        publishable token and a script URL; there is nothing here to protect.
+        """
+        session_cfg = cfg.session
+        return _shell(
+            "login.html",
+            stytch_public_token=session_cfg.public_token,
+            stytch_sdk_url=session_cfg.sdk_url,
+            # An honest flag for the page: with no keys the ceremony cannot
+            # run, and the quiet line says so on the tap rather than the
+            # buttons pretending. The copy stays as drawn either way — this
+            # is a machine state, not a product state.
+            auth_ready=bool(session_cfg.configured),
+            login_next=_safe_next(request.args.get("next") or "/"))
+
+    @app.route("/api/session", methods=["POST"])
+    def open_session():
+        """Exchange a verified vendor JWT for this service's own HttpOnly
+        cookie. THE ONLY WRITE PATH ON THE READING SIDE, and it writes exactly
+        one cookie — no row, no file, no state (read-pure, Q7, holds).
+
+        WHY AN EXCHANGE AT ALL, rather than reading the vendor SDK's cookie
+        directly: the SDK's cookies are readable by any script on the page, by
+        design. Ours is not readable by any script at all. The exchange is what
+        buys HttpOnly.
+
+        CSRF: a same-origin custom header is required (a cross-site form or
+        image cannot set one, and this service answers no CORS preflight), so a
+        hostile page cannot plant its own session in this reader's browser.
+        """
+        if request.headers.get(SESSION_REQUEST_HEADER) != "1":
+            return _err(400, "this endpoint takes a same-origin request from "
+                             "the sign-in page")
+        body = request.get_json(silent=True)
+        token = (body or {}).get("session_jwt")
+        if not isinstance(token, str) or not token:
+            return _err(400, "no session_jwt in the body")
+        try:
+            claims = verifier.verify(token)
+        except SessionInvalid as exc:
+            # THE REASON GOES TO THE OPERATOR AND NEVER TO THE CALLER: the
+            # reader gets one quiet line, and an attacker gets no oracle
+            # telling them which check to defeat next.
+            #
+            # WARNING-GRADE, and the grade was measured rather than assumed:
+            # at `info` this line did not appear at all under `app.run`
+            # (Flask's logger sits at WARNING there), which would have made
+            # DEPLOY.md's "read the issuer error out of the logs" repair path
+            # a false promise. A refused EXCHANGE is rare and diagnostic —
+            # somebody presented a token this host would not take, which is
+            # either a misconfigured claim or an attempt.
+            app.logger.warning("session refused at exchange: %s", exc)
+            return _err(401, "that sign-in could not be verified")
+        user = claims["sub"]
+        stream = cfg.user_streams.get(user)
+        resp = _no_store(jsonify({
+            "ok": True,
+            # Named honestly so the login page can send an unmapped account to
+            # the operator page instead of a blank paper.
+            "stream": stream,
+            "next": _safe_next(request.args.get("next")
+                               or (body or {}).get("next") or "/"),
+        }))
+        resp.set_cookie(
+            SESSION_COOKIE, token,
+            max_age=SESSION_COOKIE_MAX_AGE,
+            httponly=True, secure=_cookie_secure(), samesite="Lax", path="/")
+        return resp
 
     # -- the push endpoint -------------------------------------------------
 
@@ -548,6 +736,47 @@ def _archive_label(date: str) -> str:
             date, "%Y-%m-%d").strftime(", %B %-d")
     except ValueError:
         return date
+
+
+def _safe_next(raw) -> str:
+    """A place on THIS paper, or the front page.
+
+    An open redirect is the classic way a sign-in page becomes a phishing
+    stepping stone: `/login?next=https://evil.example` sends a reader who did
+    everything right to somebody else's imitation of this paper. So the return
+    path is not sanitised, it is CHECKED — one leading slash, no scheme, no
+    authority, no control characters — and anything that fails goes to `/`.
+    Refused rather than repaired: a value we had to fix is a value we did not
+    understand."""
+    if not isinstance(raw, str) or not raw:
+        return "/"
+    if len(raw) > 512:
+        return "/"
+    if not raw.startswith("/") or raw.startswith("//") or raw.startswith("/\\"):
+        return "/"
+    if any(ch in raw for ch in ("\r", "\n", "\t", "\\", " ")):
+        return "/"
+    if ":" in raw.split("?", 1)[0]:            # `/\x2f`-style scheme smuggling
+        return "/"
+    return raw
+
+
+def _cookie_secure() -> bool:
+    """`Secure` unless this is a plaintext request from this machine.
+
+    FAIL-CLOSED IN THE DIRECTION THAT MATTERS: anything not on the loopback
+    gets the flag, so a cookie can never be handed to a remote reader over
+    plaintext. The one exemption is the local development loop and the browser
+    walk, where the origin is `http://127.0.0.1` and a `Secure` cookie would
+    simply never be stored — the seam would be untestable and nobody would be
+    protected by it.
+
+    A MISSING `remote_addr` IS LOOPBACK, exactly as the bypass backstop reads
+    it (that is the in-process test client, which speaks no socket at all)."""
+    if request.is_secure:
+        return True
+    addr = request.remote_addr
+    return not (not addr or _is_loopback(addr))
 
 
 def _bearer(header: str) -> str:

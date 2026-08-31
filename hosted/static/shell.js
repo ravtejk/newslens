@@ -4,15 +4,20 @@
 
    Runs on two kinds of page: the shell states this service renders (login,
    no-edition, archive, 404) and a SERVED EDITION, where it arrives as the one
-   injected tail (hosted/app.py::augment_edition). It does exactly four things:
+   injected tail (hosted/app.py::augment_edition). It does exactly three things:
 
      1. registers the service worker (the offline morning);
      2. fills M1's empty offline slot with the §7 stamp — the bundle cannot
         know how it arrived, and neither can the host; only the client can;
      3. makes the archive reachable from an edition (standalone mode has no
-        URL bar and no back button — §6);
-     4. flips the login page's passkey/password arms, which is the whole of
-        its behaviour until M3 wires a vendor.
+        URL bar and no back button — §6).
+
+   IT NO LONGER TOUCHES THE LOGIN PAGE (M3). In M2 it flipped the
+   passkey/password arms, because that toggle was the whole of the login
+   page's behaviour. M3 gave that page a real ceremony, and the ceremony went
+   into its own file (/static/login.js) for one reason: THIS script is injected
+   into every served edition, and no line of sign-in behaviour belongs inside a
+   document a reader opens on a train.
 
    READ-PURE HOLDS. Nothing here writes: no follow verb, no POST, no event
    beacon. The read ledger is a host-side observation of GETs (Q6) precisely so
@@ -28,19 +33,6 @@
         .catch(function () { /* an unregistered worker costs the cache, not the paper */ });
     });
   }
-
-  /* -- 4. the login arms (mockup state 1's own toggle) ------------------ */
-  var arms = document.querySelectorAll('[data-login-show]');
-  Array.prototype.forEach.call(arms, function (btn) {
-    btn.addEventListener('click', function () {
-      var want = btn.getAttribute('data-login-show');
-      var passkey = document.getElementById('login-passkey');
-      var password = document.getElementById('login-password');
-      if (!passkey || !password) { return; }
-      passkey.hidden = (want !== 'passkey');
-      password.hidden = (want !== 'password');
-    });
-  });
 
   /* -- the edition island ---------------------------------------------- */
   var node = document.getElementById('newslens-edition');

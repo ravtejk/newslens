@@ -8,15 +8,27 @@
     self-serve signup and no "Forgot password?" email theater — recovery runs
     through the paper's operator, said once.
 
-    PROTOTYPE: faked — THE ONLY FAKED SEAM IN THIS SERVICE. Nothing here posts
-    anywhere: M2 is the reader and the receiver, M3 is the lock (adjudication
-    §Q8's milestone cut, and the auth PLAN is the principal's ruling at that
-    checkpoint). The buttons below are inert by construction, not by accident,
-    and this template is where M3's vendor flow arms. -#}
+    ARMED IN M3 (the principal's ruling 2026-08-31, "Lets do c"). Every drawn
+    string below is byte-identical to the state he passed; what M3 adds is
+    behaviour plus two lines that are INVISIBLE until something fails — the §8
+    failed-attempt line in danger ink (the one scoped extension to the danger
+    register) and the §8 unreachable grammar in plain ink, because
+    unreachability is a fact, not a fault, and never wears danger.
+
+    THIS IS THE ONLY PAGE IN THE SERVICE THAT LOADS A VENDOR SCRIPT, and the
+    pin is not this comment: hosted/app.py sends a Content-Security-Policy
+    naming the vendor's origin on THIS route and on no other, so a vendor tag
+    that ever appears in a served edition is refused by the browser. -#}
 {% block body %}
 <div class="page login-wrap">
   <p class="login-word">NewsLens</p>
   <p class="login-sub">Sign in to read the edition.</p>
+
+  {#- The two failure registers (§8), both hidden on first paint and never
+      rendered visible by the server: only a real attempt reveals one. -#}
+  <p class="error-text" id="login-error" role="alert" hidden></p>
+  <p class="unreach" id="login-unreach" hidden></p>
+  <p class="unreach-why" id="login-unreach-why" hidden></p>
 
   <div id="login-passkey">
     <div class="login-field">
@@ -44,4 +56,16 @@
   <p class="login-stay">You’ll stay signed in on this phone.</p>
   <p class="login-stay login-stay--operator">Accounts are created by the paper’s operator — there is no signup.</p>
 </div>
+{#- Configuration as DATA, never as an inline script — the same island pattern
+    the served edition uses. Every field is public by construction: a
+    publishable token, a script URL, a same-origin path. -#}
+<script id="newslens-login" type="application/json">{{ {
+  "public_token": stytch_public_token,
+  "sdk_url": stytch_sdk_url,
+  "ready": auth_ready,
+  "next": login_next,
+  "session_minutes": 527040
+} | tojson }}</script>
+{% if auth_ready %}<script src="{{ stytch_sdk_url }}"></script>{% endif %}
+<script src="/static/login.js" defer></script>
 {% endblock %}

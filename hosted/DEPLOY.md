@@ -41,7 +41,28 @@ own artifacts (`newslens push --date <d>`).
 | `NEWSLENS_MAX_BUNDLE_BYTES` | no (10485760) | body cap on a push; a real edition is ~150KB |
 | `NEWSLENS_DEV_NO_AUTH` | no | the loopback-only bypass — see below |
 | `NEWSLENS_DEV_USER` | no | dev-seam only: which mapped user the bypass treats as signed in (needed when `NEWSLENS_USER_STREAMS` holds more than one). **Inert unless `NEWSLENS_DEV_NO_AUTH` is on** |
-| `CLERK_PUBLISHABLE_KEY`, `CLERK_JWKS_URL` | M3 | the session verifier's inputs; **no vendor secret key is ever held here** |
+| `NEWSLENS_STYTCH_PROJECT_ID` | yes (M3) | the auth project this paper's sessions belong to. Public |
+| `NEWSLENS_STYTCH_PUBLIC_TOKEN` | yes (M3) | the **publishable** token the sign-in ceremony uses. Public by design — it is in the page's own HTML |
+| `NEWSLENS_STYTCH_JWKS_URL` | no (derived) | where the verifier reads the vendor's public keys; defaults to the documented URL for this project |
+| `NEWSLENS_STYTCH_JWKS` | no | the key set pasted verbatim (`newslens phone-account jwks` on the Mac prints it). Set it and **the reading path opens no socket to anyone**; costs a re-paste at each ~6-month rotation |
+| `NEWSLENS_STYTCH_ISSUER` | no (derived) | expected `iss`; defaults to `stytch.com/<project id>` |
+| `NEWSLENS_STYTCH_AUDIENCE` | no (derived) | expected `aud`; defaults to the project id |
+
+**NO VENDOR SECRET IS EVER HELD HERE, and that is structural rather than
+careful.** Every name above is public. This service cannot create an account,
+cannot mint a session and cannot revoke one: it checks a signature against a
+public key, and that is the whole of its authority. The operator's secret
+(`STYTCH_SECRET`) lives on the Mac and is used by one command,
+`newslens phone-account`. If a variable holding a vendor secret ever appears in
+this table, that is the finding.
+
+The two *derived* claim names exist because the claim shapes are the part most
+likely to be wrong: they are documented as `stytch.com/<project id>` and the
+project id, sourced secondarily, and **not verified against a live token** —
+the org held no keys when this was built. If sign-in refuses everyone and the
+logs say `InvalidIssuerError` or `InvalidAudienceError`, read the two claims
+off a real token and set these two variables. That is the intended repair path,
+which is exactly why they are variables and not constants.
 
 Minting a push token (his hands, on the Mac):
 
@@ -114,10 +135,44 @@ parsed by anything above): while the bypass is on, any request whose peer
 address is not loopback is answered `403` and served nothing — no page, no
 edition, no push. A same-host reverse proxy deliberately forwarding into a
 bypass instance presents loopback peers and would pass; that is a two-step
-operator act, and M3 removes the stub entirely.
+operator act, and with real auth on (M3) the backstop is not even registered —
+the session check is the access rule.
 
 Deployment therefore cannot carry it. `hosted/app.py::dev_bypass_guard` and
 `create_app`'s `_bypass_is_loopback_only`.
+
+## The lock (M3)
+
+One cookie, verified locally. `hosted/sessionauth.py` reads the vendor's public
+keys once, caches them, and checks every session JWT for a pinned RS256
+signature, the configured issuer and audience, and an unexpired `exp` with 30
+seconds of clock-skew leeway. There is no vendor round trip on the reading
+path, so a vendor outage costs new sign-ins and not the morning.
+
+**The session cookie** (`nl_session`) is HttpOnly, SameSite=Lax, `Secure`
+everywhere except a plaintext loopback request, and lives 366 days. The JWT
+inside it lives five minutes — the vendor's fixed lifetime. The gap is
+deliberate and is what "credentials once per device" is made of: when the proof
+lapses, the reader is bounced to `/login`, whose script silently exchanges the
+long-lived vendor session for a fresh proof and returns them to the page they
+asked for. The redirect carries `?next=`, checked against an open-redirect
+allowlist (one leading slash, no scheme, no authority).
+
+**The exchange** is `POST /api/session` — the only non-GET route besides the
+push endpoint. It requires a same-origin custom header, so a hostile page
+cannot plant a session in a reader's browser, and it writes exactly one cookie:
+no row, no file, no state. Read-pure holds.
+
+**The vendor's script loads on `/login` and nowhere else**, and the pin is a
+`Content-Security-Policy` rather than a promise: the login route's policy names
+the vendor origin, every other route's policy admits no third-party script at
+all. A vendor tag that ever appeared in a served edition would be refused by
+the reader's browser.
+
+**The cache is never auth-gated.** A 401, a 403 and a `/login` redirect are all
+"the network cannot give you the paper right now" as far as the service worker
+is concerned, and the cached edition answers all three. A dead session does not
+take yesterday's paper away from somebody on a train.
 
 ## What is deliberately not here
 

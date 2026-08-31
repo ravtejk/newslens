@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,33 @@ STREAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 LATEST_NAME = "latest"
 LEDGER_NAME = "ledger.db"
+
+SQLITE_TIMEOUT_SECONDS = 5.0
+# R-F (M2 gate rider): first-contact lock contention on a brand-new ledger.
+# Six attempts at 50ms doubling is ~3.1s of patience — well inside the
+# busy_timeout above and well outside the millisecond window the gate measured.
+LOCK_ATTEMPTS = 6
+LOCK_BACKOFF_SECONDS = 0.05
+
+_SCHEMA = {
+    "push_receipts": """
+        CREATE TABLE IF NOT EXISTS push_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream TEXT NOT NULL,
+            date TEXT NOT NULL,
+            content_sha256 TEXT NOT NULL,
+            bytes INTEGER NOT NULL,
+            pushed_at TEXT NOT NULL,
+            outcome TEXT NOT NULL)""",
+    "read_events": """
+        CREATE TABLE IF NOT EXISTS read_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream TEXT NOT NULL,
+            date TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            ts TEXT NOT NULL)""",
+}
 
 
 class StoreError(RuntimeError):
@@ -215,29 +243,85 @@ class HostStore:
 
     def connect(self) -> sqlite3.Connection:
         self.root.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(str(self.root / LEDGER_NAME), timeout=5.0)
+        con = sqlite3.connect(str(self.root / LEDGER_NAME),
+                              timeout=SQLITE_TIMEOUT_SECONDS)
         con.row_factory = sqlite3.Row
-        # WAL so a read never blocks the push that is landing behind it.
-        con.execute("PRAGMA journal_mode=WAL")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS push_receipts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stream TEXT NOT NULL,
-                date TEXT NOT NULL,
-                content_sha256 TEXT NOT NULL,
-                bytes INTEGER NOT NULL,
-                pushed_at TEXT NOT NULL,
-                outcome TEXT NOT NULL)""")
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS read_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stream TEXT NOT NULL,
-                date TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                ts TEXT NOT NULL)""")
-        con.commit()
+        self._prepare(con)
         return con
+
+    # -- R-F: the first-connection lock race (M2 gate rider, this milestone's
+    #    hardening seam) -----------------------------------------------------
+
+    def _prepare(self, con: sqlite3.Connection) -> None:
+        """Make this connection usable, IDEMPOTENTLY and without racing.
+
+        THE DEFECT THIS CLOSES (M2 gate micro-confirm, rider R-F): the old
+        `connect()` ran `PRAGMA journal_mode=WAL` and two unconditional
+        `CREATE TABLE IF NOT EXISTS` statements on EVERY connection. Both take
+        a write lock, and under eight-way FIRST CONTACT with a brand-new
+        `ledger.db` the gate measured `sqlite3.OperationalError: database is
+        locked` out of the pragma — the very first push of a stream's life,
+        which in production is one Mac and in a re-deploy storm is not.
+
+        THE FIX IS TO STOP ASKING. Journal mode is a persistent property of
+        the FILE: once any connection has set WAL, every later connection
+        reads it back as WAL and never needs the lock. Table existence is a
+        read against `sqlite_master`. So the common path is now two reads and
+        zero write locks, and only genuine first contact writes — with a
+        bounded retry underneath it, because first contact is exactly when
+        several writers arrive together.
+
+        DEGRADING IS ALLOWED FOR THE PRAGMA AND NOT FOR THE SCHEMA, and the
+        asymmetry is the point: journal mode is a CONCURRENCY property (a
+        rollback-journal ledger is slower under load and still correct), while
+        a missing table is a lost receipt. So an exhausted retry on WAL warns
+        and continues; an exhausted retry on the schema raises.
+        """
+        con.execute(f"PRAGMA busy_timeout = {int(SQLITE_TIMEOUT_SECONDS * 1000)}")
+        self._ensure_wal(con)
+        self._ensure_schema(con)
+
+    @staticmethod
+    def _ensure_wal(con: sqlite3.Connection) -> None:
+        try:
+            mode = str(con.execute("PRAGMA journal_mode").fetchone()[0] or "")
+        except sqlite3.Error:
+            mode = ""
+        if mode.lower() == "wal":
+            return
+        for attempt in range(LOCK_ATTEMPTS):
+            try:
+                con.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if "lock" not in str(exc).lower():
+                    raise
+                time.sleep(LOCK_BACKOFF_SECONDS * (2 ** attempt))
+        print("newslens-hosted: could not switch the ledger to WAL (the "
+              "journal is locked by another writer); continuing in the "
+              "default journal mode — receipts are still written, reads may "
+              "block a concurrent push", file=sys.stderr)
+
+    @staticmethod
+    def _ensure_schema(con: sqlite3.Connection) -> None:
+        have = {row[0] for row in con.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        missing = [name for name in _SCHEMA if name not in have]
+        if not missing:
+            return
+        last: Optional[sqlite3.OperationalError] = None
+        for attempt in range(LOCK_ATTEMPTS):
+            try:
+                for name in missing:
+                    con.execute(_SCHEMA[name])
+                con.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if "lock" not in str(exc).lower():
+                    raise
+                last = exc
+                time.sleep(LOCK_BACKOFF_SECONDS * (2 ** attempt))
+        raise StoreError(f"the ledger could not be initialised: {last}")
 
     def record_push(self, stream: str, date: str, sha: str, size: int,
                     outcome: str, pushed_at: Optional[str] = None) -> str:
