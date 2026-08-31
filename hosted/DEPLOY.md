@@ -174,6 +174,113 @@ the reader's browser.
 is concerned, and the cached edition answers all three. A dead session does not
 take yesterday's paper away from somebody on a train.
 
+## The vendor's script: why it is not vendored (M4 — settled, with receipts)
+
+M3 pinned the vendor's script by ORIGIN because the loader URL carries no
+version and so cannot carry an SRI hash. M4 was chartered to try harder: fetch
+a pinned, versioned build, vendor it into `hosted/static/`, add Subresource
+Integrity, and tighten the login page's CSP to `'self'`.
+
+**It cannot be done, and here is the evidence rather than the conclusion.**
+Everything below is a read-only GET to their CDN (`js.stytch.com`) on
+2026-08-31. No credential was sent, no API host was contacted, $0.
+
+1. **There is exactly one artifact, and it is unversioned.**
+   `https://js.stytch.com/stytch.js` → 200, 798,383 bytes, `sha256
+   215ad0b60644282c503c3ff279ccbf2b385f1ddfb2943f84e58b6dd68af72f99`,
+   `etag "f40720271bd9090dc2e6f5ffe890614a"`, `last-modified 2022-10-03`.
+   Two fetches two seconds apart returned identical bytes.
+2. **Every versioned URL shape is a decoy — and this is the part worth
+   knowing.** `/stytch.v1.js`, `/v1/stytch.js`, `/stytch-17.0.2.js`,
+   `/versions.json`, `/package.json`, `/stytch.js.map`, `/` and a randomly
+   generated nonsense path **all return HTTP 200**, each serving the same
+   715-byte SPA HTML fallback rather than JavaScript. A vendoring script that
+   fetched `stytch-17.0.2.js`, checked for a 200 and computed an SRI hash
+   would have pinned an HTML error page and reported success. The 200 is not
+   a file; it is a catch-all.
+3. **Vendoring would not even buy a third-party-free page.** The bundle
+   injects `https://www.google.com/recaptcha/enterprise.js` at runtime when a
+   project has captcha enabled — a SECOND third party, chosen by a dashboard
+   setting invisible from here — and it hard-codes `https://js.stytch.com` as
+   its own frame origin. A vendored copy still reaches the vendor, so
+   `script-src` could not tighten to `'self'` regardless.
+4. **Not licence-clean to redistribute.** No LICENSE is served beside the
+   artifact and no package metadata is obtainable from the CDN; the six
+   `MIT license` strings inside it belong to bundled dependencies, not to the
+   vendor's own code.
+5. **A frozen private copy of an auth SDK is a worse posture, not a better
+   one** — it means never receiving the vendor's security fixes for the one
+   component whose entire job is credentials.
+
+**Outcome: the M3 origin pin stands as ruled, and it is now the considered
+answer rather than merely the available one.** Revisit only if the vendor
+publishes a versioned, SRI-able artifact.
+
+## ⚠ THE SDK ARTIFACT DOES NOT MATCH THE ADAPTER (M4 — read before deploying)
+
+Having the bundle in hand settled M3's "unverifiable at $0" list against a real
+artifact instead of against documentation. **Five of seven assumptions are
+confirmed correct; two are wrong.** Receipts are greps against the sha above;
+the adapter is `hosted/static/login.js:273-305`.
+
+| The adapter assumes | The artifact `NEWSLENS_STYTCH_SDK_URL` serves | |
+|---|---|---|
+| `window.Stytch` is a callable factory | UMD ends `return function(e,t){return new mD(e,t)}` | ✅ |
+| `factory(public_token)` positional | first constructor arg is the token | ✅ |
+| `client.webauthn.authenticate({session_duration_minutes})` | `this.webauthn=new oI(…)` present | ✅ |
+| `client.session.authenticate({session_duration_minutes})` | `class jB { authenticate(e) }` present | ✅ |
+| response carries top-level `session_jwt` | `{…, session_jwt: t.session_jwt}` | ✅ |
+| **`session_duration_minutes` is snake_case** | 32 snake_case hits at real call sites; camelCase 2 | ✅ **the item QA named the silent killer is CORRECT** |
+| **`client.passwords.authenticate(…)`** | **no `passwords` namespace exists.** The client constructs `user, magicLinks, oauth, session, otps, cryptoWallets, webauthn, totps`; the string `passwords` appears **0 times** in 798KB | ❌ **throws** |
+| **`client.session.getTokens()`** | the session class has exactly `getSync()`, `authenticate()`, `revoke()` | ❌ **silently undefined** |
+
+**What each failure costs, plainly:**
+
+* **`passwords` absent is fatal to first sign-in.** Passkey *enrolment* is
+  deferred (it needs your domain), so the password arm is the only way onto a
+  NEW device. Against this artifact it raises a `TypeError`.
+* **`getTokens` absent is SILENT and breaks the §9 law quietly.** The call is
+  guarded (`client.session.getTokens && …`), so nothing throws — `canRefresh()`
+  returns `false` forever, the silent-return refresh never fires, and every
+  five-minute lapse becomes a manual sign-in instead of an invisible bounce.
+  "Credentials once per device" would fail with no error anywhere.
+
+**This was NOT repaired by guessing, deliberately.** The artifact's
+`last-modified` is 2022 and it bundles React 17, consistent with
+`js.stytch.com/stytch.js` being a LEGACY loader while the current SDK ships on
+npm as `@stytch/vanilla-js`. Rewriting the adapter against a 2022 bundle could
+easily be the wrong repair, and the enrolment-factor question standing behind
+the password arm is a decision the org routed to you, not one to settle in
+code.
+
+**The repair path is one variable, which is why it is a variable.** Point
+`NEWSLENS_STYTCH_SDK_URL` at the SDK build your project's dashboard actually
+tells you to load, then re-check the two ❌ rows against it. If the modern SDK
+keeps `passwords` and renames `getTokens`, the adapter is a two-line change in
+one file. **The login page's Content-Security-Policy follows that variable**
+(`login_csp_for`, `app.py:133`): the derived origin *replaces* the built-in
+`js.stytch.com` allowance, so the retarget really is one variable and not two.
+Before this was true, retargeting made `/login`'s own policy block the script
+you had just chosen, and the page then reported missing keys — a second wrong
+diagnosis, arriving exactly while you repaired the first. A URL that is not an
+https origin (a plaintext loopback excepted, for the local walk) is refused:
+the policy falls back to the pinned default and says so once on stderr.
+
+**Recommended and TAKEN, in a corrected shape.** The earlier recommendation
+here was to render the existing §8 "can't be reached" state on a missing
+method. That sentence would itself have been false — the script *was* reached,
+it is simply the wrong shape — so `login.js` now takes an inventory of the four
+methods it needs (over the real client, never over the test stub) and, on any
+sign-in attempt with a non-empty inventory, renders **"This page loaded an
+unexpected version of its sign-in service." / "Signing in may not work or may
+not last; the paper's operator has the fix in the runbook."** A `TypeError`
+from an arm whose method is in that inventory is attributed to the version,
+never to the network. The floor never blocks an arm — one whose methods are all
+present still signs a reader in — so a false positive can only add a line.
+First paint stays silent. This does not repair the mismatch; it makes this
+class of fault, including any future one behind that unversioned URL,
+impossible to suffer silently.
+
 ## What is deliberately not here
 
 * **No client event API.** The read ledger observes authenticated GETs on this

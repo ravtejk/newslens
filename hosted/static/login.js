@@ -72,6 +72,51 @@
     if (els.why && why) { els.why.textContent = why; els.why.hidden = false; }
   }
 
+  /* -- the version floor (M4 gate FIX-3) --------------------------------- */
+
+  /* WHY THIS EXISTS AT ALL. The vendor's loader URL carries no version, so the
+     artifact behind it can change shape on any morning without anything here
+     changing; the CSP origin pin can see WHERE the script came from and never
+     WHAT SHAPE it has. And a missing method degrades INVISIBLY in both places
+     it matters: the password arm throws a TypeError, which is the same error
+     class a dead network throws, so the page used to answer a version problem
+     with "Sign-in needs the network" — loud, and a lie about the cause; and
+     the silent return simply stays silent, which is indistinguishable from an
+     ordinary first morning. The no-silent-catches law reaches both. This is
+     the only tripwire the product can hold, so it holds it.
+
+     WHAT IT MAY NEVER DO: block an arm. A false positive here can add a line
+     and nothing else — an arm whose methods are all present keeps working
+     whatever the inventory says about the others. */
+  var NEEDED = [['webauthn', 'authenticate'], ['passwords', 'authenticate'],
+                ['session', 'authenticate'], ['session', 'getTokens']];
+  /* Filled the first time a REAL client is built, and never over the fixture
+     seam — the inventory is a statement about the vendor's artifact. */
+  var missing = [];
+
+  function inventory(client) {
+    var out = [];
+    NEEDED.forEach(function (path) {
+      var product = client && client[path[0]];
+      if (!product || typeof product[path[1]] !== 'function') {
+        out.push(path[0] + '.' + path[1]);
+      }
+    });
+    return out;
+  }
+
+  /* PLAIN INK, NOT DANGER INK: an unexpected script is the machine's fault,
+     not the reader's — the same register as an unreachable press (§8). */
+  function versionNotice() {
+    unreachable('This page loaded an unexpected version of its sign-in service.',
+                'Signing in may not work or may not last; the paper’s operator '
+                + 'has the fix in the runbook.');
+  }
+
+  function noteVersion() {
+    if (missing.length) { versionNotice(); }
+  }
+
   /* -- the exchange ------------------------------------------------------ */
 
   function exchange(jwt) {
@@ -112,11 +157,21 @@
     return (err.name === 'TypeError') || navigator.onLine === false;
   }
 
-  function report(err) {
+  function report(err, member) {
     if (isCancellation(err)) { return; }
     if (err && err.kind === 'unconfigured') {
       unreachable('The press can’t be reached from here.',
                   'This paper’s door has not been given its keys yet.');
+      return;
+    }
+    /* ATTRIBUTION BEFORE THE NETWORK GRAMMAR (FIX-3c). A missing method and a
+       dead network are the same JS error class, and the network sentence was
+       winning on both — sending the operator to watch a venue where nothing
+       would ever appear. When the inventory names the very member THIS arm
+       needed, the version line is the true one, and it is printed instead. */
+    if (err && err.name === 'TypeError' && member
+        && missing.indexOf(member) >= 0) {
+      versionNotice();
       return;
     }
     if (isUnreachable(err)) {
@@ -130,16 +185,23 @@
 
   /* -- the arms ---------------------------------------------------------- */
 
-  function attempt(run) {
+  function attempt(run, member) {
     quiet();
     return Promise.resolve()
       .then(run)
       .then(function (result) {
+        /* THE ATTEMPT IS THE MOMENT THE FLOOR SPEAKS — never first paint. A
+           reader who has not touched anything gets the drawn page in silence
+           (§11); a reader who just asked to sign in is owed the fact. */
+        noteVersion();
         var jwt = result && result.session_jwt;
         if (!jwt) { throw { kind: 'refused' }; }
         return exchange(jwt);
+      }, function (err) {
+        noteVersion();
+        throw err;
       })
-      .catch(report);
+      .catch(function (err) { report(err, member); });
   }
 
   Array.prototype.forEach.call(
@@ -162,13 +224,14 @@
         if (arm === 'passkey') {
           /* Called straight out of the click handler: the WebAuthn prompt is
              only allowed to open inside a user gesture. */
-          attempt(function () { return vendor().passkey(); });
+          attempt(function () { return vendor().passkey(); },
+                  'webauthn.authenticate');
         } else {
           attempt(function () {
             return vendor().password(
               (els.email2 && els.email2.value) || '',
               (els.password && els.password.value) || '');
-          });
+          }, 'passwords.authenticate');
         }
       });
     });
@@ -218,6 +281,10 @@
       catch (e) { client = new factory(cfg.public_token); }
       window.__stytchClient = client;
     }
+    /* THE INVENTORY IS TAKEN HERE AND ONLY HERE — over the VENDOR's client.
+       The fixture seam returned three lines up, so a stub can never be
+       reported as a version problem, and the suite's own states stay clean. */
+    missing = inventory(client);
     var minutes = cfg.session_minutes;
     return {
       passkey: function () {

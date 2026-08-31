@@ -97,7 +97,12 @@ def credentials(env: Optional[Dict[str, str]] = None, *,
             f"{' and '.join(missing)} not set. Put "
             f"{'them' if len(missing) > 1 else 'it'} in .env on THIS machine "
             "(never on the host — the paper's server holds no vendor secret): "
-            "SETUP.md, 'Creating a reader's account'.")
+            # Names the SECTION, not the step. M4 renumbered §7's steps and
+            # this pointer was already dangling before that ('Creating a
+            # reader's account' matched no heading in SETUP.md at all) — a
+            # refusal that sends the operator to a section that isn't there
+            # is a small lie in the one message they read when stuck.
+            "SETUP.md, 'The phone door'.")
     return project_id, secret
 
 

@@ -406,6 +406,10 @@ The **token** goes in your `.env`; the **digest** goes on the host
 (`fly secrets set NEWSLENS_PUSH_TOKENS='{"main":"<digest>"}'`). The host can
 check a token and can never reveal one; rotating is the same two commands.
 
+*(If you have not stood the host up yet, do this once as part of §7 step 3
+rather than twice here — that step runs the same two commands in the order the
+`fly` calls need them.)*
+
 Set both or neither — a half-configured push is a doctor `✗`. Once they are
 set, every generate delivers the edition right after it publishes:
 
@@ -447,6 +451,42 @@ verifies a session JWT against a JWKS URL, which is the same four facts for
 either vendor. Changing vendor is changing environment variables, not
 rewriting the lock (`hosted/sessionauth.py` says so in its own header).
 
+### Step 1b — the SDK check, in the same sitting (M4 found a real mismatch)
+
+While you are in the dashboard, note **which script URL it tells you to load.**
+This is not paperwork. M4 fetched the artifact our code currently names
+(`https://js.stytch.com/stytch.js`) and compared it against what our sign-in
+adapter actually calls. Five of seven assumptions were confirmed correct —
+including the one QA flagged as the silent killer, `session_duration_minutes`,
+which is indeed snake_case. **Two are wrong:**
+
+* **`client.passwords.authenticate(…)` — the password arm — does not exist in
+  that artifact at all.** Since passkey *enrolment* is deferred until you pick
+  a domain, the password arm is the only way onto a new device, so a first
+  sign-in would raise a `TypeError`.
+* **`client.session.getTokens()` does not exist either**, and that one fails
+  **silently**: the call is guarded, so the silent refresh never fires and
+  every five-minute lapse becomes a manual sign-in instead of an invisible
+  bounce. "Credentials once per device" would break with no error anywhere.
+
+That artifact was last modified in 2022 and bundles React 17, which is what a
+legacy loader looks like; the current SDK is generally distributed on npm as
+`@stytch/vanilla-js`. **The org did not guess a fix** — pointing the adapter at
+a 2022 bundle's shape could easily be the wrong repair, and the factor question
+standing behind the password arm is yours to rule on.
+
+**What the org did build is a floor**, because that URL carries no version and
+the artifact behind it can change shape on any morning: the sign-in page checks
+the four methods it needs against the client it actually loaded, and if any are
+missing it says so on the page — *"This page loaded an unexpected version of
+its sign-in service."* — instead of blaming the network or saying nothing. It
+never blocks a sign-in that would otherwise work.
+
+So, in this sitting: **copy the SDK URL the dashboard gives you** and set it on
+the host as `NEWSLENS_STYTCH_SDK_URL` at step 4. At step 6 those two rows are
+the first things checked. Full receipts and the repair path: `hosted/DEPLOY.md`,
+"THE SDK ARTIFACT DOES NOT MATCH THE ADAPTER".
+
 ### Step 2 — the keys, and which machine each half goes on
 
 There are two halves and they must not meet.
@@ -467,7 +507,66 @@ Put the operator half in `.env` here (`.env.example` describes every name), then
 newslens doctor          # "Phone sign-in" — names only, never a value
 ```
 
-### Step 3 — create a reader's account
+**Doctor is the gate at every step from here on.** It should read
+`✓ STYTCH_PROJECT_ID present and well-formed (live project)` and
+`✓ STYTCH_SECRET present (N characters)`. If it says `✗ STYTCH_SECRET is set
+but STYTCH_PROJECT_ID is not`, you have half a credential — fix that before
+going on, because every later step assumes both.
+
+### Step 3 — put the host on the internet (your hands, ~10 minutes)
+
+Nothing above needed a server. This step creates one. The org has deployed
+nothing and holds no account; these commands are yours to run.
+
+```bash
+cd <repo root>
+fly launch --no-deploy --copy-config --config hosted/fly.toml
+fly volumes create newslens_data --size 1 --region <your region>
+```
+
+**Choose the hostname now, before anyone enrols a passkey.** A passkey is bound
+to the domain it was created on, so a hostname changed later throws the
+enrolment away. Subdomains of one registration are fine.
+
+Mint the push token — the secret that lets *this Mac* publish to *that host*:
+
+```bash
+python3 -c "import secrets;print(secrets.token_urlsafe(32))"          # the TOKEN
+python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" <token>
+```
+
+The **token** goes in this Mac's `.env` as `NEWSLENS_PUSH_TOKEN`; only the
+**digest** goes to the host. The host can check a token and can never reveal
+one, so a stolen server discloses nothing that lets anyone publish.
+
+```bash
+fly secrets set NEWSLENS_PUSH_TOKENS='{"main":"<digest>"}'
+fly deploy --config hosted/fly.toml --dockerfile hosted/Dockerfile
+```
+
+Then in this Mac's `.env`:
+
+```
+NEWSLENS_PUSH_URL=https://<app>.fly.dev/api/streams/main
+NEWSLENS_PUSH_TOKEN=<the token>
+```
+
+Verify before moving on — this whole path was dry-walked on loopback, so the
+expected output is known:
+
+```bash
+curl -s https://<app>.fly.dev/healthz     # {"ok":true,"service":"newslens-hosted"}
+newslens push                             # push: <date> stored at <host> (N bytes, pushed_at …)
+newslens push                             # push: <host> already holds <date> unchanged (…)
+newslens doctor                           # "Phone edition & delivery": ✓ configured, ✓ last delivery
+```
+
+The second `push` printing **unchanged** is the point, not a redundancy: the
+same document arriving twice is not an event, and that is also the recovery
+verb if a pointer is ever lost. A push that fails never costs you an edition —
+the artifact stays on disk and the command says so.
+
+### Step 4 — create a reader's account
 
 ```bash
 newslens phone-account create you@example.com --stream main            # dry run
@@ -484,13 +583,27 @@ database. Put it in your password manager as you read it; if you lose it,
 create the account again. That is the honest shape of a paper with no
 password-reset email.
 
-### Step 4 — tell the host who reads what
+### Step 5 — tell the host who reads what
 
 ```bash
 fly secrets set NEWSLENS_STYTCH_PROJECT_ID='project-live-…' \
                 NEWSLENS_STYTCH_PUBLIC_TOKEN='public-token-live-…' \
+                NEWSLENS_STYTCH_SDK_URL='<the SDK URL from step 1b>' \
                 NEWSLENS_USER_STREAMS='{"user-live-…":"main"}'
 ```
+
+`NEWSLENS_STYTCH_SDK_URL` is the one from step 1b. Leave it out and the host
+falls back to `https://js.stytch.com/stytch.js`, the artifact M4 measured as
+missing two of the methods the sign-in page calls.
+
+**Setting it is genuinely one variable.** The login page's
+Content-Security-Policy — the rule that decides which script origins the
+browser will run — is derived from this URL, so pointing it somewhere new moves
+the permission with it, and the old `js.stytch.com` allowance is dropped rather
+than kept alongside. If the value is not an `https://…` URL the host refuses to
+widen anything: the policy stays pinned to the default and one line explaining
+that appears in `fly logs`. No other route ever names a third-party origin, at
+any setting of this variable.
 
 One account reads one paper. There is no picker and no signup page: an account
 that is not in this map signs in and is told, in plain words, that it has no
@@ -507,7 +620,7 @@ Set that on the host and it verifies sessions against keys you pinned yourself.
 The cost is a re-paste when the vendor rotates keys (roughly every 6 months;
 they serve both keys for a month, so the window is wide).
 
-### Step 5 — the door, checked
+### Step 6 — the door, checked
 
 ```bash
 NEWSLENS_DOCTOR_PHONE_AUTH_PROBE=1 newslens doctor
@@ -517,6 +630,63 @@ The probe fetches the project's **public keys** and nothing else: read-only,
 $0, no user touched, and no endpoint reachable from it that could bill a
 monthly active user. Opt-in, because a health check that phones a third party
 on every run fails on their bad afternoon rather than yours.
+
+Then open `https://<app>.fly.dev/login` on the phone and check, in this order —
+**the first two are the M4 findings and they are the ones most likely to bite:**
+
+1. **The password arm.** Tap the quiet password link and sign in. **Watch the
+   page, not the console** — the page is where this now speaks. If it prints
+   *"This page loaded an unexpected version of its sign-in service."* the SDK
+   at your `NEWSLENS_STYTCH_SDK_URL` is not the shape the sign-in page calls;
+   go back to step 1b, and `hosted/DEPLOY.md` has the repair. (The console
+   stays clean either way: the error is caught and turned into that line, so a
+   console with nothing in it proves nothing.)
+2. **The silent refresh.** Sign in, leave the page open for six minutes, then
+   navigate. You should go where you asked with no prompt. If you land on the
+   sign-in page instead, `client.session.getTokens()` is missing and the
+   refresh never fired — the silent failure named in step 1b. The next sign-in
+   you do will carry the same *"unexpected version"* line, for the same reason:
+   sign-in works, it just will not last.
+3. The claim shapes: if everyone is refused and the host log says
+   `InvalidIssuerError` / `InvalidAudienceError`, read `iss`/`aud` off a real
+   token and set `NEWSLENS_STYTCH_ISSUER` / `NEWSLENS_STYTCH_AUDIENCE`.
+4. The JWKS URL: a `401` there means the key set is not public for your
+   project — use `newslens phone-account jwks` and pin
+   `NEWSLENS_STYTCH_JWKS` instead.
+5. A cancelled Face-ID prompt should leave the page **silent**, not red.
+
+### Step 7 — the acceptance test: one phone-only morning
+
+The build is not finished when it deploys; it is finished when a morning works
+without touching the Mac. Do it once, deliberately.
+
+The night before, confirm the edition will be there:
+
+```bash
+newslens doctor     # ✓ every recent published edition has a frozen artifact
+                    # ✓ last delivery recorded: <yesterday>
+```
+
+Then, in the morning, **use only the phone.** Open the app from the home-screen
+icon — not the browser, the installed icon — and read the paper. The bar this
+is being measured against, restated so the test has an answer rather than a
+vibe:
+
+| The feel bar | What you are checking |
+|---|---|
+| **cold open under 1s** | tap the icon on a phone that has been asleep; the paper is there, not a spinner |
+| **zero chrome** | no browser address bar, no tab strip — it reads like an app |
+| **zero credential prompts after day one** | you signed in once, on a previous day, and today asks nothing |
+| **survives airplane mode** | turn the radio off, open the app: yesterday's edition still opens, stamped `Offline · pushed at …` rather than pretending to be live |
+
+**A miss on the feel bar is a recorded escalation, not a shrug** — the
+week-one path (a native wrapper) is pre-registered precisely so that a bad
+first week has a decided answer instead of a debate.
+
+Two honest limits of this test, so a pass is not over-read: today's archive
+only holds editions pushed since the host existed (nothing is reconstructed
+backwards), and the read ledger cannot see an offline open, so a genuinely
+phone-only week will under-count itself.
 
 ### What sign-in looks like, and the one thing it does not do yet
 

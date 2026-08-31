@@ -28,17 +28,14 @@ request from any non-loopback caller (see `dev_bypass_guard`).
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
-import re
 import shlex
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from flask import (Flask, Response, abort, jsonify, redirect, render_template,
                    request, send_from_directory)
@@ -46,6 +43,14 @@ from flask import (Flask, Response, abort, jsonify, redirect, render_template,
 from . import hoststore, sessionauth
 from .hoststore import HostStore, StoreError, valid_date, valid_stream
 from .sessionauth import SessionConfig, SessionInvalid, SessionVerifier
+# The pure helpers, split out at M4 (gate ruling §6) with their bodies
+# unchanged to the byte. IMPORTED BY NAME RATHER THAN QUALIFIED so that every
+# call site below and every existing importer (`hosted_app._safe_next`) reads
+# exactly as it did before the move — a refactor that also edited its own call
+# sites would be two changes wearing one diff.
+from .webhelpers import (_archive_label, _bearer, _bundle_problem,  # noqa: F401
+                         _cookie_secure, _dateline_ctx, _err, _is_loopback,
+                         _safe_next, _stream_for_token, _theme_colors)
 
 # 10MB (adjudication Q4). Renegotiated when audio joins the envelope; a real
 # edition measures ~150KB today, so this is three orders of headroom and still
@@ -105,12 +110,60 @@ _CSP_COMMON = (
     "object-src 'none'")
 CSP_READER = ("script-src 'self' 'unsafe-inline'; connect-src 'self'; "
               + _CSP_COMMON)
-CSP_LOGIN = (f"script-src 'self' 'unsafe-inline' {sessionauth.SDK_ORIGIN}; "
-             f"connect-src 'self' {sessionauth.VENDOR_API_ORIGIN}; "
-             f"frame-src 'self' {sessionauth.VENDOR_API_ORIGIN}; "
-             + _CSP_COMMON)
 
-_LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]", "0177.0.0.1"}
+
+def sdk_script_origin(sdk_url: str) -> Optional[str]:
+    """The script origin a login-page CSP must name to load `sdk_url`, or None.
+
+    FAIL CLOSED, NEVER FAIL OPEN. A URL we cannot read as an https origin (or
+    a plaintext loopback one, which is the local walk and nothing else) yields
+    None, and the caller pins the policy back to the default constant. So the
+    worst a typo in the environment can do is narrow the policy — never widen
+    it to whatever the typo happened to spell."""
+    parts = urlsplit((sdk_url or "").strip())
+    if not parts.netloc:
+        return None
+    if parts.scheme == "https":
+        return f"https://{parts.netloc}"
+    if parts.scheme == "http" and _is_loopback(parts.hostname or ""):
+        return f"http://{parts.netloc}"
+    return None
+
+
+def login_csp_for(sdk_url: str) -> str:
+    """The login route's policy, DERIVED FROM THE URL THE PAGE ACTUALLY LOADS.
+
+    THE DEFECT THIS CLOSES (M4 gate FIX-2). `sdk_url` is env-configurable and
+    the runbook's whole repair path is "retarget NEWSLENS_STYTCH_SDK_URL" — but
+    the policy used to be baked from a module constant at import, so following
+    our own runbook made the login page's CSP refuse the very script the
+    operator had just pointed it at, and the page then blamed its own missing
+    keys. A policy that contradicts the configuration is worse than no policy:
+    it misdiagnoses at the exact moment somebody is repairing the product.
+
+    The derived origin REPLACES the pinned one rather than joining it — a
+    retarget that left the old allowance standing would quietly widen the one
+    surface this milestone exists to keep narrow. `connect-src`/`frame-src`
+    keep the vendor's API origin: the loader moves, the API does not."""
+    origin = sdk_script_origin(sdk_url)
+    if origin is None:
+        print(f"REFUSING THE CONFIGURED SDK ORIGIN: {sessionauth.SDK_URL_VAR} "
+              f"is {sdk_url!r}, which is not an https URL (nor a plaintext "
+              f"loopback one). The login page's Content-Security-Policy stays "
+              f"pinned to {sessionauth.SDK_ORIGIN}; that script will be "
+              "refused by the browser until the variable names an https "
+              "origin (hosted/DEPLOY.md).", file=sys.stderr)
+        origin = sessionauth.SDK_ORIGIN
+    return (f"script-src 'self' 'unsafe-inline' {origin}; "
+            f"connect-src 'self' {sessionauth.VENDOR_API_ORIGIN}; "
+            f"frame-src 'self' {sessionauth.VENDOR_API_ORIGIN}; "
+            + _CSP_COMMON)
+
+
+# The default policy, for the default loader. Byte-identical to the constant
+# this replaced; `create_app` computes the live one from the running config.
+CSP_LOGIN = login_csp_for(sessionauth.DEFAULT_SDK_URL)
+
 # Signals that say "this process is on a platform, not on somebody's laptop".
 # Cheap, and they close the failure Rook named: the bypass ending up on the
 # internet one tired evening.
@@ -122,15 +175,6 @@ _PLATFORM_VARS = ("FLY_APP_NAME", "FLY_ALLOC_ID", "FLY_MACHINE_ID",
 # ---------------------------------------------------------------------------
 # THE BOOT REFUSAL (Rook's condition; violating it is a review BLOCK)
 # ---------------------------------------------------------------------------
-
-def _is_loopback(host: str) -> bool:
-    h = (host or "").strip().strip("[]").lower()
-    if h in _LOOPBACK or h == "127.0.0.1":
-        return True
-    if h.startswith("127.") and re.match(r"^127(\.\d{1,3}){3}$", h):
-        return True
-    return False
-
 
 def _binds_in(tokens: List[str]) -> List[str]:
     """gunicorn's own three spellings — `-b X`, `--bind X`, `--bind=X`. One
@@ -322,6 +366,10 @@ def create_app(env: Dict[str, str] = None, host: str = None,
     # request. `jwks_fetcher` is the F1 test seam — the suite hands in a
     # fixture key set and NO SOCKET IS EVER OPENED under test.
     verifier = SessionVerifier(cfg.session, fetcher=jwks_fetcher)
+    # The login policy follows the loader THIS app was configured with, not the
+    # one the module was written against (FIX-2). Computed once at boot, like
+    # every other decision that cannot change between requests.
+    csp_login = login_csp_for(cfg.session.sdk_url)
     app.config["NEWSLENS"] = cfg
     app.config["NEWSLENS_STORE"] = store
     app.config["NEWSLENS_VERIFIER"] = verifier
@@ -397,14 +445,16 @@ def create_app(env: Dict[str, str] = None, host: str = None,
         by a comment (adjudication Q3 / charter item 2: "their JS loaded ONLY
         on the login page, never on the reader; pin that").
 
-        The login route's policy names the vendor's script origin. EVERY other
-        route — the served edition first among them — sends a policy with no
-        third-party origin in it at all, so a vendor script tag that ever leaks
-        into an edition is refused by the browser, not by our good intentions.
+        The login route's policy names the vendor's script origin — the one
+        THIS app is configured to load (`csp_login`, computed at boot from
+        `cfg.session.sdk_url`). EVERY other route — the served edition first
+        among them — sends a policy with no third-party origin in it at all, so
+        a vendor script tag that ever leaks into an edition is refused by the
+        browser, not by our good intentions.
         """
         resp.headers.setdefault(
             "Content-Security-Policy",
-            CSP_LOGIN if request.path == "/login" else CSP_READER)
+            csp_login if request.path == "/login" else CSP_READER)
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
         return resp
@@ -700,133 +750,6 @@ def create_app(env: Dict[str, str] = None, host: str = None,
         return _err(413, f"body exceeds the {cfg.max_bytes}-byte limit")
 
     return app
-
-
-def _theme_colors(tokens_css: Path) -> Tuple[Optional[str], Optional[str]]:
-    """(light, dark) `--paper`, read out of the generated palette."""
-    try:
-        css = tokens_css.read_text(encoding="utf-8")
-    except OSError:
-        return None, None
-    out = []
-    for opener in (":root", "body.dark"):
-        start = css.find(opener + " {")
-        if start < 0:
-            start = css.find(opener + "{")
-        m = re.search(r"--paper\s*:\s*(#[0-9A-Fa-f]{3,8})\s*;",
-                      css[start:] if start >= 0 else "")
-        out.append(m.group(1) if m else None)
-    return out[0], out[1]
-
-
-def _dateline_ctx(date: str) -> Dict[str, str]:
-    """The masthead dateline's parts, in the shipped grammar
-    (server.py::_dateline_html — 'Friday, July [10] [2026]')."""
-    try:
-        d = datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        return {"dateline_prefix": date, "dateline_day": "", "dateline_year": ""}
-    return {"dateline_prefix": d.strftime("%A, %B"),
-            "dateline_day": str(d.day), "dateline_year": str(d.year)}
-
-
-def _archive_label(date: str) -> str:
-    try:
-        return hoststore.weekday_name(date) + datetime.strptime(
-            date, "%Y-%m-%d").strftime(", %B %-d")
-    except ValueError:
-        return date
-
-
-def _safe_next(raw) -> str:
-    """A place on THIS paper, or the front page.
-
-    An open redirect is the classic way a sign-in page becomes a phishing
-    stepping stone: `/login?next=https://evil.example` sends a reader who did
-    everything right to somebody else's imitation of this paper. So the return
-    path is not sanitised, it is CHECKED — one leading slash, no scheme, no
-    authority, no control characters — and anything that fails goes to `/`.
-    Refused rather than repaired: a value we had to fix is a value we did not
-    understand."""
-    if not isinstance(raw, str) or not raw:
-        return "/"
-    if len(raw) > 512:
-        return "/"
-    if not raw.startswith("/") or raw.startswith("//") or raw.startswith("/\\"):
-        return "/"
-    if any(ch in raw for ch in ("\r", "\n", "\t", "\\", " ")):
-        return "/"
-    if ":" in raw.split("?", 1)[0]:            # `/\x2f`-style scheme smuggling
-        return "/"
-    return raw
-
-
-def _cookie_secure() -> bool:
-    """`Secure` unless this is a plaintext request from this machine.
-
-    FAIL-CLOSED IN THE DIRECTION THAT MATTERS: anything not on the loopback
-    gets the flag, so a cookie can never be handed to a remote reader over
-    plaintext. The one exemption is the local development loop and the browser
-    walk, where the origin is `http://127.0.0.1` and a `Secure` cookie would
-    simply never be stored — the seam would be untestable and nobody would be
-    protected by it.
-
-    A MISSING `remote_addr` IS LOOPBACK, exactly as the bypass backstop reads
-    it (that is the in-process test client, which speaks no socket at all)."""
-    if request.is_secure:
-        return True
-    addr = request.remote_addr
-    return not (not addr or _is_loopback(addr))
-
-
-def _bearer(header: str) -> str:
-    parts = (header or "").split(None, 1)
-    return parts[1].strip() if len(parts) == 2 and parts[0].lower() == "bearer" else ""
-
-
-def _stream_for_token(cfg: Config, token: str) -> Optional[str]:
-    """Which stream this token publishes, or None.
-
-    The digest is compared with `hmac.compare_digest` — constant time, so a
-    token cannot be discovered a byte at a time by watching how long the
-    refusal takes. Every configured stream is compared even after a match, for
-    the same reason."""
-    if not token:
-        return None
-    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    found = None
-    for stream, expected in cfg.push_tokens.items():
-        if hmac.compare_digest(digest, str(expected).strip().lower()):
-            found = found or stream
-    return found
-
-
-def _bundle_problem(bundle, date: str) -> Optional[str]:
-    """Everything that makes a body not an edition of `date`, in one place."""
-    if not isinstance(bundle, dict):
-        return "body is not an edition bundle (not a JSON object)"
-    html = bundle.get("html")
-    if not isinstance(html, str) or not html.strip():
-        return "bundle has no html"
-    sha = bundle.get("content_sha256")
-    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):
-        return "bundle has no content_sha256"
-    actual = hashlib.sha256(html.encode("utf-8")).hexdigest()
-    if not hmac.compare_digest(actual, sha):
-        # VERIFIED SERVER-SIDE (Q4). A truncated upload and a corrupted one
-        # look identical to a length check; they do not look identical to a
-        # digest.
-        return f"content_sha256 does not match the html ({actual} computed)"
-    if bundle.get("edition_date") != date:
-        return (f"bundle is dated {bundle.get('edition_date')!r} but was "
-                f"pushed to {date}")
-    return None
-
-
-def _err(status: int, detail: str):
-    """An honest refusal: a status and a sentence, never a stack trace and
-    never a page. The Mac's push client prints this sentence verbatim."""
-    return jsonify({"error": detail}), status
 
 
 app = create_app()

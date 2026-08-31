@@ -264,6 +264,46 @@ def test_garbage_is_rejected_honestly(client):
     assert "no html" in resp.get_json()["error"]
 
 
+@pytest.mark.parametrize("html,anchor,count", [
+    # no `</head>` at all — the M4 gate's own probe
+    ("<!DOCTYPE html><html><body>an edition</body></html>", "</head>", 0),
+    # a head that closes, a body that never does
+    ("<!DOCTYPE html><html><head></head><body>an edition", "</body>", 0),
+    # two closes: the ambiguity `augment_edition` refuses at read time
+    ("<html><head></head><head></head><body>x</body></html>", "</head>", 2),
+])
+def test_a_bundle_the_serve_path_cannot_serve_is_refused_at_the_push(
+        client, store, html, anchor, count):
+    """THE PUBLISH PATH MAY NOT ACCEPT WHAT THE SERVE PATH CANNOT SERVE (M4
+    gate FIX-1, its own find).
+
+    Measured at the pre-fix bytes: a sha-valid, correctly-dated bundle with no
+    `</head>` was answered **200 stored**, `latest` moved to it, and every
+    subsequent read — the front page first — answered **500** with a StoreError
+    traceback until somebody pushed a good one. An operator-self-inflicted
+    availability hole, and a direct contradiction of this endpoint's own stated
+    philosophy: a misconfigured Mac is loud on its FIRST PUSH."""
+    resp = put(client, bundle(html=html))
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == (
+        f"bundle html cannot be augmented: {anchor} occurs {count} times, "
+        "expected exactly 1")
+    assert store.dates("main") == []
+
+
+def test_a_good_bundle_still_lands_and_still_serves_after_the_push(
+        client, store, monkeypatch):
+    """THE CONTROL THAT WOULD HAVE CAUGHT IT. Every other push pin stops at the
+    200; this one reads the paper back afterwards, which is the only assertion
+    that can see a bundle the shelf accepted and the reader cannot have."""
+    monkeypatch.setattr(hosted_app.Config, "today", lambda self: TODAY)
+    assert put(client, bundle()).get_json()["status"] == "stored"
+    assert store.dates("main") == [TODAY]
+    served = client.get("/")
+    assert served.status_code == 200
+    assert "the edition" in served.get_data(as_text=True)
+
+
 def test_a_refusal_is_a_sentence_and_never_a_stack_trace(client):
     for resp in (put(client, bundle(), token="wrong"),
                  put(client, None, raw="{"),

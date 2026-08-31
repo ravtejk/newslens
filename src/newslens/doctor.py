@@ -1910,7 +1910,14 @@ def check_phone_auth(env: Dict[str, str]) -> List[Result]:
         documented = ""
     undocumented = [name for name in
                     ("NEWSLENS_STYTCH_PROJECT_ID", "NEWSLENS_STYTCH_PUBLIC_TOKEN",
-                     "NEWSLENS_STYTCH_JWKS_URL", "NEWSLENS_USER_STREAMS")
+                     "NEWSLENS_STYTCH_JWKS_URL",
+                     # Added M4: SETUP step 5 instructs setting this, and it is
+                     # the repair path for the two SDK methods the shipped
+                     # default artifact is missing. A runbook step naming a
+                     # variable no reference documents is exactly the drift
+                     # this check exists to catch — it just wasn't watching
+                     # this name yet.
+                     "NEWSLENS_STYTCH_SDK_URL", "NEWSLENS_USER_STREAMS")
                     if name not in documented]
     if undocumented:
         out.append(Result(

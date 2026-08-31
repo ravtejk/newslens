@@ -38,9 +38,13 @@ import hashlib
 import hmac
 import json
 import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -563,6 +567,23 @@ def test_the_return_path_can_only_point_at_this_paper(client):
     assert resp.get_json()["next"] == "/"
 
 
+def test_a_control_character_in_the_return_path_is_refused(client):
+    """M4 gate FIX-4 — the M3 gate's dropped C0 ticket, closed.
+
+    The docstring said "no control characters" and the code named five bytes,
+    two of which (backslash, space) are not control characters at all. Measured
+    at the M3 gate: `/foo\\x00bar` was KEPT. A NUL or a vertical tab in a return
+    path is not a place on this paper by any reading — and a value that only
+    LOOKS like one is exactly what this gate refuses rather than repairs."""
+    for ch in ("\x00", "\x01", "\x0b", "\x0c", "\x1b", "\x1f", "\x7f"):
+        assert hosted_app._safe_next(f"/foo{ch}bar") == "/", repr(ch)
+        assert hosted_app._safe_next(f"/archive?q=a{ch}b") == "/", repr(ch)
+    # …and the genuine paths are untouched by the widening.
+    for good in ("/", "/archive", f"/editions/{TODAY}", "/editions/x?y=1",
+                 "/editions/2026-08-29?from=archive&scroll=1"):
+        assert hosted_app._safe_next(good) == good
+
+
 def test_an_account_with_no_paper_still_signs_in_and_is_told_so(tmp_path, fetcher):
     """One account, one paper (Q5). An unmapped account is an operator
     mistake — the honest page, not a picker and not a blank."""
@@ -624,6 +645,70 @@ def test_only_the_login_page_may_reach_the_vendor(client):
         assert "frame-ancestors 'none'" in csp
 
 
+def test_the_login_policy_follows_the_configured_sdk_origin(tmp_path, fetcher):
+    """M4 gate FIX-2 — THE RUNBOOK'S REPAIR PATH IS NOT SELF-DEFEATING.
+
+    SETUP 1b/5 tell the operator's engineer to repair a wrong-shaped vendor
+    artifact by retargeting one variable. At the pre-fix bytes the policy was
+    baked from a module constant at import, so doing exactly that made the
+    login page's own CSP refuse the script it had just been pointed at — and
+    the page then reported "This paper's door has not been given its keys yet",
+    a second misdiagnosis arriving at the worst possible moment.
+
+    The derived origin REPLACES the pinned one: a retarget that left the old
+    allowance standing would widen the one surface this milestone narrows."""
+    retarget = "https://cdn.example.test/stytch/6.2.0/index.js"
+    env = auth_env(tmp_path, NEWSLENS_STYTCH_SDK_URL=retarget)
+    client = hosted_app.create_app(env, jwks_fetcher=fetcher).test_client()
+
+    login_csp = client.get("/login").headers["Content-Security-Policy"]
+    assert "https://cdn.example.test" in login_csp
+    assert sessionauth.SDK_ORIGIN not in login_csp.split("connect-src")[0], (
+        "the retarget must REPLACE the pinned script origin, not join it")
+    # The page really does load from there, so policy and markup agree.
+    assert retarget in client.get("/login").get_data(as_text=True)
+
+    # …and the API origins do NOT move with the loader.
+    assert f"connect-src 'self' {sessionauth.VENDOR_API_ORIGIN};" in login_csp
+    assert f"frame-src 'self' {sessionauth.VENDOR_API_ORIGIN};" in login_csp
+
+    # Every other route stays third-party-free — the M-13 pin, re-derived
+    # against a RETARGETED config, which is where a naive fix would leak.
+    put_edition(client)
+    sign_in(client)
+    for path in ("/", "/archive", f"/editions/{TODAY}", "/healthz",
+                 "/api/ping", "/sw.js", "/nothing"):
+        csp = client.get(path).headers["Content-Security-Policy"]
+        assert "cdn.example.test" not in csp, path
+        assert "stytch" not in csp, path
+        assert "script-src 'self' 'unsafe-inline';" in csp, path
+
+
+def test_an_sdk_url_that_is_not_an_https_origin_fails_closed_to_the_pin(
+        tmp_path, fetcher, capsys):
+    """FAIL CLOSED, NEVER FAIL OPEN. A typo in the environment may narrow the
+    policy back to the shipped default; it may never widen it to whatever the
+    typo happened to spell. The refusal is said once, on stderr, in the
+    boot-refusal register — a silent downgrade would be the failure this whole
+    fix exists to end."""
+    for bad in ("http://cdn.evil.example/x.js", "not-a-url", "", "javascript:1",
+                "ftp://cdn.example.test/x.js"):
+        assert hosted_app.sdk_script_origin(bad) is None, bad
+        assert hosted_app.login_csp_for(bad) == hosted_app.CSP_LOGIN, bad
+    err = capsys.readouterr().err
+    assert err.count("REFUSING THE CONFIGURED SDK ORIGIN") == 5
+    assert sessionauth.SDK_URL_VAR in err
+
+    env = auth_env(tmp_path, NEWSLENS_STYTCH_SDK_URL="http://cdn.evil.example/x.js")
+    client = hosted_app.create_app(env, jwks_fetcher=fetcher).test_client()
+    csp = client.get("/login").headers["Content-Security-Policy"]
+    assert sessionauth.SDK_ORIGIN in csp and "evil.example" not in csp
+
+    # The local walk is the one plaintext exemption, and only on the loopback.
+    assert hosted_app.sdk_script_origin(
+        "http://127.0.0.1:8899/stytch.js") == "http://127.0.0.1:8899"
+
+
 def test_the_vendor_appears_in_exactly_one_template():
     """A census, not a spot check: the only template that may name the vendor
     script is the login page, and the served edition is not a template at all
@@ -654,6 +739,196 @@ def test_the_ceremony_asks_for_the_rolling_maximum_every_time():
     assert '"session_minutes": 527040' in template
 
 
+# ===========================================================================
+# THE VERSION FLOOR — M4 gate FIX-3 (R1's ruling (iii))
+#
+# The vendor's loader URL carries NO VERSION, so the artifact behind it can
+# change shape any morning; the CSP origin pin sees where a script came from
+# and never what shape it has. These three nodes EXECUTE the shipped login.js
+# against a DOM stub and a client of a chosen shape — the only way to see what
+# the page actually renders. No vendor, no network, no browser.
+# ===========================================================================
+
+VERSION_FACT = "This page loaded an unexpected version of its sign-in service."
+VERSION_WHY = ("Signing in may not work or may not last; the paper’s operator "
+               "has the fix in the runbook.")
+NETWORK_LIE = "Sign-in needs the network"
+
+_LOGIN_HARNESS = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const spec = JSON.parse(process.argv[3]);
+const log = [];
+
+function mk(id, attrs) {
+  return { id: id, hidden: true, textContent: '', value: '',
+           attrs: attrs || {}, _click: [],
+           addEventListener: function (k, fn) { if (k === 'click') { this._click.push(fn); } },
+           getAttribute: function (k) { return (k in this.attrs) ? this.attrs[k] : null; },
+           click: function () { this._click.forEach(function (fn) { fn(); }); } };
+}
+
+const els = {};
+['login-error', 'login-unreach', 'login-unreach-why', 'login-passkey',
+ 'login-password', 'li-email', 'li-email2', 'li-pw'].forEach(function (id) {
+   els[id] = mk(id);
+ });
+els['li-email2'].value = 'reader@example.test';
+els['li-pw'].value = 'not-a-real-password';
+const cfgNode = { textContent: JSON.stringify(spec.cfg) };
+const arms = { passkey: mk('b1', { 'data-login-arm': 'passkey' }),
+               password: mk('b2', { 'data-login-arm': 'password' }) };
+
+global.document = {
+  getElementById: function (id) {
+    return id === 'newslens-login' ? cfgNode : (els[id] || null);
+  },
+  querySelectorAll: function (sel) {
+    return sel === '[data-login-arm]' ? [arms.passkey, arms.password] : [];
+  }
+};
+global.navigator = { onLine: true };
+global.window = { location: { replace: function (u) { log.push('navigated:' + u); } } };
+global.fetch = function (url, opts) {
+  log.push('exchange:' + url);
+  return Promise.resolve({ ok: true, json: function () {
+    return Promise.resolve({ next: JSON.parse(opts.body).next }); } });
+};
+
+function build(shape) {
+  const c = {};
+  if (shape.webauthn) {
+    c.webauthn = { authenticate: function () {
+      log.push('called:webauthn.authenticate');
+      return Promise.resolve({ session_jwt: 'jwt-from-passkey' }); } };
+  }
+  if (shape.passwords) {
+    c.passwords = { authenticate: function () {
+      log.push('called:passwords.authenticate');
+      return Promise.resolve({ session_jwt: 'jwt-from-password' }); } };
+  }
+  c.session = {};
+  if (shape.sessionAuthenticate) {
+    c.session.authenticate = function () {
+      log.push('called:session.authenticate');
+      return Promise.resolve({ session_jwt: 'jwt-from-refresh' }); };
+  }
+  if (shape.getTokens) {
+    c.session.getTokens = function () {
+      log.push('called:session.getTokens');
+      return { session_jwt: 'a-live-vendor-session' }; };
+  }
+  return c;
+}
+global.window.Stytch = function () { return build(spec.shape); };
+
+eval(src);
+
+if (spec.press) { arms[spec.press].click(); }
+setTimeout(function () {
+  console.log(JSON.stringify({
+    error: els['login-error'].hidden ? null : els['login-error'].textContent,
+    unreach: els['login-unreach'].hidden ? null : els['login-unreach'].textContent,
+    why: els['login-unreach-why'].hidden ? null : els['login-unreach-why'].textContent,
+    log: log
+  }));
+}, 80);
+"""
+
+_SHAPE_WHOLE = {"webauthn": True, "passwords": True,
+                "sessionAuthenticate": True, "getTokens": True}
+
+
+def _drive_login(shape, press=None):
+    """Execute the SHIPPED login.js against a stub DOM and a client of `shape`.
+
+    Not a source assertion: a comment cannot satisfy this, because what it
+    returns is the text the page put in its own two registers."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available — the version floor needs a JS runtime")
+    spec = {"cfg": {"ready": True, "public_token": "public-token-test-not-a-secret",
+                    "session_minutes": 527040, "next": "/archive"},
+            "shape": shape, "press": press}
+    with tempfile.TemporaryDirectory() as d:
+        harness = Path(d) / "h.js"
+        harness.write_text(_LOGIN_HARNESS, encoding="utf-8")
+        proc = subprocess.run(
+            [node, str(harness),
+             str(PROTOTYPE_ROOT / "hosted/static/login.js"), json.dumps(spec)],
+            capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_a_wrong_shape_sign_in_service_is_named_instead_of_blamed_on_the_network():
+    """BORN RED at the pre-fix bytes — THE NETWORK LIE, killed.
+
+    A missing method and a dead network are the same JS error class, so the
+    password arm's TypeError was caught, classified as unreachable, and
+    answered "The press can't be reached from here. / Sign-in needs the
+    network…" — loud, and false about the cause. SETUP step 6's console
+    symptom was false for the same reason: the error never reaches the
+    console, because attempt() catches it.
+
+    AND THE FLOOR NEVER BLOCKS AN ARM: the same wrong-shaped client still
+    signs a reader in through the arm that DOES exist. A false positive here
+    can add a line and nothing else."""
+    shape = dict(_SHAPE_WHOLE, passwords=False)
+
+    hit = _drive_login(shape, press="password")
+    assert hit["unreach"] == VERSION_FACT
+    assert hit["why"] == VERSION_WHY
+    assert NETWORK_LIE not in (hit["why"] or ""), "the network lie must be dead"
+    assert "keys yet" not in (hit["why"] or ""), "nor the unconfigured lie"
+
+    working = _drive_login(shape, press="passkey")
+    assert working["unreach"] == VERSION_FACT, "the fact is owed either way"
+    assert "called:webauthn.authenticate" in working["log"]
+    assert "exchange:/api/session" in working["log"]
+    assert "navigated:/archive" in working["log"], (
+        "the floor may not block an arm whose methods are all present")
+
+
+def test_a_right_shape_client_says_nothing_and_the_ceremony_proceeds():
+    """THE CONTROL. Silence on first paint (§11) and silence through a whole
+    successful ceremony — a floor that spoke on a healthy page would be the
+    theater this product refuses, and would train its one reader to ignore it."""
+    quiet = _drive_login(_SHAPE_WHOLE)
+    assert (quiet["error"], quiet["unreach"], quiet["why"]) == (None, None, None)
+    assert "called:session.getTokens" in quiet["log"], "the silent return ran"
+
+    done = _drive_login(_SHAPE_WHOLE, press="passkey")
+    assert (done["error"], done["unreach"], done["why"]) == (None, None, None)
+    assert "called:webauthn.authenticate" in done["log"]
+    assert "navigated:/archive" in done["log"]
+
+
+def test_a_session_that_cannot_be_refreshed_is_named_at_the_next_ceremony():
+    """BORN RED at the pre-fix bytes — THE SILENT HALF.
+
+    `canRefresh()` swallows a missing `getTokens` and returns false, which is
+    indistinguishable from an ordinary first morning. The reader signs in
+    perfectly well and then, five minutes later, is asked again — for ever,
+    with nothing anywhere saying why. §9's whole promise dies invisibly. First
+    paint stays silent (that much was right); the ceremony it forces is where
+    the fact is owed, and "may not LAST" is the half of the sentence that is
+    about exactly this."""
+    shape = dict(_SHAPE_WHOLE, getTokens=False)
+
+    first_paint = _drive_login(shape)
+    assert (first_paint["error"], first_paint["unreach"],
+            first_paint["why"]) == (None, None, None)
+    assert "called:session.authenticate" not in first_paint["log"], (
+        "no silent return is possible without getTokens")
+
+    forced = _drive_login(shape, press="passkey")
+    assert forced["unreach"] == VERSION_FACT
+    assert forced["why"] == VERSION_WHY
+    assert "called:webauthn.authenticate" in forced["log"]
+    assert "navigated:/archive" in forced["log"], "the ceremony still works"
+
+
 def test_the_login_page_is_still_the_approved_masthead_and_says_nothing_on_arrival(client):
     """The drawn copy is byte-preserved, and BOTH failure lines are hidden on
     first paint — a page that greeted a reader with danger ink would be the
@@ -672,28 +947,49 @@ def test_the_login_page_is_still_the_approved_masthead_and_says_nothing_on_arriv
 def test_there_is_no_signup_surface_anywhere_in_the_service():
     """§9: accounts are created by the paper's operator. The service exposes
     ONE non-GET route besides the push endpoint, and it creates nothing —
-    it exchanges a token the vendor already issued."""
+    it exchanges a token the vendor already issued.
+
+    SCOPE IS THE WHOLE PACKAGE, NOT ONE FILE (M4). At M3 this audit read
+    `hosted/app.py` alone, which was then the whole deployable's Python. The
+    M4 split moved 132 lines out into `hosted/webhelpers.py` — and an audit
+    that keeps naming one file gets quietly narrower every time the package
+    grows a module, so the secretless-host claim would end up true of the file
+    we happen to check rather than of the thing we deploy. It globs now, and
+    the manifest assert below fails loudly if a module ever stops being found.
+
+    AND IT DESCENDS (M4 gate FIX-5). `glob("*.py")` stopped at the top of the
+    package, so the first `hosted/<anything>/module.py` anyone adds would walk
+    out of both the census and the secret audit — the same narrowing the M4
+    split had just been widened to close, one directory down. `rglob` reaches
+    it; the manifest assert is unchanged because it is a floor, not a list.
+    """
     import ast
-    tree = ast.parse((PROTOTYPE_ROOT / "hosted/app.py").read_text("utf-8"))
+    modules = sorted((PROTOTYPE_ROOT / "hosted").rglob("*.py"))
+    assert {p.name for p in modules} >= {"app.py", "webhelpers.py",
+                                         "sessionauth.py", "hoststore.py"}, modules
     writes = {}
-    for node in ast.walk(tree):
-        for dec in getattr(node, "decorator_list", []):
-            if not (isinstance(dec, ast.Call)
-                    and getattr(dec.func, "attr", "") == "route"):
-                continue
-            methods = []
-            for kw in dec.keywords:
-                if kw.arg == "methods":
-                    methods = [e.value for e in kw.value.elts]
-            if methods and methods != ["GET"]:
-                writes[dec.args[0].value] = methods
+    for path in modules:
+        tree = ast.parse(path.read_text("utf-8"))
+        for node in ast.walk(tree):
+            for dec in getattr(node, "decorator_list", []):
+                if not (isinstance(dec, ast.Call)
+                        and getattr(dec.func, "attr", "") == "route"):
+                    continue
+                methods = []
+                for kw in dec.keywords:
+                    if kw.arg == "methods":
+                        methods = [e.value for e in kw.value.elts]
+                if methods and methods != ["GET"]:
+                    writes[dec.args[0].value] = methods
     assert writes == {"/api/streams/<stream>/editions/<date>": ["PUT"],
                       "/api/session": ["POST"]}, writes
-    src = (PROTOTYPE_ROOT / "hosted/app.py").read_text("utf-8")
-    for forbidden in ("STYTCH_SECRET", "/v1/users", "/v1/passwords", "secret="):
-        assert forbidden not in src, (
-            f"{forbidden!r} in the deployable — the host holds NO vendor "
-            "secret and creates NO accounts (his ruling 2026-08-31)")
+    for path in modules:
+        src = path.read_text("utf-8")
+        for forbidden in ("STYTCH_SECRET", "/v1/users", "/v1/passwords",
+                          "secret="):
+            assert forbidden not in src, (
+                f"{forbidden!r} in {path.name} — the host holds NO vendor "
+                "secret and creates NO accounts (his ruling 2026-08-31)")
 
 
 # ===========================================================================
@@ -723,30 +1019,69 @@ def test_the_real_lock_does_not_register_the_bypass_backstop(client):
 # R-F — the ledger's first-connection lock race (M2 gate rider, fixed here)
 # ===========================================================================
 
-def test_eight_writers_meeting_a_brand_new_ledger_all_land(tmp_path):
-    """R-F, the gate's own instrument shape: eight threads make FIRST CONTACT
-    with a ledger that does not exist yet. Before the fix, `PRAGMA
-    journal_mode=WAL` on every connection lost the lock race and raised
-    `database is locked`; now journal mode is READ first and only written when
-    it is not already WAL."""
-    errors = []
-    barrier = threading.Barrier(8)
+RF_WRITERS = 12
+RF_ROUNDS = 120
 
-    def push(n):
-        try:
-            barrier.wait(timeout=10)
-            HostStore(tmp_path / "cold").record_push(
-                STREAM, TODAY, "0" * 64, 10, f"stored-{n}")
-        except Exception as exc:                     # noqa: BLE001 - recorded
-            errors.append(f"{type(exc).__name__}: {exc}")
 
-    threads = [threading.Thread(target=push, args=(n,)) for n in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
-    assert errors == [], errors
-    assert HostStore(tmp_path / "cold").counts()["push_receipts"] == 8
+def test_twelve_writers_meeting_a_brand_new_ledger_all_land_every_round(tmp_path):
+    """R-F, the gate's own instrument shape — STRENGTHENED (M4, gate LOW-2).
+
+    Twelve threads make FIRST CONTACT with a ledger that does not exist yet.
+    Before the fix, `PRAGMA journal_mode=WAL` on every connection lost the lock
+    race and raised `database is locked`; now journal mode is READ first and
+    only written when it is not already WAL.
+
+    WHY IT LOOPS, and why the loop is the whole strengthening. M3 shipped this
+    as EIGHT threads run ONCE, and both QA and the gate measured the same
+    embarrassing fact: it stayed GREEN under a full revert of the fix. A race
+    pin that fires on one throw of the dice is not a regression detector, it is
+    a smoke test wearing one's clothes.
+
+    THE SHAPE WAS MEASURED, NOT GUESSED (M4, off-tree, against `_prepare`
+    reverted to M2's unconditional pragma+CREATE):
+
+        per-ROUND red rate under the revert   ~5-15% (thread count is NOT the
+                                                     lever — 8, 12, 16 and 24
+                                                     writers all measured the
+                                                     same band; ROUNDS are)
+        the M3 node (8 writers, 1 round)      5 of 20 runs RED — the control,
+                                              and the whole reason LOW-2 was
+                                              raised: the pin missed the
+                                              regression it was written for in
+                                              three runs out of four
+        this NODE at 60 rounds                19 of 20 runs RED — REJECTED;
+                                              one run in twenty still misses
+        this NODE at 120 rounds (SHIPPED)     20 of 20 runs RED
+        this NODE against the FIX             0 red in 500 cold rounds
+        cost                                  ~3.4s
+
+    Thread count is capped at twelve because thread count was measured NOT to
+    be the lever: 8, 16 and 24 writers all sat in the same red band, so past
+    twelve the machine is measuring its own scheduler rather than this
+    ledger's first contact. Rounds are the lever, so rounds are what moved.
+    """
+    for attempt in range(RF_ROUNDS):
+        root = tmp_path / f"cold-{attempt}"
+        errors = []
+        barrier = threading.Barrier(RF_WRITERS)
+
+        def push(n):
+            try:
+                barrier.wait(timeout=20)
+                HostStore(root).record_push(
+                    STREAM, TODAY, "0" * 64, 10, f"stored-{n}")
+            except Exception as exc:                 # noqa: BLE001 - recorded
+                errors.append(f"{type(exc).__name__}: {exc}")
+
+        threads = [threading.Thread(target=push, args=(n,))
+                   for n in range(RF_WRITERS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+        assert errors == [], f"round {attempt}: {errors}"
+        assert HostStore(root).counts()["push_receipts"] == RF_WRITERS, (
+            f"round {attempt}: receipts lost at first contact")
 
 
 def test_the_ledger_asks_for_the_write_lock_only_when_it_has_to(tmp_path,

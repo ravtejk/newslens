@@ -1,5 +1,23 @@
 # PREFLIGHT — human review guide for NewsLens
 
+> **THIS DOCUMENT COVERS THE LOCAL TOOL ONLY. There is now a second, separate
+> review packet for the internet-facing part.**
+>
+> Everything below describes the single-user pipeline that runs on the
+> principal's own machine and never faces the internet. Since 2026-08-31 there
+> is also a small **hosted reader** — a public HTTPS service that serves the
+> day's edition to a phone behind a login. It is a different program with a
+> different threat model, and it has its own packet:
+>
+> **→ `hosted/REVIEW.md`** — scope, attack-surface map, faked seams, accepted
+> limitations, the three design roads not taken, and two live defects found
+> and deliberately not fixed. Estimated 4–8 reviewer-hours.
+>
+> The two programs share a repository and share no process, no port and no
+> database: the laptop pushes bytes up, and nothing comes back down. A
+> reviewer looking at the *public exposure* question wants `hosted/REVIEW.md`;
+> this file is the map for the tool that generates what the other one serves.
+
 **Current as of 2026-07-25, at the Stage-0 M2 commit** (the one whose message
 begins "Stage-0 M2"; the prior revision of this file was written at `a5033a5`,
 and the one before that at `3c79c36`, 2026-07-16, which had drifted badly).
